@@ -1,0 +1,27 @@
+{
+  "name": "hubspot-billing-updater",
+  "version": "1.0.0",
+  "description": "conexión a API de hubspot para actualizar fecha y mensaje de aviso de facturación",
+   "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vercel dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Michellefsd/hubspot-billing-updater.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Michellefsd/hubspot-billing-updater/issues"
+  },
+  "homepage": "https://github.com/Michellefsd/hubspot-billing-updater#readme",
+  "dependencies": {
+    "@hubspot/api-client": "^13.4.0",
+    "axios": "^1.7.0",
+    "dotenv": "^17.2.3"
+  }
+}
