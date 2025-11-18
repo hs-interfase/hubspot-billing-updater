@@ -1,5 +1,7 @@
 // src/processDealsOnce.js
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
+import { updateLineItemSchedule, computeNextBillingDateFromLineItems } from './billingEngine.js';
+
 
 // Por ahora trabajamos con appointmentscheduled (Prueba 1).
 // Más adelante usaremos algo como process.env.HUBSPOT_CLOSED_WON_STAGE = 'closedwon'

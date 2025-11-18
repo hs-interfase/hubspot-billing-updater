@@ -1,45 +1,13 @@
-// src/processDeal.js
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
+import {
+  updateLineItemSchedule,
+  computeNextBillingDateFromLineItems,
+} from './billingEngine.js';
 
-// DEMO: fecha global = mínima fecha_inicio_de_facturacion de los line items
-function computeNextBillingDateFromLineItems(lineItems) {
-  const dates = [];
+// Helpers chiquitos para no repetir lógica de textos
 
-  for (const li of lineItems) {
-    const props = li.properties || {};
-    const raw = props.fecha_inicio_de_facturacion; // 👈 nombre correcto
-    if (!raw) continue;
 
-    const d = new Date(raw); // asumimos que viene en un formato que Date entiende
-    if (!Number.isNaN(d.getTime())) {
-      dates.push(d);
-    }
-  }
-
-  if (!dates.length) {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d;
-  }
-
-  return dates.reduce((min, d) => (d < min ? d : min), dates[0]);
-}
-
-// Lo dejamos por ahora aunque no lo usemos, por si más adelante reactivamos datos del negocio
-async function getOwnerNameFromDeal(deal) {
-  const ownerId = deal.properties?.hubspot_owner_id;
-  if (!ownerId) return 'Sin propietario asignado';
-
-  try {
-    const owner = await hubspotClient.crm.owners.ownersApi.getById(ownerId);
-    const first = owner.firstName || '';
-    const last = owner.lastName || '';
-    const fullName = `${first} ${last}`.trim();
-    return fullName || owner.email || `Owner ${ownerId}`;
-  } catch {
-    return `Owner ${ownerId}`;
-  }
-}
+// Utilidades de presentación y construcción de mensajes.
 
 function formatMoney(value, currency) {
   const num = Number(value);
@@ -47,39 +15,44 @@ function formatMoney(value, currency) {
   return `${num.toFixed(2)} ${currency || ''}`.trim();
 }
 
-/**
- * Bloque de texto para un line item.
- */
+
 function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   const p = li.properties || {};
-
   const nombreProducto = p.name || `Línea ${idx + 1}`;
   const servicio = p.servicio || '(servicio no definido)';
-  const frecuencia = p.frecuencia_de_facturacion || 'no definida';
+  const frecuencia =
+    p.frecuencia_de_facturacion ||
+    p.facturacion_frecuencia_de_facturacion ||
+    'no definida';
 
-  // Fecha de inicio de facturación (prop del line item)
+  // Fecha de inicio de facturación
   let inicioLineaTexto = 'no definida';
-
   if (p.fecha_inicio_de_facturacion) {
-    const d = new Date(p.fecha_inicio_de_facturacion);
-    if (!Number.isNaN(d.getTime())) {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const da = String(d.getDate()).padStart(2, '0');
-      inicioLineaTexto = `${da}/${m}/${y}`;
+    const str = p.fecha_inicio_de_facturacion.toString().trim();
+    const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const [_, y, mm, dd] = m;
+      inicioLineaTexto = `${dd}/${mm}/${y}`;
+    } else {
+      const d = new Date(str);
+      if (!Number.isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        inicioLineaTexto = `${dd}/${mm}/${y}`;
+      }
     }
   }
 
-  const contratoA = p.contrato_a;
-  const terminoA = p.termino_a;
-
-  // Tus valores ya vienen tipo "1 Año", "Cantidad de meses", etc.
+  // Contrato / término (como antes)
+  const contratoA = p.contrato_a || '(sin definir)';
+  const terminoA = p.termino_a || '(sin definir)';
   let duracion = 'no definida';
-  if (contratoA && terminoA) {
+  if (contratoA !== '(sin definir)' && terminoA !== '(sin definir)') {
     duracion = `${contratoA} / ${terminoA}`;
-  } else if (contratoA) {
+  } else if (contratoA !== '(sin definir)') {
     duracion = `${contratoA}`;
-  } else if (terminoA) {
+  } else if (terminoA !== '(sin definir)') {
     duracion = `${terminoA}`;
   }
 
@@ -95,14 +68,15 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   const notaLinea = p.nota;
   const notaLineaTexto = notaLinea ? `- Nota de la línea: ${notaLinea}` : null;
 
-  // 👇 Comentamos lo que mete "nota del negocio" dentro de la línea
-  // const notaNegocioTexto = notaNegocio
-  //   ? `- Nota del negocio: ${notaNegocio}`
-  //   : null;
-
   const qty = Number(p.quantity || 1);
   const unitPrice = Number(p.price || 0);
   const total = qty * unitPrice;
+
+  // 🔍 Datos de pagos / término para debug
+  const recurringTerm = p.hs_recurring_billing_period; // "5", "12", etc.
+  const totalPagos = Number(p.total_de_pagos ?? 0);
+  const pagosEmitidos = Number(p.pagos_emitidos ?? 0);
+  const pagosRestantes = Number(p.pagos_restantes ?? 0);
 
   const parts = [
     `Servicio`,
@@ -114,10 +88,18 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   if (inicioLineaTexto !== 'no definida') {
     parts.push(`- Fecha de inicio de facturación: ${inicioLineaTexto}`);
   }
-
   if (duracion !== 'no definida') {
     parts.push(`- Duración del contrato: ${duracion}`);
   }
+
+  // 🔍 Bloque explícito de debug (lo que pediste)
+  parts.push(
+    `- DEBUG contrato_a: ${contratoA}`,
+    `- DEBUG termino_a: ${terminoA}`,
+    `- DEBUG hs_recurring_billing_period: ${recurringTerm ?? '(sin definir)'}`,
+    `- Pagos: ${pagosEmitidos} / ${totalPagos}`,
+    `- Pagos restantes: ${pagosRestantes}`
+  );
 
   parts.push(
     `- Facturación a terceros: ${tercerosTexto}`,
@@ -126,31 +108,33 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
     `- Importe total: ${formatMoney(total, moneda)}`
   );
 
-  // if (notaNegocioTexto) parts.push(notaNegocioTexto);
   if (notaLineaTexto) parts.push(notaLineaTexto);
-
   return parts.join('\n');
 }
+
 
 function getLineItemStartDateIso(li) {
   const p = li.properties || {};
   const raw = p.fecha_inicio_de_facturacion;
   if (!raw) return null;
 
-  const d = new Date(raw); // asumimos YYYY-MM-DD o algo que Date entienda
-  if (Number.isNaN(d.getTime())) return null;
+  // Si ya viene en formato YYYY-MM-DD, lo devolvemos tal cual
+  const str = raw.toString().trim();
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    return str;
+  }
 
+  // Fallback genérico
+  const d = new Date(str);
+  if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const da = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${da}`; // YYYY-MM-DD
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
 }
 
-/**
- * Mensaje completo:
- * SOLO queremos las líneas cuyo fecha_inicio_de_facturacion coincide con la próxima fecha.
- * Sin datos generales de negocio por ahora.
- */
+
 function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   const props = deal.properties || {};
   const moneda = props.deal_currency_code || '(sin definir)';
@@ -159,27 +143,21 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   const yyyy = nextDate.getFullYear();
   const mm = String(nextDate.getMonth() + 1).padStart(2, '0');
   const dd = String(nextDate.getDate()).padStart(2, '0');
-  const nextDateIso = `${yyyy}-${mm}-${dd}`; // YYYY-MM-DD
+  const nextDateIso = `${yyyy}-${mm}-${dd}`;
 
-  // 1) Separar line-items que tienen fecha válida
   const withDates = lineItems
     .map((li) => ({ li, iso: getLineItemStartDateIso(li) }))
     .filter((x) => x.iso);
 
   let relevantLineItems;
-
   if (withDates.length > 0) {
-    // 2) Tomar solo los line-items cuya fecha_inicio_de_facturacion coincide con la próxima fecha
     relevantLineItems = withDates
       .filter((x) => x.iso === nextDateIso)
       .map((x) => x.li);
-
-    // Por seguridad: si por alguna razón no hay match exacto, usamos todos con fecha
     if (!relevantLineItems.length) {
       relevantLineItems = withDates.map((x) => x.li);
     }
   } else {
-    // 3) Si NINGÚN line-item tiene fecha de inicio, mostramos todos
     relevantLineItems = lineItems;
   }
 
@@ -189,32 +167,93 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
       buildLineItemBlock(li, idx + 1, moneda, notaNegocio),
     ].join('\n')
   );
-
-  // Por pedido tuyo: solo mostramos las líneas de elemento de pedido
   return lineBlocks.join('\n\n');
 }
 
-/**
- * Procesa UN deal:
- * - Lee deal + line items
- * - Calcula facturacion_proxima_fecha (mínima fecha_inicio_de_facturacion)
- * - Arma mensaje SOLO con el/los line items de esa fecha
- * - Actualiza el deal con fecha y mensaje
- */
+
+function normalizeFreq(raw) {
+  return (raw ?? '').toString().trim().toLowerCase();
+}
+
+function isIrregular(freqRaw) {
+  return normalizeFreq(freqRaw) === 'irregular';
+}
+
+function isOneTime(freqRaw) {
+  const f = normalizeFreq(freqRaw);
+  return (
+    f === 'única' ||
+    f === 'unica' ||
+    f === 'pago único' ||
+    f === 'pago unico'
+  );
+}
+
+function isRecurrent(freqRaw) {
+  const f = normalizeFreq(freqRaw);
+  return ['mensual', 'bimestral', 'trimestral', 'semestral', 'anual'].includes(f);
+}
+
+function parseBoolFromHubspot(raw) {
+  const v = (raw ?? '').toString().toLowerCase();
+  return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
+}
+
 export async function processDeal(dealId) {
   if (!dealId) {
     throw new Error('processDeal requiere un dealId');
   }
 
   const { deal, lineItems } = await getDealWithLineItems(dealId);
+  const dealProps = deal.properties || {};
 
+  // 1) Si la facturación NO está activa, no tocamos nada
+  if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
+    return {
+      dealId,
+      dealName: dealProps.dealname,
+      skipped: true,
+      reason: 'facturacion_activa es false',
+    };
+  }
+
+  if (!lineItems.length) {
+    // Sin líneas, no hay nada que programar
+    return {
+      dealId,
+      dealName: dealProps.dealname,
+      skipped: true,
+      reason: 'sin line items',
+    };
+  }
+
+  // 2) Actualiza calendario SOLO de las líneas recurrentes
+  //    - Pago único: se usa solo fecha_inicio_de_facturacion
+  //    - Irregular: se rellena manualmente (no tocamos fechas_n)
+  for (const li of lineItems) {
+    const freq = li.properties?.frecuencia_de_facturacion;
+    if (isRecurrent(freq)) {
+      await updateLineItemSchedule(li);
+    }
+  }
+
+  // 3) Calcula la próxima fecha global a partir de TODAS las líneas
+  //    (recurrentes, únicas e irregulares)
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems);
-  // Dejamos comentado el uso de ownerName / datos de negocio en el mensaje por ahora
-  // const ownerName = await getOwnerNameFromDeal(deal);
 
+  if (!nextBillingDate) {
+    // No hay fechas futuras en ninguna línea
+    return {
+      dealId,
+      dealName: dealProps.dealname,
+      skipped: true,
+      reason: 'sin fechas futuras (contrato completado o mal configurado)',
+    };
+  }
+
+  // 4) Construye el mensaje en base a la próxima fecha y las líneas
   const message = buildNextBillingMessage({
     deal,
-    // ownerName,
     nextDate: nextBillingDate,
     lineItems,
   });
@@ -224,10 +263,33 @@ export async function processDeal(dealId) {
   const dd = String(nextBillingDate.getDate()).padStart(2, '0');
   const nextDateStr = `${yyyy}-${mm}-${dd}`;
 
+  // 5) Derivar facturacion_frecuencia_de_facturacion a nivel negocio
+  //    (Pago Único / Recurrente / Irregular) según las líneas
+  let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
+
+  const hasRecurrent = lineItems.some((li) =>
+    isRecurrent(li.properties?.frecuencia_de_facturacion)
+  );
+  const hasIrregular = lineItems.some((li) =>
+    isIrregular(li.properties?.frecuencia_de_facturacion)
+  );
+  const hasOneTime = lineItems.some((li) =>
+    isOneTime(li.properties?.frecuencia_de_facturacion)
+  );
+
+  if (hasRecurrent) {
+    dealBillingFrequency = 'Recurrente';
+  } else if (hasIrregular) {
+    dealBillingFrequency = 'Irregular';
+  } else if (hasOneTime) {
+    dealBillingFrequency = 'Pago Único';
+  }
+
   const updateBody = {
     properties: {
       facturacion_proxima_fecha: nextDateStr,
       facturacion_mensaje_proximo_aviso: message,
+      facturacion_frecuencia_de_facturacion: dealBillingFrequency,
     },
   };
 
@@ -235,8 +297,9 @@ export async function processDeal(dealId) {
 
   return {
     dealId,
-    dealName: deal.properties?.dealname,
+    dealName: dealProps.dealname,
     nextBillingDate: nextDateStr,
     lineItemsCount: lineItems.length,
+    facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
