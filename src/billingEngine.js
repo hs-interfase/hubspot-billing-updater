@@ -33,25 +33,31 @@ function getFrequencyMonths(freq) {
 }
 
 
-// Interpreta valores de período de HubSpot (ej. "P5M") como cantidad de meses.
+
+// Interpreta valores de período de HubSpot como cantidad de meses.
 // Soportamos:
-//   - "P5M"  -> 5 meses
-//   - "P12M" -> 12 meses
-// Si viene un número simple ("5"), también lo devolvemos como 5.
+//   - "P5M"        -> 5 meses
+//   - "P18M"       -> 18 meses
+//   - "P1Y"        -> 12 meses
+//   - "P2Y"        -> 24 meses
+//   - "P1Y6M"      -> 18 meses
+//   - "6"          -> 6 meses (simple numérico)
 function parseMonthsFromHubspotTerm(value) {
   if (!value) return 0;
   const str = value.toString().trim().toUpperCase();
 
-  // Caso ISO: "P5M", "P12M"
-  const isoMatch = str.match(/^P(\d+)M$/);
+  // Caso ISO tipo "P1Y6M", "P2Y", "P18M"
+  const isoMatch = str.match(/^P(?:(\d+)Y)?(?:(\d+)M)?$/);
   if (isoMatch) {
-    const months = parseInt(isoMatch[1], 10);
-    if (!Number.isNaN(months) && months > 0) {
-      return months;
+    const years = isoMatch[1] ? parseInt(isoMatch[1], 10) : 0;
+    const months = isoMatch[2] ? parseInt(isoMatch[2], 10) : 0;
+    const total = years * 12 + months;
+    if (!Number.isNaN(total) && total > 0) {
+      return total;
     }
   }
 
-  // Caso simple numérico: "5"
+  // Caso simple numérico: "6", "18"
   const num = Number(str);
   if (!Number.isNaN(num) && num > 0) {
     return num;
@@ -61,21 +67,20 @@ function parseMonthsFromHubspotTerm(value) {
 }
 
 
-// Calcula la duración total del contrato en meses.
+//
 // Regla:
-// - Si contrato_a está vacío O es "cantidad de meses" -> usar hs_recurring_billing_period.
-// - Si contrato_a es "1 año", "2 años", etc. -> usar años * 12.
+// - Si hs_recurring_billing_period tiene valor -> usar eso SIEMPRE (en meses).
+// - Si NO tiene valor -> intentar derivar de contrato_a (1 año, 2 años, etc.).
 // - Si nada sirve -> 0.
 function parseDurationMonths(contratoA, recurringPeriod) {
-  const label = (contratoA || '').toString().toLowerCase().trim();
-
-  // 1) Si contrato_a está vacío o dice "cantidad de meses", manda el término en meses
-  if (!label || /cantidad\s+de\s+meses/.test(label)) {
-    const monthsFromTerm = parseMonthsFromHubspotTerm(recurringPeriod);
-    return monthsFromTerm; // si no puede parsear, será 0
+  // 1) Primero intentamos con el término en meses (propiedad numérica o "P18M")
+  const byTerm = parseMonthsFromHubspotTerm(recurringPeriod);
+  if (byTerm > 0) {
+    return byTerm;
   }
 
-  // 2) Si contrato_a tiene años ("1 año", "2 años", etc.), derivamos meses = años * 12
+  // 2) Si no hay término válido, miramos contrato_a ("1 año", "2 años", etc.)
+  const label = (contratoA || '').toString().toLowerCase().trim();
   const match = label.match(/(\d+)/);
   if (match) {
     const years = parseInt(match[1], 10);
@@ -84,12 +89,7 @@ function parseDurationMonths(contratoA, recurringPeriod) {
     }
   }
 
-  // 3) Fallback: por las dudas, intentar también con recurringPeriod
-  const monthsFromTerm = parseMonthsFromHubspotTerm(recurringPeriod);
-  if (monthsFromTerm > 0) {
-    return monthsFromTerm;
-  }
-
+  // 3) Nada de nada
   return 0;
 }
 
@@ -198,10 +198,10 @@ function buildLineItemUpdates(lineItem) {
   // 4) Limpiar fechas que SOBRAN cuando el contrato se acorta
   //    (por ejemplo, de 12 pagos a 5 pagos).
   //    Usamos '' en vez de null porque HubSpot a veces ignora null y mantiene el valor viejo.
-  const firstExtraIndex = schedule.length + 1; // fecha_{total+1}
-  for (let i = firstExtraIndex; i <= 48; i++) {
-    updates[`fecha_${i}`] = ''; // esto borra la propiedad en HubSpot
-  }
+const firstExtraIndex = schedule.length + 1; // fecha_{total+1}
+for (let i = firstExtraIndex; i <= 48; i++) {
+  updates[`fecha_${i}`] = ''; // esto borra la propiedad en HubSpot
+}
 
   return updates;
 }
@@ -213,8 +213,19 @@ function buildLineItemUpdates(lineItem) {
 export async function updateLineItemSchedule(lineItem) {
   const updates = buildLineItemUpdates(lineItem);
   if (!Object.keys(updates).length) return;
+
   const updateBody = { properties: updates };
+
+  // 1) Actualizamos en HubSpot
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, updateBody);
+
+  // 2) Reflejamos los cambios en el objeto local
+  lineItem.properties = {
+    ...(lineItem.properties || {}),
+    ...updates,
+  };
+
+  return updates;
 }
 
 
