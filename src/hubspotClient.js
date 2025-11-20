@@ -45,6 +45,9 @@ export async function getDealWithLineItems(dealId) {
       'facturacion_frecuencia_de_facturacion',
       'facturacion_proxima_fecha',
       'facturacion_ultima_fecha',
+      'es_mirror_de_py',
+      'deal_uy_mirror_id',
+
     ],
     undefined,
     undefined,
@@ -72,6 +75,7 @@ export async function getDealWithLineItems(dealId) {
     'pagos_restantes',
     'renovacion_automatica',
     'hs_recurring_billing_period',
+    'uy',
   ];
 
   // añade dinámicamente fecha_2 ... fecha_48
