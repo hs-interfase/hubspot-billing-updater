@@ -2,6 +2,7 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
+  computeBagLineItemState,
 } from './billingEngine.js';
 
 // Helpers chiquitos para no repetir lógica de textos
@@ -109,6 +110,49 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   );
 
   if (notaLineaTexto) parts.push(notaLineaTexto);
+
+  /////////////////////////
+  /////////////////////////
+
+  // ¿Es una bolsa?
+  const esBolsa =
+    parseBoolFromHubspot(p.bolsa_de_horas) ||
+    parseBoolFromHubspot(p['Bolsa de Horas']) ||
+    (!!p.tipo_de_bolsa && p.tipo_de_bolsa !== '');
+
+  if (esBolsa) {
+    const totalH = Number(p.horas_bolsa) || 0;
+    const consumidas = Number(p.bolsa_horas_consumidas) || 0;
+    const restantes =
+      typeof p.bolsa_horas_restantes !== 'undefined'
+        ? Number(p.bolsa_horas_restantes)
+        : totalH - consumidas;
+    const valorHora = Number(p.bolsa_valor_hora) || 0;
+    const montoConsumido = Number(p.bolsa_monto_consumido) || 0;
+    const montoRestante = Number(p.bolsa_monto_restante) || 0;
+    const estadoBolsa = p.bolsa_estado || 'activa';
+    const umbral = Number(p.bolsa_umbral_horas_alerta) || 0;
+
+    parts.push(
+      `- Bolsa de horas: ${restantes}h restantes de ${totalH}h (consumidas: ${consumidas}h)`
+    );
+    parts.push(
+      `- Monto consumido/restante: ${formatMoney(
+        montoConsumido,
+        moneda
+      )} / ${formatMoney(montoRestante, moneda)}`
+    );
+    parts.push(`- Valor por hora: ${formatMoney(valorHora, moneda)}`);
+    parts.push(`- Estado de la bolsa: ${estadoBolsa}`);
+    if (umbral > 0 && restantes <= umbral) {
+      parts.push(
+        `- Aviso: quedan ${restantes}h (≤ ${umbral}h), revisar renovación de bolsa.`
+      );
+    }
+  }
+ //////////////////////
+ /////////////////////
+
   return parts.join('\n');
 }
 
@@ -262,6 +306,90 @@ export async function processDeal(dealId) {
   const mm = String(nextBillingDate.getMonth() + 1).padStart(2, '0');
   const dd = String(nextBillingDate.getDate()).padStart(2, '0');
   const nextDateStr = `${yyyy}-${mm}-${dd}`;
+
+
+////////////////////////////////////////
+/////////////////////////////////////////
+
+// 2) Procesa bolsas y actualiza calendario
+  let bagNextDate = null; // Para guardar la fecha más temprana en caso de alerta de bolsa
+
+  for (const li of lineItems) {
+    // Lógica de bolsa
+    const bagState = computeBagLineItemState(li);
+    if (bagState) {
+      const { updates, thresholdAlert, estado, modality } = bagState;
+
+      // Actualiza propiedades de la bolsa en el line item (horas restantes, estado, montos, etc.)
+      if (updates && Object.keys(updates).length) {
+        await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updates });
+        // Reflejar localmente
+        li.properties = {
+          ...(li.properties || {}),
+          ...updates,
+        };
+      }
+
+      // Según la modalidad, decidimos si actualizar calendario
+      const freq = li.properties?.frecuencia_de_facturacion;
+      // Prepago y postpago siguen siendo recurrentes: actualizamos calendario si es recurrente
+      if (modality !== 'renovacion_por_agotamiento') {
+        if (isRecurrent(freq)) {
+          await updateLineItemSchedule(li);
+        }
+      }
+      // En renovación por agotamiento NO tocamos fechas adicionales (se trata como irregular)
+
+      // Si la bolsa está agotada o debajo del umbral, la fecha de próxima acción es hoy
+      if (estado === 'agotada' || thresholdAlert) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (!bagNextDate || bagNextDate > today) {
+          bagNextDate = today;
+        }
+      }
+    } else {
+      // Line item normal: actualiza calendario si es recurrente
+      const freq = li.properties?.frecuencia_de_facturacion;
+      if (isRecurrent(freq)) {
+        await updateLineItemSchedule(li);
+      }
+    }
+  }
+
+  // 3) Calcula la próxima fecha global combinando bolsas y líneas normales
+  const nextBillingDateRegular = computeNextBillingDateFromLineItems(lineItems);
+  let nextBillingDate = nextBillingDateRegular;
+
+  if (bagNextDate) {
+    // Si hay alerta de bolsa más temprana, priorizarla
+    if (!nextBillingDate || bagNextDate < nextBillingDate) {
+      nextBillingDate = bagNextDate;
+    }
+  }
+
+  if (!nextBillingDate) {
+    // No hay fechas futuras
+    return {
+      dealId,
+      dealName: dealProps.dealname,
+      skipped: true,
+      reason: 'sin fechas futuras (contrato completado o mal configurado)',
+    };
+  }
+
+  // 4) Construye el mensaje
+  const message = buildNextBillingMessage({
+    deal,
+    nextDate: nextBillingDate,
+    lineItems,
+  });
+
+
+  ///////////////////////////////////////// 
+  ///////////////////////////////////////
+
+
 
   // 5) Derivar facturacion_frecuencia_de_facturacion a nivel negocio
   //    (Pago Único / Recurrente / Irregular) según las líneas

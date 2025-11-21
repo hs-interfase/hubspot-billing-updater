@@ -307,3 +307,122 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 
   return minDate; // puede ser null si no hay ninguna fecha futura
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// src/billingEngine.js (añadir después de los exports existentes)
+
+/**
+ * Convierte valores de HubSpot en booleano.
+ * Se admiten variantes como 'true', '1', 'sí', 'si', etc.
+ */
+function parseBool(raw) {
+  const v = (raw ?? '').toString().toLowerCase();
+  return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
+}
+
+/**
+ * Calcula y actualiza los campos de una bolsa de horas.
+ *
+ * - Determina si el line item es una bolsa mirando las propiedades:
+ *   - bolsa_de_horas (casilla de verificación)
+ *   - tipo_de_bolsa
+ *
+ * - Calcula:
+ *   horas restantes, valor hora, monto consumido/restante, estado (activa/agotada/vencida)
+ *   y umbrales de alerta.
+ *
+ * - Devuelve null si el line item NO es una bolsa.
+ *
+ * @param {object} lineItem - El line item de HubSpot con sus propiedades.
+ * @param {Date} today - Fecha de referencia para vigencia.
+ * @returns {object|null} Un objeto con { bag, updates, thresholdAlert, estado, modality }
+ */
+export function computeBagLineItemState(lineItem, today = new Date()) {
+  const p = lineItem.properties || {};
+
+  // Determinar si es bolsa: puede ser una casilla de verificación o un tipo de bolsa.
+  const esBolsa =
+    parseBool(p.bolsa_de_horas) ||
+    parseBool(p['Bolsa de Horas']) ||
+    (!!p.tipo_de_bolsa && p.tipo_de_bolsa !== '');
+
+  if (!esBolsa) return null;
+
+  // Horas totales compradas (campo "Horas Bolsa")
+  const totalHours = Number(p.horas_bolsa) || 0;
+
+  // Horas consumidas registradas hasta el momento
+  const hoursConsumed = Number(p.bolsa_horas_consumidas) || 0;
+
+  // Horas restantes
+  const hoursRemaining = totalHours - hoursConsumed;
+
+  // Valor/hora: si está definido, úsalo; si no, lo calculamos a partir del precio total
+  const valorHora =
+    Number(p.bolsa_valor_hora) ||
+    (totalHours > 0 ? (Number(p.precio_bolsa) || 0) / totalHours : 0);
+
+  // Monto total (precio de la bolsa)
+  const totalMonto =
+    Number(p.precio_bolsa) || valorHora * totalHours;
+
+  // Monto consumido y restante
+  const montoConsumido = hoursConsumed * valorHora;
+  const montoRestante = totalMonto - montoConsumido;
+
+  // Estado de la bolsa: activa, agotada o vencida
+  let estado = 'activa';
+  if (hoursRemaining <= 0) {
+    estado = 'agotada';
+  } else if (p.bolsa_fecha_fin_vigencia) {
+    const end = new Date(p.bolsa_fecha_fin_vigencia);
+    if (!Number.isNaN(end.getTime()) && today > end) {
+      estado = 'vencida';
+    }
+  }
+
+  // ¿Debe avisar por umbral?
+  const umbral = Number(p.bolsa_umbral_horas_alerta) || 0;
+  const thresholdAlert = umbral > 0 && hoursRemaining <= umbral;
+
+  // Modalidad de facturación de la bolsa (prepago / postpago_consumo / renovacion_por_agotamiento)
+  const modality = p.bolsa_modalidad_facturacion || null;
+
+  return {
+    bag: true,
+    updates: {
+      bolsa_horas_consumidas: hoursConsumed,
+      bolsa_horas_restantes: hoursRemaining,
+      bolsa_valor_hora: valorHora,
+      bolsa_monto_consumido: montoConsumido,
+      bolsa_monto_restante: montoRestante,
+      bolsa_estado: estado,
+    },
+    thresholdAlert,
+    estado,
+    modality,
+  };
+}
