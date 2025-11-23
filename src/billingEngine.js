@@ -342,7 +342,6 @@ function parseBool(raw) {
   const v = (raw ?? '').toString().toLowerCase();
   return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
 }
-
 /**
  * Calcula y actualiza los campos de una bolsa de horas.
  *
@@ -351,78 +350,110 @@ function parseBool(raw) {
  *   - tipo_de_bolsa
  *
  * - Calcula:
- *   horas restantes, valor hora, monto consumido/restante, estado (activa/agotada/vencida)
+ *   horas restantes, valor hora, monto consumido/restante, estado (activa/agotada)
  *   y umbrales de alerta.
  *
  * - Devuelve null si el line item NO es una bolsa.
  *
  * @param {object} lineItem - El line item de HubSpot con sus propiedades.
- * @param {Date} today - Fecha de referencia para vigencia.
+ * @param {Date} today - Fecha de referencia para vigencia (por ahora solo usado para futuros casos).
  * @returns {object|null} Un objeto con { bag, updates, thresholdAlert, estado, modality }
  */
+
 export function computeBagLineItemState(lineItem, today = new Date()) {
   const p = lineItem.properties || {};
 
-  // Determinar si es bolsa: puede ser una casilla de verificación o un tipo de bolsa.
+  // 1) Determinar si es bolsa
   const esBolsa =
     parseBool(p.bolsa_de_horas) ||
-    parseBool(p['Bolsa de Horas']) ||
     (!!p.tipo_de_bolsa && p.tipo_de_bolsa !== '');
 
   if (!esBolsa) return null;
 
-  // Horas totales compradas (campo "Horas Bolsa")
-  const totalHours = Number(p.horas_bolsa) || 0;
+  const tipo = p.tipo_de_bolsa || 'por_horas'; // por_horas / por_monto (si es 'true', lo tratamos como por_horas)
 
-  // Horas consumidas registradas hasta el momento
+  // 2) Valores base usando TUS nombres de propiedades
+  const valorHoraInput = Number(p.bolsa_valor_hora) || 0;
+  const horasInput = Number(p.cant__hs_bolsa) || 0; // horas de la bolsa
+  const montoInput = Number(p.precio) || 0;         // precio total de la bolsa
+
+  let totalHours = 0;
+  let totalMonto = 0;
+
+  // Regla:
+  // - por_horas: el humano llena cant__hs_bolsa + bolsa_valor_hora
+  // - por_monto: el humano llena precio + bolsa_valor_hora
+  if (tipo === 'por_horas' || tipo === 'true') {
+    totalHours = horasInput;
+    if (montoInput) {
+      totalMonto = montoInput;
+    } else {
+      totalMonto = totalHours * valorHoraInput;
+    }
+  } else if (tipo === 'por_monto') {
+    totalMonto = montoInput;
+    if (horasInput) {
+      totalHours = horasInput;
+    } else if (valorHoraInput) {
+      totalHours = totalMonto / valorHoraInput;
+    }
+  } else {
+    // Tipo desconocido: fallback simple
+    totalHours = horasInput;
+    totalMonto =
+      montoInput || (valorHoraInput && totalHours ? totalHours * valorHoraInput : 0);
+  }
+
+  // 3) Horas consumidas y restantes
   const hoursConsumed = Number(p.bolsa_horas_consumidas) || 0;
-
-  // Horas restantes
   const hoursRemaining = totalHours - hoursConsumed;
 
-  // Valor/hora: si está definido, úsalo; si no, lo calculamos a partir del precio total
-  const valorHora =
-    Number(p.bolsa_valor_hora) ||
-    (totalHours > 0 ? (Number(p.precio_bolsa) || 0) / totalHours : 0);
+  // 4) Valor/hora efectivo
+  let valorHora = valorHoraInput;
+  if (!valorHora && totalHours > 0 && totalMonto) {
+    valorHora = totalMonto / totalHours;
+  }
+  if (!totalMonto && totalHours && valorHora) {
+    totalMonto = totalHours * valorHora;
+  }
 
-  // Monto total (precio de la bolsa)
-  const totalMonto =
-    Number(p.precio_bolsa) || valorHora * totalHours;
-
-  // Monto consumido y restante
+  // 5) Monto consumido y restante
   const montoConsumido = hoursConsumed * valorHora;
   const montoRestante = totalMonto - montoConsumido;
 
-  // Estado de la bolsa: activa, agotada o vencida
-  let estado = 'activa';
-  if (hoursRemaining <= 0) {
-    estado = 'agotada';
-  } else if (p.bolsa_fecha_fin_vigencia) {
-    const end = new Date(p.bolsa_fecha_fin_vigencia);
-    if (!Number.isNaN(end.getTime()) && today > end) {
-      estado = 'vencida';
+  // 6) Estado de la bolsa (usando EXACTAMENTE las opciones válidas de HubSpot)
+  // Opciones válidas: Activa, Agotada, Vencida, Pausada, Cerrada
+  let estado = 'Activa';
+  if (totalHours > 0 || hoursConsumed > 0) {
+    if (hoursRemaining <= 0) {
+      estado = 'Agotada';
     }
   }
+  // (Más adelante podemos usar 'Vencida', 'Pausada', 'Cerrada' según lógica de negocio)
 
-  // ¿Debe avisar por umbral?
+  // 7) ¿Debe avisar por umbral?
   const umbral = Number(p.bolsa_umbral_horas_alerta) || 0;
   const thresholdAlert = umbral > 0 && hoursRemaining <= umbral;
 
-  // Modalidad de facturación de la bolsa (prepago / postpago_consumo / renovacion_por_agotamiento)
+  // 8) Modalidad de facturación de la bolsa
   const modality = p.bolsa_modalidad_facturacion || null;
 
   return {
     bag: true,
     updates: {
+      cant__hs_bolsa: totalHours,
+      precio: totalMonto,
+
       bolsa_horas_consumidas: hoursConsumed,
       bolsa_horas_restantes: hoursRemaining,
       bolsa_valor_hora: valorHora,
       bolsa_monto_consumido: montoConsumido,
       bolsa_monto_restante: montoRestante,
-      bolsa_estado: estado,
+      bolsa_estado: estado, // 👈 ahora manda "Activa" o "Agotada"
     },
     thresholdAlert,
     estado,
     modality,
   };
 }
+

@@ -47,7 +47,8 @@ export async function getDealWithLineItems(dealId) {
       'facturacion_ultima_fecha',
       'es_mirror_de_py',
       'deal_uy_mirror_id',
-
+      'horas_bolsa_reportada_PM',
+    'comentarios_pm',
     ],
     undefined,
     undefined,
@@ -57,7 +58,7 @@ export async function getDealWithLineItems(dealId) {
   const lineItemIds = await getAssocIdsV4('deals', dealId, 'line_items');
   if (!lineItemIds.length) return { deal, lineItems: [] };
 
-  // Incluir todas las propiedades necesarias, incluidas fecha_2 a fecha_48
+  // 🔹 Incluir todas las propiedades necesarias (normales + bolsa)
   const lineItemProperties = [
     'name',
     'servicio',
@@ -76,6 +77,20 @@ export async function getDealWithLineItems(dealId) {
     'renovacion_automatica',
     'hs_recurring_billing_period',
     'uy',
+
+    // 🔹 Campos de bolsa (tus internal names)
+    'bolsa_de_horas',
+    'tipo_de_bolsa',
+    'cant__hs_bolsa',
+    'precio', // precio total de la bolsa (si lo usás)
+    'bolsa_valor_hora',
+    'bolsa_modalidad_facturacion',
+    'bolsa_horas_consumidas',
+    'bolsa_horas_restantes',
+    'bolsa_monto_consumido',
+    'bolsa_monto_restante',
+    'bolsa_estado',
+    'bolsa_umbral_horas_alerta',
   ];
 
   // añade dinámicamente fecha_2 ... fecha_48
@@ -87,8 +102,13 @@ export async function getDealWithLineItems(dealId) {
     inputs: lineItemIds.map((id) => ({ id: String(id) })),
     properties: lineItemProperties,
   };
+
+  // (opcional, para ver una vez qué se está pidiendo)
+  console.log('DEBUG lineItemProperties', lineItemProperties);
+
   const batch = await hubspotClient.crm.lineItems.batchApi.read(batchInput, false);
   const lineItems = batch.results || [];
 
   return { deal, lineItems };
 }
+

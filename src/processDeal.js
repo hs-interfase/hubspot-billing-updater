@@ -271,19 +271,66 @@ export async function processDeal(dealId) {
     };
   }
 
-  // 2) Actualiza calendario SOLO de las líneas recurrentes
-  //    - Pago único: se usa solo fecha_inicio_de_facturacion
-  //    - Irregular: se rellena manualmente (no tocamos fechas_n)
-  for (const li of lineItems) {
+  /**
+   * Recorremos las líneas una sola vez:
+   *   - Si es una bolsa, actualizamos sus propiedades (horas restantes, estado, montos…),
+   *     y sólo actualizamos calendario si la modalidad no es renovacion_por_agotamiento.
+   *   - Si no es bolsa, actualizamos calendario si es recurrente.
+   * Además, guardamos la fecha más temprana en que una bolsa requiere atención (bagNextDate).
+   */
+  let bagNextDate = null;
+
+for (const li of lineItems) {
+  // DEBUG 1: ver propiedades crudas del line item
+  console.log('DEBUG lineItem props', li.id, li.properties);
+
+  const bagState = computeBagLineItemState(li);
+
+  // DEBUG 2: ver qué devuelve computeBagLineItemState
+  console.log('DEBUG bagState', li.id, bagState);
+
+  if (bagState) {
+    const { updates, thresholdAlert, estado, modality } = bagState;
+
+    // DEBUG 3: ver qué se va a escribir en HubSpot
+    console.log('DEBUG bag updates', li.id, updates);
+
+    // 2) Actualiza campos de bolsa en la línea
+    if (updates && Object.keys(updates).length > 0) {
+      await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updates });
+      li.properties = { ...(li.properties || {}), ...updates };
+    }
+
+    // 3) Actualiza calendario sólo en prepago/postpago (recurrentes)
+    const freq = li.properties?.frecuencia_de_facturacion;
+    if (modality !== 'renovacion_por_agotamiento' && isRecurrent(freq)) {
+      await updateLineItemSchedule(li);
+    }
+
+    // 4) Si está agotada o bajo umbral, la próxima acción debe ser hoy
+    if (estado === 'agotada' || thresholdAlert) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (!bagNextDate || bagNextDate > today) {
+        bagNextDate = today;
+      }
+    }
+  } else {
+    // Línea normal: actualiza calendario si es recurrente
     const freq = li.properties?.frecuencia_de_facturacion;
     if (isRecurrent(freq)) {
       await updateLineItemSchedule(li);
     }
   }
+}
 
-  // 3) Calcula la próxima fecha global a partir de TODAS las líneas
-  //    (recurrentes, únicas e irregulares)
-  const nextBillingDate = computeNextBillingDateFromLineItems(lineItems);
+  // 5) Calcula la próxima fecha a partir de calendarios de todas las líneas
+  let nextBillingDate = computeNextBillingDateFromLineItems(lineItems);
+
+  // Si hay una alerta de bolsa anterior, priorizarla
+  if (bagNextDate && (!nextBillingDate || bagNextDate < nextBillingDate)) {
+    nextBillingDate = bagNextDate;
+  }
 
   if (!nextBillingDate) {
     // No hay fechas futuras en ninguna línea
@@ -295,106 +342,21 @@ export async function processDeal(dealId) {
     };
   }
 
-  // 4) Construye el mensaje en base a la próxima fecha y las líneas
+  // 6) Construye el mensaje en base a la próxima fecha y las líneas
   const message = buildNextBillingMessage({
     deal,
     nextDate: nextBillingDate,
     lineItems,
   });
 
+  // 7) Pasa la fecha a ISO (YYYY-MM-DD) para guardarla en el negocio
   const yyyy = nextBillingDate.getFullYear();
   const mm = String(nextBillingDate.getMonth() + 1).padStart(2, '0');
   const dd = String(nextBillingDate.getDate()).padStart(2, '0');
   const nextDateStr = `${yyyy}-${mm}-${dd}`;
 
-
-////////////////////////////////////////
-/////////////////////////////////////////
-
-// 2) Procesa bolsas y actualiza calendario
-  let bagNextDate = null; // Para guardar la fecha más temprana en caso de alerta de bolsa
-
-  for (const li of lineItems) {
-    // Lógica de bolsa
-    const bagState = computeBagLineItemState(li);
-    if (bagState) {
-      const { updates, thresholdAlert, estado, modality } = bagState;
-
-      // Actualiza propiedades de la bolsa en el line item (horas restantes, estado, montos, etc.)
-      if (updates && Object.keys(updates).length) {
-        await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updates });
-        // Reflejar localmente
-        li.properties = {
-          ...(li.properties || {}),
-          ...updates,
-        };
-      }
-
-      // Según la modalidad, decidimos si actualizar calendario
-      const freq = li.properties?.frecuencia_de_facturacion;
-      // Prepago y postpago siguen siendo recurrentes: actualizamos calendario si es recurrente
-      if (modality !== 'renovacion_por_agotamiento') {
-        if (isRecurrent(freq)) {
-          await updateLineItemSchedule(li);
-        }
-      }
-      // En renovación por agotamiento NO tocamos fechas adicionales (se trata como irregular)
-
-      // Si la bolsa está agotada o debajo del umbral, la fecha de próxima acción es hoy
-      if (estado === 'agotada' || thresholdAlert) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        if (!bagNextDate || bagNextDate > today) {
-          bagNextDate = today;
-        }
-      }
-    } else {
-      // Line item normal: actualiza calendario si es recurrente
-      const freq = li.properties?.frecuencia_de_facturacion;
-      if (isRecurrent(freq)) {
-        await updateLineItemSchedule(li);
-      }
-    }
-  }
-
-  // 3) Calcula la próxima fecha global combinando bolsas y líneas normales
-  const nextBillingDateRegular = computeNextBillingDateFromLineItems(lineItems);
-  let nextBillingDate = nextBillingDateRegular;
-
-  if (bagNextDate) {
-    // Si hay alerta de bolsa más temprana, priorizarla
-    if (!nextBillingDate || bagNextDate < nextBillingDate) {
-      nextBillingDate = bagNextDate;
-    }
-  }
-
-  if (!nextBillingDate) {
-    // No hay fechas futuras
-    return {
-      dealId,
-      dealName: dealProps.dealname,
-      skipped: true,
-      reason: 'sin fechas futuras (contrato completado o mal configurado)',
-    };
-  }
-
-  // 4) Construye el mensaje
-  const message = buildNextBillingMessage({
-    deal,
-    nextDate: nextBillingDate,
-    lineItems,
-  });
-
-
-  ///////////////////////////////////////// 
-  ///////////////////////////////////////
-
-
-
-  // 5) Derivar facturacion_frecuencia_de_facturacion a nivel negocio
-  //    (Pago Único / Recurrente / Irregular) según las líneas
+  // 8) Deriva facturacion_frecuencia_de_facturacion a nivel negocio
   let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
-
   const hasRecurrent = lineItems.some((li) =>
     isRecurrent(li.properties?.frecuencia_de_facturacion)
   );
@@ -413,6 +375,7 @@ export async function processDeal(dealId) {
     dealBillingFrequency = 'Pago Único';
   }
 
+  // 9) Actualiza el negocio con la próxima fecha, el mensaje y la frecuencia
   const updateBody = {
     properties: {
       facturacion_proxima_fecha: nextDateStr,
@@ -423,6 +386,7 @@ export async function processDeal(dealId) {
 
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
+  // 10) Devuelve información resumida
   return {
     dealId,
     dealName: dealProps.dealname,
@@ -431,3 +395,4 @@ export async function processDeal(dealId) {
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
+
