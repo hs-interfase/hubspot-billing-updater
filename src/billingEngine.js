@@ -33,31 +33,25 @@ function getFrequencyMonths(freq) {
 }
 
 
-
-// Interpreta valores de período de HubSpot como cantidad de meses.
+// Interpreta valores de período de HubSpot (ej. "P5M") como cantidad de meses.
 // Soportamos:
-//   - "P5M"        -> 5 meses
-//   - "P18M"       -> 18 meses
-//   - "P1Y"        -> 12 meses
-//   - "P2Y"        -> 24 meses
-//   - "P1Y6M"      -> 18 meses
-//   - "6"          -> 6 meses (simple numérico)
+//   - "P5M"  -> 5 meses
+//   - "P12M" -> 12 meses
+// Si viene un número simple ("5"), también lo devolvemos como 5.
 function parseMonthsFromHubspotTerm(value) {
   if (!value) return 0;
   const str = value.toString().trim().toUpperCase();
 
-  // Caso ISO tipo "P1Y6M", "P2Y", "P18M"
-  const isoMatch = str.match(/^P(?:(\d+)Y)?(?:(\d+)M)?$/);
+  // Caso ISO: "P5M", "P12M"
+  const isoMatch = str.match(/^P(\d+)M$/);
   if (isoMatch) {
-    const years = isoMatch[1] ? parseInt(isoMatch[1], 10) : 0;
-    const months = isoMatch[2] ? parseInt(isoMatch[2], 10) : 0;
-    const total = years * 12 + months;
-    if (!Number.isNaN(total) && total > 0) {
-      return total;
+    const months = parseInt(isoMatch[1], 10);
+    if (!Number.isNaN(months) && months > 0) {
+      return months;
     }
   }
 
-  // Caso simple numérico: "6", "18"
+  // Caso simple numérico: "5"
   const num = Number(str);
   if (!Number.isNaN(num) && num > 0) {
     return num;
@@ -67,20 +61,21 @@ function parseMonthsFromHubspotTerm(value) {
 }
 
 
-//
+// Calcula la duración total del contrato en meses.
 // Regla:
-// - Si hs_recurring_billing_period tiene valor -> usar eso SIEMPRE (en meses).
-// - Si NO tiene valor -> intentar derivar de contrato_a (1 año, 2 años, etc.).
+// - Si contrato_a está vacío O es "cantidad de meses" -> usar hs_recurring_billing_period.
+// - Si contrato_a es "1 año", "2 años", etc. -> usar años * 12.
 // - Si nada sirve -> 0.
 function parseDurationMonths(contratoA, recurringPeriod) {
-  // 1) Primero intentamos con el término en meses (propiedad numérica o "P18M")
-  const byTerm = parseMonthsFromHubspotTerm(recurringPeriod);
-  if (byTerm > 0) {
-    return byTerm;
+  const label = (contratoA || '').toString().toLowerCase().trim();
+
+  // 1) Si contrato_a está vacío o dice "cantidad de meses", manda el término en meses
+  if (!label || /cantidad\s+de\s+meses/.test(label)) {
+    const monthsFromTerm = parseMonthsFromHubspotTerm(recurringPeriod);
+    return monthsFromTerm; // si no puede parsear, será 0
   }
 
-  // 2) Si no hay término válido, miramos contrato_a ("1 año", "2 años", etc.)
-  const label = (contratoA || '').toString().toLowerCase().trim();
+  // 2) Si contrato_a tiene años ("1 año", "2 años", etc.), derivamos meses = años * 12
   const match = label.match(/(\d+)/);
   if (match) {
     const years = parseInt(match[1], 10);
@@ -89,7 +84,12 @@ function parseDurationMonths(contratoA, recurringPeriod) {
     }
   }
 
-  // 3) Nada de nada
+  // 3) Fallback: por las dudas, intentar también con recurringPeriod
+  const monthsFromTerm = parseMonthsFromHubspotTerm(recurringPeriod);
+  if (monthsFromTerm > 0) {
+    return monthsFromTerm;
+  }
+
   return 0;
 }
 
@@ -198,10 +198,10 @@ function buildLineItemUpdates(lineItem) {
   // 4) Limpiar fechas que SOBRAN cuando el contrato se acorta
   //    (por ejemplo, de 12 pagos a 5 pagos).
   //    Usamos '' en vez de null porque HubSpot a veces ignora null y mantiene el valor viejo.
-const firstExtraIndex = schedule.length + 1; // fecha_{total+1}
-for (let i = firstExtraIndex; i <= 48; i++) {
-  updates[`fecha_${i}`] = ''; // esto borra la propiedad en HubSpot
-}
+  const firstExtraIndex = schedule.length + 1; // fecha_{total+1}
+  for (let i = firstExtraIndex; i <= 48; i++) {
+    updates[`fecha_${i}`] = ''; // esto borra la propiedad en HubSpot
+  }
 
   return updates;
 }
@@ -213,19 +213,8 @@ for (let i = firstExtraIndex; i <= 48; i++) {
 export async function updateLineItemSchedule(lineItem) {
   const updates = buildLineItemUpdates(lineItem);
   if (!Object.keys(updates).length) return;
-
   const updateBody = { properties: updates };
-
-  // 1) Actualizamos en HubSpot
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, updateBody);
-
-  // 2) Reflejamos los cambios en el objeto local
-  lineItem.properties = {
-    ...(lineItem.properties || {}),
-    ...updates,
-  };
-
-  return updates;
 }
 
 
@@ -307,156 +296,3 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 
   return minDate; // puede ser null si no hay ninguna fecha futura
 }
-<<<<<<< HEAD
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/billingEngine.js (añadir después de los exports existentes)
-
-/**
- * Convierte valores de HubSpot en booleano.
- * Se admiten variantes como 'true', '1', 'sí', 'si', etc.
- */
-function parseBool(raw) {
-  const v = (raw ?? '').toString().toLowerCase();
-  return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
-}
-/**
- * Calcula y actualiza los campos de una bolsa de horas.
- *
- * - Determina si el line item es una bolsa mirando las propiedades:
- *   - bolsa_de_horas (casilla de verificación)
- *   - tipo_de_bolsa
- *
- * - Calcula:
- *   horas restantes, valor hora, monto consumido/restante, estado (activa/agotada)
- *   y umbrales de alerta.
- *
- * - Devuelve null si el line item NO es una bolsa.
- *
- * @param {object} lineItem - El line item de HubSpot con sus propiedades.
- * @param {Date} today - Fecha de referencia para vigencia (por ahora solo usado para futuros casos).
- * @returns {object|null} Un objeto con { bag, updates, thresholdAlert, estado, modality }
- */
-
-export function computeBagLineItemState(lineItem, today = new Date()) {
-  const p = lineItem.properties || {};
-
-  // 1) Determinar si es bolsa
-  const esBolsa =
-    parseBool(p.bolsa_de_horas) ||
-    (!!p.tipo_de_bolsa && p.tipo_de_bolsa !== '');
-
-  if (!esBolsa) return null;
-
-  const tipo = p.tipo_de_bolsa || 'por_horas'; // por_horas / por_monto (si es 'true', lo tratamos como por_horas)
-
-  // 2) Valores base usando TUS nombres de propiedades
-  const valorHoraInput = Number(p.bolsa_valor_hora) || 0;
-  const horasInput = Number(p.cant__hs_bolsa) || 0; // horas de la bolsa
-  const montoInput = Number(p.precio) || 0;         // precio total de la bolsa
-
-  let totalHours = 0;
-  let totalMonto = 0;
-
-  // Regla:
-  // - por_horas: el humano llena cant__hs_bolsa + bolsa_valor_hora
-  // - por_monto: el humano llena precio + bolsa_valor_hora
-  if (tipo === 'por_horas' || tipo === 'true') {
-    totalHours = horasInput;
-    if (montoInput) {
-      totalMonto = montoInput;
-    } else {
-      totalMonto = totalHours * valorHoraInput;
-    }
-  } else if (tipo === 'por_monto') {
-    totalMonto = montoInput;
-    if (horasInput) {
-      totalHours = horasInput;
-    } else if (valorHoraInput) {
-      totalHours = totalMonto / valorHoraInput;
-    }
-  } else {
-    // Tipo desconocido: fallback simple
-    totalHours = horasInput;
-    totalMonto =
-      montoInput || (valorHoraInput && totalHours ? totalHours * valorHoraInput : 0);
-  }
-
-  // 3) Horas consumidas y restantes
-  const hoursConsumed = Number(p.bolsa_horas_consumidas) || 0;
-  const hoursRemaining = totalHours - hoursConsumed;
-
-  // 4) Valor/hora efectivo
-  let valorHora = valorHoraInput;
-  if (!valorHora && totalHours > 0 && totalMonto) {
-    valorHora = totalMonto / totalHours;
-  }
-  if (!totalMonto && totalHours && valorHora) {
-    totalMonto = totalHours * valorHora;
-  }
-
-  // 5) Monto consumido y restante
-  const montoConsumido = hoursConsumed * valorHora;
-  const montoRestante = totalMonto - montoConsumido;
-
-  // 6) Estado de la bolsa (usando EXACTAMENTE las opciones válidas de HubSpot)
-  // Opciones válidas: Activa, Agotada, Vencida, Pausada, Cerrada
-  let estado = 'Activa';
-  if (totalHours > 0 || hoursConsumed > 0) {
-    if (hoursRemaining <= 0) {
-      estado = 'Agotada';
-    }
-  }
-  // (Más adelante podemos usar 'Vencida', 'Pausada', 'Cerrada' según lógica de negocio)
-
-  // 7) ¿Debe avisar por umbral?
-  const umbral = Number(p.bolsa_umbral_horas_alerta) || 0;
-  const thresholdAlert = umbral > 0 && hoursRemaining <= umbral;
-
-  // 8) Modalidad de facturación de la bolsa
-  const modality = p.bolsa_modalidad_facturacion || null;
-
-  return {
-    bag: true,
-    updates: {
-      cant__hs_bolsa: totalHours,
-      precio: totalMonto,
-
-      bolsa_horas_consumidas: hoursConsumed,
-      bolsa_horas_restantes: hoursRemaining,
-      bolsa_valor_hora: valorHora,
-      bolsa_monto_consumido: montoConsumido,
-      bolsa_monto_restante: montoRestante,
-      bolsa_estado: estado, // 👈 ahora manda "Activa" o "Agotada"
-    },
-    thresholdAlert,
-    estado,
-    modality,
-  };
-}
-
-=======
->>>>>>> parent of 82c5d20 (buena)
