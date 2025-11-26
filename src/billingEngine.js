@@ -307,6 +307,7 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 
   return minDate; // puede ser null si no hay ninguna fecha futura
 }
+<<<<<<< HEAD
 
 
 
@@ -457,3 +458,5 @@ export function computeBagLineItemState(lineItem, today = new Date()) {
   };
 }
 
+=======
+>>>>>>> parent of 82c5d20 (buena)

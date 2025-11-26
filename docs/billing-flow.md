@@ -59,11 +59,3 @@ Este documento explica cómo preparar negocios y líneas de pedido (line items) 
 - Si cambias manualmente alguna `fecha_n` (por ejemplo, mover de día 5 al día 15), el motor respetará la fecha editada; no recalculará esa línea automáticamente.
 - En facturaciones irregulares o bolsa de horas, debes rellenar todas las fechas y contadores a mano.
 
-
-
-
-
-
-node ./src/testProcessDeal.js 48596647267
-
-node ./src/testDealMirroring.js 49641854506

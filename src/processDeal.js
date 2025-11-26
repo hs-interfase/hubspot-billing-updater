@@ -2,7 +2,6 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
-  computeBagLineItemState,
 } from './billingEngine.js';
 
 // Helpers chiquitos para no repetir lógica de textos
@@ -110,49 +109,6 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   );
 
   if (notaLineaTexto) parts.push(notaLineaTexto);
-
-  /////////////////////////
-  /////////////////////////
-
-  // ¿Es una bolsa?
-  const esBolsa =
-    parseBoolFromHubspot(p.bolsa_de_horas) ||
-    parseBoolFromHubspot(p['Bolsa de Horas']) ||
-    (!!p.tipo_de_bolsa && p.tipo_de_bolsa !== '');
-
-  if (esBolsa) {
-    const totalH = Number(p.horas_bolsa) || 0;
-    const consumidas = Number(p.bolsa_horas_consumidas) || 0;
-    const restantes =
-      typeof p.bolsa_horas_restantes !== 'undefined'
-        ? Number(p.bolsa_horas_restantes)
-        : totalH - consumidas;
-    const valorHora = Number(p.bolsa_valor_hora) || 0;
-    const montoConsumido = Number(p.bolsa_monto_consumido) || 0;
-    const montoRestante = Number(p.bolsa_monto_restante) || 0;
-    const estadoBolsa = p.bolsa_estado || 'activa';
-    const umbral = Number(p.bolsa_umbral_horas_alerta) || 0;
-
-    parts.push(
-      `- Bolsa de horas: ${restantes}h restantes de ${totalH}h (consumidas: ${consumidas}h)`
-    );
-    parts.push(
-      `- Monto consumido/restante: ${formatMoney(
-        montoConsumido,
-        moneda
-      )} / ${formatMoney(montoRestante, moneda)}`
-    );
-    parts.push(`- Valor por hora: ${formatMoney(valorHora, moneda)}`);
-    parts.push(`- Estado de la bolsa: ${estadoBolsa}`);
-    if (umbral > 0 && restantes <= umbral) {
-      parts.push(
-        `- Aviso: quedan ${restantes}h (≤ ${umbral}h), revisar renovación de bolsa.`
-      );
-    }
-  }
- //////////////////////
- /////////////////////
-
   return parts.join('\n');
 }
 
@@ -355,7 +311,12 @@ for (const li of lineItems) {
   const dd = String(nextBillingDate.getDate()).padStart(2, '0');
   const nextDateStr = `${yyyy}-${mm}-${dd}`;
 
+<<<<<<< HEAD
   // 8) Deriva facturacion_frecuencia_de_facturacion a nivel negocio
+=======
+  // 5) Derivar facturacion_frecuencia_de_facturacion a nivel negocio
+  //    (Pago Único / Recurrente / Irregular) según las líneas
+>>>>>>> parent of 82c5d20 (buena)
   let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
   const hasRecurrent = lineItems.some((li) =>
     isRecurrent(li.properties?.frecuencia_de_facturacion)
