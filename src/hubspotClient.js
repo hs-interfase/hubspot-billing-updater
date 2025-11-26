@@ -49,6 +49,7 @@ export async function getDealWithLineItems(dealId) {
       'deal_uy_mirror_id',
       'horas_bolsa_reportada_PM',
     'comentarios_pm',
+    'cliente_beneficiario'
     ],
     undefined,
     undefined,
