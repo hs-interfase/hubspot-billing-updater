@@ -5,6 +5,7 @@ import {
   computeNextBillingDateFromLineItems,
 } from './billingEngine.js';
 
+
 // -----------------------------
 // Helpers de formato / texto
 // -----------------------------
