@@ -184,53 +184,68 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
   // 6) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
   if (beneficiaryCompanyId) {
-    // Cambiar país operativo de la empresa beneficiaria
+      // 6) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
+if (beneficiaryCompanyId) {
+  // 👇 NUEVO: guardar el cliente beneficiario en el negocio espejo
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
+      properties: {
+        cliente_beneficiario: beneficiaryCompanyId, 
+      },
+    });
+  } catch {
+    // Ignorar errores de actualización de la propiedad
+  }
+
+  // Cambiar país operativo de la empresa beneficiaria
+  try {
+    await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
+      properties: { pais_operativo: 'Mixto' },
+    });
+  } catch {
+    // Ignorar errores de actualización
+  }
+
+  // Asociar la empresa beneficiaria al negocio espejo (si no lo está)
+  try {
+    await hubspotClient.crm.associations.v4.basicApi.createDefault(
+      'companies',
+      beneficiaryCompanyId,
+      'deals',
+      String(targetDealId)
+    );
+  } catch {
+    // Ignorar si ya estaba asociada
+  }
+
+  // Actualizar país operativo de los contactos de la empresa beneficiaria y asociarlos
+  const beneficiaryContactIds = await getAssocIdsV4(
+    'companies',
+    beneficiaryCompanyId,
+    'contacts'
+  );
+
+  for (const contactId of beneficiaryContactIds) {
     try {
-      await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
+      await hubspotClient.crm.contacts.basicApi.update(String(contactId), {
         properties: { pais_operativo: 'Mixto' },
       });
     } catch {
-      // Ignorar errores de actualización
+      // Ignorar errores
     }
-
-    // Asociar la empresa beneficiaria al negocio espejo (si no lo está)
     try {
       await hubspotClient.crm.associations.v4.basicApi.createDefault(
-        'companies',
-        beneficiaryCompanyId,
+        'contacts',
+        String(contactId),
         'deals',
         String(targetDealId)
       );
     } catch {
-      // Ignorar si ya estaba asociada
-    }
-
-    // Actualizar país operativo de los contactos de la empresa beneficiaria y asociarlos
-    const beneficiaryContactIds = await getAssocIdsV4(
-      'companies',
-      beneficiaryCompanyId,
-      'contacts'
-    );
-    for (const contactId of beneficiaryContactIds) {
-      try {
-        await hubspotClient.crm.contacts.basicApi.update(String(contactId), {
-          properties: { pais_operativo: 'Mixto' },
-        });
-      } catch {
-        // Ignorar errores de actualización
-      }
-      try {
-        await hubspotClient.crm.associations.v4.basicApi.createDefault(
-          'contacts',
-          String(contactId),
-          'deals',
-          String(targetDealId)
-        );
-      } catch {
-        // Ignorar si ya está asociado
-      }
+      // Ignorar si ya estaba asociado
     }
   }
+}
+
 
   // 7) Asociar explícitamente Interfase PY al espejo
   if (interfaseCompanyId) {
@@ -254,4 +269,5 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     uyLineItemsCount: uyLineItems.length,
     createdLineItems,
   };
+}
 }
