@@ -333,3 +333,70 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 
   return minDate; // puede ser null si no hay ninguna fecha futura
 }
+
+// billingEngine.js
+
+/**
+ * Calcula los contadores de facturación para un line item.
+ * - totalAvisos: total de fechas programadas (inicio + fechas_n).
+ * - avisosEmitidos: número de fechas ya pasadas respecto de "today".
+ * - avisosRestantes: totalAvisos - avisosEmitidos.
+ * - proximaFecha: primera fecha futura o igual a today (puede usarse a nivel de deal).
+ * - ultimaFecha: última fecha pasada (puede usarse a nivel de deal).
+ *
+ * @param {Object} lineItem - Objeto de line item proveniente de HubSpot.
+ * @param {Date} [today] - Fecha de referencia (por defecto, hoy).
+ * @returns {Object}
+ */
+export function computeLineItemCounters(lineItem, today = new Date()) {
+  const props = lineItem.properties || {};
+  const fechas = [];
+
+  // Añadir la fecha de inicio de facturación
+  if (props.fecha_inicio_de_facturacion) {
+    const inicio = new Date(props.fecha_inicio_de_facturacion);
+    if (!isNaN(inicio)) {
+      fechas.push(inicio);
+    }
+  }
+
+  // Recorrer las propiedades fecha_2 a fecha_48 y agregarlas si existen
+  for (let i = 2; i <= 48; i++) {
+    const key = `fecha_${i}`;
+    const value = props[key];
+    if (value) {
+      const d = new Date(value);
+      if (!isNaN(d)) {
+        fechas.push(d);
+      }
+    }
+  }
+
+  // Ordenar las fechas de forma ascendente
+  fechas.sort((a, b) => a - b);
+
+  const totalAvisos = fechas.length;
+  let avisosEmitidos = 0;
+  let proximaFecha = null;
+  let ultimaFecha = null;
+
+  // Contabilizar cuántas fechas ya pasaron y cuál es la próxima
+  for (const fecha of fechas) {
+    if (fecha < today) {
+      avisosEmitidos++;
+      ultimaFecha = fecha;
+    } else if (!proximaFecha) {
+      proximaFecha = fecha;
+    }
+  }
+
+  const avisosRestantes = totalAvisos - avisosEmitidos;
+
+  return {
+    totalAvisos,
+    avisosEmitidos,
+    avisosRestantes,
+    proximaFecha,
+    ultimaFecha
+  };
+}

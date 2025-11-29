@@ -4,7 +4,7 @@ import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
     computeLastBillingDateFromLineItems,
-
+  computeLineItemCounters,
 } from './billingEngine.js';
 
 
@@ -295,8 +295,27 @@ export async function processDeal(dealId) {
 
   // 2) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
   //    Usa fecha_inicio + fecha_2…fecha_48.
-  const today = new Date();
+  // Suponiendo que ya tienes "lineItems" como array de line items del deal
+const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+for (const item of lineItems) {
+  const counters = computeLineItemCounters(item, today);
+
+  // Prepara el objeto de propiedades a actualizar.
+  const updateProperties = {
+    facturacion_total_avisos: String(counters.totalAvisos),
+    avisos_emitidos_facturacion: String(counters.avisosEmitidos),
+    avisos_restantes_facturacion: String(counters.avisosRestantes)
+  };
+
+  // Actualiza las propiedades del line item en HubSpot
+  // Ajusta la llamada según tu cliente/servicio; aquí se usa el cliente oficial
+  await hubspotClient.crm.lineItems.basicApi.update(item.id, {
+    properties: updateProperties
+  });
+}
+
 
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
   const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today); // <-- función nueva en billingEngine.js
@@ -376,6 +395,8 @@ export async function processDeal(dealId) {
     dealBillingFrequency = 'Pago Único';
   }
 
+  
+
   // 8) Actualizar negocio (solo si facturacion_activa es true, ya estamos en esa rama).
   const updateBody = {
     properties: {
@@ -388,6 +409,8 @@ export async function processDeal(dealId) {
 
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
+
+  
   // 9) Resumen
   return {
     dealId,
