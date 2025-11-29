@@ -3,6 +3,8 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
+    computeLastBillingDateFromLineItems,
+
 } from './billingEngine.js';
 
 
@@ -261,16 +263,6 @@ export async function processDeal(dealId) {
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
-  // 1) Si la facturación NO está activa, no tocamos nada
-  if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
-    return {
-      dealId,
-      dealName: dealProps.dealname,
-      skipped: true,
-      reason: 'facturacion_activa es false',
-    };
-  }
-
   if (!lineItems.length) {
     // Sin líneas, no hay nada que programar
     return {
@@ -281,57 +273,89 @@ export async function processDeal(dealId) {
     };
   }
 
-  // 2) Recalcular calendario de líneas recurrentes.
-  //    - Si cambiás fecha_inicio_de_facturacion, frecuencia, contrato_a o término,
-  //      updateLineItemSchedule recomputa fecha_2…fecha_N y limpia las sobrantes.
-  //    - Si la frecuencia es Irregular, NO tocamos el calendario (se maneja a mano).
+  // 1) SIEMPRE: recalcular calendario de líneas recurrentes.
+  //    Esto debe ocurrir independientemente de facturacion_activa,
+  //    para que los importados queden coherentes (fecha_2, fecha_3, total_de_pagos, etc.).
   for (const li of lineItems) {
     const freq = li.properties?.frecuencia_de_facturacion;
 
     if (isRecurrent(freq)) {
-      // si querés debug:
-      // console.log('Recalculando calendario para line item', li.id);
       await updateLineItemSchedule(li);
+
+      // IMPORTANTE:
+      // updateLineItemSchedule debe actualizar también lineItem.properties en memoria:
+      // lineItem.properties = { ...lineItem.properties, ...updates }
+      // para que a partir de acá las funciones "vean" las nuevas fechas.
     } else if (isIrregular(freq)) {
-      // Irregular: NO tocamos fechas_2..N
-      // console.log('Linea irregular, no se recalcula calendario', li.id);
+      // Irregular: NO tocamos fechas_2..N (se manejan a mano)
     } else {
       // Pago único u otros: por ahora no recalculamos nada especial
     }
   }
 
-  // 3) Calcular la próxima fecha de facturación a partir de TODAS las líneas.
-  //    Usa fecha_inicio + fecha_2…fecha_48 y solo toma fechas >= hoy.
+  // 2) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
+  //    Usa fecha_inicio + fecha_2…fecha_48.
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
+  const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today); // <-- función nueva en billingEngine.js
 
-  if (!nextBillingDate) {
-    // No hay fechas futuras en ninguna línea
+  // 3) Si la facturación NO está activa:
+  //    dejamos solo recalculados los calendarios de line items y NO tocamos el negocio.
+  if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
     return {
       dealId,
       dealName: dealProps.dealname,
       skipped: true,
-      reason: 'sin fechas futuras (contrato completado o mal configurado)',
+      reason:
+        'facturacion_activa es false (solo se recalcularon calendarios de line items)',
+      nextBillingDate: nextBillingDate
+        ? nextBillingDate.toISOString().slice(0, 10)
+        : null,
+      lastBillingDate: lastBillingDate
+        ? lastBillingDate.toISOString().slice(0, 10)
+        : null,
     };
   }
 
-  // 4) Construir mensaje usando SOLO las líneas que tienen esa fecha
-  const message = buildNextBillingMessage({
-    deal,
-    nextDate: nextBillingDate,
-    lineItems,
-  });
+  // 4) Si está activa y no hay ni fechas futuras ni pasadas, algo está raro.
+  if (!nextBillingDate && !lastBillingDate) {
+    return {
+      dealId,
+      dealName: dealProps.dealname,
+      skipped: true,
+      reason: 'sin fechas útiles (contrato completado o mal configurado)',
+    };
+  }
 
-  // 5) Llevar la fecha a ISO (YYYY-MM-DD) para guardarla en el negocio
-  const yyyy = nextBillingDate.getFullYear();
-  const mm = String(nextBillingDate.getMonth() + 1).padStart(2, '0');
-  const dd = String(nextBillingDate.getDate()).padStart(2, '0');
-  const nextDateStr = `${yyyy}-${mm}-${dd}`;
+  // 5) Construir mensaje SOLO si hay próxima fecha.
+  let message = '';
+  let nextDateStr = '';
 
-  // 6) Derivar facturacion_frecuencia_de_facturacion a nivel negocio
-  //    según los line items.
+  if (nextBillingDate) {
+    message = buildNextBillingMessage({
+      deal,
+      nextDate: nextBillingDate,
+      lineItems,
+    });
+
+    const yyyy = nextBillingDate.getFullYear();
+    const mm = String(nextBillingDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(nextBillingDate.getDate()).padStart(2, '0');
+    nextDateStr = `${yyyy}-${mm}-${dd}`;
+  }
+
+  // 6) Última fecha de facturación (la mayor < hoy entre todas las fechas)
+  let lastDateStr = '';
+  if (lastBillingDate) {
+    const yyyyL = lastBillingDate.getFullYear();
+    const mmL = String(lastBillingDate.getMonth() + 1).padStart(2, '0');
+    const ddL = String(lastBillingDate.getDate()).padStart(2, '0');
+    lastDateStr = `${yyyyL}-${mmL}-${ddL}`;
+  }
+
+  // 7) Derivar facturacion_frecuencia_de_facturacion a nivel negocio según los line items.
   let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
 
   const hasRecurrent = lineItems.some((li) =>
@@ -352,22 +376,24 @@ export async function processDeal(dealId) {
     dealBillingFrequency = 'Pago Único';
   }
 
-  // 7) Actualizar negocio
+  // 8) Actualizar negocio (solo si facturacion_activa es true, ya estamos en esa rama).
   const updateBody = {
     properties: {
-      facturacion_proxima_fecha: nextDateStr,
-      facturacion_mensaje_proximo_aviso: message,
+      facturacion_proxima_fecha: nextDateStr,                  // puede ir vacío si ya no hay futuras
+      facturacion_mensaje_proximo_aviso: message,              // vacío si no hay próxima
+      facturacion_ultima_fecha: lastDateStr,                   // <-- AJUSTA el nombre a la propiedad real
       facturacion_frecuencia_de_facturacion: dealBillingFrequency,
     },
   };
 
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
-  // 8) Resumen
+  // 9) Resumen
   return {
     dealId,
     dealName: dealProps.dealname,
-    nextBillingDate: nextDateStr,
+    nextBillingDate: nextDateStr || null,
+    lastBillingDate: lastDateStr || null,
     lineItemsCount: lineItems.length,
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };

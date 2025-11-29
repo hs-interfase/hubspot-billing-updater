@@ -213,6 +213,13 @@ function buildLineItemUpdates(lineItem) {
 export async function updateLineItemSchedule(lineItem) {
   const updates = buildLineItemUpdates(lineItem);
   if (!Object.keys(updates).length) return;
+
+  lineItem.properties = {
+    ...(lineItem.properties || {}),
+    ...updates,
+  };
+
+
   const updateBody = { properties: updates };
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, updateBody);
 }
@@ -227,6 +234,36 @@ function startOfDay(date) {
   d.setHours(0, 0, 0, 0);
   return d;
 }
+
+// Devuelve la última fecha de facturación (la mayor < today)
+// usando todas las fechas de todos los line items
+// (fecha_inicio_de_facturacion, fecha_2, fecha_3, ...).
+export function computeLastBillingDateFromLineItems(
+  lineItems,
+  today = new Date()
+) {
+  const todayStart = startOfDay(today);
+  let maxPast = null;
+
+  for (const li of lineItems) {
+    // Esta función ya existe en billingEngine porque la usa getNextBillingDateForLineItem
+    const allDates = collectAllBillingDatesFromLineItem(li); // array de Date
+
+    for (const d of allDates) {
+      const dStart = startOfDay(d);
+
+      // solo nos interesan fechas estrictamente en el pasado
+      if (dStart.getTime() < todayStart.getTime()) {
+        if (!maxPast || dStart.getTime() > maxPast.getTime()) {
+          maxPast = dStart;
+        }
+      }
+    }
+  }
+
+  return maxPast; // puede ser null si no hay fechas pasadas
+}
+
 
 function collectAllBillingDatesFromLineItem(lineItem) {
   const p = lineItem.properties || {};
