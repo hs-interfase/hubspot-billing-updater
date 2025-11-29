@@ -400,3 +400,53 @@ export function computeLineItemCounters(lineItem, today = new Date()) {
     ultimaFecha
   };
 }
+
+
+/**
+ * Calcula los contadores de facturación para un line item.
+ *
+ * - facturacion_total_avisos: total de fechas programadas.
+ * - avisos_emitidos_facturacion: cuántas fechas son < today.
+ * - avisos_restantes_facturacion: total - emitidos.
+ * - proximaFecha y ultimaFecha: próximas/últimas fechas de facturación.
+ *
+ * @param {Object} lineItem
+ * @param {Date} [today]
+ * @returns {Object}
+ */
+export function computeBillingCountersForLineItem(lineItem, today = new Date()) {
+  // Normaliza "today" al comienzo del día
+  const startOfDay = (d) => {
+    const copy = new Date(d);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+  };
+  const todayStart = startOfDay(today);
+
+  // Usa la función interna collectAllBillingDatesFromLineItem (ya existe en este archivo)
+  const dates = collectAllBillingDatesFromLineItem(lineItem);
+
+  let emitidos = 0;
+  let proximaFecha = null;
+  let ultimaFecha = null;
+  for (const d of dates) {
+    const dStart = startOfDay(d);
+    if (dStart.getTime() < todayStart.getTime()) {
+      emitidos++;
+      ultimaFecha = dStart;
+    } else if (!proximaFecha) {
+      proximaFecha = dStart;
+    }
+  }
+
+  const totalAvisos = dates.length;
+  const restantes = totalAvisos > emitidos ? totalAvisos - emitidos : 0;
+
+  return {
+    facturacion_total_avisos: totalAvisos,
+    avisos_emitidos_facturacion: emitidos,
+    avisos_restantes_facturacion: restantes,
+    proximaFecha,
+    ultimaFecha,
+  };
+}

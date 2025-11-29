@@ -3,8 +3,9 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
-    computeLastBillingDateFromLineItems,
+  computeLastBillingDateFromLineItems,
   computeLineItemCounters,
+  computeBillingCountersForLineItem
 } from './billingEngine.js';
 
 
@@ -177,45 +178,56 @@ function collectBillingDateStringsForLineItem(lineItem) {
 function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   const props = deal.properties || {};
   const moneda = props.deal_currency_code || '(sin definir)';
-  const notaNegocio = props.nota || null;
-
   const yyyy = nextDate.getFullYear();
   const mm = String(nextDate.getMonth() + 1).padStart(2, '0');
   const dd = String(nextDate.getDate()).padStart(2, '0');
   const nextDateIso = `${yyyy}-${mm}-${dd}`;
 
-  // 1) Buscar las líneas que tengan esa fecha en su calendario
+  // Encontrar líneas relevantes (las que tienen la fecha exacta en su calendario)
   const linesWithDates = lineItems.map((li) => ({
     li,
     dates: collectBillingDateStringsForLineItem(li),
   }));
 
   let relevantLineItems = [];
-
   for (const { li, dates } of linesWithDates) {
     if (dates.includes(nextDateIso)) {
       relevantLineItems.push(li);
     }
   }
-
-  // 2) Si ninguna coincide EXACTAMENTE, usamos las que tengan alguna fecha;
-  //    si ni siquiera eso, usamos todos los line items.
+  // Fallback: si ninguna coincide exactamente, usa las que tengan alguna fecha; si aún no, usa todas.
   if (!relevantLineItems.length) {
-    const withAnyDates = linesWithDates
-      .filter((x) => x.dates.length)
-      .map((x) => x.li);
+    const withAnyDates = linesWithDates.filter((x) => x.dates.length).map((x) => x.li);
     relevantLineItems = withAnyDates.length ? withAnyDates : lineItems;
   }
 
-  const lineBlocks = relevantLineItems.map((li, idx) =>
-    [
-      `------------------------------`,
-      buildLineItemBlock(li, idx + 1, moneda, notaNegocio),
-    ].join('\n')
-  );
+  // Construir el texto por cada línea relevante
+  const parts = relevantLineItems.map((li) => {
+    const p = li.properties || {};
+    const counters = computeBillingCountersForLineItem(li, nextDate);
+    const cuotaActual = counters.avisos_emitidos_facturacion + 1;
+    const totalCuotas = counters.facturacion_total_avisos;
+    const nombreProducto = p.name || 'Producto sin nombre';
+    const qty = Number(p.quantity || 1);
+    const unitPrice = Number(p.price || 0);
+    const importe = qty * unitPrice;
+    return `${nombreProducto}: cuota ${cuotaActual} de ${totalCuotas} — Importe estimado ${importe.toFixed(2)} ${moneda}`;
+  });
 
-  return lineBlocks.join('\n\n');
+  return parts.join('\n');
 }
+
+// Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
+if (nextBillingDate) {
+  const dNext = new Date(nextBillingDate);
+  dNext.setHours(0, 0, 0, 0);
+  const todayStart = new Date(today);
+  todayStart.setHours(0, 0, 0, 0);
+  if (dNext.getTime() === todayStart.getTime()) {
+    await createBillingOrderTicketsForDeal(deal, lineItems, nextBillingDate, { today: today });
+  }
+}
+
 
 // -----------------------------
 // Helpers de tipo de frecuencia
@@ -296,24 +308,22 @@ export async function processDeal(dealId) {
   // 2) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
   //    Usa fecha_inicio + fecha_2…fecha_48.
   // Suponiendo que ya tienes "lineItems" como array de line items del deal
+// Definir la fecha de referencia (hoy a medianoche)
 const today = new Date();
-  today.setHours(0, 0, 0, 0);
+today.setHours(0, 0, 0, 0);
 
-for (const item of lineItems) {
-  const counters = computeLineItemCounters(item, today);
-
-  // Prepara el objeto de propiedades a actualizar.
-  const updateProperties = {
-    facturacion_total_avisos: String(counters.totalAvisos),
-    avisos_emitidos_facturacion: String(counters.avisosEmitidos),
-    avisos_restantes_facturacion: String(counters.avisosRestantes)
+// Calcular y actualizar contadores por línea
+for (const li of lineItems) {
+  const counters = computeBillingCountersForLineItem(li, today);
+  const updateProps = {
+    facturacion_total_avisos: String(counters.facturacion_total_avisos),
+    avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
+    avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
   };
-
-  // Actualiza las propiedades del line item en HubSpot
-  // Ajusta la llamada según tu cliente/servicio; aquí se usa el cliente oficial
-  await hubspotClient.crm.lineItems.basicApi.update(item.id, {
-    properties: updateProperties
-  });
+  // Actualizar en memoria
+  li.properties = { ...(li.properties || {}), ...updateProps };
+  // Actualizar en HubSpot
+  await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updateProps });
 }
 
 
