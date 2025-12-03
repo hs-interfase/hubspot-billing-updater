@@ -11,6 +11,8 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
+// ID de fallback para la empresa Interfase (si no se define por options o .env)
+const DEFAULT_INTERFASE_COMPANY_ID = '34885518646';
 
 // 👇 Propiedad de COSTO en el line item (ajustá si tu internal name es otro)
 const LINE_ITEM_COST_PROP = 'costo';
@@ -81,14 +83,17 @@ export function shouldMirrorDealToUruguay(deal, lineItems) {
  * @param {Object} options Opcional: { interfaseCompanyId }
  * @returns {Promise<Object>} Resumen de la operación.
  */
+
+
 export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   if (!sourceDealId) {
     throw new Error('mirrorDealToUruguay requiere un dealId');
   }
 
-  // ID de la empresa dueña (Interfase PY) — puede venir en options o en env.
-  const interfaseCompanyId =
-    options.interfaseCompanyId || process.env.INTERFASE_PY_COMPANY_ID;
+const interfaseCompanyId =
+  options.interfaseCompanyId ||
+  process.env.INTERFASE_PY_COMPANY_ID ||
+  DEFAULT_INTERFASE_COMPANY_ID;
 
   // 1) Obtener negocio PY y sus líneas
   const { deal, lineItems } = await getDealWithLineItems(sourceDealId);
@@ -97,6 +102,10 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   }
 
   const srcProps = deal.properties || {};
+  // Moneda del negocio origen (propiedad de deal)
+const sourceCurrency = srcProps.deal_currency_code || null;
+console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
+
 
   // 2) Verificar condiciones para espejar
   const check = shouldMirrorDealToUruguay(deal, lineItems);
@@ -178,31 +187,46 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     }
   }
 
-  if (!targetDealId) {
-    // 3b) Crear un nuevo negocio espejo con país operativo Mixto
-    const newDealProps = {
-      dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
-      ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
-      ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
+
+if (!targetDealId) {
+  // 3b) Crear un nuevo negocio espejo con país operativo Mixto
+  const newDealProps = {
+    // Nombre = nombre original + sufijo UY
+    dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
+
+    // Mantener pipeline y etapa del negocio origen (si existen)
+    ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
+    ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
+
+    // País operativo y marcadores de espejo
+    pais_operativo: 'Mixto',
+    es_mirror_de_py: 'true',
+    deal_py_origen_id: String(sourceDealId),
+
+    // 👇 Copiar moneda del negocio origen al espejo (a nivel deal)
+    ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
+  };
+
+  console.log(
+    '[mirrorDealToUruguay] Creando negocio espejo UY con moneda:',
+    sourceCurrency
+  );
+
+  const createResp = await hubspotClient.crm.deals.basicApi.create({
+    properties: newDealProps,
+  });
+
+  targetDealId = createResp.id;
+
+  // Actualizar negocio PY: Mixto y guardar el ID del espejo
+  await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+    properties: {
       pais_operativo: 'Mixto',
-      es_mirror_de_py: 'true',
-      deal_py_origen_id: String(sourceDealId),
-    };
+      deal_uy_mirror_id: String(targetDealId),
+    },
+  });
+}
 
-    const createResp = await hubspotClient.crm.deals.basicApi.create({
-      properties: newDealProps,
-    });
-
-    targetDealId = createResp.id;
-
-    // Actualizar negocio PY: Mixto y guardar el ID del espejo
-    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-      properties: {
-        pais_operativo: 'Mixto',
-        deal_uy_mirror_id: String(targetDealId),
-      },
-    });
-  }
 
   // 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
   for (const li of uyLineItems) {
@@ -215,22 +239,18 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       props[key] = srcPropsLi[key];
     }
 
-    // === Costo → price ===
-    // Prioridad: campo "precio" (el que sí vemos en el debug), luego "costo"
-    let costValue =
-      srcPropsLi.precio !== undefined && srcPropsLi.precio !== null
-        ? srcPropsLi.precio
-        : srcPropsLi.costo;
-
-    if (costValue !== undefined && costValue !== null && costValue !== '') {
-      props.price = costValue;
-      console.log(
-        '[mirrorDealToUruguay] Línea UY',
-        srcPropsLi.name,
-        '→ price en espejo =',
-        costValue
-      );
-    }
+// === Costo → price ===
+// Si existe 'precio' úsalo; si no, intentá con 'costo'
+const costValue = srcPropsLi.precio ?? srcPropsLi.costo;
+if (costValue !== undefined && costValue !== null && costValue !== '') {
+  props.price = costValue;
+  console.log(
+    '[mirrorDealToUruguay] Línea UY',
+    srcPropsLi.name,
+    '→ price en espejo =',
+    costValue
+  );
+}
 
     await hubspotClient.crm.lineItems.basicApi.create({
       properties: props,

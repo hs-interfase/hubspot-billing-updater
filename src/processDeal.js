@@ -265,6 +265,18 @@ export async function processDeal(dealId) {
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
+  // 🔁 Mirroring ANTES de la lógica de facturación
+  try {
+    console.log(' → Ejecutando mirrorDealToUruguay (antes de facturación) para deal', dealId);
+    const mirrorResult = await mirrorDealToUruguay(dealId);
+    console.log('   Resultado mirrorDealToUruguay:', mirrorResult);
+  } catch (err) {
+    console.error(
+      '   ERROR en mirrorDealToUruguay:',
+      err.response?.body || err
+    );
+  }
+
   if (!lineItems.length) {
     // Sin líneas, no hay nada que programar
     return {
@@ -411,20 +423,6 @@ export async function processDeal(dealId) {
     }
   }
 
-    // ...
-  // Después de terminar la lógica de facturación:
-
-  try {
-    console.log(' → Ejecutando mirrorDealToUruguay para deal', dealId);
-    const mirrorResult = await mirrorDealToUruguay(dealId);
-    console.log('   Resultado mirrorDealToUruguay:', mirrorResult);
-  } catch (err) {
-    console.error(
-      '   ERROR en mirrorDealToUruguay:',
-      err.response?.body || err
-    );
-  }
-
   // 12) Resumen
   return {
     dealId,
@@ -435,6 +433,4 @@ export async function processDeal(dealId) {
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
-
-
 
