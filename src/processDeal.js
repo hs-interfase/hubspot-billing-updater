@@ -1,13 +1,12 @@
-// src/processDeal.js
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
+import { createBillingOrderTicketsForDeal } from './tickets.js';
+import { mirrorDealToUruguay } from './dealMirroring.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
   computeLastBillingDateFromLineItems,
-  computeLineItemCounters,
-  computeBillingCountersForLineItem
+  computeBillingCountersForLineItem,
 } from './billingEngine.js';
-
 
 // -----------------------------
 // Helpers de formato / texto
@@ -46,78 +45,80 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
       }
     }
   }
-// Contrato / término
-const contratoA = p.contrato_a || '(sin definir)';
-const terminoA = p.termino_a || '(sin definir)';
-let duracion = 'no definida';
 
-if (contratoA !== '(sin definir)' && terminoA !== '(sin definir)') {
-  duracion = `${contratoA} / ${terminoA}`;
-} else if (contratoA !== '(sin definir)') {
-  duracion = `${contratoA}`;
-} else if (terminoA !== '(sin definir)') {
-  duracion = `${terminoA}`;
+  // Contrato / término
+  const contratoA = p.contrato_a || '(sin definir)';
+  const terminoA = p.termino_a || '(sin definir)';
+  let duracion = 'no definida';
+
+  if (contratoA !== '(sin definir)' && terminoA !== '(sin definir)') {
+    duracion = `${contratoA} / ${terminoA}`;
+  } else if (contratoA !== '(sin definir)') {
+    duracion = `${contratoA}`;
+  } else if (terminoA !== '(sin definir)') {
+    duracion = `${terminoA}`;
+  }
+
+  const tercerosRaw = (p.terceros || '').toString().toLowerCase();
+  const esTerceros =
+    tercerosRaw === 'true' ||
+    tercerosRaw === '1' ||
+    tercerosRaw === 'sí' ||
+    tercerosRaw === 'si' ||
+    tercerosRaw === 'yes';
+  const tercerosTexto = esTerceros ? 'Sí, facturación a terceros.' : 'No.';
+
+  const notaLinea = p.nota;
+  const notaLineaTexto = notaLinea ? `- Nota de la línea: ${notaLinea}` : null;
+
+  const qty = Number(p.quantity || 1);
+  const unitPrice = Number(p.price || 0);
+  const total = qty * unitPrice;
+
+  // Datos de pagos / término
+  const recurringTerm = p.hs_recurring_billing_period; // "5", "12", "P12M", etc.
+  const totalPagos = Number(p.total_de_pagos ?? 0);
+  const pagosEmitidos = Number(p.pagos_emitidos ?? 0);
+  const pagosRestantes = Number(p.pagos_restantes ?? 0);
+
+  const parts = [
+    `Servicio`,
+    `- Producto: ${nombreProducto}`,
+    `- Servicio: ${servicio}`,
+    `- Frecuencia de facturación: ${frecuencia}`,
+  ];
+
+  if (inicioLineaTexto !== 'no definida') {
+    parts.push(`- Fecha de inicio de facturación: ${inicioLineaTexto}`);
+  }
+  if (duracion !== 'no definida') {
+    parts.push(`- Duración del contrato: ${duracion}`);
+  }
+
+  // Bloque de debug visible
+  parts.push(
+    `- DEBUG contrato_a: ${contratoA}`,
+    `- DEBUG termino_a: ${terminoA}`,
+    `- DEBUG hs_recurring_billing_period: ${recurringTerm ?? '(sin definir)'}`,
+    `- Pagos: ${pagosEmitidos} / ${totalPagos}`,
+    `- Pagos restantes: ${pagosRestantes}`
+  );
+
+  parts.push(
+    `- Facturación a terceros: ${tercerosTexto}`,
+    `- Cantidad: ${qty}`,
+    `- Precio unitario: ${formatMoney(unitPrice, moneda)}`,
+    `- Importe total: ${formatMoney(total, moneda)}`
+  );
+
+  if (notaLineaTexto) parts.push(notaLineaTexto);
+  if (notaNegocio) {
+    parts.push(`- Nota del negocio: ${notaNegocio}`);
+  }
+
+  return parts.join('\n');
 }
 
-const tercerosRaw = (p.terceros || '').toString().toLowerCase();
-const esTerceros =
-  tercerosRaw === 'true' ||
-  tercerosRaw === '1' ||
-  tercerosRaw === 'sí' ||
-  tercerosRaw === 'si' ||
-  tercerosRaw === 'yes';
-const tercerosTexto = esTerceros ? 'Sí, facturación a terceros.' : 'No.';
-
-const notaLinea = p.nota;
-const notaLineaTexto = notaLinea ? `- Nota de la línea: ${notaLinea}` : null;
-
-const qty = Number(p.quantity || 1);
-const unitPrice = Number(p.price || 0);
-const total = qty * unitPrice;
-
-// Datos de pagos / término
-const recurringTerm = p.hs_recurring_billing_period; // "5", "12", "P12M", etc.
-const totalPagos = Number(p.total_de_pagos ?? 0);
-const pagosEmitidos = Number(p.pagos_emitidos ?? 0);
-const pagosRestantes = Number(p.pagos_restantes ?? 0);
-
-const parts = [
-  `Servicio`,
-  `- Producto: ${nombreProducto}`,
-  `- Servicio: ${servicio}`,
-  `- Frecuencia de facturación: ${frecuencia}`,
-];
-
-if (inicioLineaTexto !== 'no definida') {
-  parts.push(`- Fecha de inicio de facturación: ${inicioLineaTexto}`);
-}
-if (duracion !== 'no definida') {
-  parts.push(`- Duración del contrato: ${duracion}`);
-}
-
-// Bloque de debug visible
-parts.push(
-  `- DEBUG contrato_a: ${contratoA}`,
-  `- DEBUG termino_a: ${terminoA}`,
-  `- DEBUG hs_recurring_billing_period: ${recurringTerm ?? '(sin definir)'}`,
-  `- Pagos: ${pagosEmitidos} / ${totalPagos}`,
-  `- Pagos restantes: ${pagosRestantes}`
-);
-
-parts.push(
-  `- Facturación a terceros: ${tercerosTexto}`,
-  `- Cantidad: ${qty}`,
-  `- Precio unitario: ${formatMoney(unitPrice, moneda)}`,
-  `- Importe total: ${formatMoney(total, moneda)}`
-);
-
-if (notaLineaTexto) parts.push(notaLineaTexto);
-if (notaNegocio) {
-  parts.push(`- Nota del negocio: ${notaNegocio}`);
-}
-
-return parts.join('\n');
-}
 // -----------------------------
 // Fechas por línea
 // -----------------------------
@@ -172,8 +173,7 @@ function collectBillingDateStringsForLineItem(lineItem) {
  * - Próxima fecha de facturación
  * - Line items
  *
- * Solo incluye las líneas que tienen esa fecha como próxima
- * (en fecha_inicio_de_facturacion o en alguna fecha_N).
+ * Solo incluye las líneas que tienen esa fecha como próxima.
  */
 function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   const props = deal.properties || {};
@@ -211,23 +211,13 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
     const qty = Number(p.quantity || 1);
     const unitPrice = Number(p.price || 0);
     const importe = qty * unitPrice;
-    return `${nombreProducto}: cuota ${cuotaActual} de ${totalCuotas} — Importe estimado ${importe.toFixed(2)} ${moneda}`;
+    return `${nombreProducto}: cuota ${cuotaActual} de ${totalCuotas} — Importe estimado ${importe.toFixed(
+      2
+    )} ${moneda}`;
   });
 
   return parts.join('\n');
 }
-
-// Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
-if (nextBillingDate) {
-  const dNext = new Date(nextBillingDate);
-  dNext.setHours(0, 0, 0, 0);
-  const todayStart = new Date(today);
-  todayStart.setHours(0, 0, 0, 0);
-  if (dNext.getTime() === todayStart.getTime()) {
-    await createBillingOrderTicketsForDeal(deal, lineItems, nextBillingDate, { today: today });
-  }
-}
-
 
 // -----------------------------
 // Helpers de tipo de frecuencia
@@ -286,18 +276,12 @@ export async function processDeal(dealId) {
   }
 
   // 1) SIEMPRE: recalcular calendario de líneas recurrentes.
-  //    Esto debe ocurrir independientemente de facturacion_activa,
-  //    para que los importados queden coherentes (fecha_2, fecha_3, total_de_pagos, etc.).
   for (const li of lineItems) {
     const freq = li.properties?.frecuencia_de_facturacion;
 
     if (isRecurrent(freq)) {
       await updateLineItemSchedule(li);
-
-      // IMPORTANTE:
-      // updateLineItemSchedule debe actualizar también lineItem.properties en memoria:
-      // lineItem.properties = { ...lineItem.properties, ...updates }
-      // para que a partir de acá las funciones "vean" las nuevas fechas.
+      // updateLineItemSchedule actualiza también lineItem.properties en memoria
     } else if (isIrregular(freq)) {
       // Irregular: NO tocamos fechas_2..N (se manejan a mano)
     } else {
@@ -305,33 +289,29 @@ export async function processDeal(dealId) {
     }
   }
 
-  // 2) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
-  //    Usa fecha_inicio + fecha_2…fecha_48.
-  // Suponiendo que ya tienes "lineItems" como array de line items del deal
-// Definir la fecha de referencia (hoy a medianoche)
-const today = new Date();
-today.setHours(0, 0, 0, 0);
+  // 2) Definir la fecha de referencia (hoy a medianoche)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-// Calcular y actualizar contadores por línea
-for (const li of lineItems) {
-  const counters = computeBillingCountersForLineItem(li, today);
-  const updateProps = {
-    facturacion_total_avisos: String(counters.facturacion_total_avisos),
-    avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
-    avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
-  };
-  // Actualizar en memoria
-  li.properties = { ...(li.properties || {}), ...updateProps };
-  // Actualizar en HubSpot
-  await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updateProps });
-}
+  // 3) Calcular y actualizar contadores por línea
+  for (const li of lineItems) {
+    const counters = computeBillingCountersForLineItem(li, today);
+    const updateProps = {
+      facturacion_total_avisos: String(counters.facturacion_total_avisos),
+      avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
+      avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
+    };
+    // Actualizar en memoria
+    li.properties = { ...(li.properties || {}), ...updateProps };
+    // Actualizar en HubSpot
+    await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updateProps });
+  }
 
-
+  // 4) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
-  const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today); // <-- función nueva en billingEngine.js
+  const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today);
 
-  // 3) Si la facturación NO está activa:
-  //    dejamos solo recalculados los calendarios de line items y NO tocamos el negocio.
+  // 5) Si la facturación NO está activa:
   if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
     return {
       dealId,
@@ -348,7 +328,7 @@ for (const li of lineItems) {
     };
   }
 
-  // 4) Si está activa y no hay ni fechas futuras ni pasadas, algo está raro.
+  // 6) Si está activa y no hay ni fechas futuras ni pasadas, algo está raro.
   if (!nextBillingDate && !lastBillingDate) {
     return {
       dealId,
@@ -358,7 +338,7 @@ for (const li of lineItems) {
     };
   }
 
-  // 5) Construir mensaje SOLO si hay próxima fecha.
+  // 7) Construir mensaje SOLO si hay próxima fecha.
   let message = '';
   let nextDateStr = '';
 
@@ -375,7 +355,7 @@ for (const li of lineItems) {
     nextDateStr = `${yyyy}-${mm}-${dd}`;
   }
 
-  // 6) Última fecha de facturación (la mayor < hoy entre todas las fechas)
+  // 8) Última fecha de facturación (la mayor < hoy entre todas las fechas)
   let lastDateStr = '';
   if (lastBillingDate) {
     const yyyyL = lastBillingDate.getFullYear();
@@ -384,7 +364,7 @@ for (const li of lineItems) {
     lastDateStr = `${yyyyL}-${mmL}-${ddL}`;
   }
 
-  // 7) Derivar facturacion_frecuencia_de_facturacion a nivel negocio según los line items.
+  // 9) Derivar facturacion_frecuencia_de_facturacion a nivel negocio según los line items.
   let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
 
   const hasRecurrent = lineItems.some((li) =>
@@ -405,23 +385,47 @@ for (const li of lineItems) {
     dealBillingFrequency = 'Pago Único';
   }
 
-  
-
-  // 8) Actualizar negocio (solo si facturacion_activa es true, ya estamos en esa rama).
+  // 10) Actualizar negocio
   const updateBody = {
     properties: {
-      facturacion_proxima_fecha: nextDateStr,                  // puede ir vacío si ya no hay futuras
-      facturacion_mensaje_proximo_aviso: message,              // vacío si no hay próxima
-      facturacion_ultima_fecha: lastDateStr,                   // <-- AJUSTA el nombre a la propiedad real
+      facturacion_proxima_fecha: nextDateStr,
+      facturacion_mensaje_proximo_aviso: message,
+      facturacion_ultima_fecha: lastDateStr,
       facturacion_frecuencia_de_facturacion: dealBillingFrequency,
     },
   };
 
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
+  // 11) Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
+  if (nextBillingDate) {
+    const dNext = new Date(nextBillingDate);
+    dNext.setHours(0, 0, 0, 0);
+    const todayStart = new Date(today);
+    todayStart.setHours(0, 0, 0, 0);
 
-  
-  // 9) Resumen
+    if (dNext.getTime() === todayStart.getTime()) {
+      await createBillingOrderTicketsForDeal(deal, lineItems, nextBillingDate, {
+        today,
+      });
+    }
+  }
+
+    // ...
+  // Después de terminar la lógica de facturación:
+
+  try {
+    console.log(' → Ejecutando mirrorDealToUruguay para deal', dealId);
+    const mirrorResult = await mirrorDealToUruguay(dealId);
+    console.log('   Resultado mirrorDealToUruguay:', mirrorResult);
+  } catch (err) {
+    console.error(
+      '   ERROR en mirrorDealToUruguay:',
+      err.response?.body || err
+    );
+  }
+
+  // 12) Resumen
   return {
     dealId,
     dealName: dealProps.dealname,
@@ -431,4 +435,6 @@ for (const li of lineItems) {
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
+
+
 

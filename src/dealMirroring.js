@@ -1,15 +1,19 @@
 // src/dealMirroring.js
 //
 // Módulo para “espejar” un negocio de Paraguay en Uruguay cuando el negocio
-// original tiene líneas de pedido marcadas con el flag `uy = true`.  Este
-// nuevo flujo evita duplicar negocios UY innecesariamente y actualiza el espejo
-// existente cuando se modifican las líneas UY en el negocio paraguayo.
+// original tiene líneas de pedido marcadas con el flag `uy = true`.
+// Además, en el espejo UY el monto (price) de cada línea será el "costo"
+// definido en la línea original.
+//
 // También actualiza el país operativo de negocio, empresa y contactos a “Mixto”.
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
+
+// 👇 Propiedad de COSTO en el line item (ajustá si tu internal name es otro)
+const LINE_ITEM_COST_PROP = 'costo';
 
 // ID de asociación por defecto entre line items y deals (HUBSPOT_DEFINED).
 const LINE_ITEM_TO_DEAL_ASSOC_ID = 20;
@@ -69,6 +73,10 @@ export function shouldMirrorDealToUruguay(deal, lineItems) {
  *   país operativo y el de sus contactos se actualizan a “Mixto”.
  * - La empresa dueña (Interfase PY) se asocia siempre al negocio UY.
  *
+ * En las líneas UY del espejo:
+ * - Se copian todas las propiedades del line item original excepto `uy`.
+ * - Si existe la propiedad `costo`, se usa ese valor como `price` en el espejo.
+ *
  * @param {string|number} sourceDealId ID del negocio paraguayo.
  * @param {Object} options Opcional: { interfaseCompanyId }
  * @returns {Promise<Object>} Resumen de la operación.
@@ -84,12 +92,20 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
   // 1) Obtener negocio PY y sus líneas
   const { deal, lineItems } = await getDealWithLineItems(sourceDealId);
-  if (!deal) throw new Error(`No se encontró el negocio con ID ${sourceDealId}`);
+  if (!deal) {
+    throw new Error(`No se encontró el negocio con ID ${sourceDealId}`);
+  }
+
+  const srcProps = deal.properties || {};
 
   // 2) Verificar condiciones para espejar
   const check = shouldMirrorDealToUruguay(deal, lineItems);
   if (!check.ok) {
-    return { mirrored: false, sourceDealId, reason: check.reason };
+    return {
+      mirrored: false,
+      sourceDealId: String(sourceDealId),
+      reason: check.reason,
+    };
   }
 
   // Filtrar las líneas de negocio con flag UY = true
@@ -97,39 +113,73 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     parseBoolFromHubspot(li.properties?.[LINEA_PARA_UY_PROP])
   );
   if (!uyLineItems.length) {
-    return { mirrored: false, sourceDealId, reason: 'no UY line items' };
+    return {
+      mirrored: false,
+      sourceDealId: String(sourceDealId),
+      reason: 'no UY line items',
+    };
   }
 
   // 3) Determinar si ya existe un espejo
-  const existingMirrorId = deal.properties?.deal_uy_mirror_id;
-  let targetDealId;
+  const existingMirrorId = srcProps.deal_uy_mirror_id;
+  let targetDealId = null;
   let createdLineItems = 0;
 
   if (existingMirrorId) {
-    // 3a) Usar el espejo existente y actualizarlo
+    // 3a) Intentar usar el espejo existente y SINCRONIZARLO
     targetDealId = String(existingMirrorId);
 
-    // Asegurar país operativo Mixto en el espejo
-    await hubspotClient.crm.deals.basicApi.update(targetDealId, {
-      properties: { pais_operativo: 'Mixto' },
-    });
+    try {
+      const updateProps = {
+        // Siempre Mixto en el espejo
+        pais_operativo: 'Mixto',
+        // Sincronizar nombre con sufijo - UY
+        dealname: srcProps.dealname
+          ? `${srcProps.dealname} - UY`
+          : 'Negocio UY',
+      };
 
-    // Eliminar todas las líneas de pedido actuales del espejo
-    const mirrorLineItemIds = await getAssocIdsV4(
-      'deals',
-      targetDealId,
-      'line_items'
-    );
-    for (const liId of mirrorLineItemIds) {
-      try {
-        await hubspotClient.crm.lineItems.basicApi.archive(String(liId));
-      } catch {
-        // Ignorar si no se puede archivar
+      // Sincronizar pipeline y etapa del negocio original (si están definidos)
+      if (srcProps.pipeline) {
+        updateProps.pipeline = srcProps.pipeline;
       }
+      if (srcProps.dealstage) {
+        updateProps.dealstage = srcProps.dealstage;
+      }
+
+      await hubspotClient.crm.deals.basicApi.update(targetDealId, {
+        properties: updateProps,
+      });
+
+      // Eliminar todas las líneas de pedido actuales del espejo
+      const mirrorLineItemIds = await getAssocIdsV4(
+        'deals',
+        targetDealId,
+        'line_items'
+      );
+
+      for (const liId of mirrorLineItemIds) {
+        try {
+          await hubspotClient.crm.lineItems.basicApi.archive(String(liId));
+        } catch (err) {
+          console.warn(
+            '[mirrorDealToUruguay] No se pudo archivar line item en espejo UY',
+            liId,
+            err?.message || err
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[mirrorDealToUruguay] Deal espejo UY ${targetDealId} no existe o no se pudo actualizar. Se creará uno nuevo.`,
+        err?.message || err
+      );
+      targetDealId = null; // Forzamos a crear uno nuevo más abajo
     }
-  } else {
+  }
+
+  if (!targetDealId) {
     // 3b) Crear un nuevo negocio espejo con país operativo Mixto
-    const srcProps = deal.properties || {};
     const newDealProps = {
       dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
       ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
@@ -138,13 +188,15 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
     };
+
     const createResp = await hubspotClient.crm.deals.basicApi.create({
       properties: newDealProps,
     });
+
     targetDealId = createResp.id;
 
     // Actualizar negocio PY: Mixto y guardar el ID del espejo
-    await hubspotClient.crm.deals.basicApi.update(sourceDealId, {
+    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
       properties: {
         pais_operativo: 'Mixto',
         deal_uy_mirror_id: String(targetDealId),
@@ -152,14 +204,34 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     });
   }
 
-  // 4) Crear en el espejo las líneas UY del negocio PY
+  // 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
   for (const li of uyLineItems) {
+    const srcPropsLi = li.properties || {};
     const props = {};
-    for (const key of Object.keys(li.properties || {})) {
-      // No copiar el flag `uy`
+
+    // Copiar todas las props excepto el flag `uy`
+    for (const key of Object.keys(srcPropsLi)) {
       if (key === LINEA_PARA_UY_PROP) continue;
-      props[key] = li.properties[key];
+      props[key] = srcPropsLi[key];
     }
+
+    // === Costo → price ===
+    // Prioridad: campo "precio" (el que sí vemos en el debug), luego "costo"
+    let costValue =
+      srcPropsLi.precio !== undefined && srcPropsLi.precio !== null
+        ? srcPropsLi.precio
+        : srcPropsLi.costo;
+
+    if (costValue !== undefined && costValue !== null && costValue !== '') {
+      props.price = costValue;
+      console.log(
+        '[mirrorDealToUruguay] Línea UY',
+        srcPropsLi.name,
+        '→ price en espejo =',
+        costValue
+      );
+    }
+
     await hubspotClient.crm.lineItems.basicApi.create({
       properties: props,
       associations: [
@@ -177,78 +249,22 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     createdLineItems++;
   }
 
-  // 5) Determinar la empresa beneficiaria (primera empresa asociada al negocio PY)
-  const companyIds = await getAssocIdsV4('deals', sourceDealId, 'companies');
-  const beneficiaryCompanyId =
-    companyIds && companyIds.length > 0 ? String(companyIds[0]) : null;
-
-  // 6) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
-  if (beneficiaryCompanyId) {
-      // 6) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
-if (beneficiaryCompanyId) {
-  // 👇 NUEVO: guardar el cliente beneficiario en el negocio espejo
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
-      properties: {
-        cliente_beneficiario: beneficiaryCompanyId, 
-      },
-    });
-  } catch {
-    // Ignorar errores de actualización de la propiedad
-  }
-
-  // Cambiar país operativo de la empresa beneficiaria
-  try {
-    await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
-      properties: { pais_operativo: 'Mixto' },
-    });
-  } catch {
-    // Ignorar errores de actualización
-  }
-
-  // Asociar la empresa beneficiaria al negocio espejo (si no lo está)
-  try {
-    await hubspotClient.crm.associations.v4.basicApi.createDefault(
-      'companies',
-      beneficiaryCompanyId,
-      'deals',
-      String(targetDealId)
-    );
-  } catch {
-    // Ignorar si ya estaba asociada
-  }
-
-  // Actualizar país operativo de los contactos de la empresa beneficiaria y asociarlos
-  const beneficiaryContactIds = await getAssocIdsV4(
-    'companies',
-    beneficiaryCompanyId,
-    'contacts'
-  );
-
-  for (const contactId of beneficiaryContactIds) {
-    try {
-      await hubspotClient.crm.contacts.basicApi.update(String(contactId), {
-        properties: { pais_operativo: 'Mixto' },
-      });
-    } catch {
-      // Ignorar errores
-    }
-    try {
-      await hubspotClient.crm.associations.v4.basicApi.createDefault(
-        'contacts',
-        String(contactId),
-        'deals',
-        String(targetDealId)
-      );
-    } catch {
-      // Ignorar si ya estaba asociado
-    }
-  }
-}
-
-
-  // 7) Asociar explícitamente Interfase PY al espejo
+  // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
   if (interfaseCompanyId) {
+    try {
+      // Hacer que Interfase sea la EMPRESA PRINCIPAL del deal espejo
+      await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
+        properties: {
+          associatedcompanyid: String(interfaseCompanyId),
+        },
+      });
+    } catch (err) {
+      console.warn(
+        '[mirrorDealToUruguay] No se pudo actualizar associatedcompanyid con Interfase:',
+        err?.message || err
+      );
+    }
+
     try {
       await hubspotClient.crm.associations.v4.basicApi.createDefault(
         'companies',
@@ -258,6 +274,77 @@ if (beneficiaryCompanyId) {
       );
     } catch {
       // Ignorar si ya estaba asociada
+    }
+  } else {
+    console.warn(
+      '[mirrorDealToUruguay] INTERFASE_PY_COMPANY_ID no está configurado. No se puede asociar Interfase como empresa principal.'
+    );
+  }
+
+  // 6) Determinar la empresa beneficiaria (primera empresa asociada al negocio PY)
+  const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
+  const beneficiaryCompanyId =
+    companyIds && companyIds.length > 0 ? String(companyIds[0]) : null;
+
+  // 7) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
+  if (beneficiaryCompanyId) {
+    // Guardar el cliente beneficiario en el negocio espejo
+    try {
+      await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
+        properties: {
+          cliente_beneficiario: beneficiaryCompanyId,
+        },
+      });
+    } catch {
+      // Ignorar errores de actualización de la propiedad
+    }
+
+    // Cambiar país operativo de la empresa beneficiaria
+    try {
+      await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
+        properties: { pais_operativo: 'Mixto' },
+      });
+    } catch {
+      // Ignorar errores de actualización
+    }
+
+    // Asociar la empresa beneficiaria al negocio espejo (si no lo está)
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.createDefault(
+        'companies',
+        beneficiaryCompanyId,
+        'deals',
+        String(targetDealId)
+      );
+    } catch {
+      // Ignorar si ya estaba asociada
+    }
+
+    // Actualizar país operativo de los contactos de la empresa beneficiaria y asociarlos
+    const beneficiaryContactIds = await getAssocIdsV4(
+      'companies',
+      beneficiaryCompanyId,
+      'contacts'
+    );
+
+    for (const contactId of beneficiaryContactIds) {
+      try {
+        await hubspotClient.crm.contacts.basicApi.update(String(contactId), {
+          properties: { pais_operativo: 'Mixto' },
+        });
+      } catch {
+        // Ignorar errores
+      }
+      try {
+        await hubspotClient.crm.associations.v4.basicApi.createDefault(
+          'contacts',
+          String(contactId),
+          'deals',
+          String(targetDealId)
+        );
+      } catch {
+        // Ignorar si ya estaba asociado
+      }
     }
   }
 
@@ -269,5 +356,4 @@ if (beneficiaryCompanyId) {
     uyLineItemsCount: uyLineItems.length,
     createdLineItems,
   };
-}
 }
