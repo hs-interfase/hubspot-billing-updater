@@ -1,5 +1,5 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { createBillingOrderTicketsForDeal } from './tickets.js';
+import { createBillingTicketForDeal, createBillingOrderTicketsForDeal } from './tickets.js';
 import { mirrorDealToUruguay } from './dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -410,18 +410,32 @@ export async function processDeal(dealId) {
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
   // 11) Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
-  if (nextBillingDate) {
-    const dNext = new Date(nextBillingDate);
-    dNext.setHours(0, 0, 0, 0);
-    const todayStart = new Date(today);
-    todayStart.setHours(0, 0, 0, 0);
+// 11) Si la próxima fecha de facturación está dentro de la ventana (0–3 días), crear el ticket
+if (nextBillingDate) {
+  const dNext = new Date(nextBillingDate);
+  dNext.setHours(0, 0, 0, 0);
+  const todayStart = new Date(today);
+  todayStart.setHours(0, 0, 0, 0);
 
-    if (dNext.getTime() === todayStart.getTime()) {
-      await createBillingOrderTicketsForDeal(deal, lineItems, nextBillingDate, {
-        today,
-      });
-    }
+  // Cálculo de diferencia en días (positivo si future)
+  const diffMs = dNext.getTime() - todayStart.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  // Crear ticket si la fecha es hoy (0) o en 1, 2 o 3 días
+  if (diffDays >= 0 && diffDays <= 3) {
+    await createBillingTicketForDeal(
+      deal,
+      lineItems,
+      {
+        proximaFecha: dNext,
+        mensaje: message, // usa el mensaje de facturación ya calculado
+      },
+      {
+        DRY_RUN: process.env.DRY_RUN === 'true',
+      }
+    );
   }
+}
 
   // 12) Resumen
   return {
