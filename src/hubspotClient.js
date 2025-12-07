@@ -83,14 +83,17 @@ export async function getDealWithLineItems(dealId) {
 
     // 🔹 Campos de bolsa (tus internal names)
     'cant__hs_bolsa',
-    'precio', // precio total de la bolsa (si lo usás)
-    'bolsa_valor_hora',
-    'bolsa_horas_consumidas',
-    'bolsa_horas_restantes',
-    'bolsa_monto_consumido',
-    'bolsa_monto_restante',
-    'bolsa_estado',
-    'bolsa_umbral_horas_alerta',
+    'aplica_cupo',
+  'bolsa_precio_hora',
+  'horas_bolsa',
+  'precio_bolsa',
+  'bolsa_horas_restantes',
+  'bolsa_monto_restante',
+  'bolsa_monto_consumido',
+  'bolsa_horas_consumidas',
+  'total_bolsa_horas',
+  'total_bolsa_monto',
+  'bolsa_umbral_horas_alerta',
   ];
 
   // añade dinámicamente fecha_2 ... fecha_48

@@ -1,8 +1,8 @@
 // src/processAllActiveDeals.js
 import { hubspotClient } from './hubspotClient.js';
 import { processDeal } from './processDeal.js';
+import { processBagTickets } from './bagProcessor.js';
 
-// Etapas finales donde queremos auto-activar facturación si está null
 const FINAL_STAGES = ['closedwon', 'cierre_finalizado', 'cierre_ganado']; // ajustá si tus internal names son otros
 
 async function processAllActiveDeals() {
@@ -89,7 +89,9 @@ async function processAllActiveDeals() {
       }
 
       if (!debeProcesar) {
-        console.log('   - No se procesa este deal (ni activa ni etapa final con null).');
+        console.log(
+          '   - No se procesa este deal (ni activa ni etapa final con null).'
+        );
         continue;
       }
 
@@ -104,6 +106,18 @@ async function processAllActiveDeals() {
           err.response?.body || err
         );
       }
+    }
+
+    // 👇 NUEVO BLOQUE: procesar bolsas después de todos los deals
+    try {
+      console.log('\n=== Ejecutando processBagTickets (bolsas) ===');
+      const bagResult = await processBagTickets();
+      console.log('Resultado processBagTickets:', bagResult);
+    } catch (err) {
+      console.error(
+        '=== ERROR en processBagTickets ===\n',
+        err.response?.body || err
+      );
     }
 
     console.log('\n=== FIN NORMAL processAllActiveDeals ===');

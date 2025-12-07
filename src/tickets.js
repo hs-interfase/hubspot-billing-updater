@@ -2,13 +2,17 @@
 import { hubspotClient } from './hubspotClient.js';
 import { computeBillingCountersForLineItem } from './billingEngine.js';
 
-/**
- * Recoge todas las fechas de facturación de un line item (YYYY-MM-DD).
- * Replica la lógica de collectBillingDateStringsForLineItem de processDeal.js.
- */
+// src/tickets.js
+import { hubspotClient } from './hubspotClient.js';
+import { computeBillingCountersForLineItem } from './billingEngine.js';
+
+// ---------------------------------------------------------------------------
+// Helper: arma todas las fechas de facturación de un line item (YYYY-MM-DD)
+// ---------------------------------------------------------------------------
 function collectBillingDateStrings(li) {
   const p = li.properties || {};
   const out = [];
+
   const add = (raw) => {
     if (!raw) return;
     const d = new Date(raw.toString());
@@ -19,6 +23,8 @@ function collectBillingDateStrings(li) {
     const dd = String(d.getDate()).padStart(2, '0');
     out.push(`${y}-${m}-${dd}`);
   };
+
+  // fecha_inicio_de_facturacion + fecha_2..fecha_48
   add(p.fecha_inicio_de_facturacion);
   for (let i = 2; i <= 48; i++) {
     add(p[`fecha_${i}`]);
@@ -27,13 +33,12 @@ function collectBillingDateStrings(li) {
 }
 
 /**
- * Crea tickets de órdenes de facturación para las líneas que deben facturarse hoy.
- * Requiere definir las variables de entorno BILLING_ORDER_PIPELINE_ID y BILLING_ORDER_STAGE_ID.
+ * Crea tickets de órdenes de facturación para las líneas que deben facturarse
+ * en la próxima fecha. 1 ticket POR LINE ITEM.
  *
- * @param {Object} deal - Objeto del negocio
- * @param {Array} lineItems - Array de line items del negocio
- * @param {Date} nextBillingDate - Próxima fecha calculada
- * @param {Object} options - { today, pipelineId, stageId }
+ * Además:
+ * - Si el line item tiene bolsa (aplica_cupo != vacío),
+ *   inicializa consumo_bolsa_horas_pm = 0 y monto_bolsa_periodo = 0 en el ticket.
  */
 export async function createBillingOrderTicketsForDeal(
   deal,
@@ -45,13 +50,15 @@ export async function createBillingOrderTicketsForDeal(
   const todayStart = new Date(today);
   todayStart.setHours(0, 0, 0, 0);
 
-  // Normalizar la próxima fecha y obtener su ISO
+  // normalizamos nextBillingDate
   const next = new Date(nextBillingDate);
   next.setHours(0, 0, 0, 0);
   const nextIso = next.toISOString().slice(0, 10);
 
-  // si la próxima fecha no está entre hoy y 3 días, no crear tickets
-  const diffDays = Math.ceil((next - todayStart) / (1000 * 60 * 60 * 24));
+  // si la próxima fecha no está entre hoy y +3 días, no generamos tickets
+  const diffDays = Math.ceil(
+    (next.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24)
+  );
   if (diffDays < 0 || diffDays > 3) {
     return {
       created: false,
@@ -64,13 +71,13 @@ export async function createBillingOrderTicketsForDeal(
   const stageId = options.stageId || process.env.BILLING_ORDER_STAGE_ID;
   if (!pipelineId || !stageId) {
     throw new Error(
-      'Faltan BILLING_ORDER_PIPELINE_ID o BILLING_ORDER_STAGE_ID'
+      'Faltan BILLING_ORDER_PIPELINE_ID o BILLING_ORDER_STAGE_ID en variables de entorno'
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Preparar asociaciones y helpers para los tickets de facturación
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Buscar empresa asociada al deal (para asociarla al ticket)
+  // -------------------------------------------------------------------------
   let associatedCompanyId = null;
   try {
     const assocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
@@ -89,7 +96,6 @@ export async function createBillingOrderTicketsForDeal(
     );
   }
 
-  // Helper local para convertir strings tipo "sí", "1", "yes" a booleanos.
   const parseBool = (raw) => {
     const v = (raw ?? '').toString().trim().toLowerCase();
     return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
@@ -98,88 +104,116 @@ export async function createBillingOrderTicketsForDeal(
   const createdTickets = [];
 
   for (const li of lineItems) {
-    // ¿la línea factura en la próxima fecha?
     const dates = collectBillingDateStrings(li);
     if (!dates.includes(nextIso)) continue;
 
-    const p       = li.properties || {};
-    const counters   = computeBillingCountersForLineItem(li, todayStart);
+    const p = li.properties || {};
+    const counters = computeBillingCountersForLineItem(li, todayStart);
     const cuotaActual = counters.avisos_emitidos_facturacion + 1;
     const totalCuotas = counters.facturacion_total_avisos;
 
-    const qty   = Number(p.quantity || 1);
+    const qty = Number(p.quantity || 1);
     const unitPrice = Number(p.price || 0);
-    const importe  = qty * unitPrice;
+    const importe = qty * unitPrice;
 
-    // Determinar costo y margen.
     const cost = Number(p.costo || 0);
     const margin = (unitPrice - cost) * qty;
 
-    // Determinar si la facturación es repetitiva
-    const freqRaw = (p.frecuencia_de_facturacion || p.facturacion_frecuencia_de_facturacion || '').toString().toLowerCase();
-    const recurrentFrequencies = ['mensual', 'bimestral', 'trimestral', 'semestral', 'anual'];
+    const freqRaw = (
+      p.frecuencia_de_facturacion ||
+      p.facturacion_frecuencia_de_facturacion ||
+      ''
+    )
+      .toString()
+      .toLowerCase();
+    const recurrentFrequencies = [
+      'mensual',
+      'bimestral',
+      'trimestral',
+      'semestral',
+      'anual',
+    ];
     const isRepetitive = recurrentFrequencies.includes(freqRaw) ? 'true' : 'false';
 
-    // Determinar reventa
     const isResale = parseBool(p.terceros) ? 'true' : 'false';
-
-    // Determinar rubro
     const rubro = (p.servicio || p.of_rubro || '').toString();
 
-    // IVA y exoneraciones
     const iva = (p.iva || '').toString();
     const exoneraIrae = (p.of_exonera_irae || p.exonera_irae || '').toString();
     const remuneracionVariable = (p.remuneracion_variable || '').toString();
 
-    // Preparar nombres de producto/servicio para el asunto y la propiedad
     const dealName = (deal.properties?.dealname || '').toString();
     const productoNombre = (p.name || '').toString();
     const servicioNombre = (p.servicio || '').toString();
-    const productoServicio = [productoNombre, servicioNombre].filter(Boolean).join(' – ');
+    const productoServicio = [productoNombre, servicioNombre]
+      .filter(Boolean)
+      .join(' – ');
 
-    // Nombre del ticket
-    const ticketSubject = `Orden de facturación: ${dealName || 'Negocio'} – ${productoServicio || 'Producto'}`;
+    const ticketSubject = `Orden de facturación: ${
+      dealName || 'Negocio'
+    } – ${productoServicio || 'Producto'}`;
 
-    // Propiedades del ticket
+    // ⚠️ nueva propiedad de bolsa en line item
+    const aplicaCupo = (p.aplica_cupo || '').toString().trim(); // '', 'por_horas', 'por_monto'
+
     const ticketProps = {
       hs_pipeline: pipelineId,
       hs_pipeline_stage: stageId,
       subject: ticketSubject,
-      of_aplica_para_cupo: (p.of_aplica_para_cupo ?? '').toString(),
+
+      of_aplica_para_cupo: aplicaCupo || undefined, // en ticket
+
       of_cantidad: qty,
       of_costo_usd: cost,
       of_descuento: (p.of_descuento ?? 0).toString(),
       of_exonera_irae: exoneraIrae || '',
       of_margen: Number.isFinite(margin) ? margin : 0,
-      of_moneda: (p.of_moneda || deal.properties?.deal_currency_code || '').toString(),
+      of_moneda: (
+        p.of_moneda ||
+        deal.properties?.deal_currency_code ||
+        ''
+      ).toString(),
       of_monto_total: importe,
-      of_pais_operativo: (p.of_pais_operativo || deal.properties?.pais_operativo || '').toString(),
+      of_pais_operativo: (
+        p.of_pais_operativo ||
+        deal.properties?.pais_operativo ||
+        ''
+      ).toString(),
       of_rubro: rubro,
+
       numero_de_cuota: cuotaActual,
       total_cuotas: totalCuotas,
       monto_a_facturar: importe,
 
-      // Propiedades específicas de la factura
       of_fecha_de_facturacion: nextIso,
       of_line_item_id: String(li.id),
       of_deal_id: String(deal.id),
       of_producto_nombres: productoServicio,
+
       iva: iva,
       remuneracion_variable: remuneracionVariable,
       repetitivo: isRepetitive,
       reventa: isResale,
+
       of_cliente: associatedCompanyId ? String(associatedCompanyId) : '',
+
       numero_de_factura: '',
       monto_total_en_dolares: '',
     };
 
-    // 1. crear el ticket sin asociaciones
+    // 🔹 inicializar campos de bolsa EN EL TICKET si aplica cupo
+    if (aplicaCupo) {
+      ticketProps.consumo_bolsa_horas_pm = 0;
+      ticketProps.monto_bolsa_periodo = 0;
+    }
+
+    // 1) crear ticket
     const createResp = await hubspotClient.crm.tickets.basicApi.create({
       properties: ticketProps,
     });
     const ticketId = createResp.id;
 
-    // 2. asociar el ticket al deal con la asociación por defecto
+    // 2) asociar ticket al deal
     try {
       await hubspotClient.crm.associations.v4.basicApi.createDefault(
         'deals',
@@ -194,7 +228,7 @@ export async function createBillingOrderTicketsForDeal(
       );
     }
 
-    // 3. asociar el ticket a la compañía (cliente) con la asociación por defecto
+    // 3) asociar ticket a la compañía
     if (associatedCompanyId) {
       try {
         await hubspotClient.crm.associations.v4.basicApi.createDefault(
@@ -214,7 +248,7 @@ export async function createBillingOrderTicketsForDeal(
     createdTickets.push(ticketId);
   }
 
-  return { created: true, tickets: createdTickets };
+  return { created: createdTickets.length > 0, tickets: createdTickets };
 }
 
 
