@@ -35,88 +35,105 @@ function collectBillingDateStrings(li) {
  * @param {Date} nextBillingDate - Próxima fecha calculada
  * @param {Object} options - { today, pipelineId, stageId }
  */
+// Crea tickets de orden de facturación por cada línea que facture en la próxima fecha.
 export async function createBillingOrderTicketsForDeal(
   deal,
   lineItems,
   nextBillingDate,
   options = {}
 ) {
-  const today = options.today || new Date();
+  const today    = options.today || new Date();
   const todayStart = new Date(today);
   todayStart.setHours(0, 0, 0, 0);
 
+  // Normalizar la próxima fecha y obtener su ISO
   const next = new Date(nextBillingDate);
   next.setHours(0, 0, 0, 0);
+  const nextIso = next.toISOString().slice(0, 10);
 
-// si la proxiam fecha no está entre hoy y 3 días, no crear tickets
-const diffDays = Math.ceil((next - todayStart) / (1000 * 60 * 60 * 24));
-if (diffDays < 0 || diffDays > 3) {
-  return { created: false, reason: `La próxima fecha (${nextIso}) está fuera del rango de 3 días` };
-}
-
+  // si la próxima fecha no está entre hoy y 3 días, no crear tickets
+  const diffDays = Math.ceil((next - todayStart) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0 || diffDays > 3) {
+    return {
+      created: false,
+      reason: `La próxima fecha (${nextIso}) está fuera del rango de 3 días`,
+    };
+  }
 
   const pipelineId =
     options.pipelineId || process.env.BILLING_ORDER_PIPELINE_ID;
   const stageId = options.stageId || process.env.BILLING_ORDER_STAGE_ID;
   if (!pipelineId || !stageId) {
-    throw new Error('Faltan BILLING_ORDER_PIPELINE_ID o BILLING_ORDER_STAGE_ID');
+    throw new Error(
+      'Faltan BILLING_ORDER_PIPELINE_ID o BILLING_ORDER_STAGE_ID'
+    );
   }
 
   const createdTickets = [];
 
   for (const li of lineItems) {
-    // Comprobar si la línea tiene la fecha de facturación de hoy
+    // ¿la línea factura en la próxima fecha?
     const dates = collectBillingDateStrings(li);
-    const nextIso = next.toISOString().slice(0, 10);
     if (!dates.includes(nextIso)) continue;
 
-    const p = li.properties || {};
-    const counters = computeBillingCountersForLineItem(li, todayStart);
+    const p       = li.properties || {};
+    const counters   = computeBillingCountersForLineItem(li, todayStart);
     const cuotaActual = counters.avisos_emitidos_facturacion + 1;
     const totalCuotas = counters.facturacion_total_avisos;
 
-    const qty = Number(p.quantity || 1);
+    const qty   = Number(p.quantity || 1);
     const unitPrice = Number(p.price || 0);
-    const importe = qty * unitPrice;
+    const importe  = qty * unitPrice;
 
-    // Construir propiedades del ticket (ajusta según nombres reales)
+    // propiedades del ticket
     const ticketProps = {
       hs_pipeline: pipelineId,
       hs_pipeline_stage: stageId,
       subject: `Orden de facturación: ${p.name || 'Producto'}`,
-      of_aplica_para_cupo: p.of_aplica_para_cupo ?? '',
-      of_cantidad: qty,
-      of_costo_usd: unitPrice,
-      of_descuento: p.of_descuento ?? 0,
-      of_exonera_irae: p.of_exonera_irae ?? 'false',
-      of_margen: p.of_margen ?? 0,
-      of_moneda: p.of_moneda || deal.properties.deal_currency_code || '',
-      of_monto_total: importe,
+      of_aplica_para_cupo:  p.of_aplica_para_cupo ?? '',
+      of_cantidad:       qty,
+      of_costo_usd:      unitPrice,
+      of_descuento:      p.of_descuento ?? 0,
+      of_exonera_irae:   p.of_exonera_irae ?? 'false',
+      of_margen:         p.of_margen ?? 0,
+      of_moneda:         p.of_moneda || deal.properties.deal_currency_code || '',
+      of_monto_total:    importe,
       of_pais_operativo: p.of_pais_operativo ?? '',
-      of_rubro: p.servicio || p.of_rubro || '',
-      numero_de_cuota: cuotaActual,
-      total_cuotas: totalCuotas,
-      monto_a_facturar: importe,
+      of_rubro:          p.servicio || p.of_rubro || '',
+      numero_de_cuota:   cuotaActual,
+      total_cuotas:      totalCuotas,
+      monto_a_facturar:  importe,
+
+      // nuevas propiedades para facilitar el seguimiento
+      of_fecha_de_facturacion: nextIso,
+      of_line_item_id:    String(li.id),
+      of_deal_id:         String(deal.id),
+      of_producto_nombre: p.name || '',
+      of_producto_servicio: p.servicio || '',
     };
 
-    // Crear el ticket y asociarlo al negocio (associationTypeId 10 es Ticket -> Deal)
-    const ticketReq = {
+    // 1. crear el ticket sin asociaciones
+    const createResp = await hubspotClient.crm.tickets.basicApi.create({
       properties: ticketProps,
-      associations: [
-        {
-          to: { id: String(deal.id) },
-          types: [
-            {
-              associationCategory: 'HUBSPOT_DEFINED',
-              associationTypeId: 28,
-            },
-          ],
-        },
-      ],
-    };
+    });
+    const ticketId = createResp.id;
 
-    const resp = await hubspotClient.crm.tickets.basicApi.create(ticketReq);
-    createdTickets.push(resp.body.id);
+    // 2. asociar el ticket al deal con la asociación por defecto
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.createDefault(
+        'deals',
+        String(deal.id),
+        'tickets',
+        String(ticketId)
+      );
+    } catch (err) {
+      console.warn(
+        `[createBillingOrderTicketsForDeal] No se pudo asociar ticket ${ticketId} al deal ${deal.id}:`,
+        err?.message || err
+      );
+    }
+
+    createdTickets.push(ticketId);
   }
 
   return { created: true, tickets: createdTickets };
@@ -408,26 +425,21 @@ const ticketProps = {
     return { created: false, reason: 'dry-run', payload: ticketProps };
   }
 
-  const createResp = await hubspotClient.crm.tickets.basicApi.create({
-    properties: ticketProps,
-  });
-  const ticketId = createResp.id;
-  console.log('[tickets] Ticket creado. ID:', ticketId);
+ const createResp = await hubspotClient.crm.tickets.basicApi.create({
+  properties: ticketProps,
+});
+const ticketId = createResp.id;
+console.log('[tickets] Ticket creado. ID:', ticketId);
 
-  await hubspotClient.crm.associations.v4.basicApi.create(
-    'deals',
-    String(deal.id),
-    'tickets',
-    [
-      {
-        associationTypeId: 10,
-        associationCategory: 'HUBSPOT_DEFINED',
-        to: { id: ticketId },
-      },
-    ]
-  );
-  console.log('[tickets] Asociación ticket ↔ deal creada.');
+await hubspotClient.crm.associations.v4.basicApi.createDefault(
+  'deals',
+  String(deal.id),
+  'tickets',
+  String(ticketId)
+);
+console.log('[tickets] Asociación ticket ↔ deal creada.');
 
-  return { created: true, ticketId };
+return { created: true, ticketId };
+
 }
 
