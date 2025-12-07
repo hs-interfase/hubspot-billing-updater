@@ -3,7 +3,7 @@ import { hubspotClient } from './hubspotClient.js';
 import { computeBillingCountersForLineItem } from './billingEngine.js';
 
 /**
- * Devuelve todas las fechas de facturación de un line item (YYYY-MM-DD).
+ * Recoge todas las fechas de facturación de un line item (YYYY-MM-DD).
  * Replica la lógica de collectBillingDateStringsForLineItem de processDeal.js.
  */
 function collectBillingDateStrings(li) {
@@ -30,19 +30,18 @@ function collectBillingDateStrings(li) {
  * Crea tickets de órdenes de facturación para las líneas que deben facturarse hoy.
  * Requiere definir las variables de entorno BILLING_ORDER_PIPELINE_ID y BILLING_ORDER_STAGE_ID.
  *
- * @param {Object} deal - Objeto de negocio
+ * @param {Object} deal - Objeto del negocio
  * @param {Array} lineItems - Array de line items del negocio
  * @param {Date} nextBillingDate - Próxima fecha calculada
  * @param {Object} options - { today, pipelineId, stageId }
  */
-// Crea tickets de orden de facturación por cada línea que facture en la próxima fecha.
 export async function createBillingOrderTicketsForDeal(
   deal,
   lineItems,
   nextBillingDate,
   options = {}
 ) {
-  const today    = options.today || new Date();
+  const today = options.today || new Date();
   const todayStart = new Date(today);
   todayStart.setHours(0, 0, 0, 0);
 
@@ -69,6 +68,33 @@ export async function createBillingOrderTicketsForDeal(
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Preparar asociaciones y helpers para los tickets de facturación
+  // ---------------------------------------------------------------------------
+  let associatedCompanyId = null;
+  try {
+    const assocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'deals',
+      String(deal.id),
+      'companies',
+      100
+    );
+    if (assocResp && Array.isArray(assocResp.results) && assocResp.results.length > 0) {
+      associatedCompanyId = assocResp.results[0].toObjectId;
+    }
+  } catch (err) {
+    console.warn(
+      `[createBillingOrderTicketsForDeal] No se pudieron obtener compañías asociadas para el deal ${deal.id}:`,
+      err?.message || err
+    );
+  }
+
+  // Helper local para convertir strings tipo "sí", "1", "yes" a booleanos.
+  const parseBool = (raw) => {
+    const v = (raw ?? '').toString().trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
+  };
+
   const createdTickets = [];
 
   for (const li of lineItems) {
@@ -85,31 +111,66 @@ export async function createBillingOrderTicketsForDeal(
     const unitPrice = Number(p.price || 0);
     const importe  = qty * unitPrice;
 
-    // propiedades del ticket
+    // Determinar costo y margen.
+    const cost = Number(p.costo || 0);
+    const margin = (unitPrice - cost) * qty;
+
+    // Determinar si la facturación es repetitiva
+    const freqRaw = (p.frecuencia_de_facturacion || p.facturacion_frecuencia_de_facturacion || '').toString().toLowerCase();
+    const recurrentFrequencies = ['mensual', 'bimestral', 'trimestral', 'semestral', 'anual'];
+    const isRepetitive = recurrentFrequencies.includes(freqRaw) ? 'true' : 'false';
+
+    // Determinar reventa
+    const isResale = parseBool(p.terceros) ? 'true' : 'false';
+
+    // Determinar rubro
+    const rubro = (p.servicio || p.of_rubro || '').toString();
+
+    // IVA y exoneraciones
+    const iva = (p.iva || '').toString();
+    const exoneraIrae = (p.of_exonera_irae || p.exonera_irae || '').toString();
+    const remuneracionVariable = (p.remuneracion_variable || '').toString();
+
+    // Preparar nombres de producto/servicio para el asunto y la propiedad
+    const dealName = (deal.properties?.dealname || '').toString();
+    const productoNombre = (p.name || '').toString();
+    const servicioNombre = (p.servicio || '').toString();
+    const productoServicio = [productoNombre, servicioNombre].filter(Boolean).join(' – ');
+
+    // Nombre del ticket
+    const ticketSubject = `Orden de facturación: ${dealName || 'Negocio'} – ${productoServicio || 'Producto'}`;
+
+    // Propiedades del ticket
     const ticketProps = {
       hs_pipeline: pipelineId,
       hs_pipeline_stage: stageId,
-      subject: `Orden de facturación: ${p.name || 'Producto'}`,
-      of_aplica_para_cupo:  p.of_aplica_para_cupo ?? '',
-      of_cantidad:       qty,
-      of_costo_usd:      unitPrice,
-      of_descuento:      p.of_descuento ?? 0,
-      of_exonera_irae:   p.of_exonera_irae ?? 'false',
-      of_margen:         p.of_margen ?? 0,
-      of_moneda:         p.of_moneda || deal.properties.deal_currency_code || '',
-      of_monto_total:    importe,
-      of_pais_operativo: p.of_pais_operativo ?? '',
-      of_rubro:          p.servicio || p.of_rubro || '',
-      numero_de_cuota:   cuotaActual,
-      total_cuotas:      totalCuotas,
-      monto_a_facturar:  importe,
+      subject: ticketSubject,
+      of_aplica_para_cupo: (p.of_aplica_para_cupo ?? '').toString(),
+      of_cantidad: qty,
+      of_costo_usd: cost,
+      of_descuento: (p.of_descuento ?? 0).toString(),
+      of_exonera_irae: exoneraIrae || '',
+      of_margen: Number.isFinite(margin) ? margin : 0,
+      of_moneda: (p.of_moneda || deal.properties?.deal_currency_code || '').toString(),
+      of_monto_total: importe,
+      of_pais_operativo: (p.of_pais_operativo || deal.properties?.pais_operativo || '').toString(),
+      of_rubro: rubro,
+      numero_de_cuota: cuotaActual,
+      total_cuotas: totalCuotas,
+      monto_a_facturar: importe,
 
-      // nuevas propiedades para facilitar el seguimiento
+      // Propiedades específicas de la factura
       of_fecha_de_facturacion: nextIso,
-      of_line_item_id:    String(li.id),
-      of_deal_id:         String(deal.id),
-      of_producto_nombre: p.name || '',
-      of_producto_servicio: p.servicio || '',
+      of_line_item_id: String(li.id),
+      of_deal_id: String(deal.id),
+      of_producto_nombres: productoServicio,
+      iva: iva,
+      remuneracion_variable: remuneracionVariable,
+      repetitivo: isRepetitive,
+      reventa: isResale,
+      of_cliente: associatedCompanyId ? String(associatedCompanyId) : '',
+      numero_de_factura: '',
+      monto_total_en_dolares: '',
     };
 
     // 1. crear el ticket sin asociaciones
@@ -133,11 +194,29 @@ export async function createBillingOrderTicketsForDeal(
       );
     }
 
+    // 3. asociar el ticket a la compañía (cliente) con la asociación por defecto
+    if (associatedCompanyId) {
+      try {
+        await hubspotClient.crm.associations.v4.basicApi.createDefault(
+          'companies',
+          String(associatedCompanyId),
+          'tickets',
+          String(ticketId)
+        );
+      } catch (err) {
+        console.warn(
+          `[createBillingOrderTicketsForDeal] No se pudo asociar ticket ${ticketId} a la empresa ${associatedCompanyId}:`,
+          err?.message || err
+        );
+      }
+    }
+
     createdTickets.push(ticketId);
   }
 
   return { created: true, tickets: createdTickets };
 }
+
 
 /** 
 @param {Object} deal           Objeto del negocio

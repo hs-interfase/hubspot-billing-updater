@@ -48,7 +48,6 @@ export async function getDealWithLineItems(dealId) {
       'facturacion_ultima_fecha',
       'es_mirror_de_py',
       'deal_uy_mirror_id',
-      'horas_bolsa_reportada_PM',
     'comentarios_pm',
     'cliente_beneficiario'
   
@@ -83,12 +82,9 @@ export async function getDealWithLineItems(dealId) {
     'uy',
 
     // 🔹 Campos de bolsa (tus internal names)
-    'bolsa_de_horas',
-    'tipo_de_bolsa',
     'cant__hs_bolsa',
     'precio', // precio total de la bolsa (si lo usás)
     'bolsa_valor_hora',
-    'bolsa_modalidad_facturacion',
     'bolsa_horas_consumidas',
     'bolsa_horas_restantes',
     'bolsa_monto_consumido',
