@@ -1,5 +1,5 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { createBillingTicketForDeal } from './tickets.js';
+import { createBillingTicketForDeal, createBillingOrderTicketsForDeal } from './tickets.js';
 import { mirrorDealToUruguay } from './dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -117,185 +117,6 @@ function buildLineItemBlock(li, idx, moneda, notaNegocio) {
   }
 
   return parts.join('\n');
-}
-
-/**
- * Devuelve un objeto con meses y días para intervalos de facturación nativos.
- * Soporta valores como "weekly", "biweekly", "monthly", "quarterly", "semiannual",
- * "annual", "2 years", "3 years", etc. También maneja equivalentes en español.
- *
- * Si no reconoce la frecuencia, devuelve { months: 0, days: 0 }.
- */
-function getNativeInterval(freqRaw) {
-  const f = (freqRaw ?? '').toString().trim().toLowerCase();
-  switch (f) {
-    case 'weekly':
-    case 'semanal':
-      return { months: 0, days: 7 };
-    case 'biweekly':
-    case 'every 2 weeks':
-    case 'cada dos semanas':
-    case 'quincenal':
-      return { months: 0, days: 14 };
-    case 'monthly':
-    case 'mensual':
-      return { months: 1, days: 0 };
-    case 'quarterly':
-    case 'trimestral':
-      return { months: 3, days: 0 };
-    case 'semiannual':
-    case 'semi-annual':
-    case 'semi annual':
-    case 'semestral':
-      return { months: 6, days: 0 };
-    case 'annual':
-    case 'annually':
-    case 'yearly':
-    case 'anual':
-      return { months: 12, days: 0 };
-    case '2 years':
-    case '2 años':
-    case '2 anios':
-    case 'cada 2 años':
-    case 'cada dos años':
-      return { months: 24, days: 0 };
-    case '3 years':
-    case '3 años':
-    case '3 anios':
-    case 'cada 3 años':
-      return { months: 36, days: 0 };
-    case '4 years':
-    case '4 años':
-    case '4 anios':
-    case 'cada 4 años':
-      return { months: 48, days: 0 };
-    case '5 years':
-    case '5 años':
-    case '5 anios':
-    case 'cada 5 años':
-      return { months: 60, days: 0 };
-    default:
-      // One-time o irregular no tienen recurrencia
-      return { months: 0, days: 0 };
-  }
-}
-
-/**
- * Suma un intervalo (meses y/o días) a una fecha.
- * Preserva el día del mes cuando sea posible (maneja meses de distinta longitud).
- */
-function addInterval(date, interval) {
-  let d = new Date(date.getTime());
-  // sumar meses
-  if (interval.months && interval.months > 0) {
-    const day = d.getDate();
-    d.setMonth(d.getMonth() + interval.months);
-    // ajustar al último día del mes si fuera necesario
-    if (d.getDate() < day) {
-      d.setDate(0);
-    }
-  }
-  // sumar días
-  if (interval.days && interval.days > 0) {
-    d.setDate(d.getDate() + interval.days);
-  }
-  return d;
-}
-
-/**
- * Calcula todas las fechas de facturación futuras para un line item basado en las
- * propiedades nativas de suscripción de HubSpot. Solo devuelve fechas desde "today"
- * hasta "today + horizonDays".
- *
- * @param {Object} lineItem
- * @param {Object} options
- * @param {Date} [options.today] Fecha de referencia (defaults a hoy)
- * @param {number} [options.horizonDays] Número de días hacia adelante para calcular (defaults a 30)
- * @returns {Date[]} Array de fechas (objetos Date) dentro de la ventana
- */
-function getUpcomingBillingDatesForLineItemNative(lineItem, options = {}) {
-  const today = options.today ? new Date(options.today.getTime()) : new Date();
-  today.setHours(0, 0, 0, 0);
-  const horizonDays = options.horizonDays ?? 30;
-  const horizonLimit = new Date(
-    today.getTime() + horizonDays * 24 * 60 * 60 * 1000
-  );
-  const p = lineItem.properties || {};
-
-  // Determinar fecha de inicio: usar preferentemente hs_recurring_billing_start_date o fallback a fecha_inicio_de_facturacion
-  const startRaw =
-    p.hs_recurring_billing_start_date ||
-    p.billing_start_date ||
-    p.fecha_inicio_de_facturacion;
-  if (!startRaw) return [];
-  const startDate = parseLocalDate(startRaw);
-  if (!startDate) return [];
-  startDate.setHours(0, 0, 0, 0);
-
-  // Determinar frecuencia
-  const freqRaw =
-    p.hs_recurring_billing_frequency ||
-    p.recurringbillingfrequency ||
-    p.frecuencia_de_facturacion ||
-    null;
-  const interval = getNativeInterval(freqRaw);
-  // Si no hay intervalo (0 meses y 0 días), no hay recurrencia
-  if (!interval.months && !interval.days) {
-    // Para "pago único", si la fecha de inicio es futura dentro del horizonte, devolverla
-    if (
-      startDate.getTime() >= today.getTime() &&
-      startDate.getTime() <= horizonLimit.getTime()
-    ) {
-      return [startDate];
-    }
-    return [];
-  }
-
-  // Determinar número máximo de pagos
-  let maxPayments = null;
-  const numRaw =
-    p.hs_recurring_billing_number_of_payments ||
-    p.number_of_payments ||
-    p.termino_a ||
-    null;
-  if (numRaw != null) {
-    const n = Number(numRaw);
-    if (Number.isFinite(n) && n > 0) {
-      maxPayments = n;
-    }
-  }
-
-  // Determinar término: fijo vs auto-renovación
-  const termsRaw =
-    p.hs_recurring_billing_terms ||
-    p.billing_terms ||
-    p.contrato_a ||
-    '';
-  const termsLower = termsRaw.toString().toLowerCase();
-  const isFixed =
-    termsLower.includes('fijo') ||
-    termsLower.includes('fixed') ||
-    termsLower.includes('número');
-
-  const dates = [];
-  let current = startDate;
-  let count = 0;
-  while (current.getTime() <= horizonLimit.getTime()) {
-    if (current.getTime() >= today.getTime()) {
-      dates.push(new Date(current.getTime()));
-    }
-    count++;
-    if (isFixed && maxPayments != null && count >= maxPayments) {
-      break;
-    }
-    const nextDate = addInterval(current, interval);
-    // Protección ante intervalos no válidos
-    if (!nextDate || nextDate.getTime() === current.getTime()) {
-      break;
-    }
-    current = nextDate;
-  }
-  return dates;
 }
 
 // -----------------------------
@@ -432,6 +253,9 @@ function parseBoolFromHubspot(raw) {
   return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
 }
 
+// -----------------------------
+// processDeal
+// -----------------------------
 
 export async function processDeal(dealId) {
   if (!dealId) {
@@ -441,32 +265,9 @@ export async function processDeal(dealId) {
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
-  // 0) Si el negocio está pausado → desactivar facturación
-  try {
-    const pausaVal =
-      dealProps.pausa !== undefined
-        ? dealProps.pausa
-        : dealProps.Pausa !== undefined
-        ? dealProps.Pausa
-        : null;
-    if (pausaVal !== null && parseBoolFromHubspot(pausaVal)) {
-      if (parseBoolFromHubspot(dealProps.facturacion_activa)) {
-        await hubspotClient.crm.deals.basicApi.update(dealId, {
-          properties: { facturacion_activa: 'false' },
-        });
-        dealProps.facturacion_activa = 'false';
-      }
-    }
-  } catch (err) {
-    console.error('ERROR actualizando facturacion_activa por pausa:', err);
-  }
-
   // 🔁 Mirroring ANTES de la lógica de facturación
   try {
-    console.log(
-      ' → Ejecutando mirrorDealToUruguay (antes de facturación) para deal',
-      dealId
-    );
+    console.log(' → Ejecutando mirrorDealToUruguay (antes de facturación) para deal', dealId);
     const mirrorResult = await mirrorDealToUruguay(dealId);
     console.log('   Resultado mirrorDealToUruguay:', mirrorResult);
   } catch (err) {
@@ -486,9 +287,10 @@ export async function processDeal(dealId) {
     };
   }
 
-  // 1) SIEMPRE: recalcular calendario de líneas recurrentes según tu lógica actual
+  // 1) SIEMPRE: recalcular calendario de líneas recurrentes.
   for (const li of lineItems) {
     const freq = li.properties?.frecuencia_de_facturacion;
+
     if (isRecurrent(freq)) {
       await updateLineItemSchedule(li);
       // updateLineItemSchedule actualiza también lineItem.properties en memoria
@@ -508,26 +310,20 @@ export async function processDeal(dealId) {
     const counters = computeBillingCountersForLineItem(li, today);
     const updateProps = {
       facturacion_total_avisos: String(counters.facturacion_total_avisos),
-      avisos_emitidos_facturacion: String(
-        counters.avisos_emitidos_facturacion
-      ),
-      avisos_restantes_facturacion: String(
-        counters.avisos_restantes_facturacion
-      ),
+      avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
+      avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
     };
     // Actualizar en memoria
     li.properties = { ...(li.properties || {}), ...updateProps };
     // Actualizar en HubSpot
-    await hubspotClient.crm.lineItems.basicApi.update(li.id, {
-      properties: updateProps,
-    });
+    await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updateProps });
   }
 
   // 4) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
   const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today);
 
-  // 5) Si la facturación NO está activa, no programamos más
+  // 5) Si la facturación NO está activa:
   if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
     return {
       dealId,
@@ -601,7 +397,7 @@ export async function processDeal(dealId) {
     dealBillingFrequency = 'Pago Único';
   }
 
-  // 10) Actualizar negocio con próxima y última fecha / frecuencia
+  // 10) Actualizar negocio
   const updateBody = {
     properties: {
       facturacion_proxima_fecha: nextDateStr,
@@ -613,52 +409,33 @@ export async function processDeal(dealId) {
 
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
-  // 11) Crear tickets de facturación para todas las fechas dentro de los próximos 30 días.
-  try {
-    const horizon = 30;
-    // Recopilar todas las fechas próximas por línea (usando propiedades nativas)
-    const upcomingMap = new Map(); // isoDate -> Date object
-    for (const li of lineItems) {
-      const upcomingList = getUpcomingBillingDatesForLineItemNative(li, {
-        today,
-        horizonDays: horizon,
-      });
-      for (const d of upcomingList) {
-        const iso = d.toISOString().slice(0, 10);
-        if (!upcomingMap.has(iso)) {
-          upcomingMap.set(iso, d);
-        }
+  // 11) Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
+// 11) Si la próxima fecha de facturación está dentro de la ventana (0–3 días), crear el ticket
+if (nextBillingDate) {
+  const dNext = new Date(nextBillingDate);
+  dNext.setHours(0, 0, 0, 0);
+  const todayStart = new Date(today);
+  todayStart.setHours(0, 0, 0, 0);
+
+  // Cálculo de diferencia en días (positivo si future)
+  const diffMs = dNext.getTime() - todayStart.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  // Crear ticket si la fecha es hoy (0) o en 1, 2 o 3 días
+  if (diffDays >= 0 && diffDays <= 3) {
+    await createBillingTicketForDeal(
+      deal,
+      lineItems,
+      {
+        proximaFecha: dNext,
+        mensaje: message, // usa el mensaje de facturación ya calculado
+      },
+      {
+        DRY_RUN: process.env.DRY_RUN === 'true',
       }
-    }
-    // Ordenar fechas
-    const upcomingDates = Array.from(upcomingMap.values()).sort(
-      (a, b) => a - b
-    );
-    for (const dNext of upcomingDates) {
-      // Construir mensaje específico para esa fecha
-      const mensajeFecha = buildNextBillingMessage({
-        deal,
-        nextDate: dNext,
-        lineItems,
-      });
-      await createBillingTicketForDeal(
-        deal,
-        lineItems,
-        {
-          proximaFecha: dNext,
-          mensaje: mensajeFecha,
-        },
-        {
-          DRY_RUN: process.env.DRY_RUN === 'true',
-        }
-      );
-    }
-  } catch (err) {
-    console.error(
-      'ERROR creando tickets de facturación para próximos 30 días:',
-      err
     );
   }
+}
 
   // 12) Resumen
   return {
