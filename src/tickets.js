@@ -2,10 +2,6 @@
 import { hubspotClient } from './hubspotClient.js';
 import { computeBillingCountersForLineItem } from './billingEngine.js';
 
-// src/tickets.js
-import { hubspotClient } from './hubspotClient.js';
-import { computeBillingCountersForLineItem } from './billingEngine.js';
-
 // ---------------------------------------------------------------------------
 // Helper: arma todas las fechas de facturación de un line item (YYYY-MM-DD)
 // ---------------------------------------------------------------------------

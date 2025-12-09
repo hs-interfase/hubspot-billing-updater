@@ -48,9 +48,11 @@ export async function getDealWithLineItems(dealId) {
       'facturacion_ultima_fecha',
       'es_mirror_de_py',
       'deal_uy_mirror_id',
-    'comentarios_pm',
-    'cliente_beneficiario'
-  
+      'comentarios_pm',
+      'cliente_beneficiario',
+      // Añadimos la propiedad de pausa para controlar la facturación
+      'pausa',
+      'Pausa',
     ],
     undefined,
     undefined,
@@ -60,7 +62,7 @@ export async function getDealWithLineItems(dealId) {
   const lineItemIds = await getAssocIdsV4('deals', dealId, 'line_items');
   if (!lineItemIds.length) return { deal, lineItems: [] };
 
-  // 🔹 Incluir todas las propiedades necesarias (normales + bolsa)
+  // Propiedades necesarias en cada line item (normales + bolsa)
   const lineItemProperties = [
     'name',
     'servicio',
@@ -80,20 +82,24 @@ export async function getDealWithLineItems(dealId) {
     'renovacion_automatica',
     'hs_recurring_billing_period',
     'uy',
-
-    // 🔹 Campos de bolsa (tus internal names)
+    // Propiedades nativas de facturación recurrente
+    'hs_recurring_billing_frequency',
+    'hs_recurring_billing_start_date',
+    'hs_recurring_billing_terms',
+    'hs_recurring_billing_number_of_payments',
+    // Campos de bolsa
     'cant__hs_bolsa',
     'aplica_cupo',
-  'bolsa_precio_hora',
-  'horas_bolsa',
-  'precio_bolsa',
-  'bolsa_horas_restantes',
-  'bolsa_monto_restante',
-  'bolsa_monto_consumido',
-  'bolsa_horas_consumidas',
-  'total_bolsa_horas',
-  'total_bolsa_monto',
-  'bolsa_umbral_horas_alerta',
+    'bolsa_precio_hora',
+    'horas_bolsa',
+    'precio_bolsa',
+    'bolsa_horas_restantes',
+    'bolsa_monto_restante',
+    'bolsa_monto_consumido',
+    'bolsa_horas_consumidas',
+    'total_bolsa_horas',
+    'total_bolsa_monto',
+    'bolsa_umbral_horas_alerta',
   ];
 
   // añade dinámicamente fecha_2 ... fecha_48
@@ -106,12 +112,8 @@ export async function getDealWithLineItems(dealId) {
     properties: lineItemProperties,
   };
 
-  // (opcional, para ver una vez qué se está pidiendo)
-  console.log('DEBUG lineItemProperties', lineItemProperties);
-
   const batch = await hubspotClient.crm.lineItems.batchApi.read(batchInput, false);
   const lineItems = batch.results || [];
 
   return { deal, lineItems };
 }
-
