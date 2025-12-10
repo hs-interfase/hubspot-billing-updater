@@ -92,8 +92,8 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
 const interfaseCompanyId =
   options.interfaseCompanyId ||
-  process.env.INTERFASE_PY_COMPANY_ID ||
-  DEFAULT_INTERFASE_COMPANY_ID;
+  process.env.DEFAULT_INTERFASE_COMPANY_ID || process.env.INTERFASE_PY_COMPANY_ID;
+  
 
   // 1) Obtener negocio PY y sus líneas
   const { deal, lineItems } = await getDealWithLineItems(sourceDealId);
@@ -227,7 +227,6 @@ if (!targetDealId) {
   });
 }
 
-
   // 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
   for (const li of uyLineItems) {
     const srcPropsLi = li.properties || {};
@@ -239,18 +238,42 @@ if (!targetDealId) {
       props[key] = srcPropsLi[key];
     }
 
-// === Costo → price ===
-// Si existe 'precio' úsalo; si no, intentá con 'costo'
-const costValue = srcPropsLi.precio ?? srcPropsLi.costo;
-if (costValue !== undefined && costValue !== null && costValue !== '') {
-  props.price = costValue;
-  console.log(
-    '[mirrorDealToUruguay] Línea UY',
-    srcPropsLi.name,
-    '→ price en espejo =',
-    costValue
-  );
-}
+    // === COSTO → price + hs_cost_of_goods_sold en el espejo ===
+    // Prioridad:
+    // 1) hs_cost_of_goods_sold del original (nativo HubSpot)
+    // 2) costo (custom tuyo, si lo seguís usando)
+    // 3) precio (por si acaso lo usaste como "costo" en algún caso viejo)
+    const rawCost =
+      srcPropsLi.hs_cost_of_goods_sold ??
+      srcPropsLi.costo ??
+      srcPropsLi.precio;
+
+    if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
+      // Normalizamos a número por las dudas
+      const costNum = Number(rawCost);
+      const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
+
+      // En el espejo:
+      // - price = costo (lo que Interfase va a pagar)
+      // - hs_cost_of_goods_sold = costo (para contabilidad / margen)
+      props.price = finalCost;
+      props.hs_cost_of_goods_sold = finalCost;
+
+      console.log(
+        '[mirrorDealToUruguay] Línea UY espejada',
+        srcPropsLi.name,
+        '→ price =',
+        finalCost,
+        'hs_cost_of_goods_sold =',
+        finalCost
+      );
+    } else {
+      console.log(
+        '[mirrorDealToUruguay] Línea UY sin costo definido para',
+        srcPropsLi.name,
+        '(no se sobreescribe price/hs_cost_of_goods_sold)'
+      );
+    }
 
     await hubspotClient.crm.lineItems.basicApi.create({
       properties: props,
@@ -269,22 +292,9 @@ if (costValue !== undefined && costValue !== null && costValue !== '') {
     createdLineItems++;
   }
 
+
   // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
   if (interfaseCompanyId) {
-    try {
-      // Hacer que Interfase sea la EMPRESA PRINCIPAL del deal espejo
-      await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
-        properties: {
-          associatedcompanyid: String(interfaseCompanyId),
-        },
-      });
-    } catch (err) {
-      console.warn(
-        '[mirrorDealToUruguay] No se pudo actualizar associatedcompanyid con Interfase:',
-        err?.message || err
-      );
-    }
-
     try {
       await hubspotClient.crm.associations.v4.basicApi.createDefault(
         'companies',
@@ -292,14 +302,25 @@ if (costValue !== undefined && costValue !== null && costValue !== '') {
         'deals',
         String(targetDealId)
       );
-    } catch {
-      // Ignorar si ya estaba asociada
+
+      console.log(
+        '[mirrorDealToUruguay] Asocié Interfase',
+        String(interfaseCompanyId),
+        'al deal UY',
+        String(targetDealId)
+      );
+    } catch (err) {
+      console.warn(
+        '[mirrorDealToUruguay] No se pudo asociar Interfase al deal UY:',
+        err?.response?.body || err
+      );
     }
   } else {
     console.warn(
       '[mirrorDealToUruguay] INTERFASE_PY_COMPANY_ID no está configurado. No se puede asociar Interfase como empresa principal.'
     );
   }
+
 
   // 6) Determinar la empresa beneficiaria (primera empresa asociada al negocio PY)
   const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');

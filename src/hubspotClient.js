@@ -83,6 +83,8 @@ export async function getDealWithLineItems(dealId) {
     'hs_recurring_billing_period',
     'uy',
     // Propiedades nativas de facturación recurrente
+    'hs_cost_of_goods_sold',
+    'recurringbillingfrequency',
     'hs_recurring_billing_frequency',
     'hs_recurring_billing_start_date',
     'hs_recurring_billing_terms',

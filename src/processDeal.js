@@ -287,19 +287,31 @@ export async function processDeal(dealId) {
     };
   }
 
-  // 1) SIEMPRE: recalcular calendario de líneas recurrentes.
-  for (const li of lineItems) {
-    const freq = li.properties?.frecuencia_de_facturacion;
 
-    if (isRecurrent(freq)) {
-      await updateLineItemSchedule(li);
-      // updateLineItemSchedule actualiza también lineItem.properties en memoria
-    } else if (isIrregular(freq)) {
-      // Irregular: NO tocamos fechas_2..N (se manejan a mano)
-    } else {
-      // Pago único u otros: por ahora no recalculamos nada especial
-    }
+  // El propio billingEngine decide si es irregular, pago único, etc.
+for (const li of lineItems) {
+  try {
+    console.log('[processDeal] Recalculando calendario para line item', {
+      lineItemId: li.id,
+      name: li.properties?.name,
+      frecuencia_de_facturacion: li.properties?.frecuencia_de_facturacion,
+      hs_recurring_billing_frequency: li.properties?.hs_recurring_billing_frequency,
+      hs_recurring_billing_number_of_payments:
+        li.properties?.hs_recurring_billing_number_of_payments,
+      hs_recurring_billing_start_date:
+        li.properties?.hs_recurring_billing_start_date,
+    });
+
+    await updateLineItemSchedule(li); // <-- SIEMPRE
+  } catch (err) {
+    console.error(
+      '[processDeal] Error en updateLineItemSchedule para LI',
+      li.id,
+      err?.response?.data || err.message,
+    );
   }
+}
+
 
   // 2) Definir la fecha de referencia (hoy a medianoche)
   const today = new Date();
