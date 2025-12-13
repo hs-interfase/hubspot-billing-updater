@@ -1,5 +1,71 @@
 import { hubspotClient } from './hubspotClient.js';
 
+// Add known ticket properties to avoid sending unknown props to HubSpot.
+// Only the properties listed here will be sent when creating or updating tickets.
+// Add new property names here if they are added in HubSpot.
+const KNOWN_TICKET_PROPERTIES = new Set([
+  'subject',
+  'hs_pipeline',
+  'hs_pipeline_stage',
+  'of_deal_id',
+  'of_line_item_ids',
+  'of_fecha_de_facturacion',
+  'of_ticket_key',
+  'of_moneda',
+  'of_pais_operativo',
+  'of_rubro',
+  'of_producto_nombres',
+  'of_monto_total',
+  'of_precio_unitario',
+  'of_costo',
+  'of_cantidad',
+  'of_descuento',
+  'of_margen',
+  'of_aplica_para_cupo',
+  'horas_bolsa',
+  'precio_bolsa',
+  'bolsa_precio_hora',
+  'total_bolsa_horas',
+  'total_bolsa_monto',
+  'bolsa_horas_restantes',
+  'bolsa_monto_restante',
+  'repetitivo',
+  'reventa',
+  'i_v_a_',
+  'exonera_irae',
+  'remuneracion_variable',
+  'consumo_bolsa_horas_pm',
+  'monto_bolsa_periodo',
+]);
+
+// Keep track of any unknown properties encountered. We'll log these once per run.
+const _missingTicketPropertyNames = new Set();
+
+/**
+ * Filters the given ticket property object, removing any keys that are not present
+ * in KNOWN_TICKET_PROPERTIES. Unknown property names are recorded in
+ * _missingTicketPropertyNames for logging purposes. Properties with undefined
+ * values are also removed. This helps prevent HubSpot errors for non‑existent
+ * properties.
+ *
+ * @param {Object} props Object containing ticket properties.
+ * @returns {Object} Filtered properties object.
+ */
+function filterTicketProps(props) {
+  const out = {};
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value === undefined) continue;
+    if (KNOWN_TICKET_PROPERTIES.has(key)) {
+      out[key] = value;
+    } else {
+      // Record unknown property names so we can log them later.
+      _missingTicketPropertyNames.add(key);
+    }
+  }
+  return out;
+}
+
+
 /**
  * Helper interno para obtener todas las asociaciones (versión simplificada de getAssocIdsV4).
  */
@@ -99,55 +165,80 @@ function buildTicketPropsBase({ deal, lineItem, billingDate }) {
   const dealProps = deal.properties || {};
   const fechaStr = toDateOnlyString(billingDate);
 
-  const dealId = String(deal.id || deal._id || dealProps.hs_object_id || dealProps.dealId || '');
+  const dealId = String(
+    deal.id ||
+    deal._id ||
+    dealProps.hs_object_id ||
+    dealProps.dealId ||
+    ''
+  );
   const producto = liProps.name || '';
   const servicio = liProps.servicio || '';
   const subject = `${dealProps.dealname || '(sin negocio)'} | ${producto}${servicio ? ` (${servicio})` : ''} | ${fechaStr}`;
 
-  return {
+  // Compute unit price and total amount. If the discount is greater than the subtotal,
+  // total may become negative; ensure it's not below zero.
+  const unitPrice = Number(liProps.price || 0);
+  const quantity = Number(liProps.quantity || 0);
+  const discount = Number(liProps.hs_total_discount || liProps.descuento || 0);
+  const subtotal = unitPrice * quantity;
+  const total = subtotal - discount;
+
+  // Determine repetitivo using business rules in computeRepetitivo.
+  const repetitivoValue = computeRepetitivo(liProps);
+
+  // Build a preliminary props object.
+  const props = {
     subject,
     of_deal_id: dealId,
     of_line_item_ids: String(lineItem.id),
     of_fecha_de_facturacion: fechaStr,
+    of_ticket_key: `${dealId}::${lineItem.id}::${fechaStr}`,
 
+    // Deal and line item specific fields
     of_moneda: dealProps.deal_currency_code || '',
     of_pais_operativo: dealProps.pais_operativo || '',
     of_rubro: liProps.servicio || '',
     of_producto_nombres: producto,
-    of_monto_total: Number(liProps.price || 0),
+
+    // Monetary calculations
+    of_precio_unitario: unitPrice,
+    of_monto_total: total >= 0 ? total : 0,
     of_costo: Number(liProps.hs_cost_of_goods_sold || 0),
-    of_cantidad: Number(liProps.quantity || 0),
-    of_descuento: Number(liProps.hs_total_discount || 0),
+    of_cantidad: quantity,
+    of_descuento: discount,
     of_margen: Number(liProps.hs_margin || 0),
 
-
     of_aplica_para_cupo: (liProps.aplica_cupo || '').toString().trim(),
-    horas_bolsa: liProps.horas_bolsa || null,
     precio_bolsa: liProps.precio_bolsa || null,
     bolsa_precio_hora: liProps.bolsa_precio_hora || null,
-    total_bolsa_horas: liProps.total_bolsa_horas || null,
     total_bolsa_monto: liProps.total_bolsa_monto || null,
-    bolsa_horas_restantes: liProps.bolsa_horas_restantes || null,
-    bolsa_monto_restante: liProps.bolsa_monto_restante || null,
 
-    repetitivo: parseBool(liProps),
+    repetitivo: repetitivoValue,
     reventa: parseBool(liProps.terceros),
     i_v_a_: liProps.i_v_a_ || null,
     exonera_irae: liProps.exonera_irae || null,
     remuneracion_variable: Number(liProps.remuneracion_variable || 0),
   };
+
+  // Filter out unknown properties before returning.
+  return filterTicketProps(props);
 }
 
+
 function buildTicketPropsForCreate(args) {
-  return {
+  // Build base properties including of_ticket_key and filter unknown props.
+  const base = buildTicketPropsBase(args);
+  // Add pipeline and stage IDs from environment variables. These must be included on create.
+  const props = {
     hs_pipeline: process.env.BILLING_TICKET_PIPELINE_ID,
     hs_pipeline_stage: process.env.BILLING_TICKET_STAGE_ID,
-    ...buildTicketPropsBase(args),
+    ...base,
     consumo_bolsa_horas_pm: null,
     monto_bolsa_periodo: null,
   };
+  return filterTicketProps(props);
 }
-
 
 /**
  * Sincroniza los tickets de facturación por línea:
@@ -190,12 +281,13 @@ export async function syncLineItemTicketsForDeal({ deal, lineItems, today = new 
     const batch = await hubspotClient.crm.tickets.batchApi.read(
       {
         inputs: ticketIds.map((id) => ({ id: String(id) })),
-        properties: [
-          'subject',
-          'of_deal_id',
-          'of_line_item_ids',
-          'of_fecha_de_facturacion',
-        ],
+properties: [
+  'subject',
+  'of_deal_id',
+  'of_line_item_ids',
+  'of_fecha_de_facturacion',
+  'of_ticket_key',
+],
       },
       false
     );
@@ -233,22 +325,39 @@ export async function syncLineItemTicketsForDeal({ deal, lineItems, today = new 
     return { created: 0, updated: 0, deleted: deletedCount };
   }
 
-// Índice de tickets existentes (clave = lineItemId::fecha)
+// Build index of existing tickets by our unique key. Also collect any tickets
+// missing the key to perform a soft migration and detect duplicates.
 const existingIndex = new Map();
+const migrationUpdates = [];
+const duplicateIds = [];
 for (const t of existingTickets) {
   const props = t.properties || {};
   const liId = (props.of_line_item_ids || '').toString();
-  const fRaw = props.of_fecha_de_facturacion;
-  if (!liId || !fRaw) continue;
-
-  const d = new Date(fRaw);
+  const fechaRaw = props.of_fecha_de_facturacion;
+  const existingKeyProp = (props.of_ticket_key || '').toString().trim();
+  if (!liId || !fechaRaw) continue;
+  const d = new Date(fechaRaw);
   if (Number.isNaN(d.getTime())) continue;
-  const f = toDateOnlyString(d); // <-- CLAVE
-
-  existingIndex.set(`${liId}::${f}`, t);
+  d.setHours(0, 0, 0, 0);
+  const fechaStr = toDateOnlyString(d);
+  // Compute the expected key based on dealId, lineItemId and date
+  const computedKey = `${dealId}::${liId}::${fechaStr}`;
+  // Determine which key to use (existing property or computed)
+  const key = existingKeyProp || computedKey;
+  // If missing, schedule migration to set the property
+  if (!existingKeyProp) {
+    migrationUpdates.push({
+      id: String(t.id),
+      properties: { of_ticket_key: computedKey },
+    });
+  }
+  // Check for duplicates: if a ticket with the same key already exists, mark the extra one for deletion.
+  if (existingIndex.has(key)) {
+    duplicateIds.push(String(t.id));
+  } else {
+    existingIndex.set(key, t);
+  }
 }
-
-
 
   const currentLineItemIds = new Set(lineItems.map((li) => String(li.id)));
 
@@ -256,6 +365,23 @@ for (const t of existingTickets) {
   const toUpdate = [];
   const toDelete = [];
 
+
+
+// Apply soft migration for tickets missing of_ticket_key. We do this before computing updates/creations.
+if (migrationUpdates.length) {
+  try {
+    await hubspotClient.crm.tickets.batchApi.update({
+      inputs: migrationUpdates.map((u) => ({
+        id: u.id,
+        properties: { of_ticket_key: u.properties.of_ticket_key },
+      })),
+    });
+    console.log('[tickets] migration soft update count', migrationUpdates.length);
+  } catch (err) {
+    console.error('[tickets] error during migration update', err?.response?.body || err?.message || err);
+  }
+}
+  
   // 2) Para cada line item actual…
   for (const li of lineItems) {
     const liId = String(li.id);
@@ -277,8 +403,10 @@ for (const t of existingTickets) {
       horizon.setDate(horizon.getDate() + 30);
       if (d < todayMid || d > horizon) continue;
 
-      const fechaStr = toDateOnlyString(d);
-      const key = `${liId}::${fechaStr}`;
+  const fechaStr = toDateOnlyString(d);
+// Use our unique key including dealId, lineItemId and date.
+const key = `${dealId}::${liId}::${fechaStr}`;
+
 
       // Si ya tenemos un ticket existente para este (deal, lineItem, fecha)…
       const existing = existingIndex.get(key);
@@ -327,6 +455,16 @@ for (const t of existingTickets) {
       }
     }
   }
+
+
+// If duplicates exist among existing tickets (same key), schedule them for deletion.
+if (duplicateIds.length) {
+  console.log('[tickets] found duplicate tickets by key:', duplicateIds);
+  for (const dupId of duplicateIds) {
+    toDelete.push(dupId);
+  }
+}
+
 
 console.log('[tickets] pre-resumen', {
   dealId,
@@ -411,6 +549,10 @@ if (toUpdate[0]) console.log('[tickets] ejemplo update props', toUpdate[0].prope
     updated: updatedCount,
     deleted: deletedCount,
   });
+// If any properties were dropped because they are not known in HubSpot, log them once.
+if (_missingTicketPropertyNames.size) {
+  console.log('[tickets] propiedades ignoradas (no existen en el portal):', Array.from(_missingTicketPropertyNames));
+}
 
   return {
     created: createdCount,
