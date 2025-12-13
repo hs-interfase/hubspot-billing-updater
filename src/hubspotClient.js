@@ -102,6 +102,7 @@ export async function getDealWithLineItems(dealId) {
     'total_bolsa_horas',
     'total_bolsa_monto',
     'bolsa_umbral_horas_alerta',
+    'pm_asignado_bolsa',
   ];
 
   // añade dinámicamente fecha_2 ... fecha_48

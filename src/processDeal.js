@@ -1,5 +1,5 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { createBillingTicketForDeal, createBillingOrderTicketsForDeal } from './tickets.js';
+import { syncLineItemTicketsForDeal } from './tickets.js';
 import { mirrorDealToUruguay } from './dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -7,7 +7,7 @@ import {
   computeLastBillingDateFromLineItems,
   computeBillingCountersForLineItem,
 } from './billingEngine.js';
-
+import { updateBagFieldsForLineItem } from './bagEngine.js';
 // -----------------------------
 // Helpers de formato / texto
 // -----------------------------
@@ -168,6 +168,61 @@ function collectBillingDateStringsForLineItem(lineItem) {
 }
 
 /**
+ * Devuelve los line items “relevantes” para una fecha dada,
+ * usando exactamente la misma lógica que buildNextBillingMessage:
+ *  - primero los que tengan esa fecha exacta
+ *  - si no hay, los que tengan alguna fecha
+ *  - si no hay, todos
+ */
+function findRelevantLineItemsForDate(lineItems, targetDate) {
+  if (!targetDate || !Array.isArray(lineItems)) return [];
+
+  const yyyy = targetDate.getFullYear();
+  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(targetDate.getDate()).padStart(2, '0');
+  const targetIso = `${yyyy}-${mm}-${dd}`;
+
+  const linesWithDates = lineItems.map((li) => ({
+    li,
+    dates: collectBillingDateStringsForLineItem(li),
+  }));
+
+  let relevantLineItems = [];
+  for (const { li, dates } of linesWithDates) {
+    if (dates.includes(targetIso)) {
+      relevantLineItems.push(li);
+    }
+  }
+
+  // Fallback: mismas reglas que buildNextBillingMessage
+  if (!relevantLineItems.length) {
+    const withAnyDates = linesWithDates.filter((x) => x.dates.length).map((x) => x.li);
+    relevantLineItems = withAnyDates.length ? withAnyDates : lineItems;
+  }
+
+  return relevantLineItems;
+}
+
+/**
+ * Elige UN line item representativo para la próxima fecha de facturación:
+ *  - Prioriza el que tenga aplica_cupo.
+ *  - Si ninguno tiene cupo, devuelve el primero.
+ */
+function pickLineItemForNextBilling(lineItems, nextDate) {
+  const relevant = findRelevantLineItemsForDate(lineItems, nextDate);
+  if (!relevant.length) return null;
+
+  // Priorizar line item con aplica_cupo
+  const withCupo = relevant.find((li) => {
+    const aplica = (li.properties?.aplica_cupo || '').toString().trim();
+    return !!aplica;
+  });
+
+  return withCupo || relevant[0];
+}
+
+
+/**
  * Construye el mensaje de facturación en base a:
  * - Negocio
  * - Próxima fecha de facturación
@@ -317,19 +372,33 @@ for (const li of lineItems) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 3) Calcular y actualizar contadores por línea
-  for (const li of lineItems) {
-    const counters = computeBillingCountersForLineItem(li, today);
-    const updateProps = {
-      facturacion_total_avisos: String(counters.facturacion_total_avisos),
-      avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
-      avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
-    };
-    // Actualizar en memoria
-    li.properties = { ...(li.properties || {}), ...updateProps };
-    // Actualizar en HubSpot
-    await hubspotClient.crm.lineItems.basicApi.update(li.id, { properties: updateProps });
+// 3) Calcular y actualizar contadores por línea
+for (const li of lineItems) {
+  const counters = computeBillingCountersForLineItem(li, today);
+  const updateProps = {
+    facturacion_total_avisos: String(counters.facturacion_total_avisos),
+    avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion),
+    avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion),
+  };
+
+  // Actualizar en memoria
+  li.properties = { ...(li.properties || {}), ...updateProps };
+
+  // Actualizar en HubSpot (contadores de facturación)
+  await hubspotClient.crm.lineItems.basicApi.update(li.id, {
+    properties: updateProps,
+  });
+
+  try {
+    await updateBagFieldsForLineItem(li, today);
+  } catch (err) {
+    console.error(
+      '[processDeal] Error en updateBagFieldsForLineItem para LI',
+      li.id,
+      err?.response?.body || err?.message || err
+    );
   }
+}
 
   // 4) Calcular próxima y última fecha de facturación a partir de TODAS las líneas.
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
@@ -387,7 +456,29 @@ for (const li of lineItems) {
     const ddL = String(lastBillingDate.getDate()).padStart(2, '0');
     lastDateStr = `${yyyyL}-${mmL}-${ddL}`;
   }
+  // 7bis) Info de bolsa ligada a la próxima fecha
+  let facturacionTieneBolsa = null;   // null = limpiar en HubSpot
+  let pmAsignadoParaBolsa = null;
 
+if (nextBillingDate) {
+    const liForNext = pickLineItemForNextBilling(lineItems, nextBillingDate);
+
+    if (liForNext) {
+      const aplicaCupo = (liForNext.properties?.aplica_cupo || '').toString().trim();
+      if (aplicaCupo) {
+        facturacionTieneBolsa = 'true'; // HubSpot espera 'true'/'false' como string
+        pmAsignadoParaBolsa = liForNext.properties?.pm_asignado_bolsa || null;
+      }
+
+      console.log('[processDeal] Bolsa próxima fecha → LI', {
+        dealId,
+        lineItemId: liForNext.id,
+        aplica_cupo: aplicaCupo,
+        pm_asignado_bolsa: liForNext.properties?.pm_asignado_bolsa,
+        pm_asignado_que_va_al_deal: pmAsignadoParaBolsa,
+      });
+    }
+  }
   // 9) Derivar facturacion_frecuencia_de_facturacion a nivel negocio según los line items.
   let dealBillingFrequency = dealProps.facturacion_frecuencia_de_facturacion;
 
@@ -409,47 +500,61 @@ for (const li of lineItems) {
     dealBillingFrequency = 'Pago Único';
   }
 
-  // 10) Actualizar negocio
+  if (nextBillingDate) {
+    const liForNext = pickLineItemForNextBilling(lineItems, nextBillingDate);
+
+    if (liForNext) {
+      const aplicaCupo = (liForNext.properties?.aplica_cupo || '').toString().trim();
+      if (aplicaCupo) {
+        facturacionTieneBolsa = 'true'; // HubSpot espera 'true'/'false' como string
+        pmAsignadoParaBolsa = liForNext.properties?.pm_asignado_bolsa || null;
+      }
+
+      console.log('[processDeal] Bolsa próxima fecha → LI', {
+        dealId,
+        lineItemId: liForNext.id,
+        aplica_cupo: aplicaCupo,
+        pm_asignado_bolsa: liForNext.properties?.pm_asignado_bolsa,
+        pm_asignado_que_va_al_deal: pmAsignadoParaBolsa,
+      });
+    }
+  }
+
+  // 10) Armar body de actualización del negocio
   const updateBody = {
     properties: {
-      facturacion_proxima_fecha: nextDateStr,
-      facturacion_mensaje_proximo_aviso: message,
-      facturacion_ultima_fecha: lastDateStr,
-      facturacion_frecuencia_de_facturacion: dealBillingFrequency,
+      // Fechas de facturación
+      facturacion_proxima_fecha: nextDateStr || null,
+      facturacion_ultima_fecha: lastDateStr || null,
+      facturacion_mensaje_proximo_aviso: message || '',
+
+      // Tipo de facturación
+      facturacion_frecuencia_de_facturacion: dealBillingFrequency || null,
+
+      // Info de bolsa para la próxima fecha
+      facturacion_tiene_bolsa: facturacionTieneBolsa,
+      pm_asignado: pmAsignadoParaBolsa,
     },
   };
 
+  // 11) Actualizar negocio
   await hubspotClient.crm.deals.basicApi.update(dealId, updateBody);
 
-  // 11) Si la próxima fecha de facturación es hoy, crear tickets de órdenes de facturación
-// 11) Si la próxima fecha de facturación está dentro de la ventana (0–3 días), crear el ticket
-if (nextBillingDate) {
-  const dNext = new Date(nextBillingDate);
-  dNext.setHours(0, 0, 0, 0);
-  const todayStart = new Date(today);
-  todayStart.setHours(0, 0, 0, 0);
-
-  // Cálculo de diferencia en días (positivo si future)
-  const diffMs = dNext.getTime() - todayStart.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  // Crear ticket si la fecha es hoy (0) o en 1, 2 o 3 días
-  if (diffDays >= 0 && diffDays <= 3) {
-    await createBillingTicketForDeal(
+  // 12) Sincronizar tickets por line item (ventana de 30 días)
+  try {
+    await syncLineItemTicketsForDeal({
       deal,
       lineItems,
-      {
-        proximaFecha: dNext,
-        mensaje: message, // usa el mensaje de facturación ya calculado
-      },
-      {
-        DRY_RUN: process.env.DRY_RUN === 'true',
-      }
+      today,
+    });
+  } catch (err) {
+    console.error(
+      '[processDeal] Error al sincronizar tickets por line item',
+      err?.response?.body || err?.message || err
     );
   }
-}
 
-  // 12) Resumen
+  // 13) Resumen
   return {
     dealId,
     dealName: dealProps.dealname,
@@ -459,4 +564,3 @@ if (nextBillingDate) {
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
-

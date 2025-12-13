@@ -7,13 +7,101 @@ import { updateLineItemSchedule, computeNextBillingDateFromLineItems } from './b
 // Más adelante usaremos algo como process.env.HUBSPOT_CLOSED_WON_STAGE = 'closedwon'
 const TARGET_STAGE = 'appointmentscheduled';
 
-// Esta función luego será donde metas la lógica real de fechas
-function computeNextBillingDateFromLineItems(lineItems) {
-  // 🔴 Versión demo: pone “mañana”
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
+// Normaliza una fecha cruda (string, number, Date) a Date "local" (medianoche)
+function normalizeToLocalDay(raw) {
+  if (!raw) return null;
+  const str = raw.toString().trim();
+  if (!str) return null;
+
+  // Caso "YYYY-MM-DD"
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  let d;
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]); // 1-12
+    const day = Number(m[3]);   // 1-31
+    d = new Date(year, month - 1, day);
+  } else {
+    d = new Date(str);
+  }
+
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
   return d;
 }
+
+// Devuelve todas las fechas de facturación (Date) de un line item
+// usando fecha_inicio_de_facturacion y fecha_2..fecha_48
+function collectAllBillingDatesFromLineItem(lineItem) {
+  const p = lineItem.properties || {};
+  const out = [];
+
+  const add = (raw) => {
+    const d = normalizeToLocalDay(raw);
+    if (!d) return;
+    out.push(d);
+  };
+
+  add(p.fecha_inicio_de_facturacion);
+  for (let i = 2; i <= 48; i++) {
+    add(p[`fecha_${i}`]);
+  }
+
+  return out;
+}
+
+/**
+ * Próxima fecha de facturación a partir de TODOS los line items:
+ * - Devuelve la mínima fecha >= today (hoy a medianoche).
+ * - Si no hay ninguna fecha >= today, devuelve null.
+ */
+export function computeNextBillingDateFromLineItems(
+  lineItems,
+  today = new Date()
+) {
+  const todayMid = new Date(today);
+  todayMid.setHours(0, 0, 0, 0);
+
+  let candidate = null;
+
+  for (const li of lineItems || []) {
+    const dates = collectAllBillingDatesFromLineItem(li);
+    for (const d of dates) {
+      if (d < todayMid) continue; // ignorar fechas pasadas
+      if (!candidate || d < candidate) {
+        candidate = d;
+      }
+    }
+  }
+
+  return candidate;
+}
+
+/**
+ * Última fecha de facturación (la más reciente < today) a partir de TODOS los line items.
+ */
+export function computeLastBillingDateFromLineItems(
+  lineItems,
+  today = new Date()
+) {
+  const todayMid = new Date(today);
+  todayMid.setHours(0, 0, 0, 0);
+
+  let candidate = null;
+
+  for (const li of lineItems || []) {
+    const dates = collectAllBillingDatesFromLineItem(li);
+    for (const d of dates) {
+      if (d >= todayMid) continue; // solo fechas anteriores a hoy
+      if (!candidate || d > candidate) {
+        candidate = d;
+      }
+    }
+  }
+
+  return candidate;
+}
+
 
 // Un mensajito de texto para el deal
 function buildNextBillingMessage(nextDate) {

@@ -1,12 +1,75 @@
-// src/tickets.js
 import { hubspotClient } from './hubspotClient.js';
-import { computeBillingCountersForLineItem } from './billingEngine.js';
 
-// ---------------------------------------------------------------------------
-// Helper: arma todas las fechas de facturación de un line item (YYYY-MM-DD)
-// ---------------------------------------------------------------------------
-function collectBillingDateStrings(li) {
-  const p = li.properties || {};
+/**
+ * Helper interno para obtener todas las asociaciones (versión simplificada de getAssocIdsV4).
+ */
+async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
+  const out = [];
+  let after;
+
+  do {
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      fromType,
+      fromId,
+      toType,
+      limit,
+      after
+    );
+    for (const r of resp.results || []) {
+      out.push(r.toObjectId);
+    }
+    after = resp.paging?.next?.after;
+  } while (after);
+
+  return out;
+}
+
+/**
+ * Convierte cualquier fecha en un string YYYY-MM-DD (fecha “solo día”).
+ */
+function toDateOnlyString(date) {
+  const d = new Date(date);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Parsea un booleano en HubSpot (acepta "true", "1", "sí", "si", "yes").
+ */
+function parseBool(raw) {
+  const v = (raw ?? '').toString().trim().toLowerCase();
+  return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
+}
+
+function computeRepetitivo(liProps) {
+  const freq = (liProps.frecuencia_de_facturacion ?? '')
+    .toString()
+    .trim()
+    .toLowerCase();
+
+  const irregular =
+    parseBool(liProps.irregular) || parseBool(liProps.facturacion_irregular);
+
+  const isUnique =
+    freq === 'unique' ||
+    freq === 'one_time' ||
+    freq === 'one-time' ||
+    freq === 'once' ||
+    freq === 'unico' ||
+    freq === 'único';
+
+  return !(isUnique && !irregular);
+}
+
+
+/**
+ * Devuelve todas las fechas de facturación de un line item como strings "YYYY-MM-DD".
+ * Usa fecha_inicio_de_facturacion y fecha_2 … fecha_48.
+ */
+function collectBillingDateStringsForLineItem(lineItem) {
+  const p = lineItem.properties || {};
   const out = [];
 
   const add = (raw) => {
@@ -20,7 +83,6 @@ function collectBillingDateStrings(li) {
     out.push(`${y}-${m}-${dd}`);
   };
 
-  // fecha_inicio_de_facturacion + fecha_2..fecha_48
   add(p.fecha_inicio_de_facturacion);
   for (let i = 2; i <= 48; i++) {
     add(p[`fecha_${i}`]);
@@ -29,526 +91,330 @@ function collectBillingDateStrings(li) {
 }
 
 /**
- * Crea tickets de órdenes de facturación para las líneas que deben facturarse
- * en la próxima fecha. 1 ticket POR LINE ITEM.
+ * Construye las propiedades del ticket a partir del negocio, el line item y la fecha.
+ * Ajusta los nombres internos (`of_*`) según tus propiedades de ticket.
+ */
+function buildTicketPropsBase({ deal, lineItem, billingDate }) {
+  const liProps = lineItem.properties || {};
+  const dealProps = deal.properties || {};
+  const fechaStr = toDateOnlyString(billingDate);
+
+  const dealId = String(deal.id || deal._id || dealProps.hs_object_id || dealProps.dealId || '');
+  const producto = liProps.name || '';
+  const servicio = liProps.servicio || '';
+  const subject = `${dealProps.dealname || '(sin negocio)'} | ${producto}${servicio ? ` (${servicio})` : ''} | ${fechaStr}`;
+
+  return {
+    subject,
+    of_deal_id: dealId,
+    of_line_item_ids: String(lineItem.id),
+    of_fecha_de_facturacion: fechaStr,
+
+    of_moneda: dealProps.deal_currency_code || '',
+    of_pais_operativo: dealProps.pais_operativo || '',
+    of_rubro: liProps.servicio || '',
+    of_producto_nombres: producto,
+    of_monto_total: Number(liProps.price || 0),
+    of_costo: Number(liProps.hs_cost_of_goods_sold || 0),
+    of_cantidad: Number(liProps.quantity || 0),
+    of_descuento: Number(liProps.hs_total_discount || 0),
+    of_margen: Number(liProps.hs_margin || 0),
+
+
+    of_aplica_para_cupo: (liProps.aplica_cupo || '').toString().trim(),
+    horas_bolsa: liProps.horas_bolsa || null,
+    precio_bolsa: liProps.precio_bolsa || null,
+    bolsa_precio_hora: liProps.bolsa_precio_hora || null,
+    total_bolsa_horas: liProps.total_bolsa_horas || null,
+    total_bolsa_monto: liProps.total_bolsa_monto || null,
+    bolsa_horas_restantes: liProps.bolsa_horas_restantes || null,
+    bolsa_monto_restante: liProps.bolsa_monto_restante || null,
+
+    repetitivo: parseBool(liProps),
+    reventa: parseBool(liProps.terceros),
+    i_v_a_: liProps.i_v_a_ || null,
+    exonera_irae: liProps.exonera_irae || null,
+    remuneracion_variable: Number(liProps.remuneracion_variable || 0),
+  };
+}
+
+function buildTicketPropsForCreate(args) {
+  return {
+    hs_pipeline: process.env.BILLING_TICKET_PIPELINE_ID,
+    hs_pipeline_stage: process.env.BILLING_TICKET_STAGE_ID,
+    ...buildTicketPropsBase(args),
+    consumo_bolsa_horas_pm: null,
+    monto_bolsa_periodo: null,
+  };
+}
+
+
+/**
+ * Sincroniza los tickets de facturación por línea:
+ * - Crea o actualiza un ticket por combinación (deal, lineItem, fecha) en los próximos 30 días.
+ * - Elimina tickets futuros de line items que ya no existen.
+ * - Si la propiedad `pausa` (o `Pausa`) del negocio está marcada en HubSpot, elimina todos los tickets futuros y no crea ninguno nuevo.
  *
- * Además:
- * - Si el line item tiene bolsa (aplica_cupo != vacío),
- *   inicializa consumo_bolsa_horas_pm = 0 y monto_bolsa_periodo = 0 en el ticket.
+ * @param {Object} params.deal       Objeto del negocio (deal).
+ * @param {Array}  params.lineItems  Array de line items actuales del negocio.
+ * @param {Date}   params.today      Fecha actual (opcional, default = hoy).
+ * @returns {Promise<{created: number, updated: number, deleted: number}>}
  */
-export async function createBillingOrderTicketsForDeal(
-  deal,
-  lineItems,
-  nextBillingDate,
-  options = {}
-) {
-  const today = options.today || new Date();
-  const todayStart = new Date(today);
-  todayStart.setHours(0, 0, 0, 0);
-
-  // normalizamos nextBillingDate
-  const next = new Date(nextBillingDate);
-  next.setHours(0, 0, 0, 0);
-  const nextIso = next.toISOString().slice(0, 10);
-
-  // si la próxima fecha no está entre hoy y +3 días, no generamos tickets
-  const diffDays = Math.ceil(
-    (next.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24)
-  );
-  if (diffDays < 0 || diffDays > 3) {
-    return {
-      created: false,
-      reason: `La próxima fecha (${nextIso}) está fuera del rango de 3 días`,
-    };
-  }
-
-  const pipelineId =
-    options.pipelineId || process.env.BILLING_ORDER_PIPELINE_ID;
-  const stageId = options.stageId || process.env.BILLING_ORDER_STAGE_ID;
-  if (!pipelineId || !stageId) {
-    throw new Error(
-      'Faltan BILLING_ORDER_PIPELINE_ID o BILLING_ORDER_STAGE_ID en variables de entorno'
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Buscar empresa asociada al deal (para asociarla al ticket)
-  // -------------------------------------------------------------------------
-  let associatedCompanyId = null;
-  try {
-    const assocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'deals',
-      String(deal.id),
-      'companies',
-      100
-    );
-    if (assocResp && Array.isArray(assocResp.results) && assocResp.results.length > 0) {
-      associatedCompanyId = assocResp.results[0].toObjectId;
-    }
-  } catch (err) {
-    console.warn(
-      `[createBillingOrderTicketsForDeal] No se pudieron obtener compañías asociadas para el deal ${deal.id}:`,
-      err?.message || err
-    );
-  }
-
-  const parseBool = (raw) => {
-    const v = (raw ?? '').toString().trim().toLowerCase();
-    return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
-  };
-
-  const createdTickets = [];
-
-  for (const li of lineItems) {
-    const dates = collectBillingDateStrings(li);
-    if (!dates.includes(nextIso)) continue;
-
-    const p = li.properties || {};
-    const counters = computeBillingCountersForLineItem(li, todayStart);
-    const cuotaActual = counters.avisos_emitidos_facturacion + 1;
-    const totalCuotas = counters.facturacion_total_avisos;
-
-    const qty = Number(p.quantity || 1);
-    const unitPrice = Number(p.price || 0);
-    const importe = qty * unitPrice;
-
-    const cost = Number(p.costo || 0);
-    const margin = (unitPrice - cost) * qty;
-
-    const freqRaw = (
-      p.frecuencia_de_facturacion ||
-      p.facturacion_frecuencia_de_facturacion ||
+export async function syncLineItemTicketsForDeal({ deal, lineItems, today = new Date() }) {
+  const dealProps = deal.properties || {};
+  const dealId = String(
+    deal.id ||
+      deal._id ||
+      dealProps.hs_object_id ||
+      dealProps.dealId ||
       ''
-    )
-      .toString()
-      .toLowerCase();
-    const recurrentFrequencies = [
-      'mensual',
-      'bimestral',
-      'trimestral',
-      'semestral',
-      'anual',
-    ];
-    const isRepetitive = recurrentFrequencies.includes(freqRaw) ? 'true' : 'false';
-
-    const isResale = parseBool(p.terceros) ? 'true' : 'false';
-    const rubro = (p.servicio || p.of_rubro || '').toString();
-
-    const iva = (p.iva || '').toString();
-    const exoneraIrae = (p.of_exonera_irae || p.exonera_irae || '').toString();
-    const remuneracionVariable = (p.remuneracion_variable || '').toString();
-
-    const dealName = (deal.properties?.dealname || '').toString();
-    const productoNombre = (p.name || '').toString();
-    const servicioNombre = (p.servicio || '').toString();
-    const productoServicio = [productoNombre, servicioNombre]
-      .filter(Boolean)
-      .join(' – ');
-
-    const ticketSubject = `Orden de facturación: ${
-      dealName || 'Negocio'
-    } – ${productoServicio || 'Producto'}`;
-
-    // ⚠️ nueva propiedad de bolsa en line item
-    const aplicaCupo = (p.aplica_cupo || '').toString().trim(); // '', 'por_horas', 'por_monto'
-
-    const ticketProps = {
-      hs_pipeline: pipelineId,
-      hs_pipeline_stage: stageId,
-      subject: ticketSubject,
-
-      of_aplica_para_cupo: aplicaCupo || undefined, // en ticket
-
-      of_cantidad: qty,
-      of_costo_usd: cost,
-      of_descuento: (p.of_descuento ?? 0).toString(),
-      of_exonera_irae: exoneraIrae || '',
-      of_margen: Number.isFinite(margin) ? margin : 0,
-      of_moneda: (
-        p.of_moneda ||
-        deal.properties?.deal_currency_code ||
-        ''
-      ).toString(),
-      of_monto_total: importe,
-      of_pais_operativo: (
-        p.of_pais_operativo ||
-        deal.properties?.pais_operativo ||
-        ''
-      ).toString(),
-      of_rubro: rubro,
-
-      numero_de_cuota: cuotaActual,
-      total_cuotas: totalCuotas,
-      monto_a_facturar: importe,
-
-      of_fecha_de_facturacion: nextIso,
-      of_line_item_id: String(li.id),
-      of_deal_id: String(deal.id),
-      of_producto_nombres: productoServicio,
-
-      iva: iva,
-      remuneracion_variable: remuneracionVariable,
-      repetitivo: isRepetitive,
-      reventa: isResale,
-
-      of_cliente: associatedCompanyId ? String(associatedCompanyId) : '',
-
-      numero_de_factura: '',
-      monto_total_en_dolares: '',
-    };
-
-    // 🔹 inicializar campos de bolsa EN EL TICKET si aplica cupo
-    if (aplicaCupo) {
-      ticketProps.consumo_bolsa_horas_pm = 0;
-      ticketProps.monto_bolsa_periodo = 0;
-    }
-
-    // 1) crear ticket
-    const createResp = await hubspotClient.crm.tickets.basicApi.create({
-      properties: ticketProps,
-    });
-    const ticketId = createResp.id;
-
-    // 2) asociar ticket al deal
-    try {
-      await hubspotClient.crm.associations.v4.basicApi.createDefault(
-        'deals',
-        String(deal.id),
-        'tickets',
-        String(ticketId)
-      );
-    } catch (err) {
-      console.warn(
-        `[createBillingOrderTicketsForDeal] No se pudo asociar ticket ${ticketId} al deal ${deal.id}:`,
-        err?.message || err
-      );
-    }
-
-    // 3) asociar ticket a la compañía
-    if (associatedCompanyId) {
-      try {
-        await hubspotClient.crm.associations.v4.basicApi.createDefault(
-          'companies',
-          String(associatedCompanyId),
-          'tickets',
-          String(ticketId)
-        );
-      } catch (err) {
-        console.warn(
-          `[createBillingOrderTicketsForDeal] No se pudo asociar ticket ${ticketId} a la empresa ${associatedCompanyId}:`,
-          err?.message || err
-        );
-      }
-    }
-
-    createdTickets.push(ticketId);
-  }
-
-  return { created: createdTickets.length > 0, tickets: createdTickets };
-}
-
-
-/** 
-@param {Object} deal           Objeto del negocio
- * @param {Array} lineItems       Array de line items asociados
- * @param {Object} contexto       { proximaFecha: Date, mensaje: string }
- * @param {Object} options        { DRY_RUN, pipelineId, stageId }
- * @returns {Promise<Object>}     { created, ticketId?, reason? }
- */
-// Crea un único ticket de orden de facturación para un negocio.
-// Resume todas las líneas que facturan en la próxima fecha.
-// Usa tus propiedades custom of_* y las estándar de tickets.
-/*export async function createBillingTicketForDeal(
-  deal,
-  lineItems,
-  contexto = {},
-  options = {}
-) {
-  const { DRY_RUN = false, pipelineId, stageId } = options;
-
-  const proximaFecha = contexto.proximaFecha;
-  const mensaje = contexto.mensaje || '';
-
-  if (!proximaFecha) {
-    console.log('[tickets] No se crea ticket: sin próxima fecha.');
-    return { created: false, reason: 'sin próxima fecha' };
-  }
-
-  // Normalizar fecha a YYYY-MM-DD
-  const next = new Date(proximaFecha);
-  if (Number.isNaN(next.getTime())) {
-    console.log('[tickets] No se crea ticket: próxima fecha inválida.', proximaFecha);
-    return { created: false, reason: 'fecha inválida' };
-  }
-  next.setHours(0, 0, 0, 0);
-  const nextIso = next.toISOString().slice(0, 10); // yyyy-mm-dd
-
-  // Pipeline / stage de tickets
-  const pipeline = pipelineId || process.env.BILLING_TICKET_PIPELINE_ID;
-  const stage = stageId || process.env.BILLING_TICKET_STAGE_ID;
-  if (!pipeline || !stage) {
-    throw new Error(
-      'Faltan BILLING_TICKET_PIPELINE_ID o BILLING_TICKET_STAGE_ID. Configúralas en .env o pásalas en options.'
-    );
-  }
-
-  // Helper local: recolecta todas las fechas de facturación de una línea en formato YYYY-MM-DD
-  const collectBillingDateStrings = (li) => {
-    const p = li.properties || {};
-    const out = [];
-
-    const add = (raw) => {
-      if (!raw) return;
-      const d = new Date(raw.toString());
-      if (Number.isNaN(d.getTime())) return;
-      d.setHours(0, 0, 0, 0);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      out.push(`${y}-${m}-${dd}`);
-    };
-
-    add(p.fecha_inicio_de_facturacion);
-    for (let i = 2; i <= 48; i++) {
-      add(p[`fecha_${i}`]);
-    }
-    return out;
-  };
-
-  // Filtrar las líneas cuya tabla de fechas incluye la próxima fecha
-  let relevant = [];
-  for (const li of lineItems || []) {
-    const dates = collectBillingDateStrings(li);
-    if (dates.includes(nextIso)) {
-      relevant.push(li);
-    }
-  }
-
-  // Si ninguna coincide exactamente, usamos todas como fallback
-  if (!relevant.length) {
-    relevant = lineItems || [];
-  }
-
-  // Calcular importe total (qty * price) de las líneas relevantes
-  let totalAmount = 0;
-  for (const li of relevant) {
-    const p = li.properties || {};
-    const qty = Number(p.quantity || 1);
-    const price = Number(p.price || 0);
-    if (!Number.isNaN(qty) && !Number.isNaN(price)) {
-      totalAmount += qty * price;
-    }
-  }
-  totalAmount = Number(totalAmount.toFixed(2));
-
-  const dealProps = deal?.properties || {};
-  const moneda = dealProps.deal_currency_code || '';
-  const paisOperativo = dealProps.pais_operativo || '';
-  const dealName = dealProps.dealname || '';
-
-  // Propiedades del ticket (solo válidas en tu portal)
-  const ticketProps = {
-    hs_pipeline: pipeline,
-    hs_pipeline_stage: stage,
-
-    // estándar de HubSpot
-    subject: `Orden de facturación – ${dealName} – ${nextIso}`,
-    content: [
-      `Próxima fecha de facturación: ${nextIso}`,
-      `Monto estimado: ${totalAmount.toFixed(2)} ${moneda || ''}`.trim(),
-      '',
-      mensaje || '',
-    ].join('\n'),
-
-    // tus propiedades custom
-    of_moneda: moneda || '',
-    of_monto_total: totalAmount,
-    of_pais_operativo: paisOperativo || '',
-  };
-
- console.log('[tickets] Creando ticket de facturación (sin asociación previa):', JSON.stringify(ticketProps, null, 2));
-
-if (DRY_RUN) {
-  console.log('[tickets] DRY_RUN activo: no se crea el ticket.');
-  return { created: false, reason: 'dry-run', payload: ticketProps };
-}
-
-// Paso 1: Crear el ticket sin asociaciones
-const createResp = await hubspotClient.crm.tickets.basicApi.create({
-  properties: ticketProps,
+  );
+  console.log('[tickets] env', {
+  BILLING_TICKET_PIPELINE_ID: process.env.BILLING_TICKET_PIPELINE_ID,
+  BILLING_TICKET_STAGE_ID: process.env.BILLING_TICKET_STAGE_ID,
 });
-const ticketId = createResp.id;
-console.log('[tickets] Ticket creado. ID:', ticketId);
 
-// Paso 2: Asociar el ticket al deal
-await hubspotClient.crm.associations.v4.basicApi.create(
-  'deals',
-  String(deal.id),
-  'tickets',
-  [
-    {
-      associationTypeId: 10,
-      associationCategory: 'HUBSPOT_DEFINED',
-      to: { id: ticketId },
-    },
-  ]
-);
-console.log('[tickets] Asociación ticket ↔ deal creada.');
-
-return { created: true, ticketId };
-}
-*/
-
-
-export async function createBillingTicketForDeal(
-  deal,
-  lineItems,
-  contexto = {},
-  options = {}
-) {
-  const { DRY_RUN = false, pipelineId, stageId } = options;
-
-  const proximaFecha = contexto.proximaFecha;
-  const mensaje = contexto.mensaje || '';
-
-  if (!proximaFecha) {
-    console.log('[tickets] No se crea ticket: sin próxima fecha.');
-    return { created: false, reason: 'sin próxima fecha' };
+  if (!dealId) {
+    console.warn('[syncLineItemTicketsForDeal] Deal sin ID, se omite');
+    return { created: 0, updated: 0, deleted: 0 };
   }
 
-  const next = new Date(proximaFecha);
-  if (Number.isNaN(next.getTime())) {
-    console.log('[tickets] No se crea ticket: próxima fecha inválida.', proximaFecha);
-    return { created: false, reason: 'fecha inválida' };
-  }
-  next.setHours(0, 0, 0, 0);
-  const nextIso = next.toISOString().slice(0, 10);
+  // ¿El negocio está en pausa?
+  const paused =
+    parseBool(dealProps.pausa) || parseBool(dealProps.Pausa);
 
-  const pipeline = pipelineId || process.env.BILLING_TICKET_PIPELINE_ID;
-  const stage = stageId || process.env.BILLING_TICKET_STAGE_ID;
-  if (!pipeline || !stage) {
-    throw new Error('Faltan BILLING_TICKET_PIPELINE_ID o BILLING_TICKET_STAGE_ID.');
-  }
-
-  const collectBillingDateStrings = (li) => {
-    const p = li.properties || {};
-    const out = [];
-    const add = (raw) => {
-      if (!raw) return;
-      const d = new Date(raw.toString());
-      if (Number.isNaN(d.getTime())) return;
-      d.setHours(0, 0, 0, 0);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      out.push(`${y}-${m}-${dd}`);
-    };
-    add(p.fecha_inicio_de_facturacion);
-    for (let i = 2; i <= 48; i++) {
-      add(p[`fecha_${i}`]);
-    }
-    return out;
-  };
-
-  let relevant = [];
-  for (const li of lineItems || []) {
-    const dates = collectBillingDateStrings(li);
-    if (dates.includes(nextIso)) relevant.push(li);
-  }
-  if (!relevant.length) relevant = lineItems || [];
-
-  const lineItemIds = relevant.map(li => li.id).join(',');
-  const productos = relevant
-    .map(li => {
-      const p = li.properties || {};
-      const nombre = p.name || '';
-      const servicio = p.servicio || '';
-      return [nombre, servicio].filter(Boolean).join(' – ');
-    })
-    .join(' | ');
-
-  const dealProps = deal?.properties || {};
-  const moneda = dealProps.deal_currency_code || '';
-  const paisOperativo = dealProps.pais_operativo || '';
-  const dealName = dealProps.dealname || '';
-
-const searchResp = await hubspotClient.crm.tickets.searchApi.doSearch({
-  body: {
-    filterGroups: [
+  // 1) Leer todos los tickets asociados al negocio (deal ↔ tickets)
+  const ticketIds = await getAssocIdsV4('deals', dealId, 'tickets');
+  let existingTickets = [];
+  if (ticketIds.length) {
+    const batch = await hubspotClient.crm.tickets.batchApi.read(
       {
-        filters: [
-          { propertyName: 'of_fecha_de_facturacion', operator: 'EQ', value: nextIso },
-          { propertyName: 'associations.deal', operator: 'EQ', value: String(deal.id) },
+        inputs: ticketIds.map((id) => ({ id: String(id) })),
+        properties: [
+          'subject',
+          'of_deal_id',
+          'of_line_item_ids',
+          'of_fecha_de_facturacion',
         ],
       },
-    ],
-    limit: 1,
-    properties: ['subject', 'of_fecha_de_facturacion'],
-  },
-});
-
-const total = searchResp?.body?.total || 0;
-if (total > 0) {
-  console.log(`[tickets] Ya existe ticket para el deal ${deal.id} y fecha ${nextIso}.`);
-  return { created: false, reason: 'ya existe ticket para esta fecha y deal' };
-}
-
-
-let totalAmount = 0;
-for (const li of relevant) {
-  const p = li.properties || {};
-  const qty = Number(p.quantity || 1);
-  const price = Number(p.price || 0);
-  totalAmount += qty * price;
-}
-totalAmount = Number(totalAmount.toFixed(2));
-
-
-  //Propiedades del ticket
-const ticketProps = {
-  hs_pipeline: pipeline,
-  hs_pipeline_stage: stage,
-  subject: `Orden de facturación – ${dealName} – ${nextIso}`,
-  content: [
-    `Próxima fecha de facturación: ${nextIso}`,
-    `Monto estimado: ${totalAmount.toFixed(2)} ${moneda}`.trim(),
-    '',
-    mensaje || '',
-  ].join('\n'),
-
-  // Propiedades personalizadas
-  of_moneda: moneda || '',
-  of_monto_total: totalAmount,
-  of_pais_operativo: paisOperativo || '',
-  of_fecha_de_facturacion: nextIso,
-  of_line_item_ids: lineItemIds,
-  of_deal_id: String(deal.id),
-  of_producto_nombres: productos,
-};
-
-
-  console.log('[tickets] Creando ticket de facturación (sin asociación previa):', JSON.stringify(ticketProps, null, 2));
-
-  if (DRY_RUN) {
-    console.log('[tickets] DRY_RUN activo: no se crea el ticket.');
-    return { created: false, reason: 'dry-run', payload: ticketProps };
+      false
+    );
+    existingTickets = batch.results || [];
   }
 
- const createResp = await hubspotClient.crm.tickets.basicApi.create({
-  properties: ticketProps,
-});
-const ticketId = createResp.id;
-console.log('[tickets] Ticket creado. ID:', ticketId);
+  const todayMid = new Date(today);
+  todayMid.setHours(0, 0, 0, 0);
 
-await hubspotClient.crm.associations.v4.basicApi.createDefault(
-  'deals',
-  String(deal.id),
-  'tickets',
-  String(ticketId)
-);
-console.log('[tickets] Asociación ticket ↔ deal creada.');
+  // Si el negocio está en pausa, borramos todos los tickets futuros y salimos.
+  if (paused) {
+    let deletedCount = 0;
+    for (const t of existingTickets) {
+      const props = t.properties || {};
+      // Solo consideramos nuestros tickets (los que tienen fecha y line item)
+      const fechaStr = props.of_fecha_de_facturacion;
+      if (!fechaStr) continue;
+      const d = new Date(fechaStr);
+      if (Number.isNaN(d.getTime())) continue;
+      d.setHours(0, 0, 0, 0);
+      if (d >= todayMid) {
+        try {
+          await hubspotClient.crm.tickets.basicApi.archive(String(t.id));
+          deletedCount++;
+        } catch (err) {
+          console.error(
+            '[syncLineItemTicketsForDeal] Error al borrar ticket pausado',
+            t.id,
+            err?.response?.body || err?.message || err
+          );
+        }
+      }
+    }
+    console.log('[syncLineItemTicketsForDeal] Negocio en pausa, tickets eliminados:', deletedCount);
+    return { created: 0, updated: 0, deleted: deletedCount };
+  }
 
-return { created: true, ticketId };
+// Índice de tickets existentes (clave = lineItemId::fecha)
+const existingIndex = new Map();
+for (const t of existingTickets) {
+  const props = t.properties || {};
+  const liId = (props.of_line_item_ids || '').toString();
+  const fRaw = props.of_fecha_de_facturacion;
+  if (!liId || !fRaw) continue;
 
+  const d = new Date(fRaw);
+  if (Number.isNaN(d.getTime())) continue;
+  const f = toDateOnlyString(d); // <-- CLAVE
+
+  existingIndex.set(`${liId}::${f}`, t);
 }
 
+
+
+  const currentLineItemIds = new Set(lineItems.map((li) => String(li.id)));
+
+  const toCreate = [];
+  const toUpdate = [];
+  const toDelete = [];
+
+  // 2) Para cada line item actual…
+  for (const li of lineItems) {
+    const liId = String(li.id);
+    const liProps = li.properties || {};
+
+    // Si hay una propiedad de pausa a nivel de línea y es true, no programamos tickets para esta línea
+    const pausedLineItem =
+      parseBool(liProps.pausa) || parseBool(liProps.Pausa);
+
+    // Recoger las fechas de facturación de este line item
+    const dates = collectBillingDateStringsForLineItem(li);
+
+    for (const ds of dates) {
+      const d = new Date(ds);
+      if (Number.isNaN(d.getTime())) continue;
+      d.setHours(0, 0, 0, 0);
+      // Solo consideramos fechas dentro de los próximos 30 días
+      const horizon = new Date(todayMid);
+      horizon.setDate(horizon.getDate() + 30);
+      if (d < todayMid || d > horizon) continue;
+
+      const fechaStr = toDateOnlyString(d);
+      const key = `${liId}::${fechaStr}`;
+
+      // Si ya tenemos un ticket existente para este (deal, lineItem, fecha)…
+      const existing = existingIndex.get(key);
+      if (existing) {
+        // Si el line item está marcado en pausa, eliminamos el ticket futuro
+        if (pausedLineItem) {
+          // Marcar para borrado
+          toDelete.push(String(existing.id));
+        } else {
+          // Lo actualizamos con los nuevos datos
+          const props = buildTicketPropsBase({
+            deal,
+  lineItem: li,
+  billingDate: d,
+          });
+          toUpdate.push({
+            id: String(existing.id),
+            properties: props,
+          });
+        }
+        // Ya procesado, quitar del índice
+        existingIndex.delete(key);
+      } else {
+        // No existe → crear, si el line item no está pausado
+        if (!pausedLineItem) {
+          const props = buildTicketPropsForCreate({
+            deal,
+            lineItem: li,
+            billingDate: d,
+          });
+          toCreate.push({
+            properties: props,
+            associations: [
+              {
+                to: { id: dealId },
+                types: [
+                  {
+                    associationCategory: 'HUBSPOT_DEFINED',
+                    associationTypeId: 28, // deal ↔ ticket
+                  },
+                ],
+              },
+            ],
+          });
+        }
+      }
+    }
+  }
+
+console.log('[tickets] pre-resumen', {
+  dealId,
+  existingTickets: existingTickets.length,
+  toCreate: toCreate.length,
+  toUpdate: toUpdate.length,
+  toDelete: toDelete.length,
+});
+
+if (toCreate[0]) console.log('[tickets] ejemplo create props', toCreate[0].properties);
+if (toUpdate[0]) console.log('[tickets] ejemplo update props', toUpdate[0].properties);
+
+
+  // 3) Tickets “restantes” en existingIndex:
+  //    para line items que ya no existen → eliminar si la fecha es futura
+  for (const [key, t] of existingIndex.entries()) {
+    const props = t.properties || {};
+    const liId = (props.of_line_item_ids || '').toString();
+    const fechaStr = props.of_fecha_de_facturacion;
+    if (!liId || !fechaStr) continue;
+    // Line item borrado
+    const stillExists = currentLineItemIds.has(liId);
+    if (!stillExists) {
+      const d = new Date(fechaStr);
+      if (Number.isNaN(d.getTime())) continue;
+      d.setHours(0, 0, 0, 0);
+      if (d >= todayMid) {
+        toDelete.push(String(t.id));
+      }
+    }
+  }
+
+  // 4) Ejecutar los borrados, actualizaciones y creaciones
+  let createdCount = 0;
+  let updatedCount = 0;
+  let deletedCount = 0;
+
+  // Borrados
+  for (const id of toDelete) {
+    try {
+      await hubspotClient.crm.tickets.basicApi.archive(id);
+      deletedCount++;
+    } catch (err) {
+      console.error(
+        '[syncLineItemTicketsForDeal] Error al borrar ticket',
+        id,
+        err?.response?.body || err?.message || err
+      );
+    }
+  }
+
+  // Actualizaciones
+  if (toUpdate.length) {
+    const batchUpdateInput = {
+      inputs: toUpdate.map((u) => ({
+        id: u.id,
+        properties: u.properties,
+      })),
+    };
+    await hubspotClient.crm.tickets.batchApi.update(batchUpdateInput);
+    updatedCount += toUpdate.length;
+  }
+
+  if (toCreate[0]) {
+    console.log('[tickets] create pipeline/stage', {
+      hs_pipeline: toCreate[0].properties.hs_pipeline,
+      hs_pipeline_stage: toCreate[0].properties.hs_pipeline_stage,
+    });
+  } 
+
+  // Creaciones
+  if (toCreate.length) {
+    const resp = await hubspotClient.crm.tickets.batchApi.create({
+      inputs: toCreate,
+    });
+    createdCount += (resp.results || []).length;
+  }
+
+  console.log('[syncLineItemTicketsForDeal] resumen', {
+    dealId,
+    created: createdCount,
+    updated: updatedCount,
+    deleted: deletedCount,
+  });
+
+  return {
+    created: createdCount,
+    updated: updatedCount,
+    deleted: deletedCount,
+  };
+} // <-- esta cierra la función
