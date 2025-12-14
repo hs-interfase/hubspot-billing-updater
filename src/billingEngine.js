@@ -265,12 +265,10 @@ if (isIrregular) {
   const iso = formatDateISO(start);
   const updates = {};
 
-  // 👇 Verdad: propiedad nativa
   if (p.hs_recurring_billing_start_date !== iso) {
     updates.hs_recurring_billing_start_date = iso;
   }
 
-  // 👇 Solo si la propiedad custom EXISTE en este portal
   if (
     Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion') &&
     p.fecha_inicio_de_facturacion !== iso
@@ -428,6 +426,7 @@ function startOfDay(date) {
 // Devuelve la última fecha de facturación (la mayor < today)
 // usando todas las fechas de todos los line items
 // (fecha_inicio_de_facturacion, fecha_2, fecha_3, ...).
+
 export function computeLastBillingDateFromLineItems(
   lineItems,
   today = new Date()

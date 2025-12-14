@@ -14,8 +14,7 @@ const LINEA_PARA_UY_PROP = 'uy';
 // ID de fallback para la empresa Interfase (si no se define por options o .env)
 const DEFAULT_INTERFASE_COMPANY_ID = '34885518646';
 
-// 👇 Propiedad de COSTO en el line item (ajustá si tu internal name es otro)
-const LINE_ITEM_COST_PROP = 'costo';
+const LINE_ITEM_COST_PROP = 'hs_cost_of_goods_sold';
 
 // ID de asociación por defecto entre line items y deals (HUBSPOT_DEFINED).
 const LINE_ITEM_TO_DEAL_ASSOC_ID = 20;
@@ -203,7 +202,6 @@ if (!targetDealId) {
     es_mirror_de_py: 'true',
     deal_py_origen_id: String(sourceDealId),
 
-    // 👇 Copiar moneda del negocio origen al espejo (a nivel deal)
     ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
   };
 

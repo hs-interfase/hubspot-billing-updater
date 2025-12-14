@@ -108,7 +108,7 @@ async function processAllActiveDeals() {
       }
     }
 
-    // 👇 NUEVO BLOQUE: procesar bolsas después de todos los deals
+    // NUEVO BLOQUE: procesar bolsas después de todos los deals
     try {
       console.log('\n=== Ejecutando processBagTickets (bolsas) ===');
       const bagResult = await processBagTickets();
