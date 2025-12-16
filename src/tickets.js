@@ -3,6 +3,8 @@ import { hubspotClient } from './hubspotClient.js';
 // Add known ticket properties to avoid sending unknown props to HubSpot.
 // Only the properties listed here will be sent when creating or updating tickets.
 // Add new property names here if they are added in HubSpot.
+// src/tickets.js
+
 const KNOWN_TICKET_PROPERTIES = new Set([
   'subject',
   'hs_pipeline',
@@ -36,6 +38,12 @@ const KNOWN_TICKET_PROPERTIES = new Set([
   'remuneracion_variable',
   'consumo_bolsa_horas_pm',
   'monto_bolsa_periodo',
+  // Nuevas propiedades para el resultado de la factura
+  'of_invoice_id',
+  'of_invoice_url',
+  'of_invoice_status',
+  'of_invoice_key',
+  'of_billing_error',
 ]);
 
 // Keep track of any unknown properties encountered. We'll log these once per run.
@@ -128,7 +136,6 @@ function computeRepetitivo(liProps) {
 
   return !(isUnique && !irregular);
 }
-
 
 /**
  * Devuelve todas las fechas de facturación de un line item como strings "YYYY-MM-DD".
@@ -224,19 +231,35 @@ function buildTicketPropsBase({ deal, lineItem, billingDate }) {
   // Filter out unknown properties before returning.
   return filterTicketProps(props);
 }
+// src/tickets.js
 
+function buildTicketPropsForCreate({ deal, lineItem, billingDate }) {
+  // Construye las propiedades base incluyendo of_ticket_key
+  const base = buildTicketPropsBase({ deal, lineItem, billingDate });
 
-function buildTicketPropsForCreate(args) {
-  // Build base properties including of_ticket_key and filter unknown props.
-  const base = buildTicketPropsBase(args);
-  // Add pipeline and stage IDs from environment variables. These must be included on create.
+  // Normaliza fechas a medianoche para compararlas
+  const fechaTicket = new Date(billingDate);
+  fechaTicket.setHours(0, 0, 0, 0);
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  // Determina la etapa inicial: por defecto la de pipeline; si la fecha es hoy, usa READY
+  let stageId = process.env.BILLING_TICKET_STAGE_ID;
+  const readyStage =
+    process.env.BILLING_TICKET_STAGE_READY || process.env.BILLING_ORDER_STAGE_READY;
+  if (readyStage && fechaTicket.getTime() === hoy.getTime()) {
+    stageId = readyStage;
+  }
+
+  // Monta el objeto final con pipeline y etapa correctos
   const props = {
     hs_pipeline: process.env.BILLING_TICKET_PIPELINE_ID,
-    hs_pipeline_stage: process.env.BILLING_TICKET_STAGE_ID,
+    hs_pipeline_stage: stageId,
     ...base,
     consumo_bolsa_horas_pm: null,
     monto_bolsa_periodo: null,
   };
+
   return filterTicketProps(props);
 }
 
@@ -260,10 +283,13 @@ export async function syncLineItemTicketsForDeal({ deal, lineItems, today = new 
       dealProps.dealId ||
       ''
   );
-  console.log('[tickets] env', {
+console.log('[tickets] env', {
   BILLING_TICKET_PIPELINE_ID: process.env.BILLING_TICKET_PIPELINE_ID,
   BILLING_TICKET_STAGE_ID: process.env.BILLING_TICKET_STAGE_ID,
+  BILLING_TICKET_STAGE_READY: process.env.BILLING_TICKET_STAGE_READY,
+  BILLING_ORDER_STAGE_READY: process.env.BILLING_ORDER_STAGE_READY,
 });
+
 
   if (!dealId) {
     console.warn('[syncLineItemTicketsForDeal] Deal sin ID, se omite');
@@ -283,11 +309,16 @@ export async function syncLineItemTicketsForDeal({ deal, lineItems, today = new 
         inputs: ticketIds.map((id) => ({ id: String(id) })),
 properties: [
   'subject',
+  'hs_pipeline',
+  'hs_pipeline_stage',
   'of_deal_id',
   'of_line_item_ids',
   'of_fecha_de_facturacion',
   'of_ticket_key',
+  'of_invoice_id',
+  'of_invoice_key',
 ],
+
       },
       false
     );
@@ -417,15 +448,25 @@ const key = `${dealId}::${liId}::${fechaStr}`;
           toDelete.push(String(existing.id));
         } else {
           // Lo actualizamos con los nuevos datos
-          const props = buildTicketPropsBase({
-            deal,
+const props = buildTicketPropsBase({
+  deal,
   lineItem: li,
   billingDate: d,
-          });
-          toUpdate.push({
-            id: String(existing.id),
-            properties: props,
-          });
+});
+
+const isToday = d.getTime() === todayMid.getTime();
+const readyStage =
+  process.env.BILLING_TICKET_STAGE_READY || process.env.BILLING_ORDER_STAGE_READY;
+
+if (isToday && readyStage) {
+  props.hs_pipeline_stage = readyStage;
+}
+
+toUpdate.push({
+  id: String(existing.id),
+  properties: props,
+});
+
         }
         // Ya procesado, quitar del índice
         existingIndex.delete(key);

@@ -490,22 +490,24 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
     return null;
   }
 
-  // 2) Lógica de fechas: elegir la primera fecha >= hoy
+  // 2) Lógica de fechas: elegir la MENOR fecha >= hoy (sin asumir orden)
   const todayStart = startOfDay(today);
   const allDates = collectAllBillingDatesFromLineItem(lineItem);
 
   if (!allDates.length) return null;
 
+  let candidate = null;
   for (const d of allDates) {
-    if (d.getTime() >= todayStart.getTime()) {
-      return d;
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) continue;
+    if (d.getTime() < todayStart.getTime()) continue;
+
+    if (!candidate || d.getTime() < candidate.getTime()) {
+      candidate = d;
     }
   }
 
-  // Todas las fechas quedaron en el pasado -> ya no hay más pagos útiles
-  return null;
+  return candidate; // puede ser null si todas quedaron en el pasado
 }
-
 
 export function computeNextBillingDateFromLineItems(lineItems, today = new Date()) {
   let minDate = null;

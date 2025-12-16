@@ -404,6 +404,17 @@ for (const li of lineItems) {
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
   const lastBillingDate = computeLastBillingDateFromLineItems(lineItems, today);
 
+  // --- Ajuste de coherencia ---
+  // Si la próxima fecha calculada ya es pasada (menor que hoy),
+  // la tratamos como última fecha y dejamos próxima en null.
+  let effectiveNextBillingDate = nextBillingDate;
+  let effectiveLastBillingDate = lastBillingDate;
+
+  if (nextBillingDate && nextBillingDate.getTime() < today.getTime()) {
+    effectiveLastBillingDate = nextBillingDate;
+    effectiveNextBillingDate = null;
+  }
+
   // 5) Si la facturación NO está activa:
   if (!parseBoolFromHubspot(dealProps.facturacion_activa)) {
     return {
@@ -434,28 +445,27 @@ for (const li of lineItems) {
   // 7) Construir mensaje SOLO si hay próxima fecha.
   let message = '';
   let nextDateStr = '';
-
-  if (nextBillingDate) {
+  if (effectiveNextBillingDate) {
     message = buildNextBillingMessage({
       deal,
-      nextDate: nextBillingDate,
+      nextDate: effectiveNextBillingDate,
       lineItems,
     });
-
-    const yyyy = nextBillingDate.getFullYear();
-    const mm = String(nextBillingDate.getMonth() + 1).padStart(2, '0');
-    const dd = String(nextBillingDate.getDate()).padStart(2, '0');
+    const yyyy = effectiveNextBillingDate.getFullYear();
+    const mm = String(effectiveNextBillingDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(effectiveNextBillingDate.getDate()).padStart(2, '0');
     nextDateStr = `${yyyy}-${mm}-${dd}`;
   }
 
   // 8) Última fecha de facturación (la mayor < hoy entre todas las fechas)
   let lastDateStr = '';
-  if (lastBillingDate) {
-    const yyyyL = lastBillingDate.getFullYear();
-    const mmL = String(lastBillingDate.getMonth() + 1).padStart(2, '0');
-    const ddL = String(lastBillingDate.getDate()).padStart(2, '0');
+  if (effectiveLastBillingDate) {
+    const yyyyL = effectiveLastBillingDate.getFullYear();
+    const mmL = String(effectiveLastBillingDate.getMonth() + 1).padStart(2, '0');
+    const ddL = String(effectiveLastBillingDate.getDate()).padStart(2, '0');
     lastDateStr = `${yyyyL}-${mmL}-${ddL}`;
   }
+  
   // 7bis) Info de bolsa ligada a la próxima fecha
   let facturacionTieneBolsa = null;   // null = limpiar en HubSpot
   let pmAsignadoParaBolsa = null;
