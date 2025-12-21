@@ -1,5 +1,5 @@
 // src/testProcessDeal.js
-import { processDeal } from './processDeal.js';
+import { processDeal } from '../processDeal.js';
 
 const dealId = process.argv[2];
 

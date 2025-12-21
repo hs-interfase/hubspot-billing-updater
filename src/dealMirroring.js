@@ -241,21 +241,19 @@ if (!targetDealId) {
     // 1) hs_cost_of_goods_sold del original (nativo HubSpot)
     // 2) costo (custom tuyo, si lo seguís usando)
     // 3) precio (por si acaso lo usaste como "costo" en algún caso viejo)
-    const rawCost =
-      srcPropsLi.hs_cost_of_goods_sold ??
-      srcPropsLi.costo ??
-      srcPropsLi.precio;
+// dealMirroring.js (dentro del loop de creación de líneas UY)
+const rawCost =
+  srcPropsLi.hs_cost_of_goods_sold ??
+  srcPropsLi.costo ??
+  srcPropsLi.precio;
 
-    if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
-      // Normalizamos a número por las dudas
-      const costNum = Number(rawCost);
-      const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
+if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
+  const costNum = Number(rawCost);
+  const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
 
-      // En el espejo:
-      // - price = costo (lo que Interfase va a pagar)
-      // - hs_cost_of_goods_sold = costo (para contabilidad / margen)
-      props.price = finalCost;
-      props.hs_cost_of_goods_sold = finalCost;
+  // Usamos cost como price, pero no copiamos cost_of_goods_sold
+  props.price = finalCost;
+  props.hs_cost_of_goods_sold = 0; 
 
       console.log(
         '[mirrorDealToUruguay] Línea UY espejada',

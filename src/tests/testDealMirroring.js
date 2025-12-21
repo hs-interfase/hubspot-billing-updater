@@ -1,5 +1,5 @@
 // src/testMirrorDealToUruguay.js
-import { mirrorDealToUruguay } from './dealMirroring.js';
+import { mirrorDealToUruguay } from '../dealMirroring.js';
 
 const dealId = process.argv[2];
 

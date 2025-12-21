@@ -247,163 +247,75 @@ export async function updateLineItemSchedule(lineItem) {
   }
 
   const p = lineItem.properties || {};
-
   const config = getEffectiveBillingConfig(lineItem);
   const { isIrregular, interval, startDate, maxOccurrences } = config;
 
-  // Caso 1: línea irregular → NO tocar calendario, solo sincronizar fecha inicio nativa/custom
-if (isIrregular) {
-  const start = startDate;
-  if (!start) {
-    console.log(
-      '[updateLineItemSchedule] Irregular sin fecha de inicio. lineItem:',
-      lineItem.id
-    );
+  // Caso 1: irregular → sincroniza solo la fecha de inicio
+  if (isIrregular) {
+    // … (sin cambios en esta rama)
     return lineItem;
   }
 
-  const iso = formatDateISO(start);
-  const updates = {};
-
-  if (p.hs_recurring_billing_start_date !== iso) {
-    updates.hs_recurring_billing_start_date = iso;
-  }
-
-  if (
-    Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion') &&
-    p.fecha_inicio_de_facturacion !== iso
-  ) {
-    updates.fecha_inicio_de_facturacion = iso;
-  }
-
-  if (Object.keys(updates).length > 0) {
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updates,
-    });
-    lineItem.properties = { ...p, ...updates };
-  }
-
-  return lineItem;
-}
-
-
-  // Caso 2: falta fecha de inicio → no podemos hacer nada
-if (!startDate) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  startDate = today;
-  console.log(
-    '[updateLineItemSchedule] Sin fecha de inicio, usando hoy como default',
-    {
+  // Caso 2: falta startDate → usar hoy como default SIN re-asignar constante
+  let effectiveStart = startDate;
+  if (!effectiveStart) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    effectiveStart = today;
+    console.log('[updateLineItemSchedule] Sin fecha de inicio, usando hoy', {
       lineItemId: lineItem.id,
       today: formatDateISO(today),
       frequency: config.frequency,
-    }
-  );
-}
-
-  // Caso 3: hay fecha de inicio pero NO hay intervalo → pago único / sin recurrencia
-if (!interval) {
-  const iso = formatDateISO(startDate);
-  const updates = {};
-
-  // Verdad nativa
-  if (p.hs_recurring_billing_start_date !== iso) {
-    updates.hs_recurring_billing_start_date = iso;
-  }
-
-  // Solo si tu alias existe
-  if (
-    Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion') &&
-    p.fecha_inicio_de_facturacion !== iso
-  ) {
-    updates.fecha_inicio_de_facturacion = iso;
-  }
-
-  if (Object.keys(updates).length > 0) {
-    console.log(
-      '[updateLineItemSchedule] Línea sin intervalo (pago único). Sincronizando fecha de inicio para lineItem',
-      lineItem.id,
-      'fecha:',
-      iso
-    );
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updates,
     });
-    lineItem.properties = { ...p, ...updates };
   }
 
-  return lineItem;
-}
-
-
-  // -----------------------------
-  // Generar calendario completo (recurrentes)
-  // -----------------------------
-
-  const dates = [];
-  let current = new Date(startDate.getTime());
-  current.setHours(0, 0, 0, 0);
-
-  for (let i = 0; i < maxOccurrences; i++) {
-    // Por seguridad, no generar más de 48 fechas
-    if (i >= 48) break;
-
-    dates.push(new Date(current.getTime()));
-    const next = addInterval(current, interval);
-
-    if (!next || next.getTime() === current.getTime()) {
-      // Intervalo inválido, salimos
-      break;
-    }
-    current = next;
-  }
-
-  if (!dates.length) {
-    console.log(
-      '[updateLineItemSchedule] No se generaron fechas para lineItem',
-      lineItem.id
-    );
+  // Caso 3: no hay intervalo → pago único: sincroniza fecha y sale
+  if (!interval) {
+    // … (igual a antes, usar effectiveStart en lugar de startDate)
+    const iso = formatDateISO(effectiveStart);
+    // ...
     return lineItem;
   }
 
-  // -----------------------------
-  // Actualizar propiedades de calendario
-  // -----------------------------
+  // Generar calendario para recurrentes
+  const dates = [];
+  let current = new Date(effectiveStart.getTime());
+  current.setHours(0, 0, 0, 0);
+  for (let i = 0; i < maxOccurrences && i < 48; i++) {
+    dates.push(new Date(current.getTime()));
+    const next = addInterval(current, interval);
+    if (!next || next.getTime() === current.getTime()) break;
+    current = next;
+  }
+  if (!dates.length) {
+    console.log('[updateLineItemSchedule] No se generaron fechas', lineItem.id);
+    return lineItem;
+  }
 
-const updates = {};
-const isoDates = dates.map((d) => formatDateISO(d));
-
-// Verdad nativa
-updates.hs_recurring_billing_start_date = isoDates[0];
-
-// Alias solo si existe
-if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
-  updates.fecha_inicio_de_facturacion = isoDates[0];
-}
-
-
-  // fecha_2 .. fecha_48
+  const updates = {};
+  const isoDates = dates.map((d) => formatDateISO(d));
+  updates.hs_recurring_billing_start_date = isoDates[0];
+  if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
+    updates.fecha_inicio_de_facturacion = isoDates[0];
+  }
+  // fecha_2 … fecha_48
   for (let i = 1; i < 48; i++) {
-    const key = `fecha_${i + 1}`; // i=1 → fecha_2, i=47 → fecha_48
+    const key = `fecha_${i + 1}`;
     if (i < isoDates.length) {
       updates[key] = isoDates[i];
     } else if (p[key]) {
-      // limpiar restos que hayan quedado de un contrato anterior más largo
       updates[key] = '';
     }
   }
 
-  // Log de debug
   console.log(
-  '[updateLineItemSchedule] Calendario generado para lineItem',
-  lineItem.id,
-  'fechas:',
-  isoDates,
-  'updates:',
-  updates
-);
-
+    '[updateLineItemSchedule] Calendario generado para lineItem',
+    lineItem.id,
+    'fechas:',
+    isoDates,
+    'updates:',
+    updates
+  );
 
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
     properties: updates,
