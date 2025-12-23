@@ -7,7 +7,8 @@ import {
   computeLastBillingDateFromLineItems,
   computeBillingCountersForLineItem,
 } from '../billingEngine.js';
-import { initLineItemCupo, updateDealCupo } from '../cupo.js';
+import { updateDealCupo } from '../cupo.js';
+import {  updateBagFieldsForLineItem } from '../bagEngine.js';
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
@@ -142,9 +143,9 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
     // 3) cupo por línea
     if (alsoInitCupo) {
       try {
-        await initLineItemCupo(li);
+        await updateBagFieldsForLineItem(li);
       } catch (err) {
-        console.error('[phase1] Error en initLineItemCupo para line item', li.id, err);
+        console.error('[phase1] Error en updateBagFieldsForLineItem para line item', li.id, err);
       }
     }
   }
@@ -181,22 +182,24 @@ export async function runPhase1(dealId) {
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
   await processLineItemsForPhase1(lineItems, today, { alsoInitCupo: true });
 
-  // 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
-  if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
-    try {
-      const { lineItems: mirrorLineItems } = await getDealWithLineItems(mirrorResult.targetDealId);
-      await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });
+// 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
+if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
+  try {
+    const { deal: mirrorDeal, lineItems: mirrorLineItems } =
+      await getDealWithLineItems(mirrorResult.targetDealId);
 
-      // (opcional) también actualizar cupo a nivel deal espejo
-      try {
-        await updateDealCupo(mirrorResult.targetDealId, mirrorLineItems);
-      } catch (err) {
-        console.error('[phase1] Error updateDealCupo en espejo UY', mirrorResult.targetDealId, err);
-      }
+    await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });
+
+    // actualizar cupo a nivel deal espejo usando sus props (no pisar inputs)
+    try {
+      await updateDealCupo(mirrorResult.targetDealId, mirrorLineItems, mirrorDeal);
     } catch (err) {
-      console.error('[phase1] No se pudo obtener o procesar el deal espejo', mirrorResult.targetDealId, err);
+      console.error('[phase1] Error updateDealCupo en espejo UY', mirrorResult.targetDealId, err);
     }
+  } catch (err) {
+    console.error('[phase1] No se pudo obtener o procesar el deal espejo', mirrorResult.targetDealId, err);
   }
+}
 
   // 3) Calcular próxima y última fecha de facturación (negocio original)
   const nextBillingDate = computeNextBillingDateFromLineItems(lineItems, today);
@@ -216,12 +219,12 @@ export async function runPhase1(dealId) {
   // 4b) Tipo del negocio = tipo del PRÓXIMO evento (no mezcla)
   const dealBillingFrequency = pickDealFlowTypeForNextEvent(lineItems, nextDateStr);
 
-  // 5) Actualizar cupo a nivel negocio (IMPORTANTE: esto no debería pisar cupo_total/umbral del usuario)
-  try {
-    await updateDealCupo(dealId, lineItems);
-  } catch (err) {
-    console.error('[phase1] Error updateDealCupo deal', dealId, err);
-  }
+   // 5) Actualizar cupo a nivel negocio pasando también el negocio completo
+   try {
+     await updateDealCupo(dealId, lineItems, deal);
+   } catch (err) {
+     console.error('[phase1] Error updateDealCupo deal', dealId, err);
+   }
 
   // 6) Construir mensaje
   const message = effectiveNext

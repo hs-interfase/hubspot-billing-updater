@@ -181,6 +181,29 @@ export async function updateBagFieldsForLineItem(lineItem) {
     updates.bolsa_monto_consumido = '0';
   }
 
+  console.log('[bagEngine][DEBUG]', {
+    lineItemId: String(lineItem.id),
+    aplica_cupo: p.aplica_cupo,
+    parte_del_cupo: p.parte_del_cupo,
+    bolsa_precio_hora: p.bolsa_precio_hora,
+    horas_bolsa_raw: p.horas_bolsa,
+    cant__hs_bolsa_raw: p.cant__hs_bolsa,
+    precio_bolsa_raw: p.precio_bolsa,
+    total_bolsa_horas_raw: p.total_bolsa_horas,
+    bolsa_horas_consumidas_raw: p.bolsa_horas_consumidas,
+    // valores calculados
+    pricePerHour,
+    horasBolsa,
+    precioBolsa,
+    numberPeriods,
+    totalHoras,
+    horasConsumidas,
+    horasRestantes,
+    // lo que va a escribir
+    updates,
+  });
+
+
   // Si no hay nada que actualizar, retornamos
   if (Object.keys(updates).length === 0) {
     return lineItem;

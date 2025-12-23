@@ -23,25 +23,95 @@ function getArgValue(prefix) {
   return null;
 }
 
+/**
+ * Helpers gating fase 2
+ */
+function isTruthy(raw) {
+  const v = (raw ?? "").toString().trim().toLowerCase();
+  return ["true", "1", "yes", "si", "sí"].includes(v);
+}
+
+function hasPropertyValue(raw) {
+  // NOT_HAS_PROPERTY suele venir como undefined / null / ""
+  return raw !== undefined && raw !== null && String(raw).trim() !== "";
+}
+
+function isClosedWonStage(rawDealstage, envStage) {
+  const v = (rawDealstage ?? "").toString().trim().toLowerCase();
+  const s = (envStage ?? "closedwon").toString().trim().toLowerCase();
+  return v === s;
+}
+
 async function processSingleDeal(dealId) {
   console.log(`\n=== Procesando deal ${dealId} (Fase 1 -> Fase 2 -> Fase 3) ===`);
 
+  // 1) Siempre fase 1
   const res1 = await runPhase1(dealId);
   console.log("[runBilling] Fase 1:", res1);
 
-  const res2 = await runPhase2(dealId);
-  console.log("[runBilling] Fase 2:", res2);
+  // 2) Gate de fase 2: solo en closedwon (o stage env) + regla facturacion_activa
+  const stageEnv = process.env.DEAL_STAGE_CIERRE_GANADO || "closedwon";
 
+  const gateResp = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
+    "dealname",
+    "dealstage",
+    "facturacion_activa",
+  ]);
+  const p = gateResp.properties || {};
+
+  const inWon = isClosedWonStage(p.dealstage, stageEnv);
+  const hasFA = hasPropertyValue(p.facturacion_activa);
+  const faTrue = isTruthy(p.facturacion_activa);
+
+  let res2 = { dealId: String(dealId), skipped: true, reason: "no evaluado" };
+
+  if (!inWon) {
+    res2 = {
+      dealId: String(dealId),
+      skipped: true,
+      reason: `dealstage != ${stageEnv}`,
+      dealstage: p.dealstage,
+    };
+    console.log("[runBilling] Fase 2:", res2);
+  } else {
+    // Está en cierre ganado: aplicar regla acordada
+    if (!hasFA) {
+      // ✅ primer arranque: si NO existe la property, activarla
+      await hubspotClient.crm.deals.basicApi.update(String(dealId), {
+        properties: { facturacion_activa: "true" },
+      });
+      console.log("[runBilling] facturacion_activa => true (primer arranque en cierre ganado)", {
+        dealId,
+        stage: p.dealstage,
+      });
+
+      res2 = await runPhase2(dealId);
+      console.log("[runBilling] Fase 2:", res2);
+    } else if (!faTrue) {
+      // ✅ existe y es false: respetar pausa (no tocar, no tickets)
+      res2 = {
+        dealId: String(dealId),
+        skipped: true,
+        reason: "facturacion_activa=false (pausado, se respeta)",
+      };
+      console.log("[runBilling] Fase 2:", res2);
+    } else {
+      // ✅ existe y es true: ejecutar fase2 normal
+      res2 = await runPhase2(dealId);
+      console.log("[runBilling] Fase 2:", res2);
+    }
+  }
+
+  // 3) Fase 3 (por ahora igual que tu flujo)
   const res3 = await runPhase3(dealId);
   console.log("[runBilling] Fase 3:", res3);
 
   console.log(`=== FIN deal ${dealId} ===\n`);
+
+  return { res1, res2, res3 };
 }
 
 async function processAllClosedWonDeals() {
-  // OJO: esta búsqueda es solo un ejemplo mínimo.
-  // Vos definís el stage real por env:
-  //   DEAL_STAGE_CIERRE_GANADO=closedwon (o tu stage internal id)
   const stage = process.env.DEAL_STAGE_CIERRE_GANADO;
   if (!stage) {
     throw new Error(
@@ -59,9 +129,7 @@ async function processAllClosedWonDeals() {
     const searchRequest = {
       filterGroups: [
         {
-          filters: [
-            { propertyName: "dealstage", operator: "EQ", value: stage }
-          ],
+          filters: [{ propertyName: "dealstage", operator: "EQ", value: stage }],
         },
       ],
       properties: ["dealname", "dealstage", "facturacion_activa"],
@@ -87,18 +155,14 @@ async function processAllClosedWonDeals() {
 async function main() {
   const args = process.argv.slice(2);
 
-  // Permitir: node src/runBilling.js --deal=123
   const dealIdFromFlag = getArgValue("--deal");
-
   const isAllWon = hasFlag("--allWon");
 
-  // Caso 1: --allWon
   if (isAllWon) {
     await processAllClosedWonDeals();
     return;
   }
 
-  // Caso 2: deal por flag o primer arg posicional
   const dealId = dealIdFromFlag || args[0];
   if (!dealId) {
     console.log("Uso:");

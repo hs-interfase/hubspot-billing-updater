@@ -2,8 +2,9 @@
 import { hubspotClient } from "../hubspotClient.js";
 import { getDealWithLineItems } from "../hubspotClient.js";
 import { syncLineItemTicketsForDeal } from "../tickets.js";
-import { processCupoTickets, updateDealCupo } from "../cupo.js";
-import { updateDealBillingFieldsFromLineItems } from "../dealBillingFields.js"; // <-- NUEVO
+import {  updateDealCupo } from "../cupo.js";
+import { updateDealBillingFieldsFromLineItems } from "../dealBillingFields.js"; 
+import { processBagTickets } from "../bagProcessor.js";
 
 export async function runPhase2(dealId) {
   if (!dealId) throw new Error("runPhase2 requiere un dealId");
@@ -36,7 +37,7 @@ export async function runPhase2(dealId) {
   // 2) Procesar consumo de cupo a partir de tickets (global)
   //    (esto actualiza consumidos/restantes en line items, según tu cupo.js)
   try {
-    await processCupoTickets();
+    await processBagTickets();
   } catch (err) {
     console.error("[phase2] Error al procesar cupo en tickets", err?.response?.body || err);
   }
