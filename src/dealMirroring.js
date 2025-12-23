@@ -242,6 +242,7 @@ if (!targetDealId) {
     // 2) costo (custom tuyo, si lo seguís usando)
     // 3) precio (por si acaso lo usaste como "costo" en algún caso viejo)
 // dealMirroring.js (dentro del loop de creación de líneas UY)
+// src/dealMirroring.js (dentro del loop de creación de líneas UY)
 const rawCost =
   srcPropsLi.hs_cost_of_goods_sold ??
   srcPropsLi.costo ??
@@ -251,18 +252,17 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
   const costNum = Number(rawCost);
   const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
 
-  // Usamos cost como price, pero no copiamos cost_of_goods_sold
+  // Usamos cost como price y no copiamos cost_of_goods_sold del original
   props.price = finalCost;
-  props.hs_cost_of_goods_sold = 0; 
+  props.hs_cost_of_goods_sold = 0;
 
-      console.log(
-        '[mirrorDealToUruguay] Línea UY espejada',
-        srcPropsLi.name,
-        '→ price =',
-        finalCost,
-        'hs_cost_of_goods_sold =',
-        finalCost
-      );
+  console.log(
+    '[mirrorDealToUruguay] Línea UY espejada',
+    srcPropsLi.name,
+    '→ price =',
+    finalCost,
+    'hs_cost_of_goods_sold = 0'
+  );
     } else {
       console.log(
         '[mirrorDealToUruguay] Línea UY sin costo definido para',

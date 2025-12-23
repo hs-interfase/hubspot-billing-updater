@@ -250,9 +250,44 @@ export async function updateLineItemSchedule(lineItem) {
   const config = getEffectiveBillingConfig(lineItem);
   const { isIrregular, interval, startDate, maxOccurrences } = config;
 
-  // Caso 1: irregular → sincroniza solo la fecha de inicio
+  // Helper: limpiar fechas_2..fecha_24 si quedaron de una config anterior
+  const clearCalendarFields = (updatesObj) => {
+    for (let i = 2; i <= 24; i++) {
+      const key = `fecha_${i}`;
+      if (p[key]) updatesObj[key] = '';
+    }
+  };
+
+  // Caso 1: irregular → sincroniza solo la fecha de inicio (y limpia calendario recomendado)
   if (isIrregular) {
-    // … (sin cambios en esta rama)
+    // Si tu rama irregular hoy "no hace nada", al menos te recomiendo:
+    // - setear hs_recurring_billing_start_date / fecha_inicio_de_facturacion si hay startDate
+    // - limpiar fecha_2..fecha_24 (ajuste 2 aplicado también acá)
+    if (startDate) {
+      const iso = formatDateISO(startDate);
+      const updatesIrregular = {
+        hs_recurring_billing_start_date: iso,
+      };
+      if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
+        updatesIrregular.fecha_inicio_de_facturacion = iso;
+      }
+      clearCalendarFields(updatesIrregular);
+
+      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+        properties: updatesIrregular,
+      });
+      lineItem.properties = { ...p, ...updatesIrregular };
+    } else {
+      // si no hay startDate, igual conviene limpiar calendario para no dejar basura
+      const updatesIrregular = {};
+      clearCalendarFields(updatesIrregular);
+      if (Object.keys(updatesIrregular).length) {
+        await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+          properties: updatesIrregular,
+        });
+        lineItem.properties = { ...p, ...updatesIrregular };
+      }
+    }
     return lineItem;
   }
 
@@ -269,11 +304,25 @@ export async function updateLineItemSchedule(lineItem) {
     });
   }
 
-  // Caso 3: no hay intervalo → pago único: sincroniza fecha y sale
+  // Caso 3: no hay intervalo → pago único: sincroniza fecha inicio y limpia calendario (ajuste 2)
   if (!interval) {
-    // … (igual a antes, usar effectiveStart en lugar de startDate)
     const iso = formatDateISO(effectiveStart);
-    // ...
+    const updatesOneTime = {
+      hs_recurring_billing_start_date: iso,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
+      updatesOneTime.fecha_inicio_de_facturacion = iso;
+    }
+
+    // ✅ Ajuste 2: limpiar fechas_2..fecha_24 para evitar tickets fantasma
+    clearCalendarFields(updatesOneTime);
+
+    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+      properties: updatesOneTime,
+    });
+
+    lineItem.properties = { ...p, ...updatesOneTime };
     return lineItem;
   }
 
@@ -281,30 +330,36 @@ export async function updateLineItemSchedule(lineItem) {
   const dates = [];
   let current = new Date(effectiveStart.getTime());
   current.setHours(0, 0, 0, 0);
+
   for (let i = 0; i < maxOccurrences && i < 48; i++) {
     dates.push(new Date(current.getTime()));
     const next = addInterval(current, interval);
     if (!next || next.getTime() === current.getTime()) break;
     current = next;
   }
+
   if (!dates.length) {
     console.log('[updateLineItemSchedule] No se generaron fechas', lineItem.id);
     return lineItem;
   }
 
-  const updates = {};
   const isoDates = dates.map((d) => formatDateISO(d));
-  updates.hs_recurring_billing_start_date = isoDates[0];
+
+  const updatesRecurring = {
+    hs_recurring_billing_start_date: isoDates[0],
+  };
+
   if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
-    updates.fecha_inicio_de_facturacion = isoDates[0];
+    updatesRecurring.fecha_inicio_de_facturacion = isoDates[0];
   }
-  // fecha_2 … fecha_48
-  for (let i = 1; i < 48; i++) {
+
+  // fecha_2 … fecha_24 (tu realidad)
+  for (let i = 1; i < 24; i++) {
     const key = `fecha_${i + 1}`;
     if (i < isoDates.length) {
-      updates[key] = isoDates[i];
+      updatesRecurring[key] = isoDates[i];
     } else if (p[key]) {
-      updates[key] = '';
+      updatesRecurring[key] = '';
     }
   }
 
@@ -314,14 +369,14 @@ export async function updateLineItemSchedule(lineItem) {
     'fechas:',
     isoDates,
     'updates:',
-    updates
+    updatesRecurring
   );
 
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-    properties: updates,
+    properties: updatesRecurring,
   });
 
-  lineItem.properties = { ...p, ...updates };
+  lineItem.properties = { ...p, ...updatesRecurring };
   return lineItem;
 }
 
