@@ -38,26 +38,34 @@ export async function getDealWithLineItems(dealId) {
     "pais_operativo",
     "deal_currency_code",
     "nota",
+
+    // ====== FACTURACIÓN (deal - info/pantallazo) ======
     "facturacion_activa",
     "facturacion_frecuencia_de_facturacion",
     "facturacion_proxima_fecha",
     "facturacion_ultima_fecha",
+
+    // Mirrors / duplicación
     "es_mirror_de_py",
     "deal_uy_mirror_id",
-    "comentarios_pm",
     "cliente_beneficiario",
-    // Campo de pausa
-    "pausa",
-    "Pausa",
 
-    // ====== CUPO (nuevo caso) ======
+    // Pausa (normalizo a 1 sola key; dejo "pausa" y saco "Pausa")
+    "pausa",
+
+    // ====== CUPO (deal) ======
     "cupo_activo",
     "tipo_de_cupo", // "Por horas" | "Por Monto"
     "cupo_total",
+    "cupo_total_horas",
+    "cupo_total_monto",
     "cupo_umbral",
     "cupo_consumido",
     "cupo_restante",
     "cupo_estado",
+
+    // Responsable (deal)
+    "responsable_asignado",
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -87,6 +95,7 @@ export async function getDealWithLineItems(dealId) {
     "renovacion_automatica",
     "hs_recurring_billing_period",
     "uy",
+    "pais_operativo",
 
     // Campos nativos de facturación recurrente
     "hs_cost_of_goods_sold",
@@ -96,26 +105,28 @@ export async function getDealWithLineItems(dealId) {
     "hs_recurring_billing_terms",
     "hs_recurring_billing_number_of_payments",
 
-    // ====== CUPO (nuevo caso) ======
+    // ====== CUPO (line item) ======
     "parte_del_cupo", // boolean: este line item consume del cupo del negocio
 
-    // ====== BOLSA (line item) ======
-    "cant__hs_bolsa",
-    "aplica_cupo", // el vendedor lo ve como tipo de bolsa y se usa en caso de bolsa en line item, no para cupo del negocio
-    "bolsa_precio_hora",
-    "horas_bolsa",
-    "precio_bolsa",
-    "bolsa_horas_restantes",
-    "bolsa_monto_restante",
-    "bolsa_monto_consumido",
-    "bolsa_horas_consumidas",
-    "total_bolsa_horas",
-    "total_bolsa_monto",
-    "bolsa_umbral_horas_alerta",
-    "pm_asignado_bolsa",
+    // ====== FACTURACIÓN V2 (line item) ======
+    "facturacion_activa", // bool: entra en el flujo
+    "facturacion_automatica", // bool: si true => emite factura sin ticket
+    "facturar_ahora", // bool: disparador manual (si lo usás en line item)
+    "responsable_asignado", // opcional: si lo usan por línea
+    "horas_reales_usadas", // opcional: si alguna vez registran horas reales a nivel LI
+
+    // Snapshots (para tickets / auditoría)
+    "precio_hora_snapshot",
+    "horas_previstas_snapshot",
+    "monto_original_snapshot",
+
+    // Invoice tracking (si lo usás)
+    "of_invoice_id",
+    "of_invoice_key",
+    "of_invoice_status",
   ];
 
-  // Incluir fechas extras hasta 24 como pediste
+  // Incluir fechas extras hasta 24
   for (let i = 2; i <= 24; i++) {
     lineItemProperties.push(`fecha_${i}`);
   }

@@ -1,181 +1,190 @@
 // src/runBilling.js
-import "dotenv/config";
-
-import { runPhase1 } from "./phases/phase1.js";
-import { runPhase2 } from "./phases/phase2.js";
-import { runPhase3 } from "./phases/phase3.js";
-import { hubspotClient } from "./hubspotClient.js";
+import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
+import { runPhasesForDeal } from "./phases/index.js";
+import { emitInvoicesForReadyTickets } from "./invoices.js";
 
 /**
- * Pequeña ayuda para args.
+ * Modo de ejecución:
+ *   --deal <ID>     procesa un solo negocio
+ *   --allDeals      procesa TODOS los negocios
+ *
+ * (Opcional) EMIT_READY_TICKETS=true para emitir facturas por tickets READY (legacy)
  */
-function hasFlag(flag) {
-  return process.argv.slice(2).includes(flag);
-}
 
-function getArgValue(prefix) {
-  // permite: --deal=123 o --deal 123
-  const args = process.argv.slice(2);
-  const eq = args.find((a) => a.startsWith(prefix + "="));
-  if (eq) return eq.split("=")[1];
-  const idx = args.indexOf(prefix);
-  if (idx >= 0 && args[idx + 1]) return args[idx + 1];
-  return null;
-}
+function parseArgs(argv) {
+  const args = {
+    dealId: null,
+    allDeals: false,
+    help: false,
+  };
 
-/**
- * Helpers gating fase 2
- */
-function isTruthy(raw) {
-  const v = (raw ?? "").toString().trim().toLowerCase();
-  return ["true", "1", "yes", "si", "sí"].includes(v);
-}
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
 
-function hasPropertyValue(raw) {
-  // NOT_HAS_PROPERTY suele venir como undefined / null / ""
-  return raw !== undefined && raw !== null && String(raw).trim() !== "";
-}
+    if (a === "--help" || a === "-h") {
+      args.help = true;
+      continue;
+    }
 
-function isClosedWonStage(rawDealstage, envStage) {
-  const v = (rawDealstage ?? "").toString().trim().toLowerCase();
-  const s = (envStage ?? "closedwon").toString().trim().toLowerCase();
-  return v === s;
-}
+    if (a === "--deal" || a === "--dealId") {
+      const v = argv[i + 1];
+      if (!v) throw new Error("Falta el valor para --deal <ID>");
+      args.dealId = String(v);
+      i++;
+      continue;
+    }
 
-async function processSingleDeal(dealId) {
-  console.log(`\n=== Procesando deal ${dealId} (Fase 1 -> Fase 2 -> Fase 3) ===`);
-
-  // 1) Siempre fase 1
-  const res1 = await runPhase1(dealId);
-  console.log("[runBilling] Fase 1:", res1);
-
-  // 2) Gate de fase 2: solo en closedwon (o stage env) + regla facturacion_activa
-  const stageEnv = process.env.DEAL_STAGE_CIERRE_GANADO || "closedwon";
-
-  const gateResp = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
-    "dealname",
-    "dealstage",
-    "facturacion_activa",
-  ]);
-  const p = gateResp.properties || {};
-
-  const inWon = isClosedWonStage(p.dealstage, stageEnv);
-  const hasFA = hasPropertyValue(p.facturacion_activa);
-  const faTrue = isTruthy(p.facturacion_activa);
-
-  let res2 = { dealId: String(dealId), skipped: true, reason: "no evaluado" };
-
-  if (!inWon) {
-    res2 = {
-      dealId: String(dealId),
-      skipped: true,
-      reason: `dealstage != ${stageEnv}`,
-      dealstage: p.dealstage,
-    };
-    console.log("[runBilling] Fase 2:", res2);
-  } else {
-    // Está en cierre ganado: aplicar regla acordada
-    if (!hasFA) {
-      // ✅ primer arranque: si NO existe la property, activarla
-      await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-        properties: { facturacion_activa: "true" },
-      });
-      console.log("[runBilling] facturacion_activa => true (primer arranque en cierre ganado)", {
-        dealId,
-        stage: p.dealstage,
-      });
-
-      res2 = await runPhase2(dealId);
-      console.log("[runBilling] Fase 2:", res2);
-    } else if (!faTrue) {
-      // ✅ existe y es false: respetar pausa (no tocar, no tickets)
-      res2 = {
-        dealId: String(dealId),
-        skipped: true,
-        reason: "facturacion_activa=false (pausado, se respeta)",
-      };
-      console.log("[runBilling] Fase 2:", res2);
-    } else {
-      // ✅ existe y es true: ejecutar fase2 normal
-      res2 = await runPhase2(dealId);
-      console.log("[runBilling] Fase 2:", res2);
+    if (a === "--allDeals") {
+      args.allDeals = true;
+      continue;
     }
   }
 
-  // 3) Fase 3 (por ahora igual que tu flujo)
-  const res3 = await runPhase3(dealId);
-  console.log("[runBilling] Fase 3:", res3);
-
-  console.log(`=== FIN deal ${dealId} ===\n`);
-
-  return { res1, res2, res3 };
+  return args;
 }
 
-async function processAllClosedWonDeals() {
-  const stage = process.env.DEAL_STAGE_CIERRE_GANADO;
-  if (!stage) {
-    throw new Error(
-      "Falta env DEAL_STAGE_CIERRE_GANADO para usar --allWon (ej: closedwon o el stage interno que uses)."
-    );
-  }
+function printHelp() {
+  console.log(`
+Uso:
+  node ./src/runBilling.js --deal <DEAL_ID>
+  node ./src/runBilling.js --allDeals
 
-  console.log("=== RUN BILLING (modo --allWon) ===");
-  console.log("[runBilling] Buscando deals en cierre ganado:", stage);
+Opciones:
+  --deal <id>     Procesa SOLO ese negocio
+  --allDeals      Procesa TODOS los negocios (paginado)
+  -h, --help      Muestra esta ayuda
 
-  let after = undefined;
-  let count = 0;
+Env opcional:
+  EMIT_READY_TICKETS=true   (emite facturas por stage READY - legacy)
+`);
+}
 
+async function getAllDealIds() {
+  const out = [];
+  let after;
+
+  // Trae TODOS los deals del portal (paginado)
   do {
-    const searchRequest = {
-      filterGroups: [
-        {
-          filters: [{ propertyName: "dealstage", operator: "EQ", value: stage }],
-        },
-      ],
-      properties: ["dealname", "dealstage", "facturacion_activa"],
-      limit: 100,
+    const resp = await hubspotClient.crm.deals.basicApi.getPage(
+      100,
       after,
-    };
+      ["dealname"], // props mínimas (solo para log)
+      undefined,
+      false
+    );
 
-    const resp = await hubspotClient.crm.deals.searchApi.doSearch(searchRequest);
-    const deals = resp.results || [];
-
-    for (const d of deals) {
-      count++;
-      await processSingleDeal(String(d.id));
-    }
-
+    out.push(...(resp.results || []).map((d) => String(d.id)));
     after = resp.paging?.next?.after;
   } while (after);
 
-  console.log("=== FIN RUN BILLING --allWon ===");
-  console.log("[runBilling] Deals procesados:", count);
+  return out;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-
-  const dealIdFromFlag = getArgValue("--deal");
-  const isAllWon = hasFlag("--allWon");
-
-  if (isAllWon) {
-    await processAllClosedWonDeals();
-    return;
+export async function runBilling({ dealId, allDeals } = {}) {
+  if (!dealId && !allDeals) {
+    throw new Error("Debes usar --deal <ID> o --allDeals");
+  }
+  if (dealId && allDeals) {
+    throw new Error("Usa solo uno: --deal o --allDeals (no ambos)");
   }
 
-  const dealId = dealIdFromFlag || args[0];
-  if (!dealId) {
-    console.log("Uso:");
-    console.log("  node ./src/runBilling.js <DEAL_ID>");
-    console.log("  node ./src/runBilling.js --deal=<DEAL_ID>");
-    console.log("  node ./src/runBilling.js --allWon");
+  console.log("\n" + "=".repeat(80));
+  console.log("🚀 HUBSPOT BILLING UPDATER v2.0 - INICIO");
+  console.log("=".repeat(80));
+  console.log("[runBilling] Modo:", dealId ? `Deal específico: ${dealId}` : 'TODOS los deals');
+  console.log("[runBilling] Fecha:", new Date().toISOString());
+  console.log("=".repeat(80) + "\n");
+
+  const ids = dealId ? [String(dealId)] : await getAllDealIds();
+  console.log(`[runBilling] 📊 Total deals a procesar: ${ids.length}\n`);
+
+  let totalDeals = 0;
+  let totalTickets = 0;
+  let totalInvoicesAuto = 0;
+
+  for (const id of ids) {
+    try {
+      console.log(`\n${"-".repeat(80)}`);
+      console.log(`📋 PROCESANDO DEAL: ${id}`);
+      console.log("-".repeat(80));
+      
+      const { deal, lineItems } = await getDealWithLineItems(id);
+      const dealName = deal?.properties?.dealname || 'Sin nombre';
+      
+      console.log(`[Deal] Nombre: ${dealName}`);
+      console.log(`[Deal] Line Items encontrados: ${lineItems.length}`);
+      
+      if (lineItems.length === 0) {
+        console.log(`⚠️  Deal sin line items, saltando...\n`);
+        continue;
+      }
+      
+      totalDeals++;
+
+      // Ejecuta fases (Phase1 cupo + Phase2 tickets manuales + Phase3 auto invoices)
+      const res = await runPhasesForDeal({ deal, lineItems });
+
+      totalTickets += res.ticketsCreated || 0;
+      totalInvoicesAuto += res.autoInvoicesEmitted || 0;
+
+      console.log(`\n✅ Deal ${id} completado:`);
+      console.log(`   - Tickets creados: ${res.ticketsCreated || 0}`);
+      console.log(`   - Facturas emitidas: ${res.autoInvoicesEmitted || 0}`);
+    } catch (err) {
+      console.error(
+        "[runBilling] Error procesando negocio",
+        id,
+        err?.response?.body || err?.message || err
+      );
+    }
+  }
+
+  // Legacy/Opcional: emitir facturas de tickets listos por stage READY
+  const emitReady = (process.env.EMIT_READY_TICKETS || "").toLowerCase() === "true";
+  if (emitReady) {
+    try {
+      const { processed } = await emitInvoicesForReadyTickets();
+      console.log("[runBilling] Facturas emitidas por READY:", processed);
+    } catch (e) {
+      console.error(
+        "[runBilling] Error emitiendo facturas de tickets READY",
+        e?.response?.body || e?.message || e
+      );
+    }
+  }
+
+  console.log("\n" + "=".repeat(80));
+  console.log("📊 RESUMEN FINAL");
+  console.log("=".repeat(80));
+  console.log(`✅ Deals procesados: ${totalDeals}`);
+  console.log(`🎫 Tickets creados: ${totalTickets}`);
+  console.log(`💰 Facturas emitidas: ${totalInvoicesAuto}`);
+  if (emitReady) {
+    console.log(`🔄 Modo EMIT_READY_TICKETS: activo`);
+  }
+  console.log("=".repeat(80) + "\n");
+
+  return { totalDeals, totalTickets, totalInvoicesAuto };
+}
+
+// Entry point ESM
+if (import.meta.url === `file://${process.argv[1]}`) {
+  try {
+    const args = parseArgs(process.argv);
+
+    if (args.help) {
+      printHelp();
+      process.exit(0);
+    }
+
+    runBilling(args).catch((err) => {
+      console.error("[runBilling] Error fatal", err?.message || err);
+      printHelp();
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error("[runBilling] Error fatal", err?.message || err);
+    printHelp();
     process.exit(1);
   }
-
-  await processSingleDeal(String(dealId));
 }
-
-main().catch((err) => {
-  console.error("[runBilling] ERROR", err?.response?.body || err?.message || err);
-  process.exit(1);
-});

@@ -8,7 +8,6 @@ import {
   computeBillingCountersForLineItem,
 } from '../billingEngine.js';
 import { updateDealCupo } from '../cupo.js';
-import {  updateBagFieldsForLineItem } from '../bagEngine.js';
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
@@ -138,15 +137,6 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
       await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updateProps });
     } catch (err) {
       console.error('[phase1] Error guardando contadores en line item', li.id, err);
-    }
-
-    // 3) cupo por línea
-    if (alsoInitCupo) {
-      try {
-        await updateBagFieldsForLineItem(li);
-      } catch (err) {
-        console.error('[phase1] Error en updateBagFieldsForLineItem para line item', li.id, err);
-      }
     }
   }
 }
