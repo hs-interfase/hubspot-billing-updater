@@ -1,7 +1,11 @@
 // src/runBilling.js
+console.log('🔥 ARCHIVO runBilling.js CARGÁNDOSE...');
+
 import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
 import { runPhasesForDeal } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
+
+console.log('✅ Imports completados');
 
 /**
  * Modo de ejecución:
@@ -12,6 +16,7 @@ import { emitInvoicesForReadyTickets } from "./invoices.js";
  */
 
 function parseArgs(argv) {
+  console.log('🔍 parseArgs llamado con:', argv);
   const args = {
     dealId: null,
     allDeals: false,
@@ -40,6 +45,7 @@ function parseArgs(argv) {
     }
   }
 
+  console.log('✅ Args parseados:', args);
   return args;
 }
 
@@ -81,6 +87,10 @@ async function getAllDealIds() {
 }
 
 export async function runBilling({ dealId, allDeals } = {}) {
+  console.log('🎯 runBilling() EJECUTÁNDOSE!');
+  console.log('   dealId:', dealId);
+  console.log('   allDeals:', allDeals);
+  
   if (!dealId && !allDeals) {
     throw new Error("Debes usar --deal <ID> o --allDeals");
   }
@@ -108,6 +118,7 @@ export async function runBilling({ dealId, allDeals } = {}) {
       console.log(`📋 PROCESANDO DEAL: ${id}`);
       console.log("-".repeat(80));
       
+      console.log(`🔄 Llamando a getDealWithLineItems(${id})...`);
       const { deal, lineItems } = await getDealWithLineItems(id);
       const dealName = deal?.properties?.dealname || 'Sin nombre';
       
@@ -121,8 +132,11 @@ export async function runBilling({ dealId, allDeals } = {}) {
       
       totalDeals++;
 
+      console.log(`🔄 Llamando a runPhasesForDeal()...`);
       // Ejecuta fases (Phase1 cupo + Phase2 tickets manuales + Phase3 auto invoices)
       const res = await runPhasesForDeal({ deal, lineItems });
+
+      console.log(`✅ runPhasesForDeal() completado. Resultado:`, res);
 
       totalTickets += res.ticketsCreated || 0;
       totalInvoicesAuto += res.autoInvoicesEmitted || 0;
@@ -131,11 +145,10 @@ export async function runBilling({ dealId, allDeals } = {}) {
       console.log(`   - Tickets creados: ${res.ticketsCreated || 0}`);
       console.log(`   - Facturas emitidas: ${res.autoInvoicesEmitted || 0}`);
     } catch (err) {
-      console.error(
-        "[runBilling] Error procesando negocio",
-        id,
-        err?.response?.body || err?.message || err
-      );
+      console.error(`❌ [runBilling] Error procesando negocio ${id}:`);
+      console.error('   Error completo:', err);
+      console.error('   Stack:', err?.stack);
+      console.error('   Response body:', err?.response?.body);
     }
   }
 
@@ -168,7 +181,14 @@ export async function runBilling({ dealId, allDeals } = {}) {
 }
 
 // Entry point ESM
+console.log('🔍 Verificando entry point...');
+console.log('   import.meta.url:', import.meta.url);
+console.log('   process.argv[1]:', process.argv[1]);
+console.log('   process.argv completo:', process.argv);
+
 if (import.meta.url === `file://${process.argv[1]}`) {
+  console.log('✅ Entry point detectado, ejecutando...');
+  
   try {
     const args = parseArgs(process.argv);
 
@@ -177,14 +197,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exit(0);
     }
 
+    console.log('🚀 Llamando a runBilling()...');
     runBilling(args).catch((err) => {
-      console.error("[runBilling] Error fatal", err?.message || err);
+      console.error("❌ [runBilling] Error fatal:");
+      console.error('   Mensaje:', err?.message);
+      console.error('   Stack:', err?.stack);
       printHelp();
       process.exit(1);
     });
   } catch (err) {
-    console.error("[runBilling] Error fatal", err?.message || err);
+    console.error("❌ [runBilling] Error en parseArgs:");
+    console.error('   Mensaje:', err?.message);
+    console.error('   Stack:', err?.stack);
     printHelp();
     process.exit(1);
   }
+} else {
+  console.log('⚠️  Entry point NO detectado (módulo importado)');
 }
