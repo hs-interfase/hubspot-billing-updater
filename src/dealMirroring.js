@@ -1,5 +1,6 @@
 // src/dealMirroring.js
 //
+
 // Módulo para “espejar” un negocio de Paraguay en Uruguay cuando el negocio
 // original tiene líneas de pedido marcadas con el flag `uy = true`.
 // Además, en el espejo UY el monto (price) de cada línea será el "costo"
