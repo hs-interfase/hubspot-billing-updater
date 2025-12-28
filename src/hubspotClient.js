@@ -162,6 +162,11 @@ export async function getDealWithLineItems(dealId) {
     "reventa",
     "servicio", // rubro
     "unidad_de_negocio",
+    "uy",
+
+     // ====== FACTURACIÓN - REFERENCIAS ======
+    "invoice_id",
+    "invoice_key", 
   ];
 
   // Incluir fechas extras hasta 24
