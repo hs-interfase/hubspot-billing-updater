@@ -3,11 +3,13 @@
 import { runPhase1 } from './phase1.js';
 import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
+import { activateBillingIfClosedWon } from './activateBilling.js';
 
 /**
- * Orquestador de las 3 fases del proceso de facturación.
+ * Orquestador de las fases del proceso de facturación.
  * 
- * - Phase 1: Actualizar fechas, calendario, cupo (existente, sin cambios mayores)
+ * - Phase 1: Actualizar fechas, calendario, cupo (ANTES de Closed Won)
+ * - Activación: Si está en Closed Won, activar facturacion_activa y cupo_activo
  * - Phase 2: Generar tickets manuales para line items con facturacion_automatica=false
  * - Phase 3: Emitir facturas automáticas para line items con facturacion_automatica=true
  * 
@@ -19,13 +21,14 @@ import { runPhase3 } from './phase3.js';
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   
-  console.log(`\n🔄 INICIANDO PROCESAMIENTO DE 3 FASES`);
+  console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
   console.log(`   Deal ID: ${dealId}`);
   console.log(`   Line Items: ${lineItems.length}\n`);
   
   const results = {
     dealId,
     phase1: { success: false },
+    activation: { activated: false },
     phase2: { ticketsCreated: 0 },
     phase3: { invoicesEmitted: 0 },
     ticketsCreated: 0,
@@ -41,6 +44,34 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   } catch (err) {
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
     results.phase1.error = err?.message || 'Error desconocido';
+  }
+  
+  // ========== ACTIVACIÓN: Si Closed Won, activar facturación ==========
+  try {
+    console.log(`⚡ ACTIVACIÓN: Verificando si activar facturación (Closed Won)...`);
+    const activationResult = await activateBillingIfClosedWon({ deal, lineItems });
+    results.activation = activationResult;
+    
+    if (activationResult.activated) {
+      console.log(`   ✅ Facturación activada (Deal en Closed Won)\n`);
+      
+      // Delay para eventual consistency de HubSpot API
+      console.log(`   ⏳ Esperando 2 segundos para que HubSpot actualice propiedades...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Si se activó, re-fetch el deal para tener los datos actualizados
+      console.log(`   🔄 Recargando deal y line items con datos actualizados...`);
+      const { getDealWithLineItems } = await import('../hubspotClient.js');
+      const updated = await getDealWithLineItems(dealId);
+      deal = updated.deal;
+      lineItems = updated.lineItems;
+      console.log(`   ✅ Datos actualizados\n`);
+    } else {
+      console.log(`   ⏭️  No se activó facturación: ${activationResult.reason}\n`);
+    }
+  } catch (err) {
+    console.error(`   ❌ Error en Activación:`, err?.message || err);
+    results.activation.error = err?.message || 'Error desconocido';
   }
   
   // ========== PHASE 2: Tickets manuales ==========

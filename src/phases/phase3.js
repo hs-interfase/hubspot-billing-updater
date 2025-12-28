@@ -8,7 +8,8 @@ import { createAutoInvoiceFromLineItem } from '../services/invoiceService.js';
  * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true.
  * 
  * Lógica:
- * - Filtrar line items con facturacion_activa=true y facturacion_automatica=true
+ * - Verificar que el DEAL tenga facturacion_activa=true
+ * - Filtrar line items con facturacion_automatica=true
  * - Para cada line item, verificar si hoy es la fecha de facturación
  * - Si corresponde facturar HOY, emitir la factura automáticamente
  * - También procesa el flag "facturar_ahora" (disparo inmediato)
@@ -21,10 +22,20 @@ import { createAutoInvoiceFromLineItem } from '../services/invoiceService.js';
  */
 export async function runPhase3({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
+  const dp = deal.properties || {};
   const today = getTodayYMD();
   
   console.log(`   [Phase3] Hoy: ${today}`);
   console.log(`   [Phase3] Total line items: ${lineItems.length}`);
+  
+  // Verificar si el DEAL tiene facturacion_activa=true
+  const dealFacturacionActiva = parseBool(dp.facturacion_activa);
+  console.log(`   [Phase3] Deal facturacion_activa: ${dp.facturacion_activa} (parsed=${dealFacturacionActiva})`);
+  
+  if (!dealFacturacionActiva) {
+    console.log(`   [Phase3] ⚠️  Deal NO tiene facturacion_activa=true, saltando Phase 3`);
+    return { invoicesEmitted: 0, errors: [] };
+  }
   
   let invoicesEmitted = 0;
   const errors = [];
@@ -32,10 +43,9 @@ export async function runPhase3({ deal, lineItems }) {
   // Filtrar line items elegibles para facturación automática
   const autoLineItems = (lineItems || []).filter((li) => {
     const lp = li?.properties || {};
-    const facturacionActiva = parseBool(lp.facturacion_activa);
     const facturacionAutomatica = parseBool(lp.facturacion_automatica);
     
-    return facturacionActiva && facturacionAutomatica;
+    return facturacionAutomatica;
   });
   
   console.log(`   [Phase3] Line items AUTOMÁTICOS (facturacion_automatica=true): ${autoLineItems.length}`);
@@ -116,38 +126,52 @@ export async function runPhase3({ deal, lineItems }) {
 
 /**
  * Obtiene la próxima fecha de facturación de un line item.
+ * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
+ * Devuelve la fecha más cercana >= hoy.
  */
+
 function getNextBillingDate(lineItemProps) {
-  const startDate = lineItemProps.hs_recurring_billing_start_date || lineItemProps.fecha_inicio_de_facturacion;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const allDates = [];
   
+  // 1) Verificar todas las variantes de la fecha de inicio
+  const startDate = lineItemProps.hs_recurring_billing_start_date ||  // ✅ AGREGADO: nombre con guiones
+                    lineItemProps.recurringbillingstartdate || 
+                    lineItemProps.fecha_inicio_de_facturacion;
   if (startDate) {
-    const date = parseLocalDate(startDate);
-    if (date) {
-      return formatDateISO(date);
+    const d = parseLocalDate(startDate);
+    if (d) {
+      allDates.push(d);
     }
   }
   
-  // Buscar en fechas extras (fecha_2, fecha_3, ...)
-  const today = new Date();
-  const extraDates = [];
-  
+  // 2) Buscar en fecha_2, fecha_3, ..., fecha_24
   for (let i = 2; i <= 24; i++) {
     const dateKey = `fecha_${i}`;
     const dateValue = lineItemProps[dateKey];
     if (dateValue) {
       const d = parseLocalDate(dateValue);
-      if (d && d >= today) {
-        extraDates.push(d);
+      if (d) {
+        allDates.push(d);
       }
     }
   }
   
-  if (extraDates.length > 0) {
-    extraDates.sort((a, b) => a.getTime() - b.getTime());
-    return formatDateISO(extraDates[0]);
+  if (allDates.length === 0) {
+    return null;
   }
   
-  return null;
+  // 3) Filtrar solo fechas >= hoy
+  const futureDates = allDates.filter(d => d >= today);
+  
+  if (futureDates.length === 0) {
+    return null; // Todas las fechas son pasadas
+  }
+  
+  // 4) Ordenar y devolver la más cercana
+  futureDates.sort((a, b) => a.getTime() - b.getTime());
+  return formatDateISO(futureDates[0]);
 }
 
 /**

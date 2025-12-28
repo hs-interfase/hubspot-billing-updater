@@ -7,14 +7,13 @@
 // Lookahead para tickets manuales (30 días)
 export const MANUAL_TICKET_LOOKAHEAD_DAYS = 30;
 
-// Pipeline y stages de tickets (ajusta según tu portal)
-export const TICKET_PIPELINE = '0'; // ID del pipeline de tickets
+// Pipeline y stages de tickets de facturación
+export const TICKET_PIPELINE = process.env.BILLING_TICKET_PIPELINE_ID || '832539959';
 export const TICKET_STAGES = {
-  NEW: '1',           // Nueva orden de facturación
-  IN_REVIEW: '2',     // En revisión
-  READY: '3',         // Lista para facturar
-  INVOICED: '4',      // Facturada
-  CANCELLED: '999',   // Cancelada
+  NEW: process.env.BILLING_TICKET_STAGE_ID || '1234282360',           // Nueva orden de facturación
+  READY: process.env.BILLING_TICKET_STAGE_READY || '1250133337',      // Lista para facturar (día de facturación o un día antes)
+  INVOICED: process.env.BILLING_ORDER_STAGE_ID_FACTURADO || '1234282361',  // Facturado (vendedor pidió facturar ahora)
+  CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1234282363',   // Pausado/Cancelado (pausa o cierre perdido)
 };
 
 // Moneda por defecto

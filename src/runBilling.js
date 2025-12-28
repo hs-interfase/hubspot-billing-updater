@@ -4,6 +4,8 @@ console.log('🔥 ARCHIVO runBilling.js CARGÁNDOSE...');
 import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
 import { runPhasesForDeal } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
+import { fileURLToPath } from 'url';
+import { resolve } from 'path';
 
 console.log('✅ Imports completados');
 
@@ -180,13 +182,17 @@ export async function runBilling({ dealId, allDeals } = {}) {
   return { totalDeals, totalTickets, totalInvoicesAuto };
 }
 
-// Entry point ESM
+// Entry point ESM - FIX para Windows
 console.log('🔍 Verificando entry point...');
-console.log('   import.meta.url:', import.meta.url);
-console.log('   process.argv[1]:', process.argv[1]);
-console.log('   process.argv completo:', process.argv);
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const __filename = fileURLToPath(import.meta.url);
+const argvPath = resolve(process.argv[1]);
+
+console.log('   __filename:', __filename);
+console.log('   argvPath:', argvPath);
+console.log('   Son iguales?', __filename === argvPath);
+
+if (__filename === argvPath) {
   console.log('✅ Entry point detectado, ejecutando...');
   
   try {

@@ -174,21 +174,32 @@ function getEffectiveBillingConfig(lineItem) {
     irregularFlagRaw === 'si' ||
     irregularFlagRaw === 'yes';
 
-  // 🔑 Frecuencia efectiva (para el intervalo)
-  const freqKey =
-    p.recurringbillingfrequency ||              // internal values: monthly, weekly...
-    p.hs_recurring_billing_frequency ||         // por si HS rellena esta
-    p.frecuencia_de_facturacion ||              // tu campo custom
-    '';
+    
+// 🔑 Frecuencia efectiva
+const freqKey =
+  p.recurringbillingfrequency ||              // internal values: monthly, weekly...
+  p.hs_recurring_billing_frequency ||         // por si HS rellena esta
+  '';  // ✅ YA NO usamos frecuencia_de_facturacion aquí (es solo para avisos en el Deal)
 
-  const frequency = freqKey.toString().trim();
-  const interval = getIntervalFromFrequency(frequency);
+const frequency = freqKey.toString().trim();
+
+// ✅ Si frequency es vacío/null y NO es irregular → es pago único
+let interval = null;
+if (!frequency && !isIrregular) {
+  // Pago único: sin frecuencia, una sola vez
+  interval = null;
+} else if (frequency) {
+  interval = getIntervalFromFrequency(frequency);
+} else {
+  // Es irregular: interval = null
+  interval = null;
+}
 
   // Fecha de inicio
-  const startRaw =
-    p.hs_recurring_billing_start_date ||
-    p.billing_start_date ||
-    p.fecha_inicio_de_facturacion;
+const startRaw =
+  p.hs_recurring_billing_start_date ||  // ✅ PRIMERO el nombre oficial de HubSpot
+  p.recurringbillingstartdate ||
+  p.fecha_inicio_de_facturacion;
   const startDate = parseLocalDate(startRaw);
 
   console.log('[getEffectiveBillingConfig][DATE]', {
@@ -266,7 +277,7 @@ export async function updateLineItemSchedule(lineItem) {
     if (startDate) {
       const iso = formatDateISO(startDate);
       const updatesIrregular = {
-        hs_recurring_billing_start_date: iso,
+        recurringbillingstartdate: iso,
       };
       if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
         updatesIrregular.fecha_inicio_de_facturacion = iso;
@@ -308,7 +319,7 @@ export async function updateLineItemSchedule(lineItem) {
   if (!interval) {
     const iso = formatDateISO(effectiveStart);
     const updatesOneTime = {
-      hs_recurring_billing_start_date: iso,
+      recurringbillingstartdate: iso,
     };
 
     if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
@@ -346,7 +357,7 @@ export async function updateLineItemSchedule(lineItem) {
   const isoDates = dates.map((d) => formatDateISO(d));
 
   const updatesRecurring = {
-    hs_recurring_billing_start_date: isoDates[0],
+    recurringbillingstartdate: isoDates[0],
   };
 
   if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {

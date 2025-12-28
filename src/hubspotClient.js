@@ -29,43 +29,53 @@ export async function getDealWithLineItems(dealId) {
   if (!dealId) throw new Error("getDealWithLineItems requiere dealId");
 
   const dealProperties = [
+    // ====== PROPIEDADES ESTÁNDAR HUBSPOT ======
+    "amount",
+    "amount_in_home_currency",
+    "closedate",
+    "closed_lost_reason",
+    "createdate",
+    "days_to_close",
+    "deal_currency_code",
     "dealname",
     "dealstage",
-    "amount",
-    "price",
-    "closedate",
+    "hs_all_owner_ids",
+    "hs_createdate",
+    "hs_lastmodifieddate",
+    "hs_object_id",
+    "hs_pipeline",
+    "hs_pipeline_stage",
     "hubspot_owner_id",
-    "pais_operativo",
-    "deal_currency_code",
-    "nota",
+    "num_associated_contacts",
 
-    // ====== FACTURACIÓN (deal - info/pantallazo) ======
+    // ====== CUPO ======
+    "cupo_activo",
+    "cupo_consumido",
+    "cupo_estado",
+    "cupo_saldo_restante",
+    "cupo_total_horas",
+    "cupo_total_monto",
+    "cupo_ultima_actralizacion",
+    "cupo_umbral",
+    "tipo_de_cupo",
+
+    // ====== FACTURACIÓN ======
     "facturacion_activa",
     "facturacion_frecuencia_de_facturacion",
+    "facturacion_mensaje_proximo_aviso",
     "facturacion_proxima_fecha",
     "facturacion_ultima_fecha",
 
-    // Mirrors / duplicación
-    "es_mirror_de_py",
+    // ====== MIRRORS / DUPLICACIÓN ======
+    "deal_py_origen_id",
     "deal_uy_mirror_id",
-    "cliente_beneficiario",
+    "es_mirror_de_py",
 
-    // Pausa (normalizo a 1 sola key; dejo "pausa" y saco "Pausa")
-    "pausa",
-
-    // ====== CUPO (deal) ======
-    "cupo_activo",
-    "tipo_de_cupo", // "Por horas" | "Por Monto"
-    "cupo_total",
-    "cupo_total_horas",
-    "cupo_total_monto",
-    "cupo_umbral",
-    "cupo_consumido",
-    "cupo_restante",
-    "cupo_estado",
-
-    // Responsable (deal)
-    "responsable_asignado",
+    // ====== OTROS ======
+    "pais_operativo",
+    "pm_asignado_cupo",
+    "relevancia_estrategica",
+    "unidad_de_negocio",
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -77,53 +87,81 @@ export async function getDealWithLineItems(dealId) {
   if (!lineItemIds.length) return { deal, lineItems: [] };
 
   const lineItemProperties = [
-    "name",
-    "servicio",
-    "price",
-    "costo",
-    "quantity",
-    "frecuencia_de_facturacion",
-    "facturacion_frecuencia_de_facturacion",
-    "fecha_inicio_de_facturacion",
-    "contrato_a",
-    "termino_a",
-    "terceros",
-    "nota",
-    "total_de_pagos",
-    "pagos_emitidos",
-    "pagos_restantes",
-    "renovacion_automatica",
-    "hs_recurring_billing_period",
-    "uy",
-    "pais_operativo",
-
-    // Campos nativos de facturación recurrente
-    "hs_cost_of_goods_sold",
-    "recurringbillingfrequency",
-    "hs_recurring_billing_frequency",
+    // ====== PROPIEDADES ESTÁNDAR HUBSPOT ======
+    "amount",
+    "createdate",
+    "description",
+    "discount",
+    "hs_createdate",
+    "hs_lastmodifieddate",
+    "hs_object_id",
+    "hs_product_id",
     "hs_recurring_billing_start_date",
-    "hs_recurring_billing_terms",
+    "hs_recurring_billing_frequency",
     "hs_recurring_billing_number_of_payments",
+    "hs_recurring_billing_period",
+    "name",
+    "price",
+    "quantity",
+    "recurringbillingfrequency",
+    "recurringbillinginterval",
+    "recurringbillingstartdate",
+    "number_of_payments",
+    "tax_rate",
+    "term",
 
-    // ====== CUPO (line item) ======
-    "parte_del_cupo", // boolean: este line item consume del cupo del negocio
+    // ====== FACTURACIÓN ======
+    "avisos_emitidos_facturacion",
+    "avisos_restantes_facturacion",
+    "fecha_inicio_de_facturacion",
+    "fecha_proxima_facturacion",
+    "facturacion_activa",
+    "facturacion_automatica",
+    "facturacion_estado",
+    "facturacion_frecuencia",
+    "facturacion_irregular",
+    "facturacion_mensaje_proximo_aviso",
+    "facturacion_proxima_fecha",
+    "facturacion_ultima_fecha",
+    "facturar_ahora",
+    "proximo_aviso_fecha",
+    "tipo_de_facturacion",
+    "repetitivo",
 
-    // ====== FACTURACIÓN V2 (line item) ======
-    "facturacion_activa", // bool: entra en el flujo
-    "facturacion_automatica", // bool: si true => emite factura sin ticket
-    "facturar_ahora", // bool: disparador manual (si lo usás en line item)
-    "responsable_asignado", // opcional: si lo usan por línea
-    "horas_reales_usadas", // opcional: si alguna vez registran horas reales a nivel LI
+    // ====== COSTOS Y MONTOS ======
+    "costo_real",
+    "costo_real_usd",
+    "impuestos",
+    "incluye_iva",
+    "moneda_operativa",
+    "monto_a_facturar",
+    "monto_a_facturar_usd",
+    "monto_real_a_facturar",
+    "monto_total_en_dolares",
+    "monto_total_margen",
+    "monto_total_margen_usd",
+    "monto_total_uruguay",
+    "monto_total_uruguay_usd",
+    "monto_total_uy",
+    "monto_total_uy_usd",
+    "porcentaje_margen",
+    "precio_unitario_original",
+    "valor_hora",
+    "valor_hora_cupo_o_bolsa",
 
-    // Snapshots (para tickets / auditoría)
-    "precio_hora_snapshot",
-    "horas_previstas_snapshot",
-    "monto_original_snapshot",
+    // ====== CUPO ======
+    "parte_del_cupo",
+    "saldo_cupo_horas",
+    "saldo_cupo_monto",
 
-    // Invoice tracking (si lo usás)
-    "of_invoice_id",
-    "of_invoice_key",
-    "of_invoice_status",
+    // ====== OTROS ======
+    "id_deal_origen",
+    "motivo_pausa",
+    "nota",
+    "pais_operativo",
+    "reventa",
+    "servicio", // rubro
+    "unidad_de_negocio",
   ];
 
   // Incluir fechas extras hasta 24
