@@ -4,32 +4,32 @@
  * Webhook para HubSpot: Disparar facturación inmediata cuando se activa "facturar_ahora".
  * 
  * Flujo:
- * 1. HubSpot envía un webhook cuando cambia la propiedad "facturar_ahora" de un line item
- * 2. Este endpoint valida el payload y dispara Phase 3 para ese line item específico
- * 3. Emite la factura automáticamente si facturacion_automatica=true
+ * 1. HubSpot envía un webhook cuando cambia la propiedad "facturar_ahora" de un line item o ticket
+ * 2. Este endpoint valida el payload y dispara la facturación urgente
+ * 3. Emite la factura y guarda evidencia de facturación urgente
  * 
  * Configuración en HubSpot:
- * - Tipo: Property Change
- * - Objeto: Line Item
- * - Propiedad: facturar_ahora
+ * - Suscripción 1: Line Item → Property Change → facturar_ahora
+ * - Suscripción 2: Ticket → Property Change → facturar_ahora
  * - URL: https://tu-dominio.vercel.app/api/facturar-ahora
  * - Método: POST
  * 
  * Payload esperado (HubSpot):
  * {
  *   "objectId": "12345",
+ *   "objectType": "line_item" | "ticket",
  *   "propertyName": "facturar_ahora",
  *   "propertyValue": "true",
  *   "changeSource": "CRM",
  *   "eventId": "...",
  *   "subscriptionId": "...",
+ *   "subscriptionType": "line_item.propertyChange" | "ticket.propertyChange",
  *   "portalId": 123456,
  *   "occurredAt": 1234567890
  * }
  */
 
-import { hubspotClient, getDealWithLineItems } from '../src/hubspotClient.js';
-import { runPhase3 } from '../src/phases/phase3.js';
+import { processUrgentLineItem, processUrgentTicket } from '../src/services/urgentBillingService.js';
 
 /**
  * Handler principal del webhook.
@@ -41,104 +41,78 @@ export default async function handler(req, res) {
   }
   
   try {
-    // Extraer datos del payload de HubSpot
+    // Extraer datos del payload de HubSpot (puede venir como array o objeto)
     const payload = Array.isArray(req.body) ? req.body[0] : req.body;
     
-    const lineItemId = payload?.objectId;
+    const objectId = payload?.objectId;
+    const objectType = payload?.subscriptionType?.split('.')[0] || 'line_item'; // 'line_item.propertyChange' → 'line_item'
     const propertyName = payload?.propertyName;
     const propertyValue = payload?.propertyValue;
+    const eventId = payload?.eventId;
     
-    console.log('[facturar-ahora] Webhook recibido:', { lineItemId, propertyName, propertyValue });
+    console.log('\n🔥 [facturar-ahora] Webhook recibido:', {
+      objectId,
+      objectType,
+      propertyName,
+      propertyValue,
+      eventId,
+    });
     
     // Validaciones básicas
-    if (!lineItemId) {
-      return res.status(400).json({ error: 'Missing objectId (line item ID)' });
+    if (!objectId) {
+      console.error('❌ Missing objectId');
+      return res.status(400).json({ error: 'Missing objectId' });
     }
     
     if (propertyName !== 'facturar_ahora') {
-      return res.status(400).json({ error: 'Invalid property, expected facturar_ahora' });
+      console.log('⚠️ Property is not facturar_ahora, ignoring');
+      return res.status(200).json({ message: 'Property not facturar_ahora, skipped' });
     }
     
     if (propertyValue !== 'true' && propertyValue !== true) {
-      return res.status(200).json({ message: 'Property not true, skipping' });
+      console.log('⚠️ facturar_ahora is not true, ignoring');
+      return res.status(200).json({ message: 'Property value not true, skipped' });
     }
     
-    // Obtener el line item de HubSpot
-    const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(
-      lineItemId,
-      [
-        'name',
-        'price',
-        'quantity',
-        'facturacion_activa',
-        'facturacion_automatica',
-        'facturar_ahora',
-        'of_invoice_id',
-        'hs_recurring_billing_start_date',
-        'fecha_inicio_de_facturacion',
-      ]
-    );
+    // Determinar tipo de objeto y procesar
+    let result;
     
-    const lp = lineItem.properties || {};
-    
-    // Validar que sea elegible para facturación automática
-    const facturacionActiva = lp.facturacion_activa === 'true' || lp.facturacion_activa === true;
-    const facturacionAutomatica = lp.facturacion_automatica === 'true' || lp.facturacion_automatica === true;
-    
-    if (!facturacionActiva) {
-      console.log('[facturar-ahora] Line item no tiene facturacion_activa=true');
-      return res.status(200).json({ message: 'Line item not active for billing' });
+    if (objectType === 'line_item') {
+      console.log('📋 Procesando Line Item urgente...');
+      result = await processUrgentLineItem(objectId);
+    } else if (objectType === 'ticket') {
+      console.log('🎫 Procesando Ticket urgente...');
+      result = await processUrgentTicket(objectId);
+    } else {
+      console.error(`❌ Tipo de objeto no soportado: ${objectType}`);
+      return res.status(400).json({ error: `Unsupported object type: ${objectType}` });
     }
     
-    if (!facturacionAutomatica) {
-      console.log('[facturar-ahora] Line item no tiene facturacion_automatica=true, requiere ticket manual');
-      return res.status(200).json({ message: 'Line item requires manual billing (ticket)' });
+    // Si el proceso fue omitido (ya facturado, etc.)
+    if (result.skipped) {
+      console.log(`⚠️ Proceso omitido: ${result.reason}`);
+      return res.status(200).json({
+        skipped: true,
+        reason: result.reason,
+        objectId,
+        objectType,
+      });
     }
     
-    if (lp.of_invoice_id) {
-      console.log('[facturar-ahora] Line item ya tiene factura:', lp.of_invoice_id);
-      return res.status(200).json({ message: 'Invoice already exists', invoiceId: lp.of_invoice_id });
-    }
-    
-    // Obtener el deal asociado
-    const dealAssoc = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'line_items',
-      lineItemId,
-      'deals',
-      1
-    );
-    const dealId = dealAssoc.results?.[0]?.toObjectId;
-    
-    if (!dealId) {
-      console.error('[facturar-ahora] Line item sin deal asociado');
-      return res.status(400).json({ error: 'Line item has no associated deal' });
-    }
-    
-    // Obtener deal completo
-    const { deal, lineItems } = await getDealWithLineItems(dealId);
-    
-    // Filtrar solo este line item
-    const targetLineItems = lineItems.filter((li) => String(li.id) === String(lineItemId));
-    
-    if (targetLineItems.length === 0) {
-      console.error('[facturar-ahora] Line item no encontrado en el deal');
-      return res.status(404).json({ error: 'Line item not found in deal' });
-    }
-    
-    // Ejecutar Phase 3 solo para este line item
-    console.log('[facturar-ahora] Ejecutando Phase 3 para line item:', lineItemId);
-    const result = await runPhase3({ deal, lineItems: targetLineItems });
-    
-    console.log('[facturar-ahora] Resultado:', result);
-    
+    // Éxito
+    console.log('✅ Facturación urgente completada');
     return res.status(200).json({
       success: true,
-      lineItemId,
-      invoicesEmitted: result.invoicesEmitted || 0,
-      errors: result.errors || [],
+      objectId,
+      objectType,
+      invoiceId: result.invoiceId,
+      eventId,
     });
+    
   } catch (err) {
-    console.error('[facturar-ahora] Error procesando webhook:', err?.response?.body || err?.message || err);
+    console.error('\n❌ [facturar-ahora] Error procesando webhook:', err?.message || err);
+    console.error(err?.stack);
+    
     return res.status(500).json({
       error: 'Internal server error',
       message: err?.message || 'Unknown error',
