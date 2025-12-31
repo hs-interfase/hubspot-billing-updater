@@ -2,7 +2,7 @@
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem } from './invoiceService.js';
-import { createInvoiceForTicket } from '../invoices.js';
+import { createInvoiceFromTicket } from '../invoices.js';
 
 /**
  * Obtiene la fecha actual en formato YYYY-MM-DD para HubSpot.
@@ -164,20 +164,20 @@ export async function processUrgentLineItem(lineItemId) {
 
 /**
  * Procesa la facturación urgente de un Ticket.
- * 
+ *
  * Flujo:
  * 1. Obtiene el ticket
  * 2. Valida que tenga facturar_ahora = true
  * 3. Crea la factura usando la lógica legacy de tickets
  * 4. Resetea el flag facturar_ahora a false
- * 
+ *
  * @param {string} ticketId - ID del ticket a facturar
  * @returns {Promise<object>} Resultado con invoiceId y status
  */
 export async function processUrgentTicket(ticketId) {
   console.log('\n🔥 === FACTURACIÓN URGENTE TICKET ===');
   console.log(`Ticket ID: ${ticketId}`);
-  
+
   try {
     // 1. Obtener el ticket
     const ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
@@ -185,53 +185,54 @@ export async function processUrgentTicket(ticketId) {
       'facturar_ahora',
       'of_invoice_id',
     ]);
-    
+
     const ticketProps = ticket.properties || {};
     console.log(`Ticket: ${ticketProps.subject || ticketId}`);
-    
+    console.log('Props:', JSON.stringify(ticketProps, null, 2));
+
     // 2. Validar que tenga facturar_ahora = true
-    const facturarAhora = ticketProps.facturar_ahora === 'true' || ticketProps.facturar_ahora === true;
+    const facturarAhora =
+      ticketProps.facturar_ahora === 'true' || ticketProps.facturar_ahora === true;
     if (!facturarAhora) {
       console.log('⚠️ facturar_ahora no está en true, ignorando');
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
-    
+
     // 3. Validar que NO tenga ya una factura
     if (ticketProps.of_invoice_id) {
       console.log(`⚠️ Ticket ya tiene factura: ${ticketProps.of_invoice_id}, ignorando`);
       return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
     }
-    
+
     console.log('✅ Ticket válido, procediendo a facturar...\n');
-    
-    // 4. Crear la factura usando el servicio legacy de tickets
-    const invoiceResult = await createInvoiceForTicket(ticket);
-    
+
+    // 4. Crear la factura usando el servicio que utiliza la API REST directa
+    const invoiceResult = await createInvoiceFromTicket(ticket);
+
     if (!invoiceResult || !invoiceResult.invoiceId) {
       console.error('❌ No se pudo crear la factura del ticket');
       throw new Error('Error al crear factura de ticket');
     }
-    
+
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
-    
+
     // 5. Resetear facturar_ahora a false
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: { facturar_ahora: 'false' },
     });
     console.log('✅ Flag facturar_ahora reseteado a false');
-    
+
     console.log('\n🎉 Facturación urgente de ticket completada exitosamente');
-    
+
     return {
       success: true,
       invoiceId: invoiceResult.invoiceId,
       ticketId,
     };
-    
   } catch (error) {
     console.error('\n❌ Error en facturación urgente de Ticket:', error.message);
     console.error(error.stack);
-    
+
     // Intentar resetear facturar_ahora incluso si falló
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
@@ -241,7 +242,7 @@ export async function processUrgentTicket(ticketId) {
     } catch (resetError) {
       console.error('❌ No se pudo resetear facturar_ahora:', resetError.message);
     }
-    
+
     throw error;
   }
 }
