@@ -128,13 +128,6 @@ export function compareDates(a, b) {
 }
 
 /**
- * Devuelve la fecha de hoy en formato YYYY-MM-DD.
- */
-export function getTodayYMD() {
-  return formatDateISO(new Date());
-}
-
-/**
  * Calcula la diferencia en días entre dos fechas.
  */
 export function diffDays(dateA, dateB) {
