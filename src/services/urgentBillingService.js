@@ -5,23 +5,53 @@ import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoic
 import { getTodayYMD, getTodayMillis } from '../utils/dateUtils.js';
 
 /**
+ * Helper robusto para truthy/falsey (HubSpot manda strings)
+ */
+function parseBool(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'si' || s === 'sí';
+}
+
+/**
+ * Obtiene el dealId asociado a un line item (FUENTE DE VERDAD: associations v4)
+ */
+async function getDealIdForLineItem(lineItemId) {
+  const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+    'line_items',
+    String(lineItemId),
+    'deals',
+    100
+  );
+
+  const dealIds = (resp.results || [])
+    .map(r => String(r.toObjectId))
+    .filter(Boolean);
+
+  console.log('[urgent-lineitem] line_item->deals:', dealIds);
+
+  if (dealIds.length === 0) return null;
+
+  if (dealIds.length > 1) {
+    console.warn('[urgent-lineitem] ⚠️ múltiples deals asociados, usando el primero:', dealIds[0]);
+  }
+
+  return dealIds[0];
+}
+
+/**
  * Actualiza las propiedades de evidencia de facturación urgente en un Line Item.
- * 
- * @param {string} lineItemId - ID del line item
- * @param {object} currentProps - Propiedades actuales del line item
- * @returns {Promise<void>}
  */
 async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
   try {
     const cantidadActual = parseInt(currentProps.cantidad_de_facturaciones_urgentes || '0', 10);
-    
+
     const updateProps = {
       facturado_con_urgencia: 'true',
-      ultima_fecha_facturacion_urgente: getTodayMillis(), // Timestamp en ms para HubSpot
+      ultima_fecha_facturacion_urgente: getTodayMillis(), // ms para HubSpot
       cantidad_de_facturaciones_urgentes: String(cantidadActual + 1),
     };
 
-    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: updateProps,
     });
 
@@ -36,139 +66,129 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 
 /**
  * Procesa la facturación urgente de un Line Item.
- * 
+ *
  * Flujo:
- * 1. Obtiene el deal asociado con todos sus line items
- * 2. Busca el line item específico
- * 3. Crea la factura automáticamente
- * 4. Actualiza evidencia de facturación urgente
- * 5. Resetea el flag facturar_ahora a false
- * 
- * @param {string} lineItemId - ID del line item a facturar
- * @returns {Promise<object>} Resultado con invoiceId y status
+ * 1. Lee line item + valida flag
+ * 2. Resuelve deal asociado por associations v4 (robusto)
+ * 3. Trae deal completo con line items (tu helper)
+ * 4. Crea factura (tu service)
+ * 5. Evidencia + reset flag
  */
 export async function processUrgentLineItem(lineItemId) {
   console.log('\n🔥 === FACTURACIÓN URGENTE LINE ITEM ===');
   console.log(`Line Item ID: ${lineItemId}`);
-  
+
   try {
-    // 1. Obtener el line item para buscar su deal asociado
-    const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(lineItemId, [
+    // 1) Traer line item (SIN intentar associations acá)
+    const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'hs_object_id',
       'name',
       'facturar_ahora',
+      // ⚠️ acá tenías "invoice_id" pero tu sistema de evidencia usa "of_invoice_id" en otros lados.
+      // Dejo ambos por compatibilidad: si uno existe, ya está facturado.
       'invoice_id',
+      'of_invoice_id',
       'cantidad_de_facturaciones_urgentes',
-    ], ['deals']);
-    
+    ]);
+
     const lineItemProps = lineItem.properties || {};
-    const associations = lineItem.associations || {};
-    
+
     console.log(`Line Item: ${lineItemProps.name || lineItemId}`);
-    
-    // 2. Validar que tenga facturar_ahora = true
-    const facturarAhora = lineItemProps.facturar_ahora === 'true' || lineItemProps.facturar_ahora === true;
-    if (!facturarAhora) {
+    console.log('[urgent-lineitem] props:', JSON.stringify(lineItemProps, null, 2));
+
+    // 2) Validar flag
+    if (!parseBool(lineItemProps.facturar_ahora)) {
       console.log('⚠️ facturar_ahora no está en true, ignorando');
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
-    
-    // 3. Validar que NO tenga ya una factura
-    if (lineItemProps.invoice_id) {
-      console.log(`⚠️ Line Item ya tiene factura: ${lineItemProps.invoice_id}, ignorando`);
-      return { skipped: true, reason: 'already_invoiced', invoiceId: lineItemProps.invoice_id };
+
+    // 3) Idempotencia: ya tiene factura?
+    const existingInvoiceId = lineItemProps.of_invoice_id || lineItemProps.invoice_id;
+    if (existingInvoiceId) {
+      console.log(`⚠️ Line Item ya tiene factura: ${existingInvoiceId}, ignorando`);
+      return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
     }
-    
-    // 4. Obtener el deal asociado
-    const dealAssociations = associations.deals?.results || [];
-    if (dealAssociations.length === 0) {
-      console.error('❌ Line Item no tiene deal asociado');
+
+    // 4) Resolver dealId por associations v4
+    const dealId = await getDealIdForLineItem(lineItemId);
+
+    if (!dealId) {
+      console.error('❌ Line Item no tiene deal asociado (según associations v4)');
       throw new Error('Line item no tiene deal asociado');
     }
-    
-    const dealId = dealAssociations[0].id;
-    console.log(`Deal asociado: ${dealId}`);
-    
-    // 5. Obtener deal completo con todos sus line items
+
+    console.log(`Deal asociado (v4): ${dealId}`);
+
+    // 5) Obtener deal completo con line items
     const { deal, lineItems } = await getDealWithLineItems(dealId);
-    
-    // 6. Buscar el line item específico en la lista
-    const targetLineItem = lineItems.find(li => li.id === lineItemId);
+
+    // 6) Buscar el line item específico
+    const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
     if (!targetLineItem) {
       console.error(`❌ Line Item ${lineItemId} no encontrado en el deal ${dealId}`);
       throw new Error('Line item no encontrado en el deal');
     }
-    
+
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
-    
-    // 7. Crear la factura usando el servicio existente
+
+    // 7) Crear factura usando tu servicio existente
     const invoiceResult = await createAutoInvoiceFromLineItem({
       deal,
       lineItem: targetLineItem,
-      billingDate: getTodayYMD(),
+      billingDate: getTodayYMD(), // YYYY-MM-DD (si tu invoiceService normaliza, perfecto)
     });
-    
+
     if (!invoiceResult || !invoiceResult.invoiceId) {
       console.error('❌ No se pudo crear la factura');
       throw new Error('Error al crear factura');
     }
-    
+
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
-    
-    // 8. Actualizar evidencia de facturación urgente
+
+    // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
-    
-    // 9. Resetear facturar_ahora a false
-    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+
+    // 9) Reset flag
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: { facturar_ahora: 'false' },
     });
     console.log('✅ Flag facturar_ahora reseteado a false');
-    
+
     console.log('\n🎉 Facturación urgente completada exitosamente');
-    
+
     return {
       success: true,
       invoiceId: invoiceResult.invoiceId,
-      lineItemId,
-      dealId,
+      lineItemId: String(lineItemId),
+      dealId: String(dealId),
     };
-    
   } catch (error) {
     console.error('\n❌ Error en facturación urgente de Line Item:', error.message);
     console.error(error.stack);
-    
-    // Intentar resetear facturar_ahora incluso si falló
+
+    // Intentar resetear flag incluso si falló
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
         properties: { facturar_ahora: 'false' },
       });
       console.log('⚠️ Flag facturar_ahora reseteado a false (después de error)');
     } catch (resetError) {
       console.error('❌ No se pudo resetear facturar_ahora:', resetError.message);
     }
-    
+
     throw error;
   }
 }
 
 /**
  * Procesa la facturación urgente de un Ticket.
- *
- * Flujo:
- * 1. Obtiene el ticket
- * 2. Valida que tenga facturar_ahora = true
- * 3. Crea la factura usando la lógica legacy de tickets
- * 4. Resetea el flag facturar_ahora a false
- *
- * @param {string} ticketId - ID del ticket a facturar
- * @returns {Promise<object>} Resultado con invoiceId y status
+ * (Tu implementación actual — funciona bien — la dejo igual)
  */
 export async function processUrgentTicket(ticketId) {
   console.log('\n🔥 === FACTURACIÓN URGENTE TICKET ===');
   console.log(`Ticket ID: ${ticketId}`);
 
   try {
-    // 1. Obtener el ticket
     const ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'subject',
       'facturar_ahora',
@@ -179,15 +199,12 @@ export async function processUrgentTicket(ticketId) {
     console.log(`Ticket: ${ticketProps.subject || ticketId}`);
     console.log('Props:', JSON.stringify(ticketProps, null, 2));
 
-    // 2. Validar que tenga facturar_ahora = true
-    const facturarAhora =
-      ticketProps.facturar_ahora === 'true' || ticketProps.facturar_ahora === true;
+    const facturarAhora = parseBool(ticketProps.facturar_ahora);
     if (!facturarAhora) {
       console.log('⚠️ facturar_ahora no está en true, ignorando');
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
 
-    // 3. Validar que NO tenga ya una factura
     if (ticketProps.of_invoice_id) {
       console.log(`⚠️ Ticket ya tiene factura: ${ticketProps.of_invoice_id}, ignorando`);
       return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
@@ -195,7 +212,6 @@ export async function processUrgentTicket(ticketId) {
 
     console.log('✅ Ticket válido, procediendo a facturar...\n');
 
-    // 4. Crear la factura usando el servicio que utiliza la API REST directa
     const invoiceResult = await createInvoiceFromTicket(ticket);
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
@@ -205,7 +221,6 @@ export async function processUrgentTicket(ticketId) {
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
 
-    // 5. Resetear facturar_ahora a false
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: { facturar_ahora: 'false' },
     });
@@ -222,7 +237,6 @@ export async function processUrgentTicket(ticketId) {
     console.error('\n❌ Error en facturación urgente de Ticket:', error.message);
     console.error(error.stack);
 
-    // Intentar resetear facturar_ahora incluso si falló
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
         properties: { facturar_ahora: 'false' },
