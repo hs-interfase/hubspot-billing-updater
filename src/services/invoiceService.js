@@ -2,6 +2,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString } from '../utils/parsers.js';
+import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import axios from 'axios';
@@ -37,17 +38,6 @@ async function updateInvoiceDirect(invoiceId, properties) {
     }
   );
   return response.data;
-}
-
-/**
- * Obtiene la fecha actual en formato YYYY-MM-DD para HubSpot.
- */
-function getTodayISO() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padSta
-  const day = String(today.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -118,8 +108,8 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
     // Propiedades estándar HubSpot
     hs_title: `${dealName} - ${lineItemName}`, // 🔑 TÍTULO: Deal + Line Item
     hs_currency: dp.deal_currency_code || DEFAULT_CURRENCY,
-    hs_invoice_date: billingDate,
-    hs_due_date: billingDate,
+    hs_invoice_date: toHubSpotDate(billingDate), // Convertir YYYY-MM-DD a timestamp
+    hs_due_date: toHubSpotDate(billingDate),
     hs_invoice_billable: false, // 🔑 CLAVE: Desactiva validaciones, PDFs, emails
     
     // 👤 Destinatario externo (usuario HubSpot)
@@ -296,8 +286,8 @@ export async function createInvoiceFromTicket(ticket) {
     // Título: Deal + Line Item (o nombre del ticket si no hay)
     hs_title: props.subject || `Ticket ${ticketId}`,
     hs_currency: props.of_moneda || DEFAULT_CURRENCY,
-    hs_invoice_date: props.of_fecha_de_facturacion || getTodayISO(), // Fecha de facturación
-    hs_due_date: props.of_fecha_de_facturacion || getTodayISO(),
+    hs_invoice_date: toHubSpotDate(props.of_fecha_de_facturacion || getTodayYMD()),
+    hs_due_date: toHubSpotDate(props.of_fecha_de_facturacion || getTodayYMD()),
     hs_invoice_billable: false, // Desactiva validaciones
     of_invoice_key: invoiceKey,
     etapa_de_la_factura: 'Pendiente',

@@ -2,18 +2,7 @@
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
-
-
-/**
- * Obtiene la fecha actual en formato YYYY-MM-DD para HubSpot.
- */
-function getTodayISO() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { getTodayYMD, getTodayMillis } from '../utils/dateUtils.js';
 
 /**
  * Actualiza las propiedades de evidencia de facturación urgente en un Line Item.
@@ -28,7 +17,7 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
     
     const updateProps = {
       facturado_con_urgencia: 'true',
-      ultima_fecha_facturacion_urgente: getTodayISO(),
+      ultima_fecha_facturacion_urgente: getTodayMillis(), // Timestamp en ms para HubSpot
       cantidad_de_facturaciones_urgentes: String(cantidadActual + 1),
     };
 
@@ -38,7 +27,7 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 
     console.log(`✅ Evidencia de facturación urgente actualizada en Line Item ${lineItemId}`);
     console.log(`   - Cantidad total: ${cantidadActual + 1}`);
-    console.log(`   - Última fecha: ${getTodayISO()}`);
+    console.log(`   - Última fecha: ${getTodayYMD()}`);
   } catch (error) {
     console.error(`❌ Error actualizando evidencia urgente en Line Item ${lineItemId}:`, error.message);
     throw error;
@@ -116,7 +105,7 @@ export async function processUrgentLineItem(lineItemId) {
     const invoiceResult = await createAutoInvoiceFromLineItem({
       deal,
       lineItem: targetLineItem,
-      billingDate: getTodayISO(),
+      billingDate: getTodayYMD(),
     });
     
     if (!invoiceResult || !invoiceResult.invoiceId) {
