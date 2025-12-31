@@ -1,8 +1,8 @@
 // src/services/urgentBillingService.js
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
-import { createAutoInvoiceFromLineItem } from './invoiceService.js';
-import { createInvoiceFromTicket } from '../invoices.js';
+import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
+
 
 /**
  * Obtiene la fecha actual en formato YYYY-MM-DD para HubSpot.
