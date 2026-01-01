@@ -9,7 +9,7 @@
  * 3. hs_billing_start_delay_type (Line Item) → Normaliza delays a fechas
  * 
  * Configuración en HubSpot:
- * - Suscripciones en la misma URL: https://hubspot-billing-updater.vercel.app/api/facturar-ahora
+ * - Suscripciones en la misma URL: https://hubspot-billing-updater.vercel.app/api/escuchar-cambios
  * - Line Item → Property Change → facturar_ahora
  * - Ticket → Property Change → facturar_ahora
  * - Line Item → Property Change → actualizar
@@ -122,7 +122,8 @@ export default async function handler(req, res) {
       objectType,
       propertyName,
       propertyValue,
-      eventId,
+      propertyValueType: typeof propertyValue,
+      rawPayload: JSON.stringify(payload, null, 2)
     });
     console.log('='.repeat(80));
     
@@ -134,6 +135,8 @@ export default async function handler(req, res) {
     
     // ====== RUTA 1: FACTURACIÓN URGENTE (facturar_ahora) ======
     if (propertyName === 'facturar_ahora') {
+      console.log(`🔍 Validando facturar_ahora: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
+      
       if (!parseBool(propertyValue)) {
         console.log('⚠️ facturar_ahora no está en true, ignorando');
         return res.status(200).json({ message: 'Property value not true, skipped' });
@@ -183,10 +186,18 @@ export default async function handler(req, res) {
         return res.status(200).json({ message: 'Not a line_item event, ignored' });
       }
       
-      // Para "actualizar" requiere valor truthy
-      if (propertyName === 'actualizar' && !parseBool(propertyValue)) {
-        console.log('⚠️ Flag actualizar no está en true, ignorando');
-        return res.status(200).json({ message: 'actualizar flag not true, skipped' });
+      // Para "actualizar" requiere valor truthy (PERO para hs_billing_start_delay_type no importa el valor)
+      if (propertyName === 'actualizar') {
+        console.log(`🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
+        
+        if (!parseBool(propertyValue)) {
+          console.log('⚠️ Flag actualizar no está en true, ignorando');
+          return res.status(200).json({ 
+            message: 'actualizar flag not true, skipped',
+            receivedValue: propertyValue,
+            receivedType: typeof propertyValue
+          });
+        }
       }
       
       console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
