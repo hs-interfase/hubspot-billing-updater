@@ -167,3 +167,113 @@ ISC
 
 **Versión:** 2.0.0  
 **Última actualización:** 2025-12-25
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## ⏳ Inicio diferido de facturación (HubSpot Billing Start Delay)
+
+HubSpot permite que un **Line Item** configure el inicio de la facturación recurrente de tres formas:
+
+- **Inicio inmediato**
+- **Inicio en una fecha fija**
+- **Inicio diferido** por **días** o **meses** (delay)
+
+Cuando el usuario elige **inicio diferido**, HubSpot **no completa** `hs_recurring_billing_start_date`.  
+En su lugar, completa propiedades de delay:
+
+- `hs_billing_start_delay_days` *(número de días de retraso)*
+- `hs_billing_start_delay_months` *(número de meses de retraso)*
+- `hs_billing_start_delay_type` *(modo elegido por HubSpot: días/meses/fecha fija)*
+
+### 🔥 Problema que resuelve
+
+Nuestro motor (especialmente **Phase 1**) históricamente asumía que el inicio real de facturación venía en:
+
+- `hs_recurring_billing_start_date`
+
+Pero con **inicio diferido**, esa propiedad puede venir `null`, lo que provoca que:
+
+- el line item parezca “sin fecha”
+- se calcule mal la **próxima fecha de facturación**
+- se omita el item en el calendario
+- el deal termine con `facturacion_proxima_fecha` incorrecta
+
+### ✅ Solución implementada: normalización antes de Phase 1
+
+Agregamos una normalización previa que:
+
+1. Detecta line items con `hs_billing_start_delay_days` o `hs_billing_start_delay_months`
+2. Calcula una **fecha real** de inicio (`hs_recurring_billing_start_date`) usando una fecha base
+3. **Convierte** el delay a una fecha fija y limpia los campos de delay
+
+Esto permite que el motor opere sobre una “fecha justa” (fecha concreta), manteniendo la lógica existente del calendario.
+
+### 📌 Archivo y función
+
+- Archivo: `src/normalizeBillingStartDelay.js`
+- Funciones principales:
+  - `normalizeBillingStartDelayForLineItem(lineItem, deal)`
+  - `normalizeBillingStartDelay(lineItems, deal)`
+
+### 🧮 Fecha base para el cálculo
+
+Para calcular la fecha efectiva, usamos esta prioridad (puede ajustarse según negocio):
+
+1. `lineItem.createdate` o `lineItem.hs_createdate` (si existe)
+2. `deal.properties.closedate` (si existe)
+3. fallback: **hoy** (00:00)
+
+Luego:
+- si hay `hs_billing_start_delay_days`: `baseDate + days`
+- si hay `hs_billing_start_delay_months`: `baseDate + months` *(con ajuste por fin de mes)*
+
+### ✍️ Propiedades que actualizamos en HubSpot
+
+Cuando hacemos la conversión, actualizamos el line item con:
+
+- `hs_recurring_billing_start_date = YYYY-MM-DD`
+- `hs_billing_start_delay_days = null`
+- `hs_billing_start_delay_months = null`
+
+> No forzamos `hs_billing_start_delay_type` manualmente.  
+> Primero lo logueamos para confirmar el valor real que usa HubSpot en este portal.
+
+### 🧾 Logs para debug (Phase 1)
+
+Antes de la conversión logueamos:
+
+```js
+console.log('[phase1][billing-delay]', {
+  lineItemId: li.id,
+  hs_billing_start_delay_type: p.hs_billing_start_delay_type,
+  hs_billing_start_delay_days: p.hs_billing_start_delay_days,
+  hs_billing_start_delay_months: p.hs_billing_start_delay_months,
+  hs_recurring_billing_start_date: p.hs_recurring_billing_start_date,
+});
