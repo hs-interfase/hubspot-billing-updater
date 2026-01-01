@@ -8,6 +8,7 @@ import {
   computeBillingCountersForLineItem,
 } from '../billingEngine.js';
 import { updateDealCupo } from '../cupo.js';
+import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
@@ -148,6 +149,14 @@ export async function runPhase1(dealId) {
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
+// -- Convertir retrasos en fecha de inicio concreta --
+  // Esto modifica los line items en HubSpot y los actualiza en memoria.
+  try {
+    await normalizeBillingStartDelay(lineItems, deal);
+  } catch (err) {
+    console.error('[phase1] Error normalizando retrasos de facturación', err);
+  }
+  
   // 1) Mirroring (si corresponde)
   let mirrorResult = null;
   try {

@@ -128,6 +128,14 @@ export async function getDealWithLineItems(dealId) {
     "tipo_de_facturacion",
     "repetitivo",
 
+    // ====== INICIO DE FACTURACIÓN DIFERIDO ======
+  // Estos campos se completan automáticamente cuando se selecciona un inicio
+  // diferido de facturación (días o meses).  Los usamos para normalizar la
+  // fecha de inicio a una fecha concreta antes de calcular calendarios.
+  "hs_billing_start_delay_days",
+  "hs_billing_start_delay_months",
+  "hs_billing_start_delay_type",
+
     // ====== COSTOS Y MONTOS ======
     "costo_real",
     "costo_real_usd",
