@@ -132,11 +132,11 @@ export async function processUrgentLineItem(lineItemId) {
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
     // 7) Crear factura usando tu servicio existente
-    const invoiceResult = await createAutoInvoiceFromLineItem({
-      deal,
-      lineItem: targetLineItem,
-      billingDate: getTodayYMD(), // YYYY-MM-DD (si tu invoiceService normaliza, perfecto)
-    });
+const invoiceResult = await createAutoInvoiceFromLineItem(
+  deal,
+  targetLineItem,
+  getTodayYMD()
+);
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
       console.error('❌ No se pudo crear la factura');
