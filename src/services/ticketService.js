@@ -252,3 +252,46 @@ export async function updateTicket(ticketId, properties) {
     throw err;
   }
 }
+
+
+/**
+ * Crea un ticket de orden de facturación automática en el pipeline específico.
+ * Idempotente: si ya existe un ticket con la misma clave, lo devuelve.
+ * @param {Object} deal - El deal de HubSpot.
+ * @param {Object} lineItem - El line item de HubSpot.
+ * @param {string} billingDate - La fecha objetivo de facturación (YYYY-MM-DD).
+ * @returns {Object} { ticketId, created } - `created` es true si se creó, false si ya existía.
+ */
+export async function createAutoBillingTicket(deal, lineItem, billingDate) {
+  const dealId = String(deal.id || deal.properties?.hs_object_id);
+  const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
+  const ticketKey = generateTicketKey(dealId, lineItemId, billingDate);
+  // Buscar ticket existente por clave
+  const existing = await findTicketByKey(ticketKey);
+  if (existing) {
+    return { ticketId: existing.id, created: false };
+  }
+  // Si no es DRY_RUN, preparar el payload
+  const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
+  const dealName = deal.properties?.dealname || 'Deal';
+  const productName = lineItem.properties?.name || 'Producto';
+  const rubro = lineItem.properties?.servicio || 'Sin rubro';
+  const ticketProps = {
+    subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
+    hs_pipeline: AUTOMATED_TICKET_PIPELINE,
+    hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+    of_deal_id: dealId,
+    of_line_item_ids: lineItemId,
+    of_ticket_key: ticketKey,
+    ...snapshots,
+  };
+  // Crear el ticket y asociar a deal, line item, compañías y contactos
+  const createResp = await hubspotClient.crm.tickets.basicApi.create({ properties: ticketProps });
+  const ticketId = createResp.id || createResp.result?.id;
+  const [companyIds, contactIds] = await Promise.all([
+    getDealCompanies(dealId),
+    getDealContacts(dealId)
+  ]);
+  await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+  return { ticketId, created: true };
+}

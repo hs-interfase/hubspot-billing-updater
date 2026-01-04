@@ -16,6 +16,11 @@ export const TICKET_STAGES = {
   CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1234282363',   // Pausado/Cancelado (pausa o cierre perdido)
 };
 
+// Pipeline y stage para tickets automáticos
+export const AUTOMATED_TICKET_PIPELINE = process.env.BILLING_AUTOMATED_PIPELINE_ID || '829156883';
+export const AUTOMATED_TICKET_INITIAL_STAGE = process.env.BILLING_AUTOMATED_INITIAL_STAGE || '1228755520';
+
+
 // Moneda por defecto
 export const DEFAULT_CURRENCY = 'USD';
 

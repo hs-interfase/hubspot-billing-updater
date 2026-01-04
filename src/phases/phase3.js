@@ -3,126 +3,190 @@
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoInvoiceFromLineItem } from '../services/invoiceService.js';
+import { createAutoBillingTicket, updateTicket } from '../services/ticketService.js';
+import { hubspotClient } from '../hubspotClient.js';
 
 /**
- * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true.
- * 
- * Lógica:
- * - Verificar que el DEAL tenga facturacion_activa=true
- * - Filtrar line items con facturacion_automatica=true
- * - Para cada line item, verificar si hoy es la fecha de facturación
- * - Si corresponde facturar HOY, emitir la factura automáticamente
- * - También procesa el flag "facturar_ahora" (disparo inmediato)
- * - Aplicar idempotencia: no duplicar facturas existentes
- * 
- * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Array} params.lineItems - Line Items del Deal
- * @returns {Object} { invoicesEmitted, errors }
+ * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true
+ * + Crea SIEMPRE el ticket en pipeline AUTOMÁTICOS (trazabilidad)
+ *
+ * Reglas:
+ * - Si deal.facturacion_activa != true: no hace nada
+ * - Solo procesa line items con facturacion_automatica == true
+ * - Si line item ya tiene of_invoice_id: no emite factura (idempotencia), pero asegura ticket
+ * - Si facturar_ahora == true: crea ticket->factura->asocia of_invoice_id al ticket->resetea flag
+ * - Si nextBillingDate == hoy: crea ticket->factura->asocia of_invoice_id al ticket
  */
 export async function runPhase3({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
   const today = getTodayYMD();
-  
-  console.log(`   [Phase3] Hoy: ${today}`);
-  console.log(`   [Phase3] Total line items: ${lineItems.length}`);
-  
-  // Verificar si el DEAL tiene facturacion_activa=true
+
+  console.log(`   [Phase3] start`, { dealId, today, lineItems: (lineItems || []).length });
+
+  // Gate principal
   const dealFacturacionActiva = parseBool(dp.facturacion_activa);
-  console.log(`   [Phase3] Deal facturacion_activa: ${dp.facturacion_activa} (parsed=${dealFacturacionActiva})`);
-  
   if (!dealFacturacionActiva) {
-    console.log(`   [Phase3] ⚠️  Deal NO tiene facturacion_activa=true, saltando Phase 3`);
+    console.log(`   [Phase3] Deal facturacion_activa != true. Skip.`);
     return { invoicesEmitted: 0, errors: [] };
   }
-  
+
   let invoicesEmitted = 0;
   const errors = [];
-  
-  // Filtrar line items elegibles para facturación automática
+
+  // Solo automáticos
   const autoLineItems = (lineItems || []).filter((li) => {
     const lp = li?.properties || {};
-    const facturacionAutomatica = parseBool(lp.facturacion_automatica);
-    
-    return facturacionAutomatica;
+    return parseBool(lp.facturacion_automatica);
   });
-  
-  console.log(`   [Phase3] Line items AUTOMÁTICOS (facturacion_automatica=true): ${autoLineItems.length}`);
-  
-  if (autoLineItems.length === 0) {
-    console.log(`   [Phase3] No hay line items para facturación automática`);
-    return { invoicesEmitted: 0, errors: [] };
-  }
-  
+
+  console.log(`   [Phase3] autoLineItems=${autoLineItems.length}`);
+
   for (const li of autoLineItems) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
     const liName = lp.name || `LI ${lineItemId}`;
-    
-    console.log(`   [Phase3] Analizando: ${liName} (${lineItemId})`);
-    
+
+    console.log(`   [Phase3] Processing ${liName}`, { lineItemId });
+
     try {
-      // Verificar si ya tiene factura
-      if (lp.of_invoice_id) {
-        console.log(`      🔄 Ya tiene factura: ${lp.of_invoice_id} (idempotencia)`);
-        continue;
-      }
-      
-      // Verificar disparo manual (facturar_ahora)
+      const existingInvoiceId = lp.of_invoice_id;
       const facturarAhora = parseBool(lp.facturar_ahora);
-      
-      if (facturarAhora) {
-        console.log(`      ⚡ FACTURAR AHORA activado, emitiendo factura inmediata...`);
-        const result = await createAutoInvoiceFromLineItem(deal, li, today);
-        
-        if (result.created) {
-          invoicesEmitted++;
-          console.log(`      ✅ Factura creada: ${result.invoiceId}`);
-        } else {
-          console.log(`      🔄 Factura ya existía: ${result.invoiceId}`);
-        }
-        
-        // Resetear flag facturar_ahora
+      const nextBillingDate = getNextBillingDate(lp); // YYYY-MM-DD o null
+
+      // 1) Si ya tiene factura => no emitir. Pero asegurar ticket (siempre con una fecha razonable)
+      if (existingInvoiceId) {
+        console.log(`      [Phase3] idempotency: already has invoice`, { existingInvoiceId });
+
+        const targetDate = nextBillingDate || today;
         try {
-          await resetFacturarAhoraFlag(lineItemId);
-          console.log(`      🔄 Flag facturar_ahora reseteado`);
+          await createAutoBillingTicket(deal, li, targetDate);
+          console.log(`      [Phase3] ensured auto ticket`, { targetDate });
         } catch (e) {
-          console.warn(`      ⚠️  No se pudo resetear facturar_ahora`);
+          console.warn(`      [Phase3] could not ensure auto ticket`, e?.message);
         }
-        
         continue;
       }
-      
-      // Verificar si hoy es día de facturación
-      const nextBillingDate = getNextBillingDate(lp);
-      
-      if (!nextBillingDate) {
-        console.log(`      ⚠️  Sin próxima fecha de facturación, saltando...`);
-        continue;
-      }
-      
-      if (nextBillingDate === today) {
-        console.log(`      💰 ¡HOY ES DÍA DE FACTURACIÓN! (${today})`);
+
+      // 2) FACTURAR AHORA (en automático)
+      if (facturarAhora) {
+        console.log(`      [Phase3] facturar_ahora=true => ticket->invoice`);
+
+        // Ticket primero (siempre)
+        const { ticketId } = await createAutoBillingTicket(deal, li, today);
+        console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: today });
+
+        // Luego factura
         const result = await createAutoInvoiceFromLineItem(deal, li, today);
-        
-        if (result.created) {
+        if (result?.created) {
           invoicesEmitted++;
-          console.log(`      ✅ Factura creada: ${result.invoiceId}`);
+          console.log(`      [Phase3] invoice created`, { invoiceId: result.invoiceId });
         } else {
-          console.log(`      🔄 Factura ya existía: ${result.invoiceId}`);
+          console.log(`      [Phase3] invoice existed`, { invoiceId: result?.invoiceId });
         }
+
+        // Asociar invoice -> ticket
+        if (ticketId && result?.invoiceId) {
+          await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
+          console.log(`      [Phase3] ticket updated with invoice`, { ticketId, invoiceId: result.invoiceId });
+        }
+
+        // Reset flag (para no repetir)
+        await resetFacturarAhoraFlag(lineItemId);
+        console.log(`      [Phase3] facturar_ahora reset`, { lineItemId });
+
+        continue;
+      }
+
+      // 3) Facturación programada: solo si la próxima fecha == hoy
+      if (!nextBillingDate) {
+        console.log(`      [Phase3] no next billing date => skip`);
+        continue;
+      }
+
+      if (nextBillingDate !== today) {
+        console.log(`      [Phase3] nextBillingDate != today => skip`, { nextBillingDate });
+        continue;
+      }
+
+      console.log(`      [Phase3] scheduled billing today => ticket->invoice`, { nextBillingDate });
+
+      // Ticket primero
+      const { ticketId } = await createAutoBillingTicket(deal, li, nextBillingDate);
+      console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: nextBillingDate });
+
+      // Factura
+      const result = await createAutoInvoiceFromLineItem(deal, li, today);
+      if (result?.created) {
+        invoicesEmitted++;
+        console.log(`      [Phase3] invoice created`, { invoiceId: result.invoiceId });
       } else {
-        console.log(`      📅 Próxima facturación: ${nextBillingDate} (no es hoy)`);
+        console.log(`      [Phase3] invoice existed`, { invoiceId: result?.invoiceId });
+      }
+
+      // Asociar invoice -> ticket
+      if (ticketId && result?.invoiceId) {
+        await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
+        console.log(`      [Phase3] ticket updated with invoice`, { ticketId, invoiceId: result.invoiceId });
       }
     } catch (err) {
-      console.error(`      ❌ Error procesando:`, err?.message || err);
-      errors.push({ lineItemId, error: err?.message || 'Error desconocido' });
+      console.error(`      [Phase3] error`, err?.message || err);
+      errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
     }
   }
-  
+
+  console.log(`   [Phase3] done`, { dealId, invoicesEmitted, errors: errors.length });
   return { invoicesEmitted, errors };
 }
+
+/**
+ * Obtiene la próxima fecha de facturación de un line item.
+ * Busca en hs_recurring_billing_start_date / recurringbillingstartdate / fecha_inicio_de_facturacion
+ * y en fecha_2..fecha_24
+ * Devuelve la fecha más cercana >= hoy (YYYY-MM-DD). Si todas son pasadas, devuelve null.
+ */
+function getNextBillingDate(lineItemProps) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const allDates = [];
+
+  const startDate =
+    lineItemProps.hs_recurring_billing_start_date ||
+    lineItemProps.recurringbillingstartdate ||
+    lineItemProps.fecha_inicio_de_facturacion;
+
+  if (startDate) {
+    const d = parseLocalDate(startDate);
+    if (d) allDates.push(d);
+  }
+
+  for (let i = 2; i <= 24; i++) {
+    const key = `fecha_${i}`;
+    const v = lineItemProps[key];
+    if (!v) continue;
+    const d = parseLocalDate(v);
+    if (d) allDates.push(d);
+  }
+
+  if (allDates.length === 0) return null;
+
+  const futureDates = allDates.filter((d) => d >= today);
+  if (futureDates.length === 0) return null;
+
+  futureDates.sort((a, b) => a.getTime() - b.getTime());
+  return formatDateISO(futureDates[0]);
+}
+
+/**
+ * Resetea el flag facturar_ahora a false después de procesar.
+ */
+async function resetFacturarAhoraFlag(lineItemId) {
+  await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+    properties: { facturar_ahora: 'false' },
+  });
+}
+
 
 /**
  * Obtiene la próxima fecha de facturación de un line item.
