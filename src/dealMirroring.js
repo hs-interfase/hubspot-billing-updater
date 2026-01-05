@@ -286,7 +286,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     props.pais_operativo = 'Uruguay';
 
     // 3) Propietario del mirror
-    const mirrorOwnerId = process.env.USER_ADMIN_MIRRROR || '83169424';
+    const mirrorOwnerId = process.env.USER_ADMIN_MIRROR || null;
     props.hubspot_owner_id = mirrorOwnerId;
 
     // 4) PRECIO = COSTO del original, COSTO = 0 en el espejo
