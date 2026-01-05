@@ -140,45 +140,6 @@ export async function runPhase3({ deal, lineItems }) {
 }
 
 /**
- * Obtiene la próxima fecha de facturación de un line item.
- * Busca en hs_recurring_billing_start_date / recurringbillingstartdate / fecha_inicio_de_facturacion
- * y en fecha_2..fecha_24
- * Devuelve la fecha más cercana >= hoy (YYYY-MM-DD). Si todas son pasadas, devuelve null.
- */
-function getNextBillingDate(lineItemProps) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const allDates = [];
-
-  const startDate =
-    lineItemProps.hs_recurring_billing_start_date ||
-    lineItemProps.recurringbillingstartdate ||
-    lineItemProps.fecha_inicio_de_facturacion;
-
-  if (startDate) {
-    const d = parseLocalDate(startDate);
-    if (d) allDates.push(d);
-  }
-
-  for (let i = 2; i <= 24; i++) {
-    const key = `fecha_${i}`;
-    const v = lineItemProps[key];
-    if (!v) continue;
-    const d = parseLocalDate(v);
-    if (d) allDates.push(d);
-  }
-
-  if (allDates.length === 0) return null;
-
-  const futureDates = allDates.filter((d) => d >= today);
-  if (futureDates.length === 0) return null;
-
-  futureDates.sort((a, b) => a.getTime() - b.getTime());
-  return formatDateISO(futureDates[0]);
-}
-
-/**
  * Resetea el flag facturar_ahora a false después de procesar.
  */
 async function resetFacturarAhoraFlag(lineItemId) {
