@@ -198,14 +198,3 @@ function getNextBillingDate(lineItemProps) {
   futureDates.sort((a, b) => a.getTime() - b.getTime());
   return formatDateISO(futureDates[0]);
 }
-
-/**
- * Resetea el flag facturar_ahora a false después de procesar.
- */
-async function resetFacturarAhoraFlag(lineItemId) {
-  const { hubspotClient } = await import('../hubspotClient.js');
-  await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
-    properties: { facturar_ahora: 'false' },
-  });
-  console.log(`[Phase3] Flag facturar_ahora reseteado para line item ${lineItemId}`);
-}
