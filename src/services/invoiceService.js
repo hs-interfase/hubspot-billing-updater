@@ -41,7 +41,219 @@ async function updateInvoiceDirect(invoiceId, properties) {
 }
 
 /**
- * Crea una factura automática desde un Line Item.
+ * Crea una factura desde un ticket de orden de facturación.
+ * La factura SIEMPRE toma datos del ticket (no del line item directamente).
+ * 
+ * @param {Object} ticket - Ticket de HubSpot
+ * @param {string} modoGeneracion - Modo de generación: 'AUTO_LINEITEM', 'MANUAL_TICKET', 'MANUAL_LINEITEM'
+ * @param {string} usuarioDisparador - ID del usuario que disparó la facturación (opcional, si es manual)
+ * @returns {Object} { invoiceId, created }
+ */
+export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null) {
+  const ticketId = ticket.id || ticket.properties?.hs_object_id;
+  const tp = ticket.properties || {};
+  
+  console.log('\n========== CREANDO FACTURA DESDE TICKET ==========');
+  console.log('Ticket ID:', ticketId);
+  console.log('Ticket Key:', tp.of_ticket_key);
+  console.log('Modo de generación:', modoGeneracion);
+  
+  // 1) Verificar si ya tiene factura
+  if (tp.of_invoice_id) {
+    console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id}`);
+    console.log('================================================\n');
+    return { invoiceId: tp.of_invoice_id, created: false };
+  }
+  
+  // 2) Generar clave única para la factura
+  const invoiceKey = tp.of_ticket_key || `ticket::${ticketId}`;
+  console.log('Invoice Key:', invoiceKey);
+  
+  // 3) DRY RUN check
+  if (isDryRun()) {
+    console.log(`DRY_RUN: no se crea factura desde ticket ${ticketId}`);
+    console.log('================================================\n');
+    return { invoiceId: null, created: false };
+  }
+  
+  // 4) Determinar responsable asignado
+  const responsableAsignado = modoGeneracion === 'AUTO_LINEITEM' 
+    ? 'AUTO' 
+    : (tp.responsable_asignado || 'Sin asignar');
+  
+  // 5) Fecha real de facturación (momento de crear la factura)
+  const fechaRealFacturacion = getTodayYMD();
+  
+  // 6) Preparar propiedades de la factura (mapeo Ticket → Factura)
+  const invoiceProps = {
+    // Título: usar el subject del ticket
+    hs_title: tp.subject || `Factura - Ticket ${ticketId}`,
+    
+    // 💰 Moneda (del ticket)
+    hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
+    
+    // 📅 Fecha de facturación (fecha real, no planificada)
+    hs_invoice_date: toHubSpotDate(fechaRealFacturacion),
+    hs_due_date: toHubSpotDate(fechaRealFacturacion),
+    
+    // 🔑 Configuración HubSpot
+    hs_invoice_billable: false, // Desactiva validaciones, PDFs, emails
+    
+    // 👤 Destinatario externo (usuario HubSpot)
+    hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '85894063',
+    
+    // 🔑 Idempotencia y tracking
+    of_invoice_key: invoiceKey,
+    of_ticket_id: ticketId,
+    
+    // 🎯 Identidad del producto (del ticket)
+    nombre_producto: tp.of_producto_nombres,
+    descripcion: tp.descripcion_producto,
+    servicio: tp.of_rubro,
+    
+    // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
+    monto_unitario: parseNumber(tp.of_monto_unitario, 0),
+    cantidad: parseNumber(tp.of_cantidad, 0),
+    monto_total: parseNumber(tp.of_monto_total, 0),
+    monto_real_a_facturar: parseNumber(tp.monto_real_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
+    descuento: parseNumber(tp.of_descuento, 0),
+    iva: tp.iva,
+    
+    // 👥 Responsables
+    responsable_asignado: responsableAsignado,
+    vendedor_factura: tp.vendedor,
+    
+    // 📊 Frecuencia
+    frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion,
+    
+    // 🏢 Contexto
+    of_pais_operativo: tp.of_pais_operativo,
+    
+    // 🎯 Origen y auditoría
+    modo_de_generacion_factura: modoGeneracion,
+    usuario_disparador_factura: usuarioDisparador || 'Sistema',
+    
+    // 🔑 Etapa inicial
+    etapa_de_la_factura: 'Pendiente',
+  };
+  
+  // Asignar al usuario administrativo si está configurado
+  if (process.env.INVOICE_OWNER_ID) {
+    invoiceProps.hubspot_owner_id = process.env.INVOICE_OWNER_ID;
+  }
+  
+  console.log('\n--- PROPIEDADES DE LA FACTURA A CREAR ---');
+  console.log(JSON.stringify(invoiceProps, null, 2));
+  console.log('-----------------------------------------\n');
+  
+  try {
+    // 7) Crear la factura usando API directa
+    console.log('Creando factura en HubSpot...');
+    const createResp = await createInvoiceDirect(invoiceProps);
+    const invoiceId = createResp.id;
+    
+    console.log('✓ Factura creada con ID:', invoiceId);
+    
+    // 8) Asociar factura a Deal, Ticket y Contact
+    console.log('\n--- CREANDO ASOCIACIONES ---');
+    const assocCalls = [];
+    
+    // Asociación Invoice → Deal
+    if (tp.of_deal_id) {
+      assocCalls.push(
+        associateV4('invoices', invoiceId, 'deals', tp.of_deal_id)
+          .then(() => console.log(`✓ Asociación invoice→deal creada`))
+          .catch(e => console.warn(`⚠️ Error asociación invoice→deal:`, e.message))
+      );
+    }
+    
+    // Asociación Invoice → Ticket
+    assocCalls.push(
+      associateV4('invoices', invoiceId, 'tickets', ticketId)
+        .then(() => console.log(`✓ Asociación invoice→ticket creada`))
+        .catch(e => console.warn(`⚠️ Error asociación invoice→ticket:`, e.message))
+    );
+    
+    // ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
+    console.log('⚠️ Saltando asociación invoice→line_item (evita borrado automático)');
+    
+    // Intentar asociar contacto principal del deal
+    if (tp.of_deal_id) {
+      try {
+        const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage(
+          'deals',
+          tp.of_deal_id,
+          'contacts',
+          10
+        );
+        const contactId = contacts.results?.[0]?.toObjectId || null;
+        if (contactId) {
+          assocCalls.push(
+            associateV4('invoices', invoiceId, 'contacts', contactId)
+              .then(() => console.log(`✓ Asociación invoice→contact creada`))
+              .catch(e => console.warn('⚠️ No se pudo asociar contacto'))
+          );
+        }
+      } catch (e) {
+        console.warn('No se pudo obtener contacto del deal');
+      }
+    }
+    
+    await Promise.all(assocCalls);
+    console.log('✓ Todas las asociaciones creadas');
+    
+    // 9) Actualizar ticket con fecha real de facturación y referencia a la factura
+    console.log('\n--- ACTUALIZANDO TICKET ---');
+    try {
+      await hubspotClient.crm.tickets.basicApi.update(ticketId, {
+        properties: {
+          of_invoice_id: invoiceId,
+          of_fecha_real_de_facturacion: fechaRealFacturacion, // 📅 Fecha REAL (momento de emisión)
+        },
+      });
+      console.log(`✓ Ticket actualizado con invoice_id=${invoiceId} y fecha real`);
+    } catch (e) {
+      console.warn('⚠️ No se pudo actualizar ticket:', e.message);
+    }
+    
+    // 10) Actualizar line item con referencia a la factura
+    if (tp.of_line_item_ids) {
+      console.log('\n--- ACTUALIZANDO LINE ITEM ---');
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(tp.of_line_item_ids, {
+          properties: {
+            invoice_id: invoiceId,
+            invoice_key: invoiceKey,
+          },
+        });
+        console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
+      } catch (e) {
+        console.warn('⚠️ No se pudo actualizar line item:', e.message);
+      }
+    }
+    
+    console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
+    console.log('Invoice ID:', invoiceId);
+    console.log('Invoice Key:', invoiceKey);
+    console.log('Responsable:', responsableAsignado);
+    console.log('Modo de generación:', modoGeneracion);
+    console.log('================================================\n');
+    
+    return { invoiceId, created: true };
+  } catch (err) {
+    console.error('\n❌ ERROR CREANDO FACTURA DESDE TICKET:');
+    console.error('Mensaje:', err?.message);
+    console.error('Response data:', JSON.stringify(err?.response?.data, null, 2));
+    console.error('================================================\n');
+    throw err;
+  }
+}
+
+/**
+ * Crea una factura automática desde un Line Item (LEGACY - mantener por compatibilidad).
+ * 
+ * ⚠️ NOTA: Idealmente deberías usar createInvoiceFromTicket en su lugar.
+ * Esta función se mantiene solo para compatibilidad con código existente.
  * 
  * ESTRATEGIA:
  * - hs_invoice_billable = false: Desactiva validaciones de HubSpot (permite line items recurrentes)
@@ -65,7 +277,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
   const lp = lineItem.properties || {};
   const dp = deal.properties || {};
   
-  console.log('\n========== CREANDO FACTURA AUTOMÁTICA ==========');
+  console.log('\n========== CREANDO FACTURA AUTOMÁTICA (LEGACY) ==========');
   console.log('Deal ID:', dealId);
   console.log('Deal Name:', dp.dealname);
   console.log('Line Item ID:', lineItemId);
@@ -135,6 +347,10 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
     
     // 🎯 Unidad de negocio (del line item)
     ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
+    
+    // Modo de generación
+    modo_de_generacion_factura: 'AUTO_LINEITEM',
+    usuario_disparador_factura: 'Sistema',
   };
   
   // Asignar al usuario administrativo si está configurado
@@ -155,57 +371,57 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
     console.log('✓ Factura creada con ID:', invoiceId);
     console.log('Respuesta de HubSpot:', JSON.stringify(createResp, null, 2));
     
-// 7) Asociar factura a Deal y Contact (NO a Line Item para evitar que HubSpot los borre)
-console.log(`\n--- CREANDO ASOCIACIONES ---`);
-
-const assocCalls = [];
-
-// Asociación Invoice → Deal (typeId: 175)
-assocCalls.push(
-  associateV4('invoices', invoiceId, 'deals', dealId)
-    .then(() => {
-      console.log(`✓ Asociación invoice→deal creada`);
-    }).catch(e => {
-      console.error(`✗ Error asociación invoice→deal:`, e.message);
-      throw e;
-    })
-);
-
-// ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
-// La referencia se mantiene solo a través de invoice_id en las propiedades del line item
-console.log('⚠️ Saltando asociación invoice→line_item (evita borrado automático)');
-
-// Intentar asociar contacto principal del deal (typeId: 177)
-try {
-  const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage(
-    'deals',
-    dealId,
-    'contacts',
-    10
-  );
-  const contactId = contacts.results?.[0]?.toObjectId || null;
-  if (contactId) {
-    console.log('Contacto encontrado:', contactId);
+    // 7) Asociar factura a Deal y Contact (NO a Line Item para evitar que HubSpot los borre)
+    console.log(`\n--- CREANDO ASOCIACIONES ---`);
+    
+    const assocCalls = [];
+    
+    // Asociación Invoice → Deal (typeId: 175)
     assocCalls.push(
-      associateV4('invoices', invoiceId, 'contacts', contactId)
+      associateV4('invoices', invoiceId, 'deals', dealId)
         .then(() => {
-          console.log(`✓ Asociación invoice→contact creada`);
+          console.log(`✓ Asociación invoice→deal creada`);
         }).catch(e => {
-          console.warn('⚠️ No se pudo asociar contacto (no crítico)');
+          console.error(`✗ Error asociación invoice→deal:`, e.message);
+          throw e;
         })
     );
-  } else {
-    console.log('No hay contacto asociado al deal');
-  }
-} catch (e) {
-  console.warn('No se pudo obtener contacto del deal');
-}
-
-// Esperar TODAS las asociaciones
-await Promise.all(assocCalls);
-console.log('✓ Todas las asociaciones creadas');
     
-    // 9) Actualizar line item con referencia a la factura
+    // ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
+    // La referencia se mantiene solo a través de invoice_id en las propiedades del line item
+    console.log('⚠️ Saltando asociación invoice→line_item (evita borrado automático)');
+    
+    // Intentar asociar contacto principal del deal (typeId: 177)
+    try {
+      const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage(
+        'deals',
+        dealId,
+        'contacts',
+        10
+      );
+      const contactId = contacts.results?.[0]?.toObjectId || null;
+      if (contactId) {
+        console.log('Contacto encontrado:', contactId);
+        assocCalls.push(
+          associateV4('invoices', invoiceId, 'contacts', contactId)
+            .then(() => {
+              console.log(`✓ Asociación invoice→contact creada`);
+            }).catch(e => {
+              console.warn('⚠️ No se pudo asociar contacto (no crítico)');
+            })
+        );
+      } else {
+        console.log('No hay contacto asociado al deal');
+      }
+    } catch (e) {
+      console.warn('No se pudo obtener contacto del deal');
+    }
+    
+    // Esperar TODAS las asociaciones
+    await Promise.all(assocCalls);
+    console.log('✓ Todas las asociaciones creadas');
+    
+    // 8) Actualizar line item con referencia a la factura
     console.log('\n--- ACTUALIZANDO LINE ITEM ---');
     try {
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
@@ -216,7 +432,7 @@ console.log('✓ Todas las asociaciones creadas');
       });
       console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
     } catch (e) {
-      console.warn('⚠ No se pudo actualizar line item con invoice_id:', e.message);
+      console.warn('⚠️ No se pudo actualizar line item con invoice_id:', e.message);
     }
     
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE');
@@ -239,7 +455,7 @@ console.log('✓ Todas las asociaciones creadas');
 /**
  * Obtiene una factura por ID.
  * 
-* @param {string} invoiceId - ID de la factura
+ * @param {string} invoiceId - ID de la factura
  * @returns {Promise<Object>} Factura de HubSpot
  */
 export async function getInvoice(invoiceId) {
@@ -254,79 +470,6 @@ export async function getInvoice(invoiceId) {
     return invoice;
   } catch (err) {
     console.error(`[invoiceService] Error obteniendo factura ${invoiceId}:`, err?.message);
-    throw err;
-  }
-}
-
-/**
- * Crea una factura desde un ticket manual (legacy/opcional).
- * 
- * @param {Object} ticket - Ticket de HubSpot
- * @returns {Object} { invoiceId, created }
- */
-export async function createInvoiceFromTicket(ticket) {
-  const ticketId = ticket.id || ticket.properties?.hs_object_id;
-  const props = ticket.properties || {};
-  
-  // Verificar si ya tiene factura
-  if (props.of_invoice_id) {
-    console.log(`[invoiceService] Ticket ${ticketId} ya tiene factura ${props.of_invoice_id}`);
-    return { invoiceId: props.of_invoice_id, created: false };
-  }
-  
-  const invoiceKey = props.of_ticket_key || `ticket::${ticketId}::${props.of_fecha_de_facturacion}`;
-  
-  // DRY RUN check
-  if (isDryRun()) {
-    console.log(`[invoiceService] DRY_RUN: no se crea factura desde ticket ${ticketId}`);
-    return { invoiceId: null, created: false };
-  }
-  
-  const invoiceProps = {
-    // Título: Deal + Line Item (o nombre del ticket si no hay)
-    hs_title: props.subject || `Ticket ${ticketId}`,
-    hs_currency: props.of_moneda || DEFAULT_CURRENCY,
-    hs_invoice_date: toHubSpotDate(props.of_fecha_de_facturacion || getTodayYMD()),
-    hs_due_date: toHubSpotDate(props.of_fecha_de_facturacion || getTodayYMD()),
-    hs_invoice_billable: false, // Desactiva validaciones
-    of_invoice_key: invoiceKey,
-    etapa_de_la_factura: 'Pendiente',
-  };  // Asignar al usuario administrativo si está configurado
-  if (process.env.INVOICE_OWNER_ID) {
-    invoiceProps.hubspot_owner_id = process.env.INVOICE_OWNER_ID;
-  }
-  
-  try {
-    // Crear factura usando API directa
-    const createResp = await createInvoiceDirect(invoiceProps);
-    const invoiceId = createResp.id;
-    
-    // Asociar a ticket y deal usando associateV4
-    const assocCalls = [];
-    if (ticketId) {
-      assocCalls.push(associateV4('invoices', invoiceId, 'tickets', ticketId));
-    }
-    if (props.of_deal_id) {
-      assocCalls.push(associateV4('invoices', invoiceId, 'deals', props.of_deal_id));
-    }
-    if (props.of_line_item_ids) {
-      assocCalls.push(associateV4('invoices', invoiceId, 'line_items', props.of_line_item_ids));
-    }
-    
-    await Promise.all(assocCalls);
-    
-    // Actualizar ticket
-    await hubspotClient.crm.tickets.basicApi.update(ticketId, {
-      properties: {
-        of_invoice_id: invoiceId,
-        of_invoice_key: invoiceKey,
-      },
-    });
-    
-    console.log(`[invoiceService] Factura ${invoiceId} creada desde ticket ${ticketId}`);
-    return { invoiceId, created: true };
-  } catch (err) {
-    console.error('[invoiceService] Error creando factura desde ticket:', err?.response?.data || err?.message || err);
     throw err;
   }
 }

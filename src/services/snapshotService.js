@@ -90,15 +90,15 @@ export function extractLineItemSnapshots(lineItem, deal) {
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(lp.pais_operativo),
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
-    of_monto_unitario: precioUnitario, // ✅ CORREGIDO: price = monto unitario (valor hora para cupos)
+    of_monto_unitario: precioUnitario, // ✅ price = monto unitario (valor hora para cupos)
     of_cantidad: cantidad, // ✅ cantidad = horas reales para cupos (modificable por responsable)
-    of_costo: costoTotal, // ✅ CORREGIDO: costo total (unitario × cantidad)
+    of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.porcentaje_margen, 0),
-    of_descuento: descuentoPorcentaje, // ✅ CORREGIDO: descuento en % (ej: 10)
-    iva: detectIVA(lineItem), // ✅ CORREGIDO: "Si" si tipo_impositivo contiene "iva"
+    of_descuento: descuentoPorcentaje, // ✅ descuento en % (ej: 10)
+    iva: detectIVA(lineItem), // ✅ "Si" si tipo_impositivo contiene "iva"
     reventa: parseBool(lp.reventa),
-    of_frecuencia_de_facturacion: determineTicketFrequency(lineItem),
-    of_monto_total: montoTotal, // ✅ CORREGIDO: monto total inicial (modificable por responsable)
+    of_frecuencia_de_facturacion: determineTicketFrequency(lineItem), // ✅ Irregular / Único / Frecuente
+    of_monto_total: montoTotal, // ✅ monto total inicial (modificable por responsable)
     monto_real_a_facturar: montoTotal, // ✅ Empieza igual que monto_total, se ajustará según ediciones del responsable
   };
 }
@@ -112,11 +112,19 @@ export function extractDealSnapshots(deal) {
   return {
     of_moneda: safeString(dp.deal_currency_code || 'USD'),
     of_tipo_de_cupo: safeString(dp.tipo_de_cupo),
+    of_pais_operativo: safeString(dp.pais_operativo), // Fallback si line item no tiene
+    responsable_asignado: safeString(dp.pm_asignado_cupo), // ✅ PM asignado al cupo (también irá como owner del ticket)
+    vendedor: safeString(dp.hubspot_owner_id), // ✅ Vendedor (owner del deal, irá como propietario secundario del ticket)
   };
 }
 
 /**
  * Combina snapshots de Deal y Line Item en un objeto listo para el Ticket.
+ * 
+ * @param {Object} deal - Deal de HubSpot
+ * @param {Object} lineItem - Line Item de HubSpot
+ * @param {string} billingDate - Fecha planificada de facturación (YYYY-MM-DD)
+ * @returns {Object} Propiedades listas para crear el ticket
  */
 export function createTicketSnapshots(deal, lineItem, billingDate) {
   const dealData = extractDealSnapshots(deal);
@@ -130,7 +138,8 @@ export function createTicketSnapshots(deal, lineItem, billingDate) {
   return {
     ...dealData,
     ...lineItemData,
-    of_fecha_de_facturacion: billingDate,
+    of_fecha_de_facturacion: billingDate, // 📅 Fecha planificada/estipulada (la que corresponde a esta facturación)
+    // 📅 of_fecha_real_de_facturacion: Se completa cuando se genera la factura (no va en snapshot inicial)
     motivo_cancelacion_ticket: motivoCancelacion,
   };
 }

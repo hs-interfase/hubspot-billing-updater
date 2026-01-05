@@ -1,19 +1,18 @@
 // src/dealMirroring.js
-//
 
-// Módulo para “espejar” un negocio de Paraguay en Uruguay cuando el negocio
+// Módulo para "espejar" un negocio de Paraguay en Uruguay cuando el negocio
 // original tiene líneas de pedido marcadas con el flag `uy = true`.
-// Además, en el espejo UY el monto (price) de cada línea será el "costo"
-// definido en la línea original.
+// El espejo UY tendrá el monto (price) de cada línea igual al "costo" del original.
 //
-// También actualiza el país operativo de negocio, empresa y contactos a “Mixto”.
+// LÓGICA SIMPLIFICADA (sin "Mixto" en deals):
+// - Deal PY original: pais_operativo = "Paraguay"
+// - Deal UY espejo: pais_operativo = "Uruguay", es_mirror_de_py = true
+// - Empresa y contactos SÍ pueden ser "Mixto" si operan en ambos países
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
-// ID de fallback para la empresa Interfase (si no se define por options o .env)
-const DEFAULT_INTERFASE_COMPANY_ID = '34885518646';
 
 const LINE_ITEM_COST_PROP = 'hs_cost_of_goods_sold';
 
@@ -53,47 +52,57 @@ function parseBoolFromHubspot(raw) {
  */
 export function shouldMirrorDealToUruguay(deal, lineItems) {
   const props = deal?.properties || {};
+  
+  // Si ya es un espejo, no duplicar
   if (parseBoolFromHubspot(props.es_mirror_de_py)) {
     return { ok: false, reason: 'deal is already a mirror' };
   }
+  
+  // Verificar que sea un deal de Paraguay
+  const paisOperativo = (props.pais_operativo || '').toLowerCase();
+  if (paisOperativo !== 'paraguay' && paisOperativo !== 'py') {
+    return { ok: false, reason: 'deal is not from Paraguay' };
+  }
+  
+  // Verificar que tenga al menos una línea con uy=true
   const hasUy = lineItems.some((li) =>
     parseBoolFromHubspot(li.properties?.[LINEA_PARA_UY_PROP])
   );
+  
   return hasUy ? { ok: true } : { ok: false, reason: 'no UY line items' };
 }
 
 /**
- * Crea o actualiza un negocio “espejo” en UY a partir de un negocio de PY.
+ * Crea o actualiza un negocio "espejo" en UY a partir de un negocio de PY.
  *
  * - Si el negocio ya tiene un espejo (`deal_uy_mirror_id`), se reutiliza ese
  *   negocio, se borran sus líneas de pedido y se vuelven a crear con las
  *   líneas UY actuales.
- * - Si no existe espejo, se crea uno nuevo con país operativo “Mixto”,
+ * - Si no existe espejo, se crea uno nuevo con país operativo "Uruguay",
  *   marcándolo como espejo y vinculándolo al negocio PY.
- * - El negocio PY pasa a tener país operativo “Mixto” y guarda el ID del espejo.
+ * - El negocio PY mantiene su país operativo "Paraguay" y guarda el ID del espejo.
  * - La empresa beneficiaria es la primera empresa asociada al negocio PY; su
- *   país operativo y el de sus contactos se actualizan a “Mixto”.
+ *   país operativo y el de sus contactos se actualizan a "Mixto" (empresas/contactos
+ *   SÍ pueden ser mixtos).
  * - La empresa dueña (Interfase PY) se asocia siempre al negocio UY.
  *
  * En las líneas UY del espejo:
  * - Se copian todas las propiedades del line item original excepto `uy`.
- * - Si existe la propiedad `costo`, se usa ese valor como `price` en el espejo.
+ * - Si existe `hs_cost_of_goods_sold`, se usa ese valor como `price` en el espejo.
  *
  * @param {string|number} sourceDealId ID del negocio paraguayo.
  * @param {Object} options Opcional: { interfaseCompanyId }
  * @returns {Promise<Object>} Resumen de la operación.
  */
-
-
 export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   if (!sourceDealId) {
     throw new Error('mirrorDealToUruguay requiere un dealId');
   }
 
-const interfaseCompanyId =
-  options.interfaseCompanyId ||
-  process.env.DEFAULT_INTERFASE_COMPANY_ID || process.env.INTERFASE_PY_COMPANY_ID;
-  
+  const interfaseCompanyId =
+    options.interfaseCompanyId ||
+    process.env.INTERFASE_PY_COMPANY_ID ||
+    process.env.DEFAULT_INTERFASE_COMPANY_ID;
 
   // 1) Obtener negocio PY y sus líneas
   const { deal, lineItems } = await getDealWithLineItems(sourceDealId);
@@ -102,14 +111,17 @@ const interfaseCompanyId =
   }
 
   const srcProps = deal.properties || {};
-  // Moneda del negocio origen (propiedad de deal)
-const sourceCurrency = srcProps.deal_currency_code || null;
-console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
-
+  
+  // Moneda del negocio origen
+  const sourceCurrency = srcProps.deal_currency_code || null;
+  console.log('[mirrorDealToUruguay] Deal origen:', sourceDealId);
+  console.log('[mirrorDealToUruguay] País operativo:', srcProps.pais_operativo);
+  console.log('[mirrorDealToUruguay] Moneda:', sourceCurrency);
 
   // 2) Verificar condiciones para espejar
   const check = shouldMirrorDealToUruguay(deal, lineItems);
   if (!check.ok) {
+    console.log('[mirrorDealToUruguay] No se espejará:', check.reason);
     return {
       mirrored: false,
       sourceDealId: String(sourceDealId),
@@ -121,6 +133,7 @@ console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
   const uyLineItems = lineItems.filter((li) =>
     parseBoolFromHubspot(li.properties?.[LINEA_PARA_UY_PROP])
   );
+  
   if (!uyLineItems.length) {
     return {
       mirrored: false,
@@ -128,6 +141,8 @@ console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
       reason: 'no UY line items',
     };
   }
+
+  console.log(`[mirrorDealToUruguay] Encontradas ${uyLineItems.length} líneas UY`);
 
   // 3) Determinar si ya existe un espejo
   const existingMirrorId = srcProps.deal_uy_mirror_id;
@@ -137,11 +152,13 @@ console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
   if (existingMirrorId) {
     // 3a) Intentar usar el espejo existente y SINCRONIZARLO
     targetDealId = String(existingMirrorId);
+    console.log(`[mirrorDealToUruguay] Espejo existente: ${targetDealId}`);
 
     try {
       const updateProps = {
-        // Siempre Mixto en el espejo
-        pais_operativo: 'Mixto',
+        // País operativo siempre Uruguay en el espejo
+        pais_operativo: 'Uruguay',
+        
         // Sincronizar nombre con sufijo - UY
         dealname: srcProps.dealname
           ? `${srcProps.dealname} - UY`
@@ -160,12 +177,16 @@ console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
         properties: updateProps,
       });
 
+      console.log('[mirrorDealToUruguay] Espejo actualizado');
+
       // Eliminar todas las líneas de pedido actuales del espejo
       const mirrorLineItemIds = await getAssocIdsV4(
         'deals',
         targetDealId,
         'line_items'
       );
+
+      console.log(`[mirrorDealToUruguay] Eliminando ${mirrorLineItemIds.length} líneas antiguas del espejo`);
 
       for (const liId of mirrorLineItemIds) {
         try {
@@ -187,46 +208,52 @@ console.log('[mirrorDealToUruguay] Moneda deal origen:', sourceCurrency);
     }
   }
 
+  if (!targetDealId) {
+    // 3b) Crear un nuevo negocio espejo con país operativo Uruguay
+    const newDealProps = {
+      // Nombre = nombre original + sufijo UY
+      dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
 
-if (!targetDealId) {
-  // 3b) Crear un nuevo negocio espejo con país operativo Mixto
-  const newDealProps = {
-    // Nombre = nombre original + sufijo UY
-    dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
+      // Mantener pipeline y etapa del negocio origen (si existen)
+      ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
+      ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
 
-    // Mantener pipeline y etapa del negocio origen (si existen)
-    ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
-    ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
+      // ✅ País operativo Uruguay (no mixto)
+      pais_operativo: 'Uruguay',
+      
+      // ✅ Marcadores de espejo
+      es_mirror_de_py: 'true',
+      deal_py_origen_id: String(sourceDealId),
 
-    // País operativo y marcadores de espejo
-    pais_operativo: 'Mixto',
-    es_mirror_de_py: 'true',
-    deal_py_origen_id: String(sourceDealId),
+      // Moneda del deal original
+      ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
+    };
 
-    ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
-  };
+    console.log('[mirrorDealToUruguay] Creando nuevo espejo UY con país operativo: Uruguay');
 
-  console.log(
-    '[mirrorDealToUruguay] Creando negocio espejo UY con moneda:',
-    sourceCurrency
-  );
+    const createResp = await hubspotClient.crm.deals.basicApi.create({
+      properties: newDealProps,
+    });
 
-  const createResp = await hubspotClient.crm.deals.basicApi.create({
-    properties: newDealProps,
-  });
+    targetDealId = createResp.id;
 
-  targetDealId = createResp.id;
+    console.log('[mirrorDealToUruguay] Espejo creado:', targetDealId);
 
-  // Actualizar negocio PY: Mixto y guardar el ID del espejo
-  await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-    properties: {
-      pais_operativo: 'Mixto',
-      deal_uy_mirror_id: String(targetDealId),
-    },
-  });
-}
+    // ✅ Actualizar negocio PY: MANTENER Paraguay, guardar ID del espejo
+    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+      properties: {
+        // ✅ Mantener país operativo Paraguay (NO cambiar a Mixto)
+        pais_operativo: 'Paraguay',
+        deal_uy_mirror_id: String(targetDealId),
+      },
+    });
+
+    console.log('[mirrorDealToUruguay] Deal PY actualizado: mantiene Paraguay, guardó mirror_id');
+  }
 
   // 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
+  console.log(`[mirrorDealToUruguay] Creando ${uyLineItems.length} líneas UY en espejo`);
+
   for (const li of uyLineItems) {
     const srcPropsLi = li.properties || {};
     const props = {};
@@ -240,35 +267,32 @@ if (!targetDealId) {
     // === COSTO → price + hs_cost_of_goods_sold en el espejo ===
     // Prioridad:
     // 1) hs_cost_of_goods_sold del original (nativo HubSpot)
-    // 2) costo (custom tuyo, si lo seguís usando)
-    // 3) precio (por si acaso lo usaste como "costo" en algún caso viejo)
-// dealMirroring.js (dentro del loop de creación de líneas UY)
-// src/dealMirroring.js (dentro del loop de creación de líneas UY)
-const rawCost =
-  srcPropsLi.hs_cost_of_goods_sold ??
-  srcPropsLi.costo ??
-  srcPropsLi.precio;
+    // 2) costo (custom, si lo usas)
+    // 3) precio (fallback)
+    const rawCost =
+      srcPropsLi.hs_cost_of_goods_sold ??
+      srcPropsLi.costo ??
+      srcPropsLi.precio;
 
-if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
-  const costNum = Number(rawCost);
-  const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
+    if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
+      const costNum = Number(rawCost);
+      const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
 
-  // Usamos cost como price y no copiamos cost_of_goods_sold del original
-  props.price = finalCost;
-  props.hs_cost_of_goods_sold = 0;
+      // Usamos cost como price y ponemos cost en 0
+      props.price = finalCost;
+      props.hs_cost_of_goods_sold = 0;
 
-  console.log(
-    '[mirrorDealToUruguay] Línea UY espejada',
-    srcPropsLi.name,
-    '→ price =',
-    finalCost,
-    'hs_cost_of_goods_sold = 0'
-  );
+      console.log(
+        '[mirrorDealToUruguay] Línea UY:',
+        srcPropsLi.name,
+        '→ price =',
+        finalCost,
+        '(costo del original)'
+      );
     } else {
       console.log(
-        '[mirrorDealToUruguay] Línea UY sin costo definido para',
-        srcPropsLi.name,
-        '(no se sobreescribe price/hs_cost_of_goods_sold)'
+        '[mirrorDealToUruguay] Línea UY sin costo definido:',
+        srcPropsLi.name
       );
     }
 
@@ -289,6 +313,7 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
     createdLineItems++;
   }
 
+  console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
   // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
   if (interfaseCompanyId) {
@@ -301,10 +326,8 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
       );
 
       console.log(
-        '[mirrorDealToUruguay] Asocié Interfase',
-        String(interfaseCompanyId),
-        'al deal UY',
-        String(targetDealId)
+        '[mirrorDealToUruguay] Interfase PY asociada al espejo UY:',
+        interfaseCompanyId
       );
     } catch (err) {
       console.warn(
@@ -314,36 +337,38 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
     }
   } else {
     console.warn(
-      '[mirrorDealToUruguay] INTERFASE_PY_COMPANY_ID no está configurado. No se puede asociar Interfase como empresa principal.'
+      '[mirrorDealToUruguay] INTERFASE_PY_COMPANY_ID no configurado'
     );
   }
-
 
   // 6) Determinar la empresa beneficiaria (primera empresa asociada al negocio PY)
   const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
   const beneficiaryCompanyId =
     companyIds && companyIds.length > 0 ? String(companyIds[0]) : null;
 
-  // 7) Actualizar empresa beneficiaria y sus contactos a Mixto y asociarlos al espejo
+  // 7) ✅ Actualizar empresa beneficiaria a "Mixto" (empresas SÍ pueden ser mixtas)
   if (beneficiaryCompanyId) {
-    // Guardar el cliente beneficiario en el negocio espejo
+    console.log('[mirrorDealToUruguay] Empresa beneficiaria:', beneficiaryCompanyId);
+
+    // Guardar cliente beneficiario en el negocio espejo
     try {
       await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
         properties: {
           cliente_beneficiario: beneficiaryCompanyId,
         },
       });
-    } catch {
-      // Ignorar errores de actualización de la propiedad
+    } catch (err) {
+      console.warn('[mirrorDealToUruguay] No se pudo actualizar cliente_beneficiario');
     }
 
-    // Cambiar país operativo de la empresa beneficiaria
+    // ✅ Cambiar país operativo de la empresa beneficiaria a "Mixto"
     try {
       await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
         properties: { pais_operativo: 'Mixto' },
       });
-    } catch {
-      // Ignorar errores de actualización
+      console.log('[mirrorDealToUruguay] Empresa actualizada a Mixto');
+    } catch (err) {
+      console.warn('[mirrorDealToUruguay] No se pudo actualizar empresa a Mixto');
     }
 
     // Asociar la empresa beneficiaria al negocio espejo (si no lo está)
@@ -354,23 +379,26 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
         'deals',
         String(targetDealId)
       );
-    } catch {
-      // Ignorar si ya estaba asociada
+      console.log('[mirrorDealToUruguay] Empresa asociada al espejo UY');
+    } catch (err) {
+      // Ya estaba asociada
     }
 
-    // Actualizar país operativo de los contactos de la empresa beneficiaria y asociarlos
+    // ✅ Actualizar contactos a "Mixto" y asociarlos al espejo
     const beneficiaryContactIds = await getAssocIdsV4(
       'companies',
       beneficiaryCompanyId,
       'contacts'
     );
 
+    console.log(`[mirrorDealToUruguay] Actualizando ${beneficiaryContactIds.length} contactos a Mixto`);
+
     for (const contactId of beneficiaryContactIds) {
       try {
         await hubspotClient.crm.contacts.basicApi.update(String(contactId), {
           properties: { pais_operativo: 'Mixto' },
         });
-      } catch {
+      } catch (err) {
         // Ignorar errores
       }
       try {
@@ -380,13 +408,15 @@ if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
           'deals',
           String(targetDealId)
         );
-      } catch {
-        // Ignorar si ya estaba asociado
+      } catch (err) {
+        // Ya estaba asociado
       }
     }
   }
 
   // 8) Devolver resumen
+  console.log('[mirrorDealToUruguay] ✅ Duplicación completada');
+  
   return {
     mirrored: true,
     sourceDealId: String(sourceDealId),

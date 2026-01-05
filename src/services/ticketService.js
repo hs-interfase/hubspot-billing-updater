@@ -143,6 +143,31 @@ async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds
 }
 
 /**
+ * Asigna propietario secundario al ticket.
+ * HubSpot maneja esto a través de hs_all_owner_ids (array separado por punto y coma).
+ */
+async function assignSecondaryOwner(ticketId, primaryOwnerId, secondaryOwnerId) {
+  if (!secondaryOwnerId || secondaryOwnerId === primaryOwnerId) {
+    return; // No hay secundario o es el mismo que el principal
+  }
+  
+  try {
+    // hs_all_owner_ids acepta formato: "id1;id2;id3"
+    const allOwners = `${primaryOwnerId};${secondaryOwnerId}`;
+    
+    await hubspotClient.crm.tickets.basicApi.update(ticketId, {
+      properties: {
+        hs_all_owner_ids: allOwners,
+      },
+    });
+    
+    console.log(`[ticketService] Propietario secundario asignado: ${secondaryOwnerId}`);
+  } catch (err) {
+    console.warn('[ticketService] Error asignando propietario secundario:', err?.message);
+  }
+}
+
+/**
  * Crea un ticket de orden de facturación manual.
  * 
  * @param {Object} deal - Deal de HubSpot
@@ -153,6 +178,7 @@ async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds
 export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
+  const dp = deal.properties || {};
   
   // 1) Generar clave única
   const ticketKey = generateTicketKey(dealId, lineItemId, billingDate);
@@ -179,7 +205,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const rubro = lineItem.properties?.servicio || 'Sin rubro';
   
   // 6) Determinar stage según fecha y flag "facturar ahora"
- const stage = getTicketStage(billingDate, lineItem);
+  const stage = getTicketStage(billingDate, lineItem);
   
   // 7) Verificar si el vendedor solicitó "facturar ahora" (agregar nota en descripción)
   const lp = lineItem.properties || {};
@@ -200,10 +226,15 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       : notaUrgente;
   }
   
+  // 8) Determinar propietario principal (PM asignado al cupo)
+  const primaryOwnerId = dp.pm_asignado_cupo || dp.hubspot_owner_id;
+  const secondaryOwnerId = dp.hubspot_owner_id; // Vendedor como propietario secundario
+  
   const ticketProps = {
     subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
     hs_pipeline: TICKET_PIPELINE,
     hs_pipeline_stage: stage,
+    hubspot_owner_id: primaryOwnerId, // 👤 Propietario principal: PM asignado
     of_deal_id: dealId,
     of_line_item_ids: lineItemId,
     of_ticket_key: ticketKey,
@@ -212,24 +243,28 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   };
   
   try {
-    // 8) Crear el ticket
+    // 9) Crear el ticket
     const createResp = await hubspotClient.crm.tickets.basicApi.create({
       properties: ticketProps,
     });
     const ticketId = createResp.id || createResp.result?.id;
     
-    // 9) Obtener asociaciones del deal (empresas y contactos)
+    // 10) Asignar propietario secundario (vendedor)
+    await assignSecondaryOwner(ticketId, primaryOwnerId, secondaryOwnerId);
+    
+    // 11) Obtener asociaciones del deal (empresas y contactos)
     const [companyIds, contactIds] = await Promise.all([
       getDealCompanies(dealId),
       getDealContacts(dealId),
     ]);
     
-    // 10) Crear todas las asociaciones
+    // 12) Crear todas las asociaciones
     await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
     
     const stageLabel = stage === TICKET_STAGES.READY ? 'READY' : 'NEW';
     const urgentLabel = facturarAhoraLineItem ? ' [URGENTE]' : '';
     console.log(`[ticketService] Ticket creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`);
+    console.log(`[ticketService] Propietario: ${primaryOwnerId} (PM), Secundario: ${secondaryOwnerId} (Vendedor)`);
     
     return { ticketId, created: true };
   } catch (err) {
@@ -253,10 +288,10 @@ export async function updateTicket(ticketId, properties) {
   }
 }
 
-
 /**
  * Crea un ticket de orden de facturación automática en el pipeline específico.
  * Idempotente: si ya existe un ticket con la misma clave, lo devuelve.
+ * 
  * @param {Object} deal - El deal de HubSpot.
  * @param {Object} lineItem - El line item de HubSpot.
  * @param {string} billingDate - La fecha objetivo de facturación (YYYY-MM-DD).
@@ -265,33 +300,68 @@ export async function updateTicket(ticketId, properties) {
 export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
+  const dp = deal.properties || {};
+  
   const ticketKey = generateTicketKey(dealId, lineItemId, billingDate);
+  
   // Buscar ticket existente por clave
   const existing = await findTicketByKey(ticketKey);
   if (existing) {
     return { ticketId: existing.id, created: false };
   }
-  // Si no es DRY_RUN, preparar el payload
+  
+  // Si es DRY_RUN, no crear
+  if (isDryRun()) {
+    console.log(`[ticketService] DRY_RUN: no se crea ticket automático para ${ticketKey}`);
+    return { ticketId: null, created: false };
+  }
+  
+  // Preparar el payload
   const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
   const dealName = deal.properties?.dealname || 'Deal';
   const productName = lineItem.properties?.name || 'Producto';
   const rubro = lineItem.properties?.servicio || 'Sin rubro';
+  
+  // Determinar propietario principal (PM asignado al cupo)
+  const primaryOwnerId = dp.pm_asignado_cupo || dp.hubspot_owner_id;
+  const secondaryOwnerId = dp.hubspot_owner_id; // Vendedor como propietario secundario
+  
+  // Determinar stage (automático suele ser NEW o según fecha)
+  const stage = getTicketStage(billingDate, lineItem);
+  
   const ticketProps = {
     subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
-    hs_pipeline: AUTOMATED_TICKET_PIPELINE,
-    hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+    hs_pipeline: TICKET_PIPELINE,
+    hs_pipeline_stage: stage,
+    hubspot_owner_id: primaryOwnerId, // 👤 Propietario principal: PM asignado
     of_deal_id: dealId,
     of_line_item_ids: lineItemId,
     of_ticket_key: ticketKey,
     ...snapshots,
   };
-  // Crear el ticket y asociar a deal, line item, compañías y contactos
-  const createResp = await hubspotClient.crm.tickets.basicApi.create({ properties: ticketProps });
-  const ticketId = createResp.id || createResp.result?.id;
-  const [companyIds, contactIds] = await Promise.all([
-    getDealCompanies(dealId),
-    getDealContacts(dealId)
-  ]);
-  await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-  return { ticketId, created: true };
+  
+  try {
+    // Crear el ticket
+    const createResp = await hubspotClient.crm.tickets.basicApi.create({ properties: ticketProps });
+    const ticketId = createResp.id || createResp.result?.id;
+    
+    // Asignar propietario secundario (vendedor)
+    await assignSecondaryOwner(ticketId, primaryOwnerId, secondaryOwnerId);
+    
+    // Obtener y crear asociaciones
+    const [companyIds, contactIds] = await Promise.all([
+      getDealCompanies(dealId),
+      getDealContacts(dealId)
+    ]);
+    
+    await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+    
+    console.log(`[ticketService] Ticket automático creado: ${ticketId} para ${ticketKey}`);
+    console.log(`[ticketService] Propietario: ${primaryOwnerId} (PM), Secundario: ${secondaryOwnerId} (Vendedor)`);
+    
+    return { ticketId, created: true };
+  } catch (err) {
+    console.error('[ticketService] Error creando ticket automático:', err?.response?.body || err?.message || err);
+    throw err;
+  }
 }
