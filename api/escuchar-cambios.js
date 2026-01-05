@@ -164,72 +164,67 @@ export default async function handler(req, res) {
       });
     }
     
-    // ====== RUTA 2: RECALCULACIÓN (actualizar o hs_billing_start_delay_type) ======
-    if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
-      // Validar que sea line item
-      if (objectType !== 'line_item') {
-        console.log(`⚠️ ${propertyName} solo aplica a line items, ignorando`);
-        return res.status(200).json({ message: 'Not a line_item event, ignored' });
-      }
-      
-      // Para "actualizar" requiere valor truthy (PERO para hs_billing_start_delay_type no importa el valor)
-      if (propertyName === 'actualizar') {
-        console.log(`🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
-        
-        if (!parseBool(propertyValue)) {
-          console.log('⚠️ Flag actualizar no está en true, ignorando');
-          return res.status(200).json({ 
-            message: 'actualizar flag not true, skipped',
-            receivedValue: propertyValue
-          });
-        }
-      }
-      
-      console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
-      const result = await processRecalculation(objectId, propertyName);
-      
-      if (result.skipped) {
-        console.log(`⚠️ Recalculación omitida: ${result.reason}`);
-        console.log('='.repeat(80) + '\n');
-        return res.status(200).json({
-          skipped: true,
-          reason: result.reason,
-          objectId,
-          propertyName,
-        });
-      }
-      
-      // 4. Resetear flag "actualizar" DESPUÉS de procesar (con delay para evitar loop)
-      if (propertyName === "actualizar") {
-        console.log(`⏳ Esperando 2 segundos antes de resetear flag...`);
-        
-        // Esperar asíncronamente SIN bloquear la respuesta
-        setTimeout(async () => {
-          try {
-            await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
-              properties: { actualizar: "false" },
-            });
-            console.log(`🔄 Flag 'actualizar' reseteado a false para line item ${objectId}`);
-          } catch (err) {
-            console.error(`⚠️ Error reseteando 'actualizar':`, err.message);
-          }
-        }, 2000);
-      }
-      
-      console.log('✅ Recalculación completada');
-      console.log('='.repeat(80) + '\n');
-      
-      return res.status(200).json({
-        success: true,
-        action: 'recalculation',
-        objectId,
-        propertyName,
-        dealId: result.dealId,
-        dealName: result.dealName,
-        billingResult: result.billingResult,
-        eventId,
+// ====== RUTA 2: RECALCULACIÓN (actualizar o hs_billing_start_delay_type) ======
+if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
+  // Validar que sea line item
+  if (objectType !== 'line_item') {
+    console.log(`⚠️ ${propertyName} solo aplica a line items, ignorando`);
+    return res.status(200).json({ message: 'Not a line_item event, ignored' });
+  }
+  
+  // Para "actualizar" requiere valor truthy (PERO para hs_billing_start_delay_type no importa el valor)
+  if (propertyName === 'actualizar') {
+    console.log(`🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
+    
+    if (!parseBool(propertyValue)) {
+      console.log('⚠️ Flag actualizar no está en true, ignorando');
+      return res.status(200).json({ 
+        message: 'actualizar flag not true, skipped',
+        receivedValue: propertyValue
       });
     }
+  }
+  
+  console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
+  const result = await processRecalculation(objectId, propertyName);
+  
+  if (result.skipped) {
+    console.log(`⚠️ Recalculación omitida: ${result.reason}`);
+    console.log('='.repeat(80) + '\n');
+    return res.status(200).json({
+      skipped: true,
+      reason: result.reason,
+      objectId,
+      propertyName,
+    });
+  }
+  
+  // Resetear flag "actualizar" inmediatamente después de procesar (sin delay)
+  if (propertyName === "actualizar") {
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
+        properties: { actualizar: false },
+      });
+      console.log(`✅ Flag 'actualizar' reseteado a false para line item ${objectId}`);
+    } catch (err) {
+      console.error(`⚠️ Error reseteando 'actualizar':`, err.message);
+    }
+  }
+  
+  console.log('✅ Recalculación completada');
+  console.log('='.repeat(80) + '\n');
+  
+  return res.status(200).json({
+    success: true,
+    action: 'recalculation',
+    objectId,
+    propertyName,
+    dealId: result.dealId,
+    dealName: result.dealName,
+    billingResult: result.billingResult,
+    eventId,
+  });
+}
     
     // ====== PROPIEDAD NO RECONOCIDA ======
     console.log(`⚠️ Propiedad no reconocida: ${propertyName}, ignorando`);
