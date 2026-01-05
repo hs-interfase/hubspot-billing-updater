@@ -198,7 +198,7 @@ export async function createInvoiceForLineItem(deal, lineItem, invoiceDate) {
  */
 export async function emitInvoicesForReadyTickets() {
   const readyStage =
-    process.env.BILLING_TICKET_STAGE_READY || process.env.BILLING_ORDER_STAGE_READY;
+    process.env.BILLING_TICKET_STAGE_READY;
   const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
   const filterGroups = [
     {
