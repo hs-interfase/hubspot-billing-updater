@@ -3,6 +3,7 @@
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis } from '../utils/dateUtils.js';
+import { createAutoBillingTicket, updateTicket } from './ticketService.js';
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
@@ -132,11 +133,19 @@ export async function processUrgentLineItem(lineItemId) {
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
     // 7) Crear factura usando tu servicio existente
-const invoiceResult = await createAutoInvoiceFromLineItem(
-  deal,
-  targetLineItem,
-  getTodayYMD()
-);
+// 7.a) Crear ticket primero (pipeline automático)
+const { ticketId } = await createAutoBillingTicket(deal, targetLineItem, getTodayYMD());
+console.log(`✅ Ticket creado: ${ticketId}`);
+
+// 7.b) Crear factura
+const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, getTodayYMD());
+console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
+
+// 3) Asociar factura al ticket
+if (ticketId && invoiceResult?.invoiceId) {
+  await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
+  console.log(`✅ Ticket actualizado con invoice ID`);
+}
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
       console.error('❌ No se pudo crear la factura');

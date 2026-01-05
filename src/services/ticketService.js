@@ -1,7 +1,12 @@
 // src/services/ticketService.js
 
 import { hubspotClient } from '../hubspotClient.js';
-import { TICKET_PIPELINE, TICKET_STAGES, isDryRun } from '../config/constants.js';
+import { 
+  TICKET_PIPELINE, 
+  TICKET_STAGES, 
+  AUTOMATED_TICKET_PIPELINE,     
+  AUTOMATED_TICKET_INITIAL_STAGE, 
+  isDryRun } from '../config/constants.js';
 import { generateTicketKey } from '../utils/idempotency.js';
 import { createTicketSnapshots } from './snapshotService.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
@@ -331,8 +336,8 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   
   const ticketProps = {
     subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
-    hs_pipeline: TICKET_PIPELINE,
-    hs_pipeline_stage: stage,
+    hs_pipeline: AUTOMATED_TICKET_PIPELINE,             
+    hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,   
     hubspot_owner_id: primaryOwnerId, // 👤 Propietario principal: PM asignado
     of_deal_id: dealId,
     of_line_item_ids: lineItemId,
