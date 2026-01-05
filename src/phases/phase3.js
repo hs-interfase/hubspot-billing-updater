@@ -148,20 +148,18 @@ async function resetFacturarAhoraFlag(lineItemId) {
   });
 }
 
-
 /**
  * Obtiene la próxima fecha de facturación de un line item.
  * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
  * Devuelve la fecha más cercana >= hoy.
  */
-
 function getNextBillingDate(lineItemProps) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const allDates = [];
   
   // 1) Verificar todas las variantes de la fecha de inicio
-  const startDate = lineItemProps.hs_recurring_billing_start_date ||  // ✅ AGREGADO: nombre con guiones
+  const startDate = lineItemProps.hs_recurring_billing_start_date ||
                     lineItemProps.recurringbillingstartdate || 
                     lineItemProps.fecha_inicio_de_facturacion;
   if (startDate) {
