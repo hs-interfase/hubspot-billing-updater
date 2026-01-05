@@ -40,6 +40,9 @@ async function getDealIdForLineItem(lineItemId) {
 /**
  * Procesa eventos de "actualizar" o "hs_billing_start_delay_type".
  * Ejecuta las 3 fases de facturación para el deal asociado.
+ * 
+ * IMPORTANTE: Phase 1 SIEMPRE se ejecuta (mirroring, fechas, cupo).
+ * Phase 2 y 3 solo se ejecutan si facturacion_activa=true.
  */
 async function processRecalculation(lineItemId, propertyName) {
   console.log(`\n🔄 [Recalculation] Procesando ${propertyName} para line item ${lineItemId}...`);
@@ -51,23 +54,19 @@ async function processRecalculation(lineItemId, propertyName) {
     return { skipped: true, reason: 'No associated deal' };
   }
   
-  // 2. Verificar facturación activa
+  // 2. Obtener deal info para logging
   const deal = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
     "facturacion_activa",
     "dealname",
   ]);
   const dealProps = deal?.properties || {};
-  const active = parseBool(dealProps.facturacion_activa);
   const dealName = dealProps.dealname || "Sin nombre";
   
-  console.log(`📋 Deal: ${dealName} (${dealId}) - facturacion_activa: ${active}`);
-  
-  if (!active) {
-    console.log(`⚠️ Deal no tiene facturación activa, saltando`);
-    return { skipped: true, reason: 'Billing not active' };
-  }
+  console.log(`📋 Deal: ${dealName} (${dealId})`);
   
   // 3. Ejecutar fases de facturación
+  // Phase 1 se ejecuta SIEMPRE (mirroring, normalización de fechas, etc.)
+  // Phase 2 y 3 verifican internamente facturacion_activa
   console.log(`🚀 Ejecutando runPhasesForDeal...`);
   const dealWithLineItems = await getDealWithLineItems(dealId);
   const billingResult = await runPhasesForDeal(dealWithLineItems);
