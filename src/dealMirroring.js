@@ -251,90 +251,74 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     console.log('[mirrorDealToUruguay] Deal PY actualizado: mantiene Paraguay, guardó mirror_id');
   }
 
-  // 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
-  console.log(`[mirrorDealToUruguay] Creando ${uyLineItems.length} líneas UY en espejo`);
+// 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
+console.log(`[mirrorDealToUruguay] Creando ${uyLineItems.length} líneas UY en espejo`);
 
-  for (const li of uyLineItems) {
-    const srcPropsLi = li.properties || {};
-    const props = {};
+for (const li of uyLineItems) {
+  const srcPropsLi = li.properties || {};
+  
+  // 🔍 DEBUG: Ver TODAS las propiedades del line item original
+  console.log('[mirrorDealToUruguay] 🔍 DEBUG - Propiedades completas del line item:', 
+    JSON.stringify(srcPropsLi, null, 2)
+  );
+  
+  const props = {};
 
-    // Propiedades que NO deben copiarse (se establecen explícitamente después)
-    const propsToExclude = [
-      'uy',                         // Se establece explícitamente como true
-      'price',                      // Se establece desde cost del original
-      'hs_cost_of_goods_sold',     // Se establece explícitamente en 0
-      'pais_operativo',            // Se establece explícitamente como Uruguay
-      'hubspot_owner_id',          // Se establece explícitamente al admin del mirror
-      'discount',                   // Descuento del original no aplica
-      'hs_discount_percentage',    // Porcentaje de descuento no aplica
-      'tax',                        // Impuesto del original no aplica
-      'hs_tax_amount',             // Monto de impuesto no aplica
-    ];
-
-    // Copiar propiedades excepto las excluidas
-    for (const key of Object.keys(srcPropsLi)) {
-      if (propsToExclude.includes(key)) continue;
-      props[key] = srcPropsLi[key];
-    }
-
-    // === Establecer propiedades específicas del espejo UY ===
-    
-    // 1) Todas las líneas del espejo tienen uy = true
-    props.uy = true;
-    
-    // 2) País operativo siempre Uruguay
-    props.pais_operativo = 'Uruguay';
-
-    // 3) Propietario del mirror
-    const mirrorOwnerId = process.env.USER_ADMIN_MIRROR || null;
-    props.hubspot_owner_id = mirrorOwnerId;
-
-    // 4) PRECIO = COSTO del original, COSTO = 0 en el espejo
-    const rawCost =
-      srcPropsLi.hs_cost_of_goods_sold ??
-      srcPropsLi.costo ??
-      srcPropsLi.precio;
-
-    if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
-      const costNum = Number(rawCost);
-      const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
-
-      props.price = finalCost;
-      props.hs_cost_of_goods_sold = 0;
-
-      console.log(
-        '[mirrorDealToUruguay] Línea UY:',
-        srcPropsLi.name,
-        '→ price =',
-        finalCost,
-        '(costo del original), uy=true, país=Uruguay, owner=',
-        mirrorOwnerId
-      );
-    } else {
-      console.warn(
-        '[mirrorDealToUruguay] ⚠️ Línea sin costo definido:',
-        srcPropsLi.name,
-        '- NO se creará en el espejo'
-      );
-      continue; // Saltar esta línea si no tiene costo
-    }
-
-    await hubspotClient.crm.lineItems.basicApi.create({
-      properties: props,
-      associations: [
-        {
-          to: { id: targetDealId },
-          types: [
-            {
-              associationCategory: 'HUBSPOT_DEFINED',
-              associationTypeId: LINE_ITEM_TO_DEAL_ASSOC_ID,
-            },
-          ],
-        },
-      ],
-    });
-    createdLineItems++;
+  // Copiar todas las props excepto el flag `uy`
+  for (const key of Object.keys(srcPropsLi)) {
+    if (key === LINEA_PARA_UY_PROP) continue;
+    props[key] = srcPropsLi[key];
   }
+
+  // 4) COSTO → price
+  const rawCost =
+    srcPropsLi.hs_cost_of_goods_sold ??
+    srcPropsLi.costo ??
+    srcPropsLi.precio;
+
+  console.log('[mirrorDealToUruguay] 🔍 DEBUG - Valores de costo:', {
+    hs_cost_of_goods_sold: srcPropsLi.hs_cost_of_goods_sold,
+    costo: srcPropsLi.costo,
+    precio: srcPropsLi.precio,
+    rawCost: rawCost
+  });
+
+  if (rawCost !== undefined && rawCost !== null && rawCost !== '') {
+    const costNum = Number(rawCost);
+    const finalCost = Number.isFinite(costNum) ? costNum : rawCost;
+
+    props.price = finalCost;
+    props.hs_cost_of_goods_sold = 0;
+
+    console.log(
+      '[mirrorDealToUruguay] Línea UY espejada:',
+      srcPropsLi.name,
+      '→ price =',
+      finalCost
+    );
+  } else {
+    console.log(
+      '[mirrorDealToUruguay] Línea UY sin costo definido:',
+      srcPropsLi.name
+    );
+  }
+
+  await hubspotClient.crm.lineItems.basicApi.create({
+    properties: props,
+    associations: [
+      {
+        to: { id: targetDealId },
+        types: [
+          {
+            associationCategory: 'HUBSPOT_DEFINED',
+            associationTypeId: LINE_ITEM_TO_DEAL_ASSOC_ID,
+          },
+        ],
+      },
+    ],
+  });
+  createdLineItems++;
+}
 
   console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
