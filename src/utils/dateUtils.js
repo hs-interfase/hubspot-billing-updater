@@ -5,11 +5,106 @@
  */
 
 /**
- * Parsea una fecha desde string YYYY-MM-DD o timestamp.
- * Devuelve un Date en hora local (00:00:00).
+ * Devuelve { year, month, day } de una fecha "ahora" en un timezone dado.
+ * month viene 1-12.
  */
+function getYMDPartsInTZ(date, timeZone) {
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 
-// src/utils/dateUtils.js
+  const parts = dtf.formatToParts(date);
+  const year = Number(parts.find(p => p.type === "year")?.value);
+  const month = Number(parts.find(p => p.type === "month")?.value);
+  const day = Number(parts.find(p => p.type === "day")?.value);
+
+  if (!year || !month || !day) return null;
+  return { year, month, day };
+}
+
+/**
+ * Offset (minutos) entre UTC y el timezone, para un instante dado.
+ * Ej: Montevideo suele ser -180.
+ */
+function getTimeZoneOffsetMinutes(timeZone, utcDate) {
+const dtf = new Intl.DateTimeFormat("en-US", {
+  timeZone,
+  hour12: false,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+  const parts = dtf.formatToParts(utcDate);
+  const y = Number(parts.find(p => p.type === "year")?.value);
+  const m = Number(parts.find(p => p.type === "month")?.value);
+  const d = Number(parts.find(p => p.type === "day")?.value);
+let hh = Number(parts.find(p => p.type === "hour")?.value);
+
+// Fix clásico: a veces Intl devuelve 24 en medianoche
+if (hh === 24) hh = 0;  const mm = Number(parts.find(p => p.type === "minute")?.value);
+  const ss = Number(parts.find(p => p.type === "second")?.value);
+
+  // Esto crea "la misma fecha/hora" pero interpretada como UTC
+  const asUTC = Date.UTC(y, m - 1, d, hh, mm, ss);
+  const utcMillis = utcDate.getTime();
+
+  // offset = tzTime - utcTime (en minutos)
+  return Math.round((asUTC - utcMillis) / 60000);
+}
+
+/**
+ * Convierte YYYY-MM-DD a millis que representan 00:00 en BILLING_TZ,
+ * expresado como timestamp UTC (lo que HubSpot quiere).
+ */
+function ymdToHubSpotMillisInTZ(ymd, timeZone) {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+
+  // Base UTC (00:00Z de ese día) + ajuste por offset
+  const baseUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
+
+  // Iteramos 2 veces para que si el offset cambia (DST) quede correcto
+  let utc = baseUTC;
+  for (let i = 0; i < 2; i++) {
+    const offsetMin = getTimeZoneOffsetMinutes(timeZone, new Date(utc));
+    utc = baseUTC - offsetMin * 60000;
+  }
+  return String(utc);
+}
+
+/**
+ * Devuelve la fecha actual (en BILLING_TZ) en formato YYYY-MM-DD.
+ * NO depende del timezone del server.
+ */
+export function getTodayYMD() {
+  const tz = process.env.BILLING_TZ || "America/Montevideo";
+  const parts = getYMDPartsInTZ(new Date(), tz);
+  if (!parts) return formatDateISO(new Date()); // fallback
+  const y = String(parts.year);
+  const m = String(parts.month).padStart(2, "0");
+  const d = String(parts.day).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Devuelve la fecha actual (00:00 en BILLING_TZ) como millis string para HubSpot.
+ */
+export function getTodayMillis() {
+  const tz = process.env.BILLING_TZ || "America/Montevideo";
+  const todayYMD = getTodayYMD();
+  return ymdToHubSpotMillisInTZ(todayYMD, tz);
+}
 
 /**
  * Convierte un valor de fecha (Date, timestamp o string YYYY-MM-DD/ISO) 
@@ -22,40 +117,22 @@
 export function toHubSpotDate(value) {
   if (!value) return null;
 
-  // Si ya viene como número o string numérico, lo usamos tal cual
-  if (typeof value === 'number' || /^\d+$/.test(value.toString().trim())) {
+  if (typeof value === "number" || /^\d+$/.test(value.toString().trim())) {
     return String(value);
   }
 
-  // Si viene en formato YYYY-MM-DD, convertimos a Date local a medianoche
+  // ✅ CAMBIO: YYYY-MM-DD => millis representando 00:00 en BILLING_TZ
   if (isYMD(value)) {
-    const d = parseLocalDate(value);
-    return d ? String(d.getTime()) : null;
+    const tz = process.env.BILLING_TZ || "America/Montevideo";
+    return ymdToHubSpotMillisInTZ(value, tz);
   }
 
-  // Si es un objeto Date
   if (value instanceof Date) {
     return String(value.getTime());
   }
 
-  // Fallback: intentar parsear cualquier string de fecha
   const d = new Date(value);
   return Number.isFinite(d.getTime()) ? String(d.getTime()) : null;
-}
-
-/**
- * Devuelve la fecha actual (00:00 hora local) en formato YYYY-MM-DD.
- */
-export function getTodayYMD() {
-  return formatDateISO(new Date());
-}
-
-/**
- * Devuelve la fecha actual (00:00 hora local) como timestamp en milisegundos.
- */
-export function getTodayMillis() {
-  const today = parseLocalDate(getTodayYMD());
-  return today ? String(today.getTime()) : null;
 }
 
 export function parseLocalDate(raw) {

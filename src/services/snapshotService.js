@@ -112,9 +112,9 @@ export function extractDealSnapshots(deal) {
   return {
     of_moneda: safeString(dp.deal_currency_code || 'USD'),
     of_tipo_de_cupo: safeString(dp.tipo_de_cupo),
-    of_pais_operativo: safeString(dp.pais_operativo), // Fallback si line item no tiene
-    responsable_asignado: safeString(dp.pm_asignado_cupo), // ✅ PM asignado al cupo (también irá como owner del ticket)
-    vendedor: safeString(dp.hubspot_owner_id), // ✅ Vendedor (owner del deal, irá como propietario secundario del ticket)
+    of_pais_operativo: safeString(dp.pais_operativo),
+    responsable_asignado: safeString(dp.pm_asignado_cupo), 
+    of_propietario_secundario: safeString(dp.hubspot_owner_id), 
   };
 }
 

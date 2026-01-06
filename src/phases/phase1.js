@@ -9,6 +9,9 @@ import {
 } from '../billingEngine.js';
 import { updateDealCupo } from '../cupo.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
+import { logDateEnvOnce } from "../utils/dateDebugs.js";
+
+logDateEnvOnce();
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
@@ -143,11 +146,19 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
 }
 
 export async function runPhase1(dealId) {
+
   if (!dealId) throw new Error('runPhase1 requiere un dealId');
 
   // Obtener negocio y line items
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
+
+    console.log("[DEBUG] Line items recibidos:", lineItems.map(li => ({
+  id: li.id,
+  name: li.properties?.name,
+  uy: li.properties?.uy,
+  pais_operativo: li.properties?.pais_operativo,
+})));
 
 // -- Convertir retrasos en fecha de inicio concreta --
   // Esto modifica los line items en HubSpot y los actualiza en memoria.
@@ -179,6 +190,7 @@ export async function runPhase1(dealId) {
   today.setHours(0, 0, 0, 0);
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
+  console.log(`[phase1] Procesando ORIGINAL deal=${dealId} lineItems=${lineItems.map(x=>x.id).join(",")}`);
   await processLineItemsForPhase1(lineItems, today, { alsoInitCupo: true });
 
 // 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
@@ -186,7 +198,8 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
   try {
     const { deal: mirrorDeal, lineItems: mirrorLineItems } =
       await getDealWithLineItems(mirrorResult.targetDealId);
-
+      
+    console.log(`[phase1] Procesando ESPEJO deal=${mirrorResult.targetDealId} lineItems=${mirrorLineItems.map(x=>x.id).join(",")}`);
     await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });
 
     // actualizar cupo a nivel deal espejo usando sus props (no pisar inputs)

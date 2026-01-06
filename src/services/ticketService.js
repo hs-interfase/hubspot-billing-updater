@@ -232,28 +232,37 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       : notaUrgente;
   }
   
-  // 8) Determinar propietario principal (PM asignado al cupo)
-  const primaryOwnerId = dp.pm_asignado_cupo || dp.hubspot_owner_id;
-  const secondaryOwnerId = dp.hubspot_owner_id; // Vendedor como propietario secundario
+// 8) Determinar propietario y vendedor
+const pmAsignado = dp.pm_asignado_cupo || dp.hubspot_owner_id;
+const vendedorId = dp.hubspot_owner_id; // Vendedor = owner del deal
+
+// 🔑 REGLA: Tickets MANUALES tienen owner (PM), tickets AUTOMÁTICOS no
+const ticketProps = {
+  subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
+  hs_pipeline: TICKET_PIPELINE,
+  hs_pipeline_stage: stage,
+  hubspot_owner_id: pmAsignado, // ✅ MANUAL: Asignar owner (PM)
+  of_deal_id: dealId,
+  of_line_item_ids: lineItemId,
+  of_ticket_key: ticketKey,
+  ...snapshots, // Ya incluye of_propietario_secundario
+  descripcion_producto: descripcionProducto,
+};
+
+// 🔍 DEBUG: Ver propiedades antes de crear
+console.log('[ticketService] 🔍 DEBUG MANUAL - Keys del payload:', Object.keys(ticketProps));
+console.log('[ticketService] 🔍 DEBUG MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
+console.log('[ticketService] 🔍 DEBUG MANUAL - hubspot_owner_id:', ticketProps.hubspot_owner_id);
+
+try {
+  // 9) Crear el ticket
+  const createResp = await hubspotClient.crm.tickets.basicApi.create({
+    properties: ticketProps,
+  });
+  const ticketId = createResp.id || createResp.result?.id;
   
-  const ticketProps = {
-    subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
-    hs_pipeline: TICKET_PIPELINE,
-    hs_pipeline_stage: stage,
-    hubspot_owner_id: primaryOwnerId, // 👤 Propietario principal: PM asignado
-    of_deal_id: dealId,
-    of_line_item_ids: lineItemId,
-    of_ticket_key: ticketKey,
-    ...snapshots,
-    descripcion_producto: descripcionProducto, // Sobrescribir con nota urgente si aplica
-  };
-  
-  try {
-    // 9) Crear el ticket
-    const createResp = await hubspotClient.crm.tickets.basicApi.create({
-      properties: ticketProps,
-    });
-    const ticketId = createResp.id || createResp.result?.id;
+  // 10) Ya NO usamos assignSecondaryOwner porque of_propietario_secundario ya está en snapshots
+  // await assignSecondaryOwner(ticketId, pmAsignado, vendedorId); // ❌ ELIMINADO
     
     // 10) Asignar propietario secundario (vendedor)
     await assignSecondaryOwner(ticketId, primaryOwnerId, secondaryOwnerId);
@@ -328,44 +337,46 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   const productName = lineItem.properties?.name || 'Producto';
   const rubro = lineItem.properties?.servicio || 'Sin rubro';
   
-  // Determinar propietario principal (PM asignado al cupo)
-  const primaryOwnerId = dp.pm_asignado_cupo || dp.hubspot_owner_id;
-  const secondaryOwnerId = dp.hubspot_owner_id; // Vendedor como propietario secundario
+// Determinar vendedor (dato informativo)
+const vendedorId = dp.hubspot_owner_id;
+
+// 🔑 REGLA: Tickets AUTOMÁTICOS NO tienen owner (dejar vacío)
+const ticketProps = {
+  subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
+  hs_pipeline: AUTOMATED_TICKET_PIPELINE,             
+  hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+  // ❌ NO asignar hubspot_owner_id en tickets automáticos
+  of_deal_id: dealId,
+  of_line_item_ids: lineItemId,
+  of_ticket_key: ticketKey,
+  ...snapshots, // Ya incluye of_propietario_secundario
+};
+
+// 🔍 DEBUG: Ver propiedades antes de crear
+console.log('[ticketService] 🔍 DEBUG AUTO - Keys del payload:', Object.keys(ticketProps));
+console.log('[ticketService] 🔍 DEBUG AUTO - of_propietario_secundario:', ticketProps.of_propietario_secundario);
+console.log('[ticketService] 🔍 DEBUG AUTO - hubspot_owner_id:', ticketProps.hubspot_owner_id);
+
+try {
+  // Crear el ticket
+  const createResp = await hubspotClient.crm.tickets.basicApi.create({ properties: ticketProps });
+  const ticketId = createResp.id || createResp.result?.id;
   
-  // Determinar stage (automático suele ser NEW o según fecha)
-  const stage = getTicketStage(billingDate, lineItem);
+  // Ya NO usamos assignSecondaryOwner porque of_propietario_secundario ya está en snapshots
+  // await assignSecondaryOwner(ticketId, primaryOwnerId, vendedorId); // ❌ ELIMINADO
   
-  const ticketProps = {
-    subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
-    hs_pipeline: AUTOMATED_TICKET_PIPELINE,             
-    hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,   
-    hubspot_owner_id: primaryOwnerId, // 👤 Propietario principal: PM asignado
-    of_deal_id: dealId,
-    of_line_item_ids: lineItemId,
-    of_ticket_key: ticketKey,
-    ...snapshots,
-  };
+  // Obtener y crear asociaciones
+  const [companyIds, contactIds] = await Promise.all([
+    getDealCompanies(dealId),
+    getDealContacts(dealId)
+  ]);
   
-  try {
-    // Crear el ticket
-    const createResp = await hubspotClient.crm.tickets.basicApi.create({ properties: ticketProps });
-    const ticketId = createResp.id || createResp.result?.id;
-    
-    // Asignar propietario secundario (vendedor)
-    await assignSecondaryOwner(ticketId, primaryOwnerId, secondaryOwnerId);
-    
-    // Obtener y crear asociaciones
-    const [companyIds, contactIds] = await Promise.all([
-      getDealCompanies(dealId),
-      getDealContacts(dealId)
-    ]);
-    
-    await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-    
-    console.log(`[ticketService] Ticket automático creado: ${ticketId} para ${ticketKey}`);
-    console.log(`[ticketService] Propietario: ${primaryOwnerId} (PM), Secundario: ${secondaryOwnerId} (Vendedor)`);
-    
-    return { ticketId, created: true };
+  await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+  
+  console.log(`[ticketService] Ticket automático creado: ${ticketId} para ${ticketKey}`);
+  console.log(`[ticketService] Vendedor (of_propietario_secundario): ${vendedorId}`);
+  
+  return { ticketId, created: true };
   } catch (err) {
     console.error('[ticketService] Error creando ticket automático:', err?.response?.body || err?.message || err);
     throw err;

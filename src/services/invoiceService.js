@@ -121,17 +121,13 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     
     // 👥 Responsables
     responsable_asignado: responsableAsignado,
-    vendedor_factura: tp.vendedor,
+    vendedor_factura: tp.of_propietario_secundario,
     
     // 📊 Frecuencia
     frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion,
     
     // 🏢 Contexto
     of_pais_operativo: tp.of_pais_operativo,
-    
-    // 🎯 Origen y auditoría
-    modo_de_generacion_factura: modoGeneracion,
-    usuario_disparador_factura: usuarioDisparador || 'Sistema',
     
     // 🔑 Etapa inicial
     etapa_de_la_factura: 'Pendiente',
@@ -316,42 +312,40 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
   // 5) Preparar propiedades de la factura
   const dealName = dp.dealname || 'Deal';
   const lineItemName = lp.name || 'Line Item';
-  const invoiceProps = {
-    // Propiedades estándar HubSpot
-    hs_title: `${dealName} - ${lineItemName}`, // 🔑 TÍTULO: Deal + Line Item
-    hs_currency: dp.deal_currency_code || DEFAULT_CURRENCY,
-    hs_invoice_date: toHubSpotDate(billingDate), // Convertir YYYY-MM-DD a timestamp
-    hs_due_date: toHubSpotDate(billingDate),
-    hs_invoice_billable: false, // 🔑 CLAVE: Desactiva validaciones, PDFs, emails
-    
-    // 👤 Destinatario externo (usuario HubSpot)
-    hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '85894063',
-    
-    // Propiedad custom para idempotencia
-    of_invoice_key: invoiceKey,
-    
-    // 🔑 Propiedad custom para gestión del flujo
-    etapa_de_la_factura: 'Pendiente',
-    
-    // 📦 Producto (del line item)
-    ...(lp.name ? { nombre_producto: lp.name } : {}),
-    
-    // 📝 Descripción (del line item)
-    ...(lp.description ? { descripcion: lp.description } : {}),
-    
-    // 💼 Servicio/Rubro (del line item)
-    ...(lp.servicio ? { servicio: lp.servicio } : {}),
-    
-    // 🏢 Empresa beneficiaria (del deal - solo referencia)
-    ...(dp.dealname ? { nombre_empresa: dp.dealname } : {}),
-    
-    // 🎯 Unidad de negocio (del line item)
-    ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
-    
-    // Modo de generación
-    modo_de_generacion_factura: 'AUTO_LINEITEM',
-    usuario_disparador_factura: 'Sistema',
-  };
+const invoiceProps = {
+  // Propiedades estándar HubSpot
+  hs_title: `${dealName} - ${lineItemName}`,
+  hs_currency: dp.deal_currency_code || DEFAULT_CURRENCY,
+  hs_invoice_date: toHubSpotDate(billingDate),
+  hs_due_date: toHubSpotDate(billingDate),
+  hs_invoice_billable: false,
+  
+  // 👤 Destinatario externo (usuario HubSpot)
+  hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '85894063',
+  
+  // Propiedad custom para idempotencia
+  of_invoice_key: invoiceKey,
+  
+  // 🔑 Propiedad custom para gestión del flujo
+  etapa_de_la_factura: 'Pendiente',
+  
+  // 📦 Producto (del line item)
+  ...(lp.name ? { nombre_producto: lp.name } : {}),
+  
+  // 📝 Descripción (del line item)
+  ...(lp.description ? { descripcion: lp.description } : {}),
+  
+  // 💼 Servicio/Rubro (del line item)
+  ...(lp.servicio ? { servicio: lp.servicio } : {}),
+  
+  // 🏢 Empresa beneficiaria (del deal - solo referencia)
+  ...(dp.dealname ? { nombre_empresa: dp.dealname } : {}),
+  
+  // 🎯 Unidad de negocio (del line item)
+  ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
+  
+  // ❌ ELIMINADAS: modo_de_generacion_factura y usuario_disparador_factura
+};
   
   // Asignar al usuario administrativo si está configurado
   if (process.env.INVOICE_OWNER_ID) {
