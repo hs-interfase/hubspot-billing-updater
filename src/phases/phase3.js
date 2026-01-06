@@ -5,6 +5,8 @@ import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.j
 import { createAutoInvoiceFromLineItem } from '../services/invoiceService.js';
 import { createAutoBillingTicket, updateTicket } from '../services/ticketService.js';
 import { hubspotClient } from '../hubspotClient.js';
+import { safeString } from '../utils/parsers.js';
+import { generateInvoiceKey } from '../utils/idempotency.js';
 
 /**
  * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true
@@ -28,10 +30,11 @@ export async function runPhase3({ deal, lineItems }) {
   const dealFacturacionActiva = parseBool(dp.facturacion_activa);
   if (!dealFacturacionActiva) {
     console.log(`   [Phase3] Deal facturacion_activa != true. Skip.`);
-    return { invoicesEmitted: 0, errors: [] };
-  }
+    return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
+    }
 
   let invoicesEmitted = 0;
+    let ticketsEnsured = 0;
   const errors = [];
 
   // Solo automáticos
@@ -50,30 +53,29 @@ export async function runPhase3({ deal, lineItems }) {
     console.log(`   [Phase3] Processing ${liName}`, { lineItemId });
 
     try {
-      const existingInvoiceId = lp.of_invoice_id;
       const facturarAhora = parseBool(lp.facturar_ahora);
-      const nextBillingDate = getNextBillingDate(lp); // YYYY-MM-DD o null
+const nextBillingDate = getNextBillingDate(lp); // YYYY-MM-DD o null
+const targetForKey = facturarAhora ? today : nextBillingDate;
 
-      // 1) Si ya tiene factura => no emitir. Pero asegurar ticket (siempre con una fecha razonable)
-      if (existingInvoiceId) {
-        console.log(`      [Phase3] idempotency: already has invoice`, { existingInvoiceId });
+// (Opcional) compat: si tenés un campo legacy of_invoice_id en el futuro
+const existingInvoiceIdLegacy = safeString(lp.of_invoice_id);
 
-        const targetDate = nextBillingDate || today;
-        try {
-          await createAutoBillingTicket(deal, li, targetDate);
-          console.log(`      [Phase3] ensured auto ticket`, { targetDate });
-        } catch (e) {
-          console.warn(`      [Phase3] could not ensure auto ticket`, e?.message);
-        }
-        continue;
-      }
+// OJO: no usar invoice_id legacy como “ya facturado”
+// la idempotencia real ya la hicimos por invoice_key arriba
+if (existingInvoiceIdLegacy) {
+  console.log(`      [Phase3] note: legacy of_invoice_id present`, { existingInvoiceIdLegacy });
+}
 
+if (existingInvoiceIdLegacy) {
+  console.log(`      [Phase3] note: legacy of_invoice_id present`, { existingInvoiceIdLegacy });
+}
       // 2) FACTURAR AHORA (en automático)
       if (facturarAhora) {
         console.log(`      [Phase3] facturar_ahora=true => ticket->invoice`);
 
         // Ticket primero (siempre)
         const { ticketId } = await createAutoBillingTicket(deal, li, today);
+                if (ticketId) ticketsEnsured++;
         console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: today });
 
         // Luego factura
@@ -113,6 +115,7 @@ export async function runPhase3({ deal, lineItems }) {
 
       // Ticket primero
       const { ticketId } = await createAutoBillingTicket(deal, li, nextBillingDate);
+      if (ticketId) ticketsEnsured++;
       console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: nextBillingDate });
 
       // Factura
@@ -135,9 +138,7 @@ export async function runPhase3({ deal, lineItems }) {
     }
   }
 
-  console.log(`   [Phase3] done`, { dealId, invoicesEmitted, errors: errors.length });
-  return { invoicesEmitted, errors };
-}
+  console.log(`   [Phase3] done`, { dealId, invoicesEmitted, ticketsEnsured, errors: errors.length });  return { invoicesEmitted, ticketsEnsured, errors };}
 
 /**
  * Resetea el flag facturar_ahora a false después de procesar.

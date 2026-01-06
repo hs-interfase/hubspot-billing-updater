@@ -30,7 +30,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     phase1: { success: false },
     activation: { activated: false },
     phase2: { ticketsCreated: 0 },
-    phase3: { invoicesEmitted: 0 },
+    phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
     ticketsCreated: 0,
     autoInvoicesEmitted: 0,
   };
@@ -80,7 +80,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     const phase2Result = await runPhase2({ deal, lineItems });
     results.phase2 = phase2Result;
     results.ticketsCreated = phase2Result.ticketsCreated || 0;
-    console.log(`   ✅ Phase 2 completada: ${results.ticketsCreated} tickets creados\n`);
+    console.log(`   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`);
   } catch (err) {
     console.error(`   ❌ Error en Phase 2:`, err?.message || err);
     results.phase2.error = err?.message || 'Error desconocido';
@@ -92,14 +92,19 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     const phase3Result = await runPhase3({ deal, lineItems });
     results.phase3 = phase3Result;
     results.autoInvoicesEmitted = phase3Result.invoicesEmitted || 0;
-    console.log(`   ✅ Phase 3 completada: ${results.autoInvoicesEmitted} facturas emitidas\n`);
+    
+    // Sumar tickets de Phase 3 al total
+    const ticketsPhase3 = phase3Result.ticketsEnsured || 0;
+    results.ticketsCreated += ticketsPhase3;
+    
+    console.log(`   ✅ Phase 3 completada: ${results.autoInvoicesEmitted} facturas emitidas, ${ticketsPhase3} tickets automáticos creados\n`);
   } catch (err) {
     console.error(`   ❌ Error en Phase 3:`, err?.message || err);
     results.phase3.error = err?.message || 'Error desconocido';
   }
   
   console.log(`🏁 Deal ${dealId} completado:`);
-  console.log(`   - Tickets: ${results.ticketsCreated}`);
+  console.log(`   - Tickets totales: ${results.ticketsCreated}`);
   console.log(`   - Facturas: ${results.autoInvoicesEmitted}`);
   
   return results;

@@ -113,7 +113,7 @@ export function extractDealSnapshots(deal) {
     of_moneda: safeString(dp.deal_currency_code || 'USD'),
     of_tipo_de_cupo: safeString(dp.tipo_de_cupo),
     of_pais_operativo: safeString(dp.pais_operativo),
-    responsable_asignado: safeString(dp.pm_asignado_cupo), 
+    pm_asignado: safeString(dp.pm_asignado_cupo), 
     of_propietario_secundario: safeString(dp.hubspot_owner_id), 
   };
 }

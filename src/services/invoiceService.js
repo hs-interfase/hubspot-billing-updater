@@ -58,16 +58,40 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   console.log('Ticket Key:', tp.of_ticket_key);
   console.log('Modo de generación:', modoGeneracion);
   
-  // 1) Verificar si ya tiene factura
-  if (tp.of_invoice_id) {
-    console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id}`);
-    console.log('================================================\n');
+// 1) Calcular invoiceKey estricta (si hay data suficiente)
+const dealId = safeString(tp.of_deal_id);
+
+// OJO: si of_line_item_ids puede venir CSV, tomar el primero
+const rawLineItemIds = safeString(tp.of_line_item_ids);
+const lineItemId = rawLineItemIds?.includes(',')
+  ? rawLineItemIds.split(',')[0].trim()
+  : rawLineItemIds;
+
+const fechaPlan = safeString(tp.of_fecha_de_facturacion); // YYYY-MM-DD
+
+const invoiceKeyStrict =
+  (dealId && lineItemId && fechaPlan)
+    ? generateInvoiceKey(dealId, lineItemId, fechaPlan)
+    : null;
+
+// fallback SOLO si no hay strict (menos ideal)
+const invoiceKey = invoiceKeyStrict || safeString(tp.of_ticket_key) || `ticket::${ticketId}`;
+console.log('Invoice Key:', invoiceKey);
+
+// 2) Verificar si ya tiene factura (REGLA estricta)
+if (tp.of_invoice_id) {
+  const ticketKey = safeString(tp.of_invoice_key); // guardada en ticket (recomendado)
+  const expected = invoiceKey;
+
+  if (ticketKey && ticketKey === expected) {
+    console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id} (invoice_key OK)`);
     return { invoiceId: tp.of_invoice_id, created: false };
   }
-  
-  // 2) Generar clave única para la factura
-  const invoiceKey = tp.of_ticket_key || `ticket::${ticketId}`;
-  console.log('Invoice Key:', invoiceKey);
+
+  console.warn(
+    `⚠️ Ticket ${ticketId} tiene of_invoice_id=${tp.of_invoice_id} pero invoice_key no valida. IGNORANDO para evitar clon sucio.`
+  );
+}
   
   // 3) DRY RUN check
   if (isDryRun()) {
@@ -204,6 +228,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
         properties: {
           of_invoice_id: invoiceId,
+          of_invoice_key: invoiceKey,
           of_fecha_real_de_facturacion: fechaRealFacturacion, // 📅 Fecha REAL (momento de emisión)
         },
       });
@@ -281,16 +306,22 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingDate)
   console.log('Billing Date:', billingDate);
   console.log('Propiedades del Line Item:', JSON.stringify(lp, null, 2));
   
-  // 1) Verificar si ya tiene factura asociada en el line item
-  if (lp.invoice_id) {
-    console.log(`✓ Line Item ${lineItemId} ya tiene factura ${lp.invoice_id}`);
-    console.log('================================================\n');
+  
+   // 2) Generar clave única
+   const invoiceKey = generateInvoiceKey(dealId, lineItemId, billingDate);
+  console.log('Invoice Key generada:', invoiceKey);
+  
+  // 2) Verificar si ya tiene factura asociada en el line item
+if (lp.invoice_id) {
+  if (safeString(lp.invoice_key) === invoiceKey) {
+    console.log(`✓ Line Item ${lineItemId} ya tiene factura ${lp.invoice_id} (invoice_key OK)`);
     return { invoiceId: lp.invoice_id, created: false };
   }
-  
-  // 2) Generar clave única
-  const invoiceKey = generateInvoiceKey(dealId, lineItemId, billingDate);
-  console.log('Invoice Key generada:', invoiceKey);
+
+  console.warn(`⚠️ Line Item ${lineItemId} tiene invoice_id=${lp.invoice_id} pero invoice_key mismatch. IGNORANDO (posible clon sucio).`);
+  // seguir y crear
+}
+
   
   // 3) DRY RUN check
   if (isDryRun()) {

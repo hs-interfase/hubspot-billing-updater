@@ -1,4 +1,6 @@
 import { hubspotClient } from './hubspotClient.js';
+import { buildInvoiceKey, parseInvoiceKey } from './utils/invoiceKey.js';
+
 
 /*
  * Módulo para crear facturas. Incluye funciones para facturar tickets (manual)
@@ -16,9 +18,21 @@ export async function createInvoiceForTicket(ticket) {
     return { invoiceId: existingInvoiceId };
   }
 
-  const invoiceKey =
-    props.of_invoice_key ||
-    `${props.of_deal_id || ''}::${props.of_line_item_ids || ''}::${props.of_fecha_de_facturacion || ''}`;
+let invoiceKey = props.of_invoice_key;
+
+if (invoiceKey) {
+  // si vino algo, lo canonicalizamos si se puede
+  const parsed = parseInvoiceKey(invoiceKey);
+  if (parsed.ok) invoiceKey = parsed.canonical;
+} else {
+  // si no vino, lo construimos canónico
+  invoiceKey = buildInvoiceKey(
+    props.of_deal_id,
+    props.of_line_item_ids,
+    props.of_fecha_de_facturacion
+  );
+}
+
 
   const dryRun = (process.env.DRY_RUN || '').toString().toLowerCase() === 'true';
   if (dryRun) {
@@ -123,7 +137,7 @@ export async function createInvoiceForLineItem(deal, lineItem, invoiceDate) {
   const lp = lineItem.properties || {};
   const dp = deal.properties || {};
 
-  const invoiceKey = `${dealId}::${lineItemId}::${invoiceDate || ''}`;
+const invoiceKey = buildInvoiceKey(dealId, lineItemId, invoiceDate);
 
   if (lp.of_invoice_id) {
     return { invoiceId: lp.of_invoice_id };
@@ -234,17 +248,29 @@ export async function emitInvoicesForReadyTickets() {
     for (const ticket of tickets) {
       try {
         const { invoiceId } = await createInvoiceForTicket(ticket);
-        if (invoiceId) {
-          await hubspotClient.crm.tickets.basicApi.update(ticket.id, {
-            properties: {
-              of_invoice_id: invoiceId,
-              of_invoice_key:
-                ticket.properties.of_invoice_key ||
-                `${ticket.properties.of_deal_id}::${ticket.properties.of_line_item_ids}::${ticket.properties.of_fecha_de_facturacion}`,
-              of_invoice_status: 'open',
-            },
-          });
-        }
+if (invoiceId) {
+  let ticketInvoiceKey = ticket.properties.of_invoice_key;
+
+  if (ticketInvoiceKey) {
+    const parsed = parseInvoiceKey(ticketInvoiceKey);
+    if (parsed.ok) ticketInvoiceKey = parsed.canonical;
+  } else {
+    ticketInvoiceKey = buildInvoiceKey(
+      ticket.properties.of_deal_id,
+      ticket.properties.of_line_item_ids,
+      ticket.properties.of_fecha_de_facturacion
+    );
+  }
+
+  await hubspotClient.crm.tickets.basicApi.update(ticket.id, {
+    properties: {
+      of_invoice_id: invoiceId,
+      of_invoice_key: ticketInvoiceKey,
+      of_invoice_status: 'open',
+    },
+  });
+}
+
         processed++;
       } catch (e) {
         await hubspotClient.crm.tickets.basicApi.update(ticket.id, {

@@ -10,6 +10,9 @@
 // - Empresa y contactos SÍ pueden ser "Mixto" si operan en ambos países
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
+import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
+
+
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
@@ -186,27 +189,58 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
         'line_items'
       );
 
-      console.log(`[mirrorDealToUruguay] Eliminando ${mirrorLineItemIds.length} líneas antiguas del espejo`);
+} catch (err) {
+  const details = err?.response?.body || err?.message || err;
+  console.warn(
+    `[mirrorDealToUruguay] Deal espejo UY ${targetDealId} no existe o no se pudo actualizar. Se creará uno nuevo.`,
+    details
+  );
+  targetDealId = null;
+}
 
-      for (const liId of mirrorLineItemIds) {
-        try {
-          await hubspotClient.crm.lineItems.basicApi.archive(String(liId));
-        } catch (err) {
-          console.warn(
-            '[mirrorDealToUruguay] No se pudo archivar line item en espejo UY',
-            liId,
-            err?.message || err
-          );
-        }
-      }
-    } catch (err) {
-      console.warn(
-        `[mirrorDealToUruguay] Deal espejo UY ${targetDealId} no existe o no se pudo actualizar. Se creará uno nuevo.`,
-        err?.message || err
-      );
-      targetDealId = null; // Forzamos a crear uno nuevo más abajo
-    }
   }
+async function findExistingMirrorByOrigin(sourceDealId) {
+  const resp = await hubspotClient.crm.deals.searchApi.doSearch({
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: 'es_mirror_de_py', operator: 'EQ', value: 'true' },
+          { propertyName: 'deal_py_origen_id', operator: 'EQ', value: String(sourceDealId) },
+        ],
+      },
+    ],
+    properties: ['dealname', 'deal_py_origen_id', 'es_mirror_de_py', 'deal_uy_mirror_id'],
+    limit: 10,
+  });
+  return resp.results || [];
+}
+
+
+if (!targetDealId) {
+  const mirrors = await findExistingMirrorByOrigin(sourceDealId);
+
+  if (mirrors.length === 1) {
+    targetDealId = String(mirrors[0].id);
+    console.log('[mirrorDealToUruguay] Backstop: encontré espejo por deal_py_origen_id:', targetDealId);
+
+    // Re-asegurar el vínculo en el PY para próximas corridas
+    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+      properties: { deal_uy_mirror_id: String(targetDealId) },
+    });
+
+  } else if (mirrors.length > 1) {
+    console.warn('[mirrorDealToUruguay] ERROR: múltiples espejos para el mismo PY. No crear otro.', {
+      sourceDealId,
+      mirrorIds: mirrors.map(m => m.id),
+    });
+    return {
+      mirrored: false,
+      sourceDealId: String(sourceDealId),
+      reason: 'multiple mirrors found for same origin',
+      mirrorIds: mirrors.map(m => String(m.id)),
+    };
+  }
+}
 
   if (!targetDealId) {
     // 3b) Crear un nuevo negocio espejo con país operativo Uruguay
@@ -251,8 +285,8 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     console.log('[mirrorDealToUruguay] Deal PY actualizado: mantiene Paraguay, guardó mirror_id');
   }
 
-// 4) Crear en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
-console.log(`[mirrorDealToUruguay] Creando ${uyLineItems.length} líneas UY en espejo`);
+// 4) Upsert en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
+console.log(`[mirrorDealToUruguay] Upsert de ${uyLineItems.length} líneas UY en espejo`);
 
 // Variable de entorno para el propietario
 const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
@@ -276,6 +310,7 @@ for (const li of uyLineItems) {
     'hs_discount_percentage',   
     'tax',
     'hs_tax_amount',
+    'of_line_item_py_origen_id',
   ]);
 
   // Copiar todas las propiedades EXCEPTO las excluidas
@@ -289,6 +324,9 @@ for (const li of uyLineItems) {
   props.uy = 'true';
   props.pais_operativo = 'Uruguay';
   props.hubspot_owner_id = userAdminMirror;
+
+  // 🔑 Idempotencia: guardar ID del line item origen (PY)
+  props.of_line_item_py_origen_id = String(li.id || li.properties?.hs_object_id);
 
   // ✅ COSTO → price (parseado como float)
   const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
@@ -344,22 +382,19 @@ for (const li of uyLineItems) {
     nota: props.nota
   });
 
-  await hubspotClient.crm.lineItems.basicApi.create({
-    properties: props,
-    associations: [
-      {
-        to: { id: targetDealId },
-        types: [
-          {
-            associationCategory: 'HUBSPOT_DEFINED',
-            associationTypeId: LINE_ITEM_TO_DEAL_ASSOC_ID,
-          },
-        ],
-      },
-    ],
-  });
-  createdLineItems++;
+  const { action, id } = await upsertUyLineItem(
+    targetDealId,     // mirror deal id
+    li,               // line item PY origen (para identificar por id)
+    () => props       // buildUyProps: usamos el props que ya armaste arriba
+  );
+
+  if (action === 'created') {
+    createdLineItems++;
+  }
+
+  console.log(`[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`);
 }
+
 
   console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
