@@ -132,20 +132,12 @@ export async function processUrgentLineItem(lineItemId) {
 
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
-    // 7) Crear factura usando tu servicio existente
-// 7.a) Crear ticket primero (pipeline automático)
-const { ticketId } = await createAutoBillingTicket(deal, targetLineItem, getTodayYMD());
-console.log(`✅ Ticket creado: ${ticketId}`);
+    // 7.a) Crear ticket primero
+    const { ticketId } = await createAutoBillingTicket(deal, targetLineItem, getTodayYMD());
+    console.log(`✅ Ticket creado: ${ticketId}`);
 
-// 7.b) Crear factura
-const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, getTodayYMD());
-console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
-
-// 3) Asociar factura al ticket
-if (ticketId && invoiceResult?.invoiceId) {
-  await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
-  console.log(`✅ Ticket actualizado con invoice ID`);
-}
+    // 7.b) Crear factura
+    const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, getTodayYMD());
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
       console.error('❌ No se pudo crear la factura');
@@ -153,6 +145,12 @@ if (ticketId && invoiceResult?.invoiceId) {
     }
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
+
+    // 7.c) Asociar factura al ticket (prop custom)
+    if (ticketId) {
+      await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
+      console.log('✅ Ticket actualizado con invoice ID');
+    }
 
     // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
@@ -172,21 +170,25 @@ if (ticketId && invoiceResult?.invoiceId) {
       dealId: String(dealId),
     };
   } catch (error) {
+    
     console.error('\n❌ Error en facturación urgente de Line Item:', error.message);
     console.error(error.stack);
-
-    // Intentar resetear flag incluso si falló
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-        properties: { facturar_ahora: 'false' },
-      });
-      console.log('⚠️ Flag facturar_ahora reseteado a false (después de error)');
-    } catch (resetError) {
-      console.error('❌ No se pudo resetear facturar_ahora:', resetError.message);
-    }
-
-    throw error;
+ 
+  // ✅ Guardar error para debug + alertas
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: {
+        of_billing_error: String(error?.message || 'unknown_error').slice(0, 250),
+        of_billing_error_at: String(getTodayMillis()),
+      },
+    });
+    console.log('⚠️ Guardado of_billing_error en Line Item (sin resetear facturar_ahora)');
+  } catch (e) {
+    console.error('❌ No se pudo guardar of_billing_error:', e.message);
   }
+
+  throw error;
+}
 }
 
 /**
@@ -230,6 +232,19 @@ export async function processUrgentTicket(ticketId) {
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
 
+    // Mover ticket a READY (flujo manual)
+    const readyStage = process.env.BILLING_TICKET_STAGE_READY;
+    const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
+    if (readyStage) {
+      await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+        properties: {
+          hs_pipeline_stage: readyStage,
+          ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
+        },
+      });
+      console.log(`✅ Ticket movido a READY (${readyStage})`);
+    }
+
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: { facturar_ahora: 'false' },
     });
@@ -246,13 +261,17 @@ export async function processUrgentTicket(ticketId) {
     console.error('\n❌ Error en facturación urgente de Ticket:', error.message);
     console.error(error.stack);
 
+    // ✅ Guardar error para debug + alertas (NO resetear facturar_ahora)
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
-        properties: { facturar_ahora: 'false' },
+        properties: {
+          of_billing_error: String(error?.message || 'unknown_error').slice(0, 250),
+          of_billing_error_at: String(getTodayMillis()),
+        },
       });
-      console.log('⚠️ Flag facturar_ahora reseteado a false (después de error)');
-    } catch (resetError) {
-      console.error('❌ No se pudo resetear facturar_ahora:', resetError.message);
+      console.log('⚠️ Guardado of_billing_error en Ticket (sin resetear facturar_ahora)');
+    } catch (e) {
+      console.error('❌ No se pudo guardar of_billing_error:', e.message);
     }
 
     throw error;

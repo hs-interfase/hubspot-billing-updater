@@ -264,7 +264,9 @@ if (tp.of_invoice_id) {
   } catch (err) {
     console.error('\n❌ ERROR CREANDO FACTURA DESDE TICKET:');
     console.error('Mensaje:', err?.message);
+    console.error('Status:', err?.response?.status);
     console.error('Response data:', JSON.stringify(err?.response?.data, null, 2));
+    console.error('URL:', err?.config?.url);
     console.error('================================================\n');
     throw err;
   }
@@ -470,7 +472,9 @@ const invoiceProps = {
   } catch (err) {
     console.error('\n❌ ERROR CREANDO FACTURA:');
     console.error('Mensaje:', err?.message);
+    console.error('Status:', err?.response?.status);
     console.error('Response data:', JSON.stringify(err?.response?.data, null, 2));
+    console.error('URL:', err?.config?.url);
     console.error('Stack:', err?.stack);
     console.error('================================================\n');
     throw err;
