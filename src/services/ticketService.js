@@ -122,7 +122,7 @@ function getTicketStage(billingDate, lineItem) {
   const today = getTodayYMD();
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+const tomorrowStr = getTomorrowYMD(); // helper
   
   if (billingDate === today || billingDate === tomorrowStr) {
     return TICKET_STAGES.READY;
@@ -213,7 +213,6 @@ async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds
  * @param {string} billingDate - Fecha de facturación (YYYY-MM-DD)
  * @returns {Object} { ticketId, created } - created=true si se creó, false si ya existía
  */
-// src/services/ticketService.js
 
 export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
@@ -250,6 +249,16 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
 
   // 3) Snapshots
   const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
+
+console.log(`[ticketService] 💰 MANUAL - Montos iniciales:`);
+  console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
+  console.log(`   - monto_real_a_facturar: ${snapshots.monto_real_a_facturar}`);
+  console.log(`   ℹ️ En tickets MANUALES, monto_real_a_facturar es EDITABLE por el responsable.`);
+  console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item (snapshot inmutable).`);
+
+  console.log(`[ticketService] 📊 MANUAL - Frecuencia:`);
+  console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
+  console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
   // 4) Título
   const dealName = dp.dealname || 'Deal';
@@ -304,14 +313,13 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
     // si querés que sea editable, esto NO es snapshot: lo tomamos del deal al crear
     ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
 
-    ...(pmAsignado ? { pm_asignado: pmAsignado } : {}),
+    ...(pmAsignado ? { hubspot_owner_id: pmAsignado } : {}),
 
     descripcion_producto: descripcionProducto,
   };
 
   console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
-  console.log('[ticketService] 🔍 MANUAL - hubspot_owner_id:', ticketProps.hubspot_owner_id);
-  console.log('[ticketService] 🔍 MANUAL - pm_asignado:', ticketProps.pm_asignado);
+  console.log('[ticketService] 🔍 MANUAL - responsable del ticket:', ticketProps.hubspot_owner_id);
 
   try {
     // 9) Crear ticket
@@ -395,6 +403,17 @@ console.log('[ticketService] 🔍 AUTO - ticketKey:', ticketKey);
   
   // Preparar el payload
   const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
+
+  console.log(`[ticketService] 💰 AUTO - Montos iniciales:`);
+  console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
+  console.log(`   - monto_real_a_facturar: ${snapshots.monto_real_a_facturar}`);
+  console.log(`   ℹ️ En tickets AUTOMÁTICOS, ambos montos permanecen iguales (snapshot inmutable).`);
+  console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item.`);
+
+  console.log(`[ticketService] 📊 AUTO - Frecuencia:`);
+  console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
+  console.log(`   - repetitivo: ${snapshots.repetitivo}`);
+
   const dealName = deal.properties?.dealname || 'Deal';
   const productName = lineItem.properties?.name || 'Producto';
   const rubro = lineItem.properties?.servicio || 'Sin rubro';

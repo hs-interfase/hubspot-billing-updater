@@ -55,7 +55,7 @@ export async function getDealWithLineItems(dealId) {
     "cupo_saldo_restante",
     "cupo_total_horas",
     "cupo_total_monto",
-    "cupo_ultima_actralizacion",
+    "cupo_ultima_actualizacion",
     "cupo_umbral",
     "tipo_de_cupo",
 
@@ -74,8 +74,6 @@ export async function getDealWithLineItems(dealId) {
     // ====== OTROS ======
     "pais_operativo",
     "pm_asignado_cupo",
-    "relevancia_estrategica",
-    "unidad_de_negocio",
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -98,9 +96,9 @@ export async function getDealWithLineItems(dealId) {
     "hs_object_id",
     "hs_product_id",
     "hs_recurring_billing_start_date",
-    "hs_recurring_billing_frequency",
     "hs_recurring_billing_number_of_payments",
     "hs_recurring_billing_period",
+    "hs_post_tax_amount",
     "hubspot_owner_id",
     "name",
     "price",
@@ -117,18 +115,11 @@ export async function getDealWithLineItems(dealId) {
     "avisos_restantes_facturacion",
     "fecha_inicio_de_facturacion",
     "fecha_proxima_facturacion",
-    "facturacion_activa",
+    "total_avisos_facturacion",
     "facturacion_automatica",
-    "facturacion_estado",
-    "facturacion_frecuencia",
-    "facturacion_irregular",
-    "facturacion_mensaje_proximo_aviso",
-    "facturacion_proxima_fecha",
-    "facturacion_ultima_fecha",
+    "irregular",
     "facturar_ahora",
     "proximo_aviso_fecha",
-    "tipo_de_facturacion",
-    "repetitivo",
 
     // ====== INICIO DE FACTURACIÓN DIFERIDO ======
   // Estos campos se completan automáticamente cuando se selecciona un inicio
@@ -137,27 +128,6 @@ export async function getDealWithLineItems(dealId) {
   "hs_billing_start_delay_days",
   "hs_billing_start_delay_months",
   "hs_billing_start_delay_type",
-
-    // ====== COSTOS Y MONTOS ======
-    "costo_real",
-    "costo_real_usd",
-    "impuestos",
-    "incluye_iva",
-    "moneda_operativa",
-    "monto_a_facturar",
-    "monto_a_facturar_usd",
-    "monto_real_a_facturar",
-    "monto_total_en_dolares",
-    "monto_total_margen",
-    "monto_total_margen_usd",
-    "monto_total_uruguay",
-    "monto_total_uruguay_usd",
-    "monto_total_uy",
-    "monto_total_uy_usd",
-    "porcentaje_margen",
-    "precio_unitario_original",
-    "valor_hora",
-    "valor_hora_cupo_o_bolsa",
 
     // ====== CUPO ======
     "parte_del_cupo",

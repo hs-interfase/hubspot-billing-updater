@@ -250,6 +250,8 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
       facturacion_proxima_fecha: nextDateStr || null,
       facturacion_ultima_fecha: lastDateStr || null,
       facturacion_mensaje_proximo_aviso: message || '',
+      // ⚠️ SOLO PARA REPORTING: esta propiedad NO se usa en lógica de facturación
+      // La fuente de verdad SIEMPRE es el Line Item
       facturacion_frecuencia_de_facturacion: dealBillingFrequency || null,
     },
   };
