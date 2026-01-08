@@ -132,25 +132,40 @@ export async function processUrgentLineItem(lineItemId) {
 
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
-    // 7.a) Crear ticket primero
-    const { ticketId } = await createAutoBillingTicket(deal, targetLineItem, getTodayYMD());
-    console.log(`✅ Ticket creado: ${ticketId}`);
+ // 7.a) Crear ticket primero
+const { ticketId } = await createAutoBillingTicket(deal, targetLineItem, getTodayYMD());
+console.log(`✅ Ticket creado: ${ticketId}`);
 
-    // 7.b) Crear factura
-    const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, getTodayYMD());
+// 7.b) Crear factura
+const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, getTodayYMD());
 
-    if (!invoiceResult || !invoiceResult.invoiceId) {
-      console.error('❌ No se pudo crear la factura');
-      throw new Error('Error al crear factura');
-    }
+if (!invoiceResult || !invoiceResult.invoiceId) {
+  console.error('❌ No se pudo crear la factura');
+  throw new Error('Error al crear factura');
+}
 
-    console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
+console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
 
-    // 7.c) Asociar factura al ticket (prop custom)
-    if (ticketId) {
-      await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
-      console.log('✅ Ticket actualizado con invoice ID');
-    }
+// 7.c) Asociar factura al ticket (prop custom)
+if (ticketId) {
+  await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
+  console.log('✅ Ticket actualizado con invoice ID');
+
+  // ✅ 7.d) Mover ticket a READY
+  const readyStage = process.env.BILLING_TICKET_STAGE_READY;
+  const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
+
+  if (readyStage) {
+    const stageProps = {
+      hs_pipeline_stage: readyStage,
+      ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
+    };
+    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+      properties: stageProps,
+    });
+    console.log(`✅ Ticket movido a READY (${readyStage})`);
+  }
+}
 
     // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
@@ -231,19 +246,6 @@ export async function processUrgentTicket(ticketId) {
     }
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
-
-    // Mover ticket a READY (flujo manual)
-    const readyStage = process.env.BILLING_TICKET_STAGE_READY;
-    const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
-    if (readyStage) {
-      await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-        properties: {
-          hs_pipeline_stage: readyStage,
-          ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
-        },
-      });
-      console.log(`✅ Ticket movido a READY (${readyStage})`);
-    }
 
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: { facturar_ahora: 'false' },

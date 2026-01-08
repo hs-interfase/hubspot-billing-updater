@@ -10,6 +10,34 @@ import axios from 'axios';
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
 
+// Propiedades permitidas en el objeto Invoice de HubSpot
+const ALLOWED_INVOICE_PROPS = [
+  "cantidad","descripcion","descuento","etapa_de_la_factura","fecha_de_caneclacion",
+  "fecha_de_emision","fecha_de_envio","fecha_de_pago","frecuencia_de_facturacion",
+  "hs_comments","hs_currency","hs_due_date","hs_invoice_date","hs_tax_id","hs_title",
+  "hubspot_owner_id","id_factura_nodum","modo_de_generacion_de_factura","monto_a_facturar",
+  "motivo_de_pausa","nombre_empresa","nombre_producto","of_invoice_key","pais_operativo",
+  "pedido_por","procede_de","responsable_asignado","reventa","servicio","ticket_id",
+  "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura"
+];
+
+// Filtra un objeto dejando solo las propiedades permitidas (no null/undefined)
+function pickAllowedProps(inputProps) {
+  const result = {};
+  for (const key of ALLOWED_INVOICE_PROPS) {
+    if (inputProps[key] !== undefined && inputProps[key] !== null) {
+      result[key] = inputProps[key];
+    }
+  }
+  return result;
+}
+
+// Convierte un valor a owner ID numérico o null
+function toNumericOwnerOrNull(v) {
+  const s = String(v).trim();
+  return /^\d+$/.test(s) ? s : null;
+}
+
 // Crear factura usando API REST directa
 async function createInvoiceDirect(properties) {
   const response = await axios.post(
@@ -101,15 +129,14 @@ if (tp.of_invoice_id) {
   }
   
   // 4) Determinar responsable asignado
-  const responsableAsignado = modoGeneracion === 'AUTO_LINEITEM' 
-    ? 'AUTO' 
-    : (tp.responsable_asignado || 'Sin asignar');
+  const responsableAsignadoRaw = process.env.USER_BILLING || '83169424';
+  const responsableAsignado = toNumericOwnerOrNull(responsableAsignadoRaw);
   
   // 5) Fecha real de facturación (momento de crear la factura)
   const fechaRealFacturacion = getTodayYMD();
   
   // 6) Preparar propiedades de la factura (mapeo Ticket → Factura)
-  const invoiceProps = {
+  const invoicePropsRaw = {
     // Título: usar el subject del ticket
     hs_title: tp.subject || `Factura - Ticket ${ticketId}`,
     
@@ -120,15 +147,9 @@ if (tp.of_invoice_id) {
     hs_invoice_date: toHubSpotDate(fechaRealFacturacion),
     hs_due_date: toHubSpotDate(fechaRealFacturacion),
     
-    // 🔑 Configuración HubSpot
-    hs_invoice_billable: false, // Desactiva validaciones, PDFs, emails
-    
-    // 👤 Destinatario externo (usuario HubSpot)
-    hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '85894063',
-    
     // 🔑 Idempotencia y tracking
     of_invoice_key: invoiceKey,
-    of_ticket_id: ticketId,
+    ticket_id: String(ticketId),
     
     // 🎯 Identidad del producto (del ticket)
     nombre_producto: tp.of_producto_nombres,
@@ -136,31 +157,36 @@ if (tp.of_invoice_id) {
     servicio: tp.of_rubro,
     
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
-    monto_unitario: parseNumber(tp.of_monto_unitario, 0),
     cantidad: parseNumber(tp.of_cantidad, 0),
-    monto_total: parseNumber(tp.of_monto_total, 0),
-    monto_real_a_facturar: parseNumber(tp.monto_real_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
+    monto_a_facturar: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
     descuento: parseNumber(tp.of_descuento, 0),
-    iva: tp.iva,
     
     // 👥 Responsables
-    responsable_asignado: responsableAsignado,
     vendedor_factura: tp.of_propietario_secundario,
     
     // 📊 Frecuencia
     frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion,
     
     // 🏢 Contexto
-    of_pais_operativo: tp.of_pais_operativo,
+    pais_operativo: tp.of_pais_operativo,
     
     // 🔑 Etapa inicial
     etapa_de_la_factura: 'Pendiente',
   };
   
-  // Asignar al usuario administrativo si está configurado
-  if (process.env.INVOICE_OWNER_ID) {
-    invoiceProps.hubspot_owner_id = process.env.INVOICE_OWNER_ID;
+  // Agregar responsable_asignado solo si es numérico válido
+  if (responsableAsignado) {
+    invoicePropsRaw.responsable_asignado = responsableAsignado;
   }
+  
+  // Asignar al usuario administrativo si está configurado
+  const invoiceOwner = toNumericOwnerOrNull(process.env.INVOICE_OWNER_ID);
+  if (invoiceOwner) {
+    invoicePropsRaw.hubspot_owner_id = invoiceOwner;
+  }
+  
+  // Filtrar solo propiedades permitidas
+  const invoiceProps = pickAllowedProps(invoicePropsRaw);
   
   console.log('\n--- PROPIEDADES DE LA FACTURA A CREAR ---');
   console.log(JSON.stringify(invoiceProps, null, 2));
@@ -256,7 +282,7 @@ if (tp.of_invoice_id) {
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
     console.log('Invoice Key:', invoiceKey);
-    console.log('Responsable:', responsableAsignado);
+    console.log('Responsable:', responsableAsignado || 'no asignado');
     console.log('Modo de generación:', modoGeneracion);
     console.log('================================================\n');
     
@@ -493,7 +519,7 @@ export async function getInvoice(invoiceId) {
       'invoices',
       invoiceId,
       ['etapa_de_la_factura', 'of_invoice_key',
-       'fecha_de_emision', 'fecha_de_envio', 'fecha_de_pago', 'fecha_de_cancelacion',
+       'fecha_de_emision', 'fecha_de_envio', 'fecha_de_pago', 'fecha_de_caneclacion',
        'id_factura_nodum', 'hs_invoice_date', 'hs_currency']
     );
     return invoice;
