@@ -45,10 +45,14 @@ async function getDealIdForLineItem(lineItemId) {
 async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
   try {
     const cantidadActual = parseInt(currentProps.cantidad_de_facturaciones_urgentes || '0', 10);
+    const billingDateYMD = getTodayYMD(); // YYYY-MM-DD en BILLING_TZ
+    const midnightUTC = toHubSpotDateOnly(billingDateYMD); // Convierte a midnight UTC
+
+    console.log(`[debug] ultima_fecha_facturacion_urgente: billingDateYMD=${billingDateYMD}, millis=${midnightUTC}`);
 
     const updateProps = {
       facturado_con_urgencia: 'true',
-      ultima_fecha_facturacion_urgente: getTodayMillis(), // ms para HubSpot
+      ultima_fecha_facturacion_urgente: midnightUTC, // ms para HubSpot
       cantidad_de_facturaciones_urgentes: String(cantidadActual + 1),
     };
 
@@ -58,7 +62,7 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 
     console.log(`✅ Evidencia de facturación urgente actualizada en Line Item ${lineItemId}`);
     console.log(`   - Cantidad total: ${cantidadActual + 1}`);
-    console.log(`   - Última fecha: ${getTodayYMD()}`);
+    console.log(`   - Última fecha: ${billingDateYMD}`);
   } catch (error) {
     console.error(`❌ Error actualizando evidencia urgente en Line Item ${lineItemId}:`, error.message);
     throw error;
