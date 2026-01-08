@@ -255,7 +255,7 @@ if (tp.of_invoice_id) {
         properties: {
           of_invoice_id: invoiceId,
           of_invoice_key: invoiceKey,
-          of_fecha_real_de_facturacion: fechaRealFacturacion, // 📅 Fecha REAL (momento de emisión)
+          fecha_real_de_facturacion: fechaRealFacturacion,
         },
       });
       console.log(`✓ Ticket actualizado con invoice_id=${invoiceId} y fecha real`);

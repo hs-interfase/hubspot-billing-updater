@@ -135,6 +135,55 @@ export function toHubSpotDate(value) {
   return Number.isFinite(d.getTime()) ? String(d.getTime()) : null;
 }
 
+/**
+ * Para propiedades HubSpot tipo DATE (sin hora).
+ * SIEMPRE devuelve midnight UTC (00:00:00.000Z).
+ * 
+ * @param {string|number|Date} value - Fecha en distintos formatos
+ * @returns {string|null} Timestamp midnight UTC como string
+ */
+export function toHubSpotDateOnly(value) {
+  if (!value) return null;
+
+  if (typeof value === "number" || /^\d+$/.test(value.toString().trim())) {
+    return String(value);
+  }
+
+  if (isYMD(value)) {
+    return ymdToMidnightUTCMillis(value); // ✅ SIEMPRE midnight UTC
+  }
+
+  // Si viene ISO/Date, lo normalizás a YMD en BILLING_TZ y guardás midnight UTC
+  const tz = process.env.BILLING_TZ || "America/Montevideo";
+  const d = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(d.getTime())) return null;
+
+  const parts = getYMDPartsInTZ(d, tz);
+  if (!parts) return null;
+  const ymd = `${parts.year}-${String(parts.month).padStart(2,"0")}-${String(parts.day).padStart(2,"0")}`;
+  return ymdToMidnightUTCMillis(ymd);
+}
+
+/**
+ * Para propiedades HubSpot tipo DATETIME (con hora completa).
+ * Preserva el timestamp exacto en milisegundos.
+ * 
+ * @param {string|number|Date} value - Fecha/hora en distintos formatos
+ * @returns {string|null} Timestamp en milisegundos como string
+ */
+export function toHubSpotDateTime(value) {
+  if (!value) return null;
+  if (typeof value === "number" || /^\d+$/.test(value.toString().trim())) return String(value);
+
+  if (isYMD(value)) {
+    // Para YYYY-MM-DD, usamos midnight UTC por consistencia
+    return ymdToMidnightUTCMillis(value);
+  }
+
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(d.getTime()) ? String(d.getTime()) : null;
+}
+
 export function parseLocalDate(raw) {
   if (!raw) return null;
   const str = raw.toString().trim();
@@ -213,4 +262,16 @@ export function diffDays(dateA, dateB) {
   if (!a || !b) return null;
   const diff = b.getTime() - a.getTime();
   return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * YYYY-MM-DD -> millis string a 00:00:00.000Z (DATE-ONLY HubSpot)
+ */
+export function ymdToMidnightUTCMillis(ymd) {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  return String(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }

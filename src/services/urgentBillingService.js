@@ -247,6 +247,19 @@ export async function processUrgentTicket(ticketId) {
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
 
+    // Mover ticket a READY (flujo manual)
+    const readyStage = process.env.BILLING_TICKET_STAGE_READY;
+    const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
+    if (readyStage) {
+      await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+        properties: {
+          hs_pipeline_stage: readyStage,
+          ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
+        },
+      });
+      console.log(`✅ Ticket movido a READY (${readyStage})`);
+    }
+
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: { facturar_ahora: 'false' },
     });
