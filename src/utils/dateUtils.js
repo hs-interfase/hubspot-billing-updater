@@ -275,3 +275,16 @@ export function ymdToMidnightUTCMillis(ymd) {
   const day = Number(m[3]);
   return String(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }
+
+
+/**
+ * Helper para obtener mañana en formato YYYY-MM-DD
+ */
+export function getTomorrowYMD() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const y = tomorrow.getFullYear();
+  const m = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const d = String(tomorrow.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}

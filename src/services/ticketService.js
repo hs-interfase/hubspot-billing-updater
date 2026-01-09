@@ -10,7 +10,7 @@ import {
 } from '../config/constants.js';
 import { generateTicketKey } from '../utils/idempotency.js';
 import { createTicketSnapshots } from './snapshotService.js';
-import { getTodayYMD } from '../utils/dateUtils.js';
+import { getTodayYMD, getTomorrowYMD } from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
 
 /**
@@ -120,8 +120,7 @@ function getTicketStage(billingDate, lineItem) {
   
   // Prioridad 2: Si es hoy o mañana → READY
   const today = getTodayYMD();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+
 const tomorrowStr = getTomorrowYMD(); // helper
   
   if (billingDate === today || billingDate === tomorrowStr) {
@@ -206,151 +205,6 @@ async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds
 }
 
 /**
- * Crea un ticket de orden de facturación manual.
- * 
- * @param {Object} deal - Deal de HubSpot
- * @param {Object} lineItem - Line Item de HubSpot
- * @param {string} billingDate - Fecha de facturación (YYYY-MM-DD)
- * @returns {Object} { ticketId, created } - created=true si se creó, false si ya existía
- */
-
-export async function createManualBillingTicket(deal, lineItem, billingDate) {
-  const dealId = String(deal?.id || deal?.properties?.hs_object_id);
-  const lineItemId = String(lineItem?.id || lineItem?.properties?.hs_object_id);
-
-  const dp = deal?.properties || {};
-  const lp = lineItem?.properties || {};
-
-  // ✅ ID estable para idempotencia (sirve tanto para PY como para espejo UY)
-  // - En espejo UY, lp.of_line_item_py_origen_id viene seteado al crear el line item espejo
-  // - En PY normal, no existe y usamos el ID real del line item
-  const stableLineId = lp.of_line_item_py_origen_id
-    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : `LI:${lineItemId}`;
-
-  // ✅ Key idempotente
-  const ticketKey = generateTicketKey(dealId, stableLineId, billingDate);
-
-  console.log('[ticketService] 🔍 MANUAL - stableLineId:', stableLineId, '(real:', lineItemId, ')');
-  console.log('[ticketService] 🔍 MANUAL - ticketKey:', ticketKey);
-
-  // 1) Verificar si ya existe
-  const existing = await findTicketByKey(ticketKey);
-  if (existing) {
-    console.log(`[ticketService] Ticket ya existe con key ${ticketKey}, id=${existing.id}`);
-    return { ticketId: existing.id, created: false };
-  }
-
-  // 2) DRY RUN
-  if (isDryRun()) {
-    console.log(`[ticketService] DRY_RUN: no se crea ticket real para ${ticketKey}`);
-    return { ticketId: null, created: false };
-  }
-
-  // 3) Snapshots
-  const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
-
-console.log(`[ticketService] 💰 MANUAL - Montos iniciales:`);
-  console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
-  console.log(`   - monto_real_a_facturar: ${snapshots.monto_real_a_facturar}`);
-  console.log(`   ℹ️ En tickets MANUALES, monto_real_a_facturar es EDITABLE por el responsable.`);
-  console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item (snapshot inmutable).`);
-
-  console.log(`[ticketService] 📊 MANUAL - Frecuencia:`);
-  console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
-  console.log(`   - repetitivo: ${snapshots.repetitivo}`);
-
-  // 4) Título
-  const dealName = dp.dealname || 'Deal';
-  const productName = lp.name || 'Producto';
-  const rubro = lp.servicio || 'Sin rubro';
-
-  // 5) Stage según fecha y flag
-  const stage = getTicketStage(billingDate, lineItem);
-
-  // 6) Facturar ahora -> nota urgente en descripción
-  const facturarAhoraRaw = (lp.facturar_ahora ?? '').toString().toLowerCase();
-  const facturarAhoraLineItem =
-    facturarAhoraRaw === 'true' ||
-    facturarAhoraRaw === '1' ||
-    facturarAhoraRaw === 'sí' ||
-    facturarAhoraRaw === 'si' ||
-    facturarAhoraRaw === 'yes';
-
-  let descripcionProducto = snapshots.descripcion_producto || '';
-  if (facturarAhoraLineItem) {
-    const notaUrgente = '⚠️ URGENTE: Vendedor solicitó facturar ahora.';
-    descripcionProducto = descripcionProducto
-      ? `${notaUrgente}\n\n${descripcionProducto}`
-      : notaUrgente;
-  }
-
-  // 7) Owner (PM) y vendedor (informativo)
-  const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
-  const pmAsignado = dp.pm_asignado_cupo
-    ? String(dp.pm_asignado_cupo)
-    : (dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null);
-
-  console.log('[ticketService] MANUAL - vendedorId:', vendedorId, 'pmAsignado:', pmAsignado);
-
-  // 8) Props del ticket
-  const ticketProps = {
-    subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
-    hs_pipeline: TICKET_PIPELINE,
-    hs_pipeline_stage: stage,
-
-    // ✅ MANUAL: asignar owner (PM). Si no hay, no mandes la prop (evita errores raros)
-    ...(pmAsignado ? { hubspot_owner_id: pmAsignado } : {}),
-
-    of_deal_id: dealId,
-    of_line_item_ids: lineItemId,
-
-    // 🔑 clave idempotente (con stableLineId adentro)
-    of_ticket_key: ticketKey,
-
-    ...snapshots,
-
-    // si querés que sea editable, esto NO es snapshot: lo tomamos del deal al crear
-    ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
-
-    ...(pmAsignado ? { hubspot_owner_id: pmAsignado } : {}),
-
-    descripcion_producto: descripcionProducto,
-  };
-
-  console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
-  console.log('[ticketService] 🔍 MANUAL - responsable del ticket:', ticketProps.hubspot_owner_id);
-
-  try {
-    // 9) Crear ticket
-    const createResp = await safeCreateTicket(hubspotClient, { properties: ticketProps });    const ticketId = createResp.id || createResp.result?.id;
-
-    // 10) Asociaciones
-    const [companyIds, contactIds] = await Promise.all([
-      getDealCompanies(dealId),
-      getDealContacts(dealId),
-    ]);
-
-    await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-
-    const stageLabel =
-      stage === TICKET_STAGES.READY ? 'READY' :
-      stage === TICKET_STAGES.INVOICED ? 'INVOICED' :
-      'NEW';
-
-    const urgentLabel = facturarAhoraLineItem ? ' [URGENTE]' : '';
-
-    console.log(`[ticketService] Ticket manual creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`);
-    console.log(`[ticketService] Owner (PM): ${pmAsignado}, Vendedor: ${vendedorId}`);
-
-    return { ticketId, created: true };
-  } catch (err) {
-    console.error('[ticketService] Error creando ticket:', err?.response?.body || err?.message || err);
-    throw err;
-  }
-}
-
-/**
  * Actualiza un ticket existente con datos adicionales.
  */
 export async function updateTicket(ticketId, properties) {
@@ -401,8 +255,16 @@ console.log('[ticketService] 🔍 AUTO - ticketKey:', ticketKey);
     return { ticketId: null, created: false };
   }
   
-  // Preparar el payload
-  const snapshots = createTicketSnapshots(deal, lineItem, billingDate);
+// Determinar fechas según reglas
+const expectedDate = billingDate;
+const orderedDate = billingDate; // En auto: orderedDate = expectedDate
+
+console.log(`[ticketService] 📅 AUTO - Fechas:`);
+console.log(`   - expectedDate: ${expectedDate} (siempre = billingDate)`);
+console.log(`   - orderedDate: ${orderedDate} (= expectedDate en auto)`);
+
+// Preparar el payload con nueva firma
+const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
 
   console.log(`[ticketService] 💰 AUTO - Montos iniciales:`);
   console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
@@ -413,6 +275,9 @@ console.log('[ticketService] 🔍 AUTO - ticketKey:', ticketKey);
   console.log(`[ticketService] 📊 AUTO - Frecuencia:`);
   console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
   console.log(`   - repetitivo: ${snapshots.repetitivo}`);
+
+  console.log('[ticketService] 🔍 AUTO - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
+  console.log('[ticketService] 🔍 AUTO - of_fecha_facturacion:', snapshots.of_fecha_facturacion ?? '(no seteada)');
 
   const dealName = deal.properties?.dealname || 'Deal';
   const productName = lineItem.properties?.name || 'Producto';
