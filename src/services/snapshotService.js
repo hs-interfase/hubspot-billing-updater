@@ -32,45 +32,16 @@ function determineTicketFrequency(lineItem) {
 }
 
 /**
- * Convierte boolean a formato HubSpot "Si" / "No"
- */
-function boolToSiNo(value) {
-  return parseBool(value) ? 'Si' : 'No';
-}
-
-/**
- * Detecta si el line item tiene IVA según el tipo impositivo.
- * tax_rate = "IVA" o "IVA Uruguay 22%" → "Si"
- * Cualquier otro valor → "No"
+ * Detecta si el line item tiene IVA según hs_tax_rate_group_id.
+ * ID 16912720 = IVA Uruguay → "true"
+ * Cualquier otro valor → "false"
  */
 function detectIVA(lineItem) {
   const lp = lineItem?.properties || {};
-  const tipoImpositivo = safeString(lp.tax_rate || '').toLowerCase();
-
-  // Si contiene "iva" en el nombre, entonces tiene IVA
-  if (tipoImpositivo.includes('iva')) return 'Si';
-
-  return 'No';
-}
-
-/**
- * Convierte el tipo de cupo del line item a formato HubSpot.
- * Si parte_del_cupo es false, devuelve null (no aplica cupo).
- * Si es true, devuelve "Por Horas" o "Por Monto" según tipo_de_cupo del deal.
- */
-function getCupoType(lineItem, deal) {
-  const lp = lineItem?.properties || {};
-  const dp = deal?.properties || {};
-
-  const aplicaCupo = parseBool(lp.parte_del_cupo);
-  if (!aplicaCupo) return null; // No aplica cupo
-
-  const tipoCupo = safeString(dp.tipo_de_cupo);
-  // Normalizar el valor
-  if (tipoCupo.toLowerCase().includes('hora')) return 'Por Horas';
-  if (tipoCupo.toLowerCase().includes('monto')) return 'Por Monto';
-
-  return null; // Valor desconocido
+  const taxGroupId = String(lp.hs_tax_rate_group_id || '').trim();
+  
+  if (taxGroupId === '16912720') return 'true';
+  return 'false';
 }
 
 /**
@@ -83,7 +54,24 @@ export function extractLineItemSnapshots(lineItem, deal) {
   const precioUnitario = parseNumber(lp.price, 0); // = valor hora para cupos
   const cantidad = parseNumber(lp.quantity, 0); // = horas para cupos
   const costoUnitario = parseNumber(lp.hs_cost_of_goods_sold, 0);
-  const descuentoPorcentaje = parseNumber(lp.discount, 0);
+  
+  // TAX & DISCOUNT desde Line Item
+  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0); // % descuento
+  const descuentoMonto = parseNumber(lp.discount, 0); // descuento por unidad en moneda del deal
+  const ivaValue = detectIVA(lineItem); // "true" si ID === '16912720'
+
+  // 🐛 DEBUG: Log valores fuente y destino
+  console.log(`\n[DBG][SNAPSHOT] Line Item ID: ${lineItem?.id}`);
+  console.log('[DBG][SNAPSHOT] Tax/Discount SOURCE:', {
+    hs_discount_percentage: lp.hs_discount_percentage,
+    discount: lp.discount,
+    hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
+  });
+  console.log('[DBG][SNAPSHOT] Tax/Discount TARGET (ticket):', {
+    of_descuento: descuentoPorcentaje,
+    of_descuento_monto: descuentoMonto,
+    iva: ivaValue,
+  });
 
   // Calcular costo total (unitario × cantidad)
   const costoTotal = costoUnitario * cantidad;
@@ -113,14 +101,34 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_cantidad: cantidad, // ✅ cantidad = horas reales para cupos (modificable por responsable)
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.porcentaje_margen, 0),
-    of_descuento: descuentoPorcentaje, // ✅ descuento en % (ej: 10)
-    iva: detectIVA(lineItem), // ✅ "Si" si tax_rate contiene "iva"
+    of_descuento: descuentoPorcentaje, // ✅ % descuento (ej: 10 = 10%)
+    of_descuento_monto: descuentoMonto, // ✅ descuento por unidad en moneda del deal
+    iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
     of_monto_total: montoTotal, // ✅ monto total sugerido (snapshot inmutable)
     monto_real_a_facturar: montoTotal, // ✅ Inicia igual que of_monto_total. En MANUAL es editable (no hay sync). En AUTO se mantiene igual.
   };
+}
+/**
+ * Convierte el tipo de cupo del line item a formato HubSpot.
+ * Si parte_del_cupo es false, devuelve null (no aplica cupo).
+ * Si es true, devuelve "Por Horas" o "Por Monto" según tipo_de_cupo del deal.
+ */
+function getCupoType(lineItem, deal) {
+  const lp = lineItem?.properties || {};
+  const dp = deal?.properties || {};
+
+  const aplicaCupo = parseBool(lp.parte_del_cupo);
+  if (!aplicaCupo) return null; // No aplica cupo
+
+  const tipoCupo = safeString(dp.tipo_de_cupo);
+  // Normalizar el valor
+  if (tipoCupo.toLowerCase().includes('hora')) return 'Por Horas';
+  if (tipoCupo.toLowerCase().includes('monto')) return 'Por Monto';
+
+  return null; // Valor desconocido
 }
 
 /**
@@ -143,7 +151,7 @@ export function extractDealSnapshots(deal) {
  *
  * NUEVO MODELO DE FECHAS (sin período):
  * - expectedDate (planificada/esperada desde Line Item) → hs_resolution_due_date
- * - orderedDate (cuando se manda a facturar) → of_fecha_facturacion
+ * - orderedDate (cuando se manda a facturar) → of_fecha_de_facturacion
  *
  * Regla: En MANUAL normal, orderedDate debe ser null (NO se setea).
  * En AUTO, orderedDate == expectedDate.
@@ -179,7 +187,7 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
 
   // 📅 FECHA ORDENADA A FACTURAR (solo si aplica)
   if (orderedDate) {
-    out.of_fecha_facturacion = safeString(orderedDate);
+    out.of_fecha_de_facturacion = safeString(orderedDate);
   }
 
   return out;

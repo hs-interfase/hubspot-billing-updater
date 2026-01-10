@@ -3,7 +3,7 @@
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
-import { createManualBillingTicket } from '../services/ticketService.js';
+import { createManualBillingTicket } from '../services/manualTicketService.js';
 
 /**
  * PHASE 2: Generación de tickets manuales para line items con facturacion_automatica!=true.

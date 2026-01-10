@@ -24,7 +24,7 @@ import { parseBool } from '../utils/parsers.js';
  * Detecta propiedades faltantes en HubSpot y reintenta sin ellas.
  */
 
-function getMissingPropertyNameFromHubSpotError(e) {
+export function getMissingPropertyNameFromHubSpotError(e) {
   const body = e?.body || e?.response?.body;
   const ctx = body?.errors?.[0]?.context?.propertyName?.[0];
   if (ctx) return ctx;
@@ -34,7 +34,7 @@ function getMissingPropertyNameFromHubSpotError(e) {
   return m?.[1] || null;
 }
 
-async function safeCreateTicket(hubspotClient, payload) {
+export async function safeCreateTicket(hubspotClient, payload) {
   let current = structuredClone(payload);
 
   for (let i = 0; i < 5; i++) {
@@ -53,7 +53,7 @@ async function safeCreateTicket(hubspotClient, payload) {
   throw new Error("safeCreateTicket: too many retries removing missing properties");
 }
 
-async function safeUpdateTicket(hubspotClient, ticketId, payload) {
+export async function safeUpdateTicket(hubspotClient, ticketId, payload) {
   let current = structuredClone(payload);
 
   for (let i = 0; i < 5; i++) {
@@ -79,7 +79,7 @@ async function safeUpdateTicket(hubspotClient, ticketId, payload) {
  * Busca un ticket existente por clave única (of_ticket_key).
  * Devuelve el ticket si existe, null si no.
  */
-async function findTicketByKey(ticketKey) {
+export async function findTicketByKey(ticketKey) {
   try {
     const searchResp = await hubspotClient.crm.tickets.searchApi.doSearch({
       filterGroups: [
@@ -110,12 +110,12 @@ async function findTicketByKey(ticketKey) {
  * - Si es HOY o MAÑANA: READY
  * - Si es después: NEW
  */
-function getTicketStage(billingDate, lineItem) {
+export function getTicketStage(billingDate, lineItem) {
   const lp = lineItem?.properties || {};
   
   // Prioridad 1: Si el vendedor pidió facturar ahora → INVOICED
   if (parseBool(lp.facturar_ahora)) {
-    return TICKET_STAGES.INVOICED;
+    return TICKET_STAGES.READY;
   }
   
   // Prioridad 2: Si es hoy o mañana → READY
@@ -134,7 +134,7 @@ const tomorrowStr = getTomorrowYMD(); // helper
 /**
  * Obtiene los IDs de empresas asociadas al deal.
  */
-async function getDealCompanies(dealId) {
+export async function getDealCompanies(dealId) {
   try {
     const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
@@ -152,7 +152,7 @@ async function getDealCompanies(dealId) {
 /**
  * Obtiene los IDs de contactos asociados al deal.
  */
-async function getDealContacts(dealId) {
+export async function getDealContacts(dealId) {
   try {
     const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
@@ -170,7 +170,7 @@ async function getDealContacts(dealId) {
 /**
  * Asocia el ticket a empresas, contactos y line item.
  */
-async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds) {
+export async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds) {
   const associations = [];
   
   // Deal
@@ -277,7 +277,7 @@ const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDat
   console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
   console.log('[ticketService] 🔍 AUTO - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
-  console.log('[ticketService] 🔍 AUTO - of_fecha_facturacion:', snapshots.of_fecha_facturacion ?? '(no seteada)');
+  console.log('[ticketService] 🔍 AUTO - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
   const dealName = deal.properties?.dealname || 'Deal';
   const productName = lineItem.properties?.name || 'Producto';

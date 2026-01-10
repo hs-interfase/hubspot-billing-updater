@@ -15,7 +15,7 @@ import {
   getDealCompanies,
   getDealContacts,
   createTicketAssociations,
-} from './ticketServiceInternals.js';
+} from './ticketService.js';
 
 /**
  * Crea un ticket de orden de facturación manual.
@@ -88,7 +88,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
   console.log('[ticketService] 🔍 MANUAL - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
-  console.log('[ticketService] 🔍 MANUAL - of_fecha_facturacion:', snapshots.of_fecha_facturacion ?? '(no seteada)');
+  console.log('[ticketService] 🔍 MANUAL - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
   // 5) Título
   const dealName = dp.dealname || 'Deal';

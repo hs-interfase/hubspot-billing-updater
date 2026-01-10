@@ -12,13 +12,14 @@ const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
 
 // Propiedades permitidas en el objeto Invoice de HubSpot
 const ALLOWED_INVOICE_PROPS = [
-  "cantidad","descripcion","descuento","etapa_de_la_factura","fecha_de_caneclacion",
-  "fecha_de_emision","fecha_de_envio","fecha_de_pago","frecuencia_de_facturacion",
-  "hs_comments","hs_currency","hs_due_date","hs_invoice_date","hs_tax_id","hs_title",
-  "hubspot_owner_id","id_factura_nodum","modo_de_generacion_de_factura","monto_a_facturar",
-  "motivo_de_pausa","nombre_empresa","nombre_producto","of_invoice_key","pais_operativo",
-  "pedido_por","procede_de","responsable_asignado","reventa","servicio","ticket_id",
-  "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura"
+  "cantidad","descripcion","descuento","descuento_por_unidad","etapa_de_la_factura",
+  "exonera_irae","fecha_de_caneclacion","fecha_de_emision","fecha_de_envio","fecha_de_pago",
+  "frecuencia_de_facturacion","hs_comments","hs_currency","hs_due_date","hs_invoice_date",
+  "hs_tax_id","hs_title","hubspot_owner_id","id_factura_nodum","iva",
+  "modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
+  "nombre_producto","of_invoice_key","pais_operativo","pedido_por","procede_de",
+  "responsable_asignado","reventa","servicio","ticket_id","unidad_de_negocio",
+  "usuario_disparador_de_factura","vendedor_factura"
 ];
 
 // Filtra un objeto dejando solo las propiedades permitidas (no null/undefined)
@@ -159,7 +160,12 @@ if (tp.of_invoice_id) {
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
     cantidad: parseNumber(tp.of_cantidad, 0),
     monto_a_facturar: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
-    descuento: parseNumber(tp.of_descuento, 0),
+    descuento: parseNumber(tp.of_descuento, 0), // % descuento
+    descuento_por_unidad: parseNumber(tp.of_descuento_monto, 0), // monto descuento por unidad
+    
+    // 🧾 Impuestos y exoneraciones
+iva: String(tp.iva).trim() === 'true' ? 'true' : 'false',
+    exonera_irae: tp.of_exonera_irae, // desde ticket (si existe)
     
     // 👥 Responsables
     vendedor_factura: tp.of_propietario_secundario,
@@ -173,7 +179,22 @@ if (tp.of_invoice_id) {
     // 🔑 Etapa inicial
     etapa_de_la_factura: 'Pendiente',
   };
-  
+
+  // 🐛 DEBUG: Log mapeo Ticket → Invoice para tax/discount
+  console.log('\n[DBG][INVOICE] Tax/Discount TICKET → INVOICE:');
+  console.log('[DBG][INVOICE] SOURCE (ticket):', {
+    of_descuento: tp.of_descuento,
+    of_descuento_monto: tp.of_descuento_monto,
+    iva: tp.iva,
+    of_exonera_irae: tp.of_exonera_irae,
+  });
+  console.log('[DBG][INVOICE] TARGET (invoice):', {
+    descuento: invoicePropsRaw.descuento,
+    descuento_por_unidad: invoicePropsRaw.descuento_por_unidad,
+    iva: invoicePropsRaw.iva,
+    exonera_irae: invoicePropsRaw.exonera_irae,
+  });
+
   // Agregar responsable_asignado solo si es numérico válido
   if (responsableAsignado) {
     invoicePropsRaw.responsable_asignado = responsableAsignado;
@@ -264,20 +285,20 @@ if (tp.of_invoice_id) {
     }
     
     // 10) Actualizar line item con referencia a la factura
-    if (tp.of_line_item_ids) {
-      console.log('\n--- ACTUALIZANDO LINE ITEM ---');
-      try {
-        await hubspotClient.crm.lineItems.basicApi.update(tp.of_line_item_ids, {
-          properties: {
-            invoice_id: invoiceId,
-            invoice_key: invoiceKey,
-          },
-        });
-        console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
-      } catch (e) {
-        console.warn('⚠️ No se pudo actualizar line item:', e.message);
-      }
-    }
+if (lineItemId) {
+  console.log('\n--- ACTUALIZANDO LINE ITEM ---');
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+      properties: {
+        invoice_id: invoiceId,
+        invoice_key: invoiceKey,
+      },
+    });
+    console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
+  } catch (e) {
+    console.warn('⚠️ No se pudo actualizar line item:', e.message);
+  }
+}
     
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
