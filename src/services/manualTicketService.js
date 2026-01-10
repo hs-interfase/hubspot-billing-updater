@@ -6,7 +6,7 @@ import { generateTicketKey } from '../utils/idempotency.js';
 import { createTicketSnapshots } from './snapshotService.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
-import { applyCupoPreventiveAlertFromTicket } from "./alerts/cupoAlerts.js";
+import { applyCupoPreventiveAlertFromTicket } from "./alerts/cupoAlert.js";
 
 // Helpers compartidos (para evitar duplicar lógica y evitar imports circulares)
 import {
