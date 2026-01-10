@@ -6,6 +6,7 @@ import { generateTicketKey } from '../utils/idempotency.js';
 import { createTicketSnapshots } from './snapshotService.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
+import { applyCupoPreventiveAlertFromTicket } from "./alerts/cupoAlerts.js";
 
 // Helpers compartidos (para evitar duplicar lógica y evitar imports circulares)
 import {
@@ -144,6 +145,15 @@ let descripcionProducto = snapshots.of_descripcion_producto || '';
     // 11) Asociaciones
     const [companyIds, contactIds] = await Promise.all([getDealCompanies(dealId), getDealContacts(dealId)]);
     await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+
+    
+    // 12) Alerta preventiva de cupo
+    try {
+      const createdTicket = { id: ticketId, properties: ticketProps };
+      await applyCupoPreventiveAlertFromTicket({ deal, ticket: createdTicket, lineItem });
+    } catch (err) {
+      console.warn('[ticketService] Error en alerta preventiva de cupo:', err?.message);
+    }
 
     const stageLabel =
       stage === TICKET_STAGES.READY ? 'READY' : stage === TICKET_STAGES.INVOICED ? 'INVOICED' : 'NEW';

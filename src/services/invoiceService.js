@@ -6,6 +6,7 @@ import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { applyCupoAfterInvoiceCreated } from './applyCupo.js';
+import { applyCupoConsumptionAfterInvoice } from './alerts/cupoConsumption.js';
 import axios from 'axios';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
@@ -310,6 +311,46 @@ if (lineItemId) {
     
  // 11) Aplicar consumo de cupo (solo si se creó nueva factura)
     await applyCupoAfterInvoiceCreated({ ticket, invoiceId });
+
+    
+    // 12) Consumo REAL de cupo (requiere Deal y Line Item)
+    try {
+      // Obtener Deal asociado
+      const dealId = tp.of_deal_id;
+      let deal = null;
+      if (dealId) {
+        const dealResp = await hubspotClient.crm.deals.basicApi.getById(dealId, [
+          'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante', 
+          'cupo_umbral', 'cupo_alerta_disparada', 'cupo_alerta_fecha'
+        ]);
+        deal = dealResp;
+      }
+
+      // Obtener Line Item asociado
+      const lineItemIdRaw = tp.of_line_item_ids;
+      const lineItemId = lineItemIdRaw?.includes(',') 
+        ? lineItemIdRaw.split(',')[0].trim() 
+        : lineItemIdRaw;
+      
+      let lineItem = null;
+      if (lineItemId) {
+        const liResp = await hubspotClient.crm.lineItems.basicApi.getById(lineItemId, [
+          'parte_del_cupo', 'name'
+        ]);
+        lineItem = liResp;
+      }
+
+      // Aplicar consumo si tenemos todos los datos
+      if (deal && lineItem) {
+        const invoice = { id: invoiceId };
+        await applyCupoConsumptionAfterInvoice({ deal, ticket, lineItem, invoice });
+      } else {
+        console.warn('[invoiceService] ⚠️ No se pudo aplicar consumo de cupo: falta deal o lineItem');
+      }
+    } catch (err) {
+      console.warn('[invoiceService] ⚠️ Error aplicando consumo de cupo:', err?.message);
+      // No lanzar error, solo advertir (el consumo de cupo es complementario)
+    }
 
     return { invoiceId, created: true };
   } catch (err) {
