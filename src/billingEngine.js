@@ -154,7 +154,7 @@ function getEffectiveBillingConfig(lineItem) {
     hs_recurring_billing_period: p.hs_recurring_billing_period, // solo debug
     number_of_payments: p.number_of_payments,
     frecuencia_de_facturacion: p.frecuencia_de_facturacion,
-    facturacion_irregular: p.facturacion_irregular,
+    irregular: p.irregular,
   });
 
   // ¿Es irregular?
@@ -162,7 +162,7 @@ function getEffectiveBillingConfig(lineItem) {
     .toString()
     .trim()
     .toLowerCase();
-  const irregularFlagRaw = (p.facturacion_irregular ?? '')
+  const irregularFlagRaw = (p.irregular ?? '')
     .toString()
     .toLowerCase();
 

@@ -155,7 +155,7 @@ if (tp.of_invoice_id) {
     
     // 🎯 Identidad del producto (del ticket)
     nombre_producto: tp.of_producto_nombres,
-    descripcion: tp.descripcion_producto,
+descripcion: tp.of_descripcion_producto,
     servicio: tp.of_rubro,
     
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)

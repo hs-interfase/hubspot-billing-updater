@@ -92,7 +92,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   return {
     of_producto_nombres: safeString(lp.name),
-    descripcion_producto: safeString(lp.description),
+    of_descripcion_producto: safeString(lp.description),
     of_rubro: safeString(lp.servicio),
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(lp.pais_operativo),

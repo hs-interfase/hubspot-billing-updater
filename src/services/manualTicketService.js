@@ -99,7 +99,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const stage = getTicketStage(billingDate, lineItem);
 
   // 7) Facturar ahora -> nota urgente en descripción
-  let descripcionProducto = snapshots.descripcion_producto || '';
+let descripcionProducto = snapshots.of_descripcion_producto || '';
   if (facturarAhora) {
     const notaUrgente = '⚠️ URGENTE: Vendedor solicitó facturar ahora.';
     descripcionProducto = descripcionProducto ? `${notaUrgente}\n\n${descripcionProducto}` : notaUrgente;
@@ -130,7 +130,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
     ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
     ...(pmAsignado ? { hubspot_owner_id: pmAsignado } : {}),
 
-    descripcion_producto: descripcionProducto,
+    of_descripcion_producto: descripcionProducto,
   };
 
   console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
