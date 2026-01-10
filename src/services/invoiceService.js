@@ -5,6 +5,7 @@ import { parseNumber, safeString } from '../utils/parsers.js';
 import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
+import { applyCupoAfterInvoiceCreated } from './applyCupo.js';
 import axios from 'axios';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
@@ -307,6 +308,9 @@ if (lineItemId) {
     console.log('Modo de generación:', modoGeneracion);
     console.log('================================================\n');
     
+ // 11) Aplicar consumo de cupo (solo si se creó nueva factura)
+    await applyCupoAfterInvoiceCreated({ ticket, invoiceId });
+
     return { invoiceId, created: true };
   } catch (err) {
     console.error('\n❌ ERROR CREANDO FACTURA DESDE TICKET:');
