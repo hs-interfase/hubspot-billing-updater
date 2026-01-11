@@ -16,6 +16,7 @@ import { getTodayYMD } from "../../utils/dateUtils.js";
  *
  * Deal:
  *  - cupo_activo (bool)
+ *  - facturacion_activa (bool)
  *  - tipo_de_cupo (text/enum)
  *  - cupo_restante (number)
  *  - cupo_umbral (number)
@@ -23,11 +24,7 @@ import { getTodayYMD } from "../../utils/dateUtils.js";
  * Line Item:
  *  - parte_del_cupo (bool)
  */
-export async function applyCupoPreventiveAlertFromTicket({
-  deal,
-  ticket,
-  lineItem,
-}) {
+export async function applyCupoPreventiveAlertFromTicket({ deal, ticket, lineItem }) {
   const dp = deal?.properties || {};
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
@@ -36,10 +33,21 @@ export async function applyCupoPreventiveAlertFromTicket({
   const parteDelCupo = parseBool(lp.parte_del_cupo);
   if (!parteDelCupo) return { applied: false, reason: "LI no es parte_del_cupo" };
 
-  // 1) Cupo activo y umbral válido
-  const cupoActivo = parseBool(dp.cupo_activo);
-  if (!cupoActivo) return { applied: false, reason: "cupo_activo=false" };
+  // 1) Cupo "efectivo" (antes de facturar)
+  //    Si Phase 1 todavía no dejó cupo_activo=true, igual podemos evaluar la condición real.
+  const facturacionActiva = parseBool(dp.facturacion_activa);
+  const cupoActivoStored = parseBool(dp.cupo_activo);
+  const cupoActivoEfectivo = cupoActivoStored || (facturacionActiva && parteDelCupo);
 
+  if (!cupoActivoEfectivo) {
+    return {
+      applied: false,
+      reason: "cupo no activo (stored=false y condiciones efectivas=false)",
+      debug: { cupoActivoStored, facturacionActiva, parteDelCupo },
+    };
+  }
+
+  // 2) Umbral válido + datos base
   const tipoCupoRaw = safeString(dp.tipo_de_cupo).toLowerCase();
   const cupoRestante = parseNumber(dp.cupo_restante, null);
   const cupoUmbral = parseNumber(dp.cupo_umbral, null);

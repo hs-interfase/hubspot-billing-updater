@@ -14,52 +14,83 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 
 logDateEnvOnce();
-
 /**
  * Activa o desactiva cupo_activo según reglas de negocio.
- * 
+ *
  * REGLAS:
  * - Si facturacion_activa == false → cupo_activo = false
  * - Si deal cancelado → cupo_activo = false
  * - Si facturacion_activa == true Y existe ≥1 LI con parte_del_cupo == true → cupo_activo = true
  * - Si NO hay LIs parte_del_cupo → cupo_activo = false
- * 
+ *
  * ⚠️ NO TOCA: cupo_consumido, cupo_restante, cupo_ultima_actualizacion
  */
 async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
   const facturacionActiva = parseBool(dealProps.facturacion_activa);
+
   const dealStage = safeString(dealProps.dealstage).toLowerCase();
-  const isCancelled = dealStage.includes('cancel') || dealStage.includes('cerrado perdido') || dealStage.includes('closedlost');
-  
-  // Determinar si debe activarse
+  const isCancelled =
+    dealStage.includes('cancel') ||
+    dealStage.includes('cerrado perdido') ||
+    dealStage.includes('closedlost');
+
+  // 1) Calcular estado deseado según reglas
   let shouldActivate = false;
-  
+
   if (!facturacionActiva || isCancelled) {
     shouldActivate = false;
   } else {
-    // Verificar si hay al menos 1 line item con parte_del_cupo=true
-    const hasLineItemWithCupo = (lineItems || []).some(li => {
+    const hasLineItemWithCupo = (lineItems || []).some((li) => {
       const lp = li?.properties || {};
-      return parseBool(lp.parte_del_cupo);
+      const raw = lp.parte_del_cupo;
+
+      // robusto para boolean/string/number
+      return (
+        raw === true ||
+        raw === 'true' ||
+        raw === 'TRUE' ||
+        raw === 'True' ||
+        raw === 1 ||
+        raw === '1'
+      );
     });
+
     shouldActivate = hasLineItemWithCupo;
   }
-  
-  // Leer estado actual
-  const currentCupoActivo = parseBool(dealProps.cupo_activo);
-  
-  // Solo actualizar si cambió
-  if (currentCupoActivo !== shouldActivate) {
-    try {
-      await hubspotClient.crm.deals.basicApi.update(String(dealId), { 
-        properties: { cupo_activo: String(shouldActivate) }
-      });
-      console.log(`[cupo:activate] dealId=${dealId} cupo_activo: ${currentCupoActivo} → ${shouldActivate}`);
-    } catch (err) {
-      console.error(`[cupo:activate] Error actualizando deal ${dealId}:`, err?.message);
-    }
-  } else {
-    console.log(`[cupo:activate] dealId=${dealId} cupo_activo ya es ${shouldActivate}, no cambiar`);
+
+  // 2) Leer estado ACTUAL (tratando "" como null)
+  const rawCupoActivo = dealProps.cupo_activo; // puede ser true|false|null|""
+  const isEmpty =
+    rawCupoActivo === null ||
+    rawCupoActivo === undefined ||
+    rawCupoActivo === '';
+
+  const currentCupoActivo = isEmpty ? null : parseBool(rawCupoActivo);
+
+  // 3) Actualizar si está vacío o distinto
+  const needsUpdate =
+    currentCupoActivo === null || currentCupoActivo !== shouldActivate;
+
+  if (!needsUpdate) {
+    console.log(
+      `[cupo:activate] dealId=${dealId} cupo_activo ya es ${shouldActivate}, no cambiar`
+    );
+    return;
+  }
+
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(dealId), {
+      properties: { cupo_activo: String(shouldActivate) },
+    });
+
+    console.log(
+      `[cupo:activate] dealId=${dealId} cupo_activo: ${currentCupoActivo} → ${shouldActivate}`
+    );
+  } catch (err) {
+    console.error(
+      `[cupo:activate] Error actualizando deal ${dealId}:`,
+      err?.message
+    );
   }
 }
 
@@ -376,7 +407,7 @@ if (DBG_PHASE1) {
 
     // 1.5) Inicializar cupo si es necesario (antes de procesar line items)
   try {
-    await activateCupoIfNeeded(dealId, dealProps);
+await activateCupoIfNeeded(dealId, dealProps, lineItems);
   } catch (err) {
     console.error('[phase1] Error en activateCupoIfNeeded:', err);
   }
@@ -394,7 +425,7 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
    
      // Inicializar cupo del espejo también
   try {
-    await activateCupoIfNeeded(mirrorResult.targetDealId, mirrorDeal.properties);
+  await activateCupoIfNeeded(mirrorResult.targetDealId, mirrorDeal.properties, mirrorLineItems);
   } catch (err) {
     console.error('[phase1] Error activateCupoIfNeeded en espejo UY', mirrorResult.targetDealId, err);
   }
