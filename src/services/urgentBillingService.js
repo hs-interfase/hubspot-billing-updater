@@ -3,7 +3,7 @@
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis } from '../utils/dateUtils.js';
-import { createAutoBillingTicket, updateTicket } from './ticketService.js';
+import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
