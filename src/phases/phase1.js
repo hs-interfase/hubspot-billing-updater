@@ -16,62 +16,53 @@ import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 logDateEnvOnce();
 
 /**
- * Inicializa cupo en Deal si cupo_activo=true y tipo_de_cupo tiene valor.
- * Establece cupo_consumido, cupo_restante, cupo_ultima_actualizacion si están vacíos.
- * Solo actualiza HubSpot si al menos una propiedad cambió.
+ * Activa o desactiva cupo_activo según reglas de negocio.
+ * 
+ * REGLAS:
+ * - Si facturacion_activa == false → cupo_activo = false
+ * - Si deal cancelado → cupo_activo = false
+ * - Si facturacion_activa == true Y existe ≥1 LI con parte_del_cupo == true → cupo_activo = true
+ * - Si NO hay LIs parte_del_cupo → cupo_activo = false
+ * 
+ * ⚠️ NO TOCA: cupo_consumido, cupo_restante, cupo_ultima_actualizacion
  */
-async function initCupoIfNeeded(dealId, dp) {
-  const cupoActivo = parseBool(dp.cupo_activo);
-  const tipoCupo = safeString(dp.tipo_de_cupo);
-
-  if (!cupoActivo || !tipoCupo) {
-    return; // No aplica cupo
-  }
-
-  // Calcular total según tipo
-  let total = 0;
-  if (tipoCupo === "Por Horas") {
-    total = parseNumber(dp.cupo_total, 0);
-  } else if (tipoCupo === "Por Monto") {
-    total = parseNumber(dp.cupo_total_monto ?? dp.cupo_total, 0);
-  }
-
+async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
+  const facturacionActiva = parseBool(dealProps.facturacion_activa);
+  const dealStage = safeString(dealProps.dealstage).toLowerCase();
+  const isCancelled = dealStage.includes('cancel') || dealStage.includes('cerrado perdido') || dealStage.includes('closedlost');
   
-  // Warning si cupo está activo pero total es 0 o negativo
-  if (total <= 0) {
-    console.warn(`[cupo:init] ⚠️ dealId=${dealId} tiene cupo_activo=true y tipo_de_cupo="${tipoCupo}" pero total calculado es ${total}`);
-    return;
+  // Determinar si debe activarse
+  let shouldActivate = false;
+  
+  if (!facturacionActiva || isCancelled) {
+    shouldActivate = false;
+  } else {
+    // Verificar si hay al menos 1 line item con parte_del_cupo=true
+    const hasLineItemWithCupo = (lineItems || []).some(li => {
+      const lp = li?.properties || {};
+      return parseBool(lp.parte_del_cupo);
+    });
+    shouldActivate = hasLineItemWithCupo;
   }
-
-  // Verificar qué propiedades necesitan inicialización
-    const currentConsumido = dp.cupo_consumido;
-  const currentRestante = dp.cupo_restante;
-  const currentUltimaActualizacion = dp.cupo_ultima_actualizacion;
-
-    const needsConsumido = currentConsumido == null || currentConsumido === "";
-  const needsRestante = currentRestante == null || currentRestante === "";
-  const needsUltimaActualizacion = currentUltimaActualizacion == null || currentUltimaActualizacion === "";
-
-  const needsUpdate = needsConsumido || needsRestante || needsUltimaActualizacion;
-
-  if (!needsUpdate) {
-    return; // Todas las propiedades ya tienen valores
-  }
-
-  // Preparar valores nuevos
-  const updateProps = {};
-  if (needsConsumido) updateProps.cupo_consumido = "0";
-  if (needsRestante) updateProps.cupo_restante = String(total);
-  if (needsUltimaActualizacion) updateProps.cupo_ultima_actualizacion = getTodayYMD();
-
-  // Actualizar HubSpot
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties: updateProps });
-    console.log(`[cupo:init] updated=true dealId=${dealId} values=${JSON.stringify(updateProps)}`);
-  } catch (err) {
-    console.error(`[cupo:init] Error actualizando deal ${dealId}:`, err?.message);
+  
+  // Leer estado actual
+  const currentCupoActivo = parseBool(dealProps.cupo_activo);
+  
+  // Solo actualizar si cambió
+  if (currentCupoActivo !== shouldActivate) {
+    try {
+      await hubspotClient.crm.deals.basicApi.update(String(dealId), { 
+        properties: { cupo_activo: String(shouldActivate) }
+      });
+      console.log(`[cupo:activate] dealId=${dealId} cupo_activo: ${currentCupoActivo} → ${shouldActivate}`);
+    } catch (err) {
+      console.error(`[cupo:activate] Error actualizando deal ${dealId}:`, err?.message);
+    }
+  } else {
+    console.log(`[cupo:activate] dealId=${dealId} cupo_activo ya es ${shouldActivate}, no cambiar`);
   }
 }
+
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
@@ -385,9 +376,9 @@ if (DBG_PHASE1) {
 
     // 1.5) Inicializar cupo si es necesario (antes de procesar line items)
   try {
-    await initCupoIfNeeded(dealId, dealProps);
+    await activateCupoIfNeeded(dealId, dealProps);
   } catch (err) {
-    console.error('[phase1] Error en initCupoIfNeeded:', err);
+    console.error('[phase1] Error en activateCupoIfNeeded:', err);
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
@@ -403,9 +394,9 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
    
      // Inicializar cupo del espejo también
   try {
-    await initCupoIfNeeded(mirrorResult.targetDealId, mirrorDeal.properties);
+    await activateCupoIfNeeded(mirrorResult.targetDealId, mirrorDeal.properties);
   } catch (err) {
-    console.error('[phase1] Error initCupoIfNeeded en espejo UY', mirrorResult.targetDealId, err);
+    console.error('[phase1] Error activateCupoIfNeeded en espejo UY', mirrorResult.targetDealId, err);
   }
 
     await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });

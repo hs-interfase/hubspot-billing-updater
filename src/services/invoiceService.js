@@ -5,7 +5,7 @@ import { parseNumber, safeString } from '../utils/parsers.js';
 import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
-import { applyCupoConsumptionAfterInvoice } from './alerts/cupoConsumption.js';
+import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
 import axios from 'axios';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
@@ -570,44 +570,43 @@ if (lineItemId) {
     console.log('Modo de generación:', modoGeneracion);
     console.log('================================================\n');
 
-    // 12) Consumo REAL de cupo (requiere Deal y Line Item)
-    try {
-      // Obtener Deal asociado
-      const dealId = tp.of_deal_id;
-      let deal = null;
-      if (dealId) {
-        const dealResp = await hubspotClient.crm.deals.basicApi.getById(dealId, [
-          'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante', 
-          'cupo_umbral', 'cupo_alerta_disparada', 'cupo_alerta_fecha'
-        ]);
-        deal = dealResp;
-      }
-
-      // Obtener Line Item asociado
-      const lineItemIdRaw = tp.of_line_item_ids;
-      const lineItemId = lineItemIdRaw?.includes(',') 
-        ? lineItemIdRaw.split(',')[0].trim() 
-        : lineItemIdRaw;
-      
-      let lineItem = null;
-      if (lineItemId) {
-        const liResp = await hubspotClient.crm.lineItems.basicApi.getById(lineItemId, [
-          'parte_del_cupo', 'name'
-        ]);
-        lineItem = liResp;
-      }
-
-      // Aplicar consumo si tenemos todos los datos
-      if (deal && lineItem) {
-        const invoice = { id: invoiceId };
-        await applyCupoConsumptionAfterInvoice({ deal, ticket, lineItem, invoice });
-      } else {
-        console.warn('[invoiceService] ⚠️ No se pudo aplicar consumo de cupo: falta deal o lineItem');
-      }
-    } catch (err) {
-      console.warn('[invoiceService] ⚠️ Error aplicando consumo de cupo:', err?.message);
-      // No lanzar error, solo advertir (el consumo de cupo es complementario)
+// 12) Consumo de cupo (idempotente, no rompe facturación)
+try {
+  const dealId = tp.of_deal_id;
+  const lineItemIdRaw = tp.of_line_item_ids;
+  
+  if (!dealId || !lineItemIdRaw) {
+    console.log('[invoiceService] ⊘ No se consume cupo: falta of_deal_id o of_line_item_ids');
+  } else {
+    // Si hay múltiples lineItems (CSV), usar solo el primero
+    const lineItemId = lineItemIdRaw.includes(',') 
+      ? lineItemIdRaw.split(',')[0].trim() 
+      : lineItemIdRaw.trim();
+    
+    if (lineItemIdRaw.includes(',')) {
+      console.log(`[invoiceService] ⚠️ Ticket tiene múltiples lineItems (${lineItemIdRaw}), usando primero: ${lineItemId}`);
     }
+    
+    // Obtener Deal y Line Item
+    const [deal, lineItem] = await Promise.all([
+      hubspotClient.crm.deals.basicApi.getById(dealId, [
+        'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
+        'cupo_total', 'cupo_total_monto', 'dealstage'
+      ]),
+      hubspotClient.crm.lineItems.basicApi.getById(lineItemId, ['parte_del_cupo'])
+    ]);
+    
+    // Re-leer invoice con propiedades de cupo (para idempotencia)
+    const invoiceResp = await hubspotClient.crm.commerce.invoices.basicApi.getById(invoiceId, [
+      'of_cupo_consumido', 'of_cupo_consumo_valor', 'of_cupo_consumo_fecha'
+    ]);
+    
+    await consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice: invoiceResp });
+  }
+} catch (err) {
+  console.error('[invoiceService] ❌ Error en consumo de cupo:', err?.message);
+  // NO lanzar error: consumo de cupo es complementario, no debe romper facturación
+}
 
     return { invoiceId, created: true };
   } catch (err) {
