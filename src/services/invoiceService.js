@@ -1,11 +1,10 @@
 // src/services/invoiceService.js
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from './hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString } from '../utils/parsers.js';
 import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
-import { applyCupoAfterInvoiceCreated } from './applyCupo.js';
 import { applyCupoConsumptionAfterInvoice } from './alerts/cupoConsumption.js';
 import axios from 'axios';
 
@@ -122,6 +121,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_monto_total',
       'of_cantidad',
       'of_monto_unitario',
+      'total_de_horas_consumidas',
       
       // Producto
       'subject',
@@ -165,6 +165,34 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   }
   
   const tp = ticketFull.properties || {};
+  console.log('\n==================== [DEBUG][CUPO] TICKET (ALL props) ====================');
+try {
+  console.log(JSON.stringify(tp, null, 2));
+} catch {
+  console.log(tp);
+}
+
+console.log('\n-------------------- [DEBUG][CUPO] Keys específicas --------------------');
+console.log('[DEBUG][CUPO] of_aplica_para_cupo:', tp.of_aplica_para_cupo);
+console.log('[DEBUG][CUPO] tipo_de_cupo (no va en ticket normalmente):', tp.tipo_de_cupo);
+
+console.log('[DEBUG][CUPO] monto_real_a_facturar:', tp.monto_real_a_facturar);
+console.log('[DEBUG][CUPO] total_de_horas_consumidas:', tp.total_de_horas_consumidas);
+console.log('[DEBUG][CUPO] of_cantidad:', tp.of_cantidad);
+
+console.log('[DEBUG][CUPO] of_deal_id:', tp.of_deal_id);
+console.log('[DEBUG][CUPO] of_line_item_ids:', tp.of_line_item_ids);
+
+console.log('[DEBUG][CUPO] of_cupo_consumido:', tp.of_cupo_consumido);
+console.log('[DEBUG][CUPO] of_cupo_consumo_invoice_id:', tp.of_cupo_consumo_invoice_id);
+console.log('==========================================================================\n');
+
+console.log('\n-------------------- [DEBUG][CUPO] Props que contienen "cupo" --------------------');
+Object.entries(tp)
+  .filter(([k]) => k.toLowerCase().includes('cupo'))
+  .forEach(([k, v]) => console.log(`[DEBUG][CUPO] ${k}:`, v));
+console.log('------------------------------------------------------------------------------\n');
+
   
   console.log('\n╔════════════════════════════════════════════════════════╗');
   console.log('║         DEBUG: PROPIEDADES DEL TICKET                 ║');
@@ -541,11 +569,7 @@ if (lineItemId) {
     console.log('Responsable:', responsableAsignado || 'no asignado');
     console.log('Modo de generación:', modoGeneracion);
     console.log('================================================\n');
-    
- // 11) Aplicar consumo de cupo (solo si se creó nueva factura)
-    await applyCupoAfterInvoiceCreated({ ticket, invoiceId });
 
-    
     // 12) Consumo REAL de cupo (requiere Deal y Line Item)
     try {
       // Obtener Deal asociado

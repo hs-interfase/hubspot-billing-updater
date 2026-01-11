@@ -1,12 +1,12 @@
 // src/services/manualTicketService.js
 
 import { hubspotClient } from '../hubspotClient.js';
-import { TICKET_PIPELINE, TICKET_STAGES, isDryRun } from '../config/constants.js';
-import { generateTicketKey } from '../utils/idempotency.js';
-import { createTicketSnapshots } from './snapshotService.js';
-import { getTodayYMD } from '../utils/dateUtils.js';
-import { parseBool } from '../utils/parsers.js';
-import { applyCupoPreventiveAlertFromTicket } from "./alerts/cupoAlert.js";
+import { TICKET_PIPELINE, TICKET_STAGES, isDryRun } from '../../config/constants.js';
+import { generateTicketKey } from '../../utils/idempotency.js';
+import { createTicketSnapshots } from '../snapshotService.js';
+import { getTodayYMD } from '../../utils/dateUtils.js';
+import { parseBool } from '../../utils/parsers.js';
+import { applyCupoPreventiveAlertFromTicket } from "../alerts/cupoAlert.js";
 
 // Helpers compartidos (para evitar duplicar lógica y evitar imports circulares)
 import {

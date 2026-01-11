@@ -1,4 +1,4 @@
-import { hubspotClient } from './hubspotClient.js';
+import { hubspotClient } from './services/hubspotClient.js';
 import { buildInvoiceKey, parseInvoiceKey } from './utils/invoiceKey.js';
 
 

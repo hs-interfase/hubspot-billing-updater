@@ -7,11 +7,11 @@ import {
   AUTOMATED_TICKET_PIPELINE,     
   AUTOMATED_TICKET_INITIAL_STAGE, 
   isDryRun 
-} from '../config/constants.js';
-import { generateTicketKey } from '../utils/idempotency.js';
-import { createTicketSnapshots } from './snapshotService.js';
-import { getTodayYMD, getTomorrowYMD } from '../utils/dateUtils.js';
-import { parseBool } from '../utils/parsers.js';
+} from '../../config/constants.js';
+import { generateTicketKey } from '../../utils/idempotency.js';
+import { createTicketSnapshots } from '../snapshotService.js';
+import { getTodayYMD, getTomorrowYMD } from '../../utils/dateUtils.js';
+import { parseBool } from '../../utils/parsers.js';
 
 /**
  * Servicio para crear y gestionar tickets de "orden de facturación".
@@ -161,11 +161,10 @@ async function findCanonicalAndDuplicates({ dealId, expectedKey, billDateYMD, li
   // Elegir canónico: el MÁS VIEJO (createdate menor)
   let canonical = null;
   if (byKey.length) {
-    canonical = byKey
-      .slice()
-      .sort((a, b) => String(a.createdate || '').localeCompare(String(b.createdate || '')))[0];
+canonical = byKey
+   .slice()
+   .sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b))[0];
   }
-
   // Duplicados:
   // - si hay canonical: todo lo demás en candidates que NO sea ese canonical
   //   (incluye otros con la misma key!)
@@ -177,9 +176,9 @@ async function findCanonicalAndDuplicates({ dealId, expectedKey, billDateYMD, li
 }
 
 function getTicketCreatedMs(t) {
-  const p = t?.properties || {};
-  const raw = p.createdate ?? p.hs_createdate;
-  const ms = raw ? Date.parse(String(raw)) : NaN;
+  const p = t.properties || {};
+  const raw = p.createdate || p.hs_createdate || p.hs_created_at;
+  const ms = raw ? Date.parse(raw) : NaN;
   return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;
 }
 
@@ -244,6 +243,8 @@ export async function ensureTicketCanonical({
   console.log(`   stableLineId: ${stableLineId}`);
   console.log(`   billDateYMD: ${billDateYMD}`);
   console.log(`   expectedKey: ${expectedKey}`);
+
+    await archiveClonedTicketsByKey({ expectedKey, dealId, dryRun: isDryRun() });
 
   // 1) Buscar canonical + duplicates por deal/fecha
   const { canonical, duplicates } = await findCanonicalAndDuplicates({
@@ -622,6 +623,8 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   
   return { ticketId, created, duplicatesMarked };
 }
+
+
 
 
 

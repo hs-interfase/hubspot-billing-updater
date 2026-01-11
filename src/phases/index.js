@@ -3,15 +3,17 @@
 import { runPhase1 } from './phase1.js';
 import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
-import { activateBillingIfClosedWon } from './activateBilling.js';
+import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 
 /**
  * Orquestador de las fases del proceso de facturación.
  * 
- * - Phase 1: Actualizar fechas, calendario, cupo (ANTES de Closed Won)
- * - Activación: Si está en Closed Won, activar facturacion_activa y cupo_activo
+ * - Phase 1: Actualizar fechas, calendario, cupo
  * - Phase 2: Generar tickets manuales para line items con facturacion_automatica=false
  * - Phase 3: Emitir facturas automáticas para line items con facturacion_automatica=true
+ * 
+ * NOTA: La activación de facturacion_activa y cupo_activo se gestiona mediante
+ * Workflow de HubSpot cuando el deal llega a "Closed Won".
  * 
  * @param {Object} params
  * @param {Object} params.deal - Deal de HubSpot
@@ -27,13 +29,26 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   
   const results = {
     dealId,
+    cleanup: { scanned: 0, duplicates: 0, deprecated: 0 },
     phase1: { success: false },
-    activation: { activated: false },
     phase2: { ticketsCreated: 0 },
     phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
     ticketsCreated: 0,
     autoInvoicesEmitted: 0,
   };
+
+  // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
+  try {
+    console.log(`🧹 PRE: Limpieza de tickets clonados/duplicados (por of_ticket_key/of_invoice_key)...`);
+    const cleanupResult = await cleanupClonedTicketsForDeal({ dealId, lineItems });    results.cleanup = cleanupResult || results.cleanup;
+    console.log(
+      `   ✅ Cleanup completado: scanned=${results.cleanup.scanned}, duplicates=${results.cleanup.duplicates}, deprecated=${results.cleanup.deprecated}\n`
+    );
+  } catch (err) {
+    console.error(`   ❌ Error en Cleanup PRE:`, err?.message || err);
+    results.cleanup.error = err?.message || 'Error desconocido';
+    // Importante: NO frenamos el proceso por esto, seguimos con phases.
+  }
   
   // ========== PHASE 1: Fechas, calendario, cupo ==========
   try {
@@ -44,34 +59,6 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   } catch (err) {
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
     results.phase1.error = err?.message || 'Error desconocido';
-  }
-  
-  // ========== ACTIVACIÓN: Si Closed Won, activar facturación ==========
-  try {
-    console.log(`⚡ ACTIVACIÓN: Verificando si activar facturación (Closed Won)...`);
-    const activationResult = await activateBillingIfClosedWon({ deal, lineItems });
-    results.activation = activationResult;
-    
-    if (activationResult.activated) {
-      console.log(`   ✅ Facturación activada (Deal en Closed Won)\n`);
-      
-      // Delay para eventual consistency de HubSpot API
-      console.log(`   ⏳ Esperando 2 segundos para que HubSpot actualice propiedades...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Si se activó, re-fetch el deal para tener los datos actualizados
-      console.log(`   🔄 Recargando deal y line items con datos actualizados...`);
-      const { getDealWithLineItems } = await import('../hubspotClient.js');
-      const updated = await getDealWithLineItems(dealId);
-      deal = updated.deal;
-      lineItems = updated.lineItems;
-      console.log(`   ✅ Datos actualizados\n`);
-    } else {
-      console.log(`   ⏭️  No se activó facturación: ${activationResult.reason}\n`);
-    }
-  } catch (err) {
-    console.error(`   ❌ Error en Activación:`, err?.message || err);
-    results.activation.error = err?.message || 'Error desconocido';
   }
   
   // ========== PHASE 2: Tickets manuales ==========

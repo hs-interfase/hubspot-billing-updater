@@ -1,4 +1,4 @@
-import { hubspotClient } from './hubspotClient.js';
+import { hubspotClient } from './services/hubspotClient.js';
 
 /*
  * Calcula y actualiza el cupo de un negocio. Usa `tipo_de_cupo` para decidir
@@ -12,7 +12,7 @@ export function computeCupoStatus(deal, lineItems) {
   }
   const props = deal.properties;
   const tipo = (props.tipo_de_cupo || '').toString().trim().toUpperCase();
-  const totalHoras = parseFloat(props.cupo_total_horas) || 0;
+  const totalHoras = parseFloat(props.cupo_total) || 0;
   const totalMonto = parseFloat(props.cupo_total_monto) || 0;
   const totalGenerico = parseFloat(props.cupo_total) || 0;
   let total;

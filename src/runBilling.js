@@ -1,7 +1,7 @@
 // src/runBilling.js
 console.log('🔥 ARCHIVO runBilling.js CARGÁNDOSE...');
 
-import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
+import { hubspotClient, getDealWithLineItems } from "./services/hubspotClient.js";
 import { runPhasesForDeal } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
 import { fileURLToPath } from 'url';

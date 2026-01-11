@@ -58,7 +58,6 @@ export async function getDealWithLineItems(dealId) {
     "tipo_de_cupo",
     "cupo_activo",
     "cupo_total",
-    "cupo_total_horas",
     "cupo_total_monto",
     "cupo_consumido",
     "cupo_restante",

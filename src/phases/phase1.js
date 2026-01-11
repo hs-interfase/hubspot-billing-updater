@@ -1,5 +1,5 @@
 // src/phases/phase1.js
-import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
+import { hubspotClient, getDealWithLineItems } from '../services/hubspotClient.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -255,7 +255,6 @@ if (DBG_PHASE1) {
   showProp(dp, "tipo_de_cupo");
   showProp(dp, "cupo_activo");
   showProp(dp, "cupo_total");
-  showProp(dp, "cupo_total_horas");
   showProp(dp, "cupo_total_monto");
   showProp(dp, "cupo_consumido");
   showProp(dp, "cupo_restante");
