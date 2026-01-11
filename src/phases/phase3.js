@@ -4,7 +4,7 @@ import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoInvoiceFromLineItem } from '../services/invoiceService.js';
 import { createAutoBillingTicket, updateTicket } from '../services/tickets/ticketService.js';
-import { hubspotClient } from '../services/hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 import { safeString } from '../utils/parsers.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 

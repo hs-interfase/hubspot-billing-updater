@@ -1,5 +1,5 @@
 // src/phases/phase1.js
-import { hubspotClient, getDealWithLineItems } from '../services/hubspotClient.js';
+import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
   updateLineItemSchedule,

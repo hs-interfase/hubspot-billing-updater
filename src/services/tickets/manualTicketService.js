@@ -1,6 +1,6 @@
 // src/services/manualTicketService.js
 
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from '../../hubspotClient.js';
 import { TICKET_PIPELINE, TICKET_STAGES, isDryRun } from '../../config/constants.js';
 import { generateTicketKey } from '../../utils/idempotency.js';
 import { createTicketSnapshots } from '../snapshotService.js';

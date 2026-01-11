@@ -1,5 +1,5 @@
 // src/services/alerts/cupoAlerts.js
-import { hubspotClient } from "../hubspotClient.js";
+import { hubspotClient } from "../../hubspotClient.js";
 import { parseBool, parseNumber, safeString } from "../../utils/parsers.js";
 import { getTodayYMD } from "../../utils/dateUtils.js";
 

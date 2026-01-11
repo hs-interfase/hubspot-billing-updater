@@ -1,5 +1,5 @@
 // src/billingEngine.js
-import { hubspotClient } from './services/hubspotClient.js';
+import { hubspotClient } from './hubspotClient.js';
 
 // -----------------------------
 // Helpers de fechas / frecuencia

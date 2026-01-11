@@ -1,6 +1,6 @@
 // src/services/tickets/ticketCleanupService.js
 
-import { hubspotClient } from "../hubspotClient.js";
+import { hubspotClient } from "../../hubspotClient.js";
 import { isDryRun } from "../../config/constants.js";
 
 const CANCELLED_STAGE_ID = process.env.BILLING_TICKET_STAGE_CANCELLED;

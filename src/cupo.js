@@ -1,4 +1,4 @@
-import { hubspotClient } from './services/hubspotClient.js';
+import { hubspotClient } from './hubspotClient.js';
 
 /*
  * Calcula y actualiza el cupo de un negocio. Usa `tipo_de_cupo` para decidir

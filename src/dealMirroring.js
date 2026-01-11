@@ -9,7 +9,7 @@
 // - Deal UY espejo: pais_operativo = "Uruguay", es_mirror_de_py = true
 // - Empresa y contactos SÍ pueden ser "Mixto" si operan en ambos países
 
-import { hubspotClient, getDealWithLineItems } from './services/hubspotClient.js';
+import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 
 

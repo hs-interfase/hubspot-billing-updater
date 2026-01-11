@@ -1,5 +1,5 @@
 // src/services/invoiceService.js
-import { hubspotClient } from './hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString } from '../utils/parsers.js';
 import { getTodayYMD, toHubSpotDate } from '../utils/dateUtils.js';

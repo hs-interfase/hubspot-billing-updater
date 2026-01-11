@@ -1,4 +1,4 @@
-import { hubspotClient } from "./services/hubspotClient.js";
+import { hubspotClient } from "./hubspotClient.js";
 
 /**
  * Normaliza los campos hs_billing_start_delay_days y hs_billing_start_delay_months

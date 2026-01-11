@@ -1,5 +1,5 @@
 // src/associations.js
-import { hubspotClient } from "./services/hubspotClient.js";
+import { hubspotClient } from "./hubspotClient.js";
 
 const _assocTypeCache = new Map();
 

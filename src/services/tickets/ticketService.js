@@ -1,6 +1,6 @@
 // src/services/ticketService.js
 
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from '../../hubspotClient.js';
 import { 
   TICKET_PIPELINE, 
   TICKET_STAGES, 
