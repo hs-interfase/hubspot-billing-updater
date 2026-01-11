@@ -12,6 +12,21 @@ import axios from 'axios';
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
 
+
+// ========= DEBUG HELPERS =========
+function statusOf(obj, key) {
+  const has = Object.prototype.hasOwnProperty.call(obj || {}, key);
+  const val = obj?.[key];
+  const empty = val === null || val === "" || typeof val === "undefined";
+  const status = !has ? "MISSING" : empty ? "EMPTY" : "OK";
+  return { val, status };
+}
+
+function showProp(obj, key, label = key) {
+  const { val, status } = statusOf(obj, key);
+  console.log(`   ${label}: ${val} (${status})`);
+}
+
 // Propiedades permitidas en el objeto Invoice de HubSpot
 const ALLOWED_INVOICE_PROPS = [
   "cantidad","descripcion","descuento","descuento_por_unidad","etapa_de_la_factura",
@@ -82,9 +97,130 @@ async function updateInvoiceDirect(invoiceId, properties) {
  */
 export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null) {
   const ticketId = ticket.id || ticket.properties?.hs_object_id;
-  const tp = ticket.properties || {};
   
   console.log('\n========== CREANDO FACTURA DESDE TICKET ==========');
+  console.log('Ticket ID:', ticketId);
+  
+  // ========== DEBUG: Re-leer ticket con todas las propiedades relevantes ==========
+  let ticketFull = ticket;
+  try {
+    ticketFull = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
+      // Idempotencia y referencias
+      'of_ticket_key',
+      'of_deal_id',
+      'of_line_item_ids',
+      'of_invoice_id',
+      'of_invoice_key',
+      
+      // Fechas
+      'of_fecha_de_facturacion',
+      'fecha_real_de_facturacion',
+      'hs_resolution_due_date',
+      
+      // Montos y cantidades
+      'monto_real_a_facturar',
+      'of_monto_total',
+      'of_cantidad',
+      'of_monto_unitario',
+      
+      // Producto
+      'subject',
+      'of_producto_nombres',
+      'of_descripcion_producto',
+      'of_rubro',
+      
+      // Tax & Discount
+      'of_descuento',
+      'of_descuento_monto',
+      'iva',
+      'of_exonera_irae',
+      
+      // Cupo - Alerta preventiva
+      'of_aplica_para_cupo',
+      'of_cupo_alerta_preventiva_emitida',
+      'of_cupo_alerta_preventiva_fecha',
+      'of_cupo_restante_proyectado',
+      'of_cupo_consumo_estimado',
+      
+      // Cupo - Consumo real
+      'of_cupo_consumido',
+      'of_cupo_consumido_fecha',
+      'of_cupo_consumo_valor',
+      'of_cupo_consumo_invoice_id',
+      
+      // Contexto
+      'of_moneda',
+      'of_pais_operativo',
+      'of_frecuencia_de_facturacion',
+      'of_propietario_secundario',
+      'hubspot_owner_id',
+      
+      // Flags
+      'facturar_ahora',
+      'repetitivo',
+    ]);
+    console.log('✓ Ticket re-leído con propiedades completas');
+  } catch (err) {
+    console.warn('⚠️ No se pudo re-leer ticket completo, usando datos originales:', err?.message);
+  }
+  
+  const tp = ticketFull.properties || {};
+  
+  console.log('\n╔════════════════════════════════════════════════════════╗');
+  console.log('║         DEBUG: PROPIEDADES DEL TICKET                 ║');
+  console.log('╚════════════════════════════════════════════════════════╝');
+  
+  console.log('\n🔑 IDEMPOTENCIA Y REFERENCIAS');
+  showProp(tp, 'of_ticket_key');
+  showProp(tp, 'of_deal_id');
+  showProp(tp, 'of_line_item_ids');
+  showProp(tp, 'of_invoice_id');
+  showProp(tp, 'of_invoice_key');
+  
+  console.log('\n📅 FECHAS');
+  showProp(tp, 'of_fecha_de_facturacion');
+  showProp(tp, 'fecha_real_de_facturacion');
+  showProp(tp, 'hs_resolution_due_date');
+  
+  console.log('\n💰 MONTOS Y CANTIDADES');
+  showProp(tp, 'monto_real_a_facturar');
+  showProp(tp, 'of_monto_total');
+  showProp(tp, 'of_cantidad');
+  showProp(tp, 'of_monto_unitario');
+  
+  console.log('\n🧾 TAX & DISCOUNT');
+  showProp(tp, 'of_descuento');
+  showProp(tp, 'of_descuento_monto');
+  showProp(tp, 'iva');
+  showProp(tp, 'of_exonera_irae');
+  
+  console.log('\n💳 CUPO - ALERTA PREVENTIVA');
+  showProp(tp, 'of_aplica_para_cupo');
+  showProp(tp, 'of_cupo_alerta_preventiva_emitida');
+  showProp(tp, 'of_cupo_alerta_preventiva_fecha');
+  showProp(tp, 'of_cupo_restante_proyectado');
+  showProp(tp, 'of_cupo_consumo_estimado');
+  
+  console.log('\n💳 CUPO - CONSUMO REAL');
+  showProp(tp, 'of_cupo_consumido');
+  showProp(tp, 'of_cupo_consumido_fecha');
+  showProp(tp, 'of_cupo_consumo_valor');
+  showProp(tp, 'of_cupo_consumo_invoice_id');
+  
+  console.log('\n🎯 CONTEXTO');
+  showProp(tp, 'of_producto_nombres');
+  showProp(tp, 'of_rubro');
+  showProp(tp, 'of_moneda');
+  showProp(tp, 'of_pais_operativo');
+  showProp(tp, 'of_frecuencia_de_facturacion');
+  showProp(tp, 'of_propietario_secundario');
+  showProp(tp, 'hubspot_owner_id');
+  
+  console.log('\n🚩 FLAGS');
+  showProp(tp, 'facturar_ahora');
+  showProp(tp, 'repetitivo');
+  
+  console.log('\n═══════════════════════════════════════════════════════════\n');
   console.log('Ticket ID:', ticketId);
   console.log('Ticket Key:', tp.of_ticket_key);
   console.log('Modo de generación:', modoGeneracion);
@@ -220,8 +356,105 @@ iva: String(tp.iva).trim() === 'true' ? 'true' : 'false',
     console.log('Creando factura en HubSpot...');
     const createResp = await createInvoiceDirect(invoiceProps);
     const invoiceId = createResp.id;
-    
+
+        
     console.log('✓ Factura creada con ID:', invoiceId);
+    
+    // ========== DEBUG: Re-leer invoice con todas las propiedades relevantes ==========
+    let invoiceFull = null;
+    try {
+      invoiceFull = await hubspotClient.crm.objects.basicApi.getById('invoices', invoiceId, [
+        // Idempotencia
+        'of_invoice_key',
+        'ticket_id',
+        
+        // Fechas
+        'hs_invoice_date',
+        'hs_due_date',
+        'fecha_de_emision',
+        'fecha_de_envio',
+        'fecha_de_pago',
+        'fecha_de_caneclacion',
+        
+        // Montos
+        'monto_a_facturar',
+        'cantidad',
+        'descuento',
+        'descuento_por_unidad',
+        
+        // Tax
+        'iva',
+        'exonera_irae',
+        
+        // Producto
+        'hs_title',
+        'nombre_producto',
+        'descripcion',
+        'servicio',
+        
+        // Estado
+        'etapa_de_la_factura',
+        'id_factura_nodum',
+        
+        // Contexto
+        'hs_currency',
+        'pais_operativo',
+        'frecuencia_de_facturacion',
+        'vendedor_factura',
+        'responsable_asignado',
+        'hubspot_owner_id',
+      ]);
+      
+      const ip = invoiceFull.properties || {};
+      
+      console.log('\n╔════════════════════════════════════════════════════════╗');
+      console.log('║         DEBUG: PROPIEDADES DE LA INVOICE              ║');
+      console.log('╚════════════════════════════════════════════════════════╝');
+      
+      console.log('\n🔑 IDEMPOTENCIA');
+      showProp(ip, 'of_invoice_key');
+      showProp(ip, 'ticket_id');
+      
+      console.log('\n📅 FECHAS');
+      showProp(ip, 'hs_invoice_date');
+      showProp(ip, 'hs_due_date');
+      showProp(ip, 'fecha_de_emision');
+      showProp(ip, 'fecha_de_envio');
+      showProp(ip, 'fecha_de_pago');
+      
+      console.log('\n💰 MONTOS');
+      showProp(ip, 'monto_a_facturar');
+      showProp(ip, 'cantidad');
+      showProp(ip, 'descuento');
+      showProp(ip, 'descuento_por_unidad');
+      
+      console.log('\n🧾 TAX');
+      showProp(ip, 'iva');
+      showProp(ip, 'exonera_irae');
+      
+      console.log('\n📦 PRODUCTO');
+      showProp(ip, 'hs_title');
+      showProp(ip, 'nombre_producto');
+      showProp(ip, 'descripcion');
+      showProp(ip, 'servicio');
+      
+      console.log('\n🎯 ESTADO Y CONTEXTO');
+      showProp(ip, 'etapa_de_la_factura');
+      showProp(ip, 'id_factura_nodum');
+      showProp(ip, 'hs_currency');
+      showProp(ip, 'pais_operativo');
+      showProp(ip, 'frecuencia_de_facturacion');
+      
+      console.log('\n👥 RESPONSABLES');
+      showProp(ip, 'vendedor_factura');
+      showProp(ip, 'responsable_asignado');
+      showProp(ip, 'hubspot_owner_id');
+      
+      console.log('\n═══════════════════════════════════════════════════════════\n');
+      
+    } catch (err) {
+      console.warn('⚠️ No se pudo re-leer invoice completa:', err?.message);
+    }
     
     // 8) Asociar factura a Deal, Ticket y Contact
     console.log('\n--- CREANDO ASOCIACIONES ---');
