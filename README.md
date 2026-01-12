@@ -9,15 +9,16 @@ Este proyecto automatiza el proceso de facturación en HubSpot basándose en Lin
 - **Facturación Manual** (`facturacion_automatica=false`): Genera tickets de "Orden de Facturación" para revisión humana con 30 días de anticipación
 - **Facturación Automática** (`facturacion_automatica=true`): Emite facturas directamente cuando llega la fecha o mediante disparo manual
 
-## ✨ Características
 
+## ✨ Características
 - ✅ **3 Fases de procesamiento** (Fechas/Cupo, Tickets Manuales, Facturas Automáticas)
 - ✅ **Idempotencia garantizada** (no crea duplicados)
 - ✅ **Snapshots inmutables** (copia datos a tickets para evitar cambios posteriores)
 - ✅ **Webhook para facturación inmediata** (disparar desde HubSpot)
 - ✅ **Modo DRY_RUN** (testing sin afectar datos)
 - ✅ **Soporte para mirrors UY/PY** (sincronización entre países)
-- ✅ **Gestión de cupo** (por horas o por monto)
+- ✅ **Gestión de cupo** (por horas o por monto) con inicialización automática y consumo idempotente. Si un deal tiene `cupo_activo=true` y `cupo_consumido` o `cupo_restante` están vacíos, el sistema los inicializa: `cupo_consumido=0` y `cupo_restante=cupo_total`/`cupo_total_monto`. Tras crear cada factura, se descuenta del cupo sólo una vez (aunque se vuelva a procesar el ticket) y se desactiva el cupo cuando se agota.
+
 
 ## 🏗️ Arquitectura
 

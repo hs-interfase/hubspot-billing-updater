@@ -39,6 +39,37 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
   const ip = invoice?.properties || {};
+  
+  // 🔄 Si faltan datos de consumo, re-leer el ticket con esas props
+  try {
+    const tipoCupoTmp = safeString(dp.tipo_de_cupo);
+    const ticketKey = ticket?.id || ticket?.properties?.hs_object_id;
+    const propsToFetch = [];
+
+    if (tipoCupoTmp === 'Por Horas') {
+      if (!tp.total_de_horas_consumidas) propsToFetch.push('total_de_horas_consumidas');
+      if (!tp.of_cantidad) propsToFetch.push('of_cantidad');
+    } else if (tipoCupoTmp === 'Por Monto') {
+      if (!tp.monto_real_a_facturar) propsToFetch.push('monto_real_a_facturar');
+    }
+
+    if (ticketKey && propsToFetch.length > 0) {
+      const refreshed = await hubspotClient.crm.tickets.basicApi.getById(String(ticketKey), propsToFetch);
+      const refreshedProps = refreshed?.properties || {};
+      // Actualizar el objeto tp con los valores recargados
+      if (tipoCupoTmp === 'Por Horas') {
+        if (refreshedProps.total_de_horas_consumidas)
+          tp.total_de_horas_consumidas = refreshedProps.total_de_horas_consumidas;
+        if (refreshedProps.of_cantidad)
+          tp.of_cantidad = refreshedProps.of_cantidad;
+      } else if (tipoCupoTmp === 'Por Monto') {
+        if (refreshedProps.monto_real_a_facturar)
+          tp.monto_real_a_facturar = refreshedProps.monto_real_a_facturar;
+      }
+    }
+  } catch (e) {
+    console.warn(`[consumeCupo] ⚠️ No se pudo recargar ticket para consumo:`, e?.message);
+  }
 
   console.log(`\n[consumeCupo] 💳 Iniciando validación de consumo de cupo`);
   console.log(`   Deal: ${dealId}`);

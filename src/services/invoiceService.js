@@ -597,11 +597,13 @@ try {
     ]);
     
     // Re-leer invoice con propiedades de cupo (para idempotencia)
-    const invoiceResp = await hubspotClient.crm.commerce.invoices.basicApi.getById(invoiceId, [
-      'of_cupo_consumido', 'of_cupo_consumo_valor', 'of_cupo_consumo_fecha'
-    ]);
-    
-    await consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice: invoiceResp });
+  const invoiceResp = await hubspotClient.crm.objects.basicApi.getById('invoices', invoiceId, [
+   'of_cupo_consumido',
+   'of_cupo_consumo_valor',
+   'of_cupo_consumo_fecha',
+   'of_invoice_key',
+ ]);
+ await hubspotClient.crm.objects.basicApi.update('invoices', invoiceId, { properties: invoiceUpdateProps });
   }
 } catch (err) {
   console.error('[invoiceService] ❌ Error en consumo de cupo:', err?.message);
