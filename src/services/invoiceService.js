@@ -592,12 +592,6 @@ try {
         'cupo_total', 'cupo_total_monto', 'dealstage'
       ]),
       hubspotClient.crm.lineItems.basicApi.getById(firstLineItemId, ['parte_del_cupo']),
-      hubspotClient.crm.objects.basicApi.getById('invoices', invoiceId, [
-        'of_cupo_consumido',
-        'of_cupo_consumo_valor',
-        'of_cupo_consumo_fecha',
-        'of_invoice_key',
-      ]),
     ]);
 
     await consumeCupoAfterInvoice({

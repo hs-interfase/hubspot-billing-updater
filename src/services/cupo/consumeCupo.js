@@ -39,7 +39,7 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
   const ip = invoice?.properties || {};
-  
+
   // 🔄 Si faltan datos de consumo, re-leer el ticket con esas props
   try {
     const tipoCupoTmp = safeString(dp.tipo_de_cupo);
@@ -197,13 +197,6 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
     console.error(`[consumeCupo] ❌ Error actualizando deal ${dealId}:`, err?.message);
     throw err;
   }
-
-  // ========== ACTUALIZAR INVOICE (IDEMPOTENCIA) ==========
-  const invoiceUpdateProps = {
-    of_cupo_consumido: 'true',
-    of_cupo_consumo_valor: String(consumo),
-    of_cupo_consumo_fecha: getTodayYMD(),
-  };
 
   try {
     await hubspotClient.crm.commerce.invoices.basicApi.update(invoiceId, { properties: invoiceUpdateProps });
