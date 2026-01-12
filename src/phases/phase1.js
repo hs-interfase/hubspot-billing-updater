@@ -14,86 +14,62 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 
 logDateEnvOnce();
+
 /**
- * Activa o desactiva cupo_activo según reglas de negocio.
+ * Activa o desactiva cupo según reglas simplificadas.
  *
- * REGLAS:
- * - Si facturacion_activa == false → cupo_activo = false
- * - Si deal cancelado → cupo_activo = false
- * - Si facturacion_activa == true Y existe ≥1 LI con parte_del_cupo == true → cupo_activo = true
- * - Si NO hay LIs parte_del_cupo → cupo_activo = false
+ * REGLAS SIMPLIFICADAS:
+ * 1) Si facturacion_activa == true Y tipo_de_cupo tiene valor → cupo_activo = true
+ * 2) Si NO → cupo_activo = false
+ * 3) Si cupo_consumido o cupo_restante están null:
+ *    - cupo_consumido = 0
+ *    - cupo_restante = cupo_total (para "Por Horas") o cupo_total_monto (para "Por Monto")
  *
- * ⚠️ NO TOCA: cupo_consumido, cupo_restante, cupo_ultima_actualizacion
+ * OPCIONAL (comentado): Validar que exista ≥1 line item con parte_del_cupo=true
  */
 async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
   const facturacionActiva = parseBool(dealProps.facturacion_activa);
+  const tipoRaw = safeString(dealProps.tipo_de_cupo).trim();
+  const tipo = tipoRaw.toLowerCase();
 
-  const dealStage = safeString(dealProps.dealstage).toLowerCase();
-  const isCancelled =
-    dealStage.includes('cancel') ||
-    dealStage.includes('cerrado perdido') ||
-    dealStage.includes('closedlost');
+  const shouldActivate = facturacionActiva && tipoRaw !== '';
 
-  // 1) Calcular estado deseado según reglas
-  let shouldActivate = false;
+  const cupoConsumido = dealProps.cupo_consumido;
+  const cupoRestante = dealProps.cupo_restante;
 
-  if (!facturacionActiva || isCancelled) {
-    shouldActivate = false;
-  } else {
-    const hasLineItemWithCupo = (lineItems || []).some((li) => {
-      const lp = li?.properties || {};
-      const raw = lp.parte_del_cupo;
+  const isConsumidoNull = cupoConsumido === null || cupoConsumido === undefined || cupoConsumido === '';
+  const isRestanteNull = cupoRestante === null || cupoRestante === undefined || cupoRestante === '';
 
-      // robusto para boolean/string/number
-      return (
-        raw === true ||
-        raw === 'true' ||
-        raw === 'TRUE' ||
-        raw === 'True' ||
-        raw === 1 ||
-        raw === '1'
-      );
-    });
-
-    shouldActivate = hasLineItemWithCupo;
+  let cupoTotal = 0;
+  if (tipo === 'por horas' || tipo === 'por_horas') {
+    cupoTotal = parseNumber(dealProps.cupo_total, 0);
+  } else if (tipo === 'por monto' || tipo === 'por_monto') {
+    cupoTotal = parseNumber(dealProps.cupo_total_monto ?? dealProps.cupo_total, 0);
   }
 
-  // 2) Leer estado ACTUAL (tratando "" como null)
-  const rawCupoActivo = dealProps.cupo_activo; // puede ser true|false|null|""
-  const isEmpty =
-    rawCupoActivo === null ||
-    rawCupoActivo === undefined ||
-    rawCupoActivo === '';
+  const updateProps = {};
 
-  const currentCupoActivo = isEmpty ? null : parseBool(rawCupoActivo);
+  const currentCupoActivo = parseBool(dealProps.cupo_activo);
+  if (currentCupoActivo !== shouldActivate) {
+    updateProps.cupo_activo = String(shouldActivate);
+  }
 
-  // 3) Actualizar si está vacío o distinto
-  const needsUpdate =
-    currentCupoActivo === null || currentCupoActivo !== shouldActivate;
+  // ✅ Inicializar SOLO si se activa cupo
+  if (shouldActivate && isConsumidoNull) {
+    updateProps.cupo_consumido = '0';
+  }
+  if (shouldActivate && isRestanteNull) {
+    updateProps.cupo_restante = String(cupoTotal);
+  }
 
-  if (!needsUpdate) {
-    console.log(
-      `[cupo:activate] dealId=${dealId} cupo_activo ya es ${shouldActivate}, no cambiar`
-    );
+  if (Object.keys(updateProps).length === 0) {
+    console.log(`[cupo:activate] dealId=${dealId} sin cambios (cupo_activo=${shouldActivate})`);
     return;
   }
 
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-      properties: { cupo_activo: String(shouldActivate) },
-    });
-
-    console.log(
-      `[cupo:activate] dealId=${dealId} cupo_activo: ${currentCupoActivo} → ${shouldActivate}`
-    );
-  } catch (err) {
-    console.error(
-      `[cupo:activate] Error actualizando deal ${dealId}:`,
-      err?.message
-    );
-  }
+  await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties: updateProps });
+  console.log(`[cupo:activate] ✅ Deal ${dealId} actualizado:`, updateProps);
 }
-
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
