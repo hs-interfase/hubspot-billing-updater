@@ -586,7 +586,7 @@ try {
       console.log(`[invoiceService] ⚠️ Ticket tiene múltiples lineItems (${lineItemIdRaw}), usando primero: ${firstLineItemId}`);
     }
 
-    const [deal, lineItem, invoiceResp] = await Promise.all([
+    const [deal, lineItem] = await Promise.all([
       hubspotClient.crm.deals.basicApi.getById(dealId, [
         'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
         'cupo_total', 'cupo_total_monto', 'dealstage'
@@ -596,9 +596,9 @@ try {
 
     await consumeCupoAfterInvoice({
       deal,
-      ticket: ticketFull,     // 👈 usá el ticket re-leído (tiene las props)
+      ticket: ticketFull,     
       lineItem,
-      invoice: invoiceResp,   // 👈 invoice re-leída con props cupo/idempotencia
+      invoice: { id: invoiceId, properties: {} },  
     });
   }
 } catch (err) {

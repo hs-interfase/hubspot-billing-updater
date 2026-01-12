@@ -128,6 +128,11 @@ export async function getDealWithLineItems(dealId) {
     "hs_recurring_billing_start_date",
     "hs_recurring_billing_number_of_payments",
 
+    // --- delays en fechas ---
+    "hs_billing_start_delay_type",
+    "hs_billing_start_delay_days",
+    "hs_billing_start_delay_months",  
+    
     // --- cupo (solo flag) ---
     "parte_del_cupo",
 

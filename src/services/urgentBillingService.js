@@ -4,6 +4,8 @@ import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
+import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
+
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
@@ -89,10 +91,8 @@ export async function processUrgentLineItem(lineItemId) {
       'hs_object_id',
       'name',
       'facturar_ahora',
-      // ⚠️ acá tenías "invoice_id" pero tu sistema de evidencia usa "of_invoice_id" en otros lados.
-      // Dejo ambos por compatibilidad: si uno existe, ya está facturado.
+      'invoice_key',
       'invoice_id',
-      'of_invoice_id',
       'cantidad_de_facturaciones_urgentes',
     ]);
 
@@ -107,14 +107,7 @@ export async function processUrgentLineItem(lineItemId) {
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
 
-    // 3) Idempotencia: ya tiene factura?
-    const existingInvoiceId = lineItemProps.of_invoice_id || lineItemProps.invoice_id;
-    if (existingInvoiceId) {
-      console.log(`⚠️ Line Item ya tiene factura: ${existingInvoiceId}, ignorando`);
-      return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
-    }
-
-    // 4) Resolver dealId por associations v4
+// 3) Resolver dealId por associations v4 (necesario para validación)
     const dealId = await getDealIdForLineItem(lineItemId);
 
     if (!dealId) {
@@ -124,8 +117,54 @@ export async function processUrgentLineItem(lineItemId) {
 
     console.log(`Deal asociado (v4): ${dealId}`);
 
-    // 5) Obtener deal completo con line items
-    const { deal, lineItems } = await getDealWithLineItems(dealId);
+    // 4) Idempotencia: validar invoice_id si existe
+    const existingInvoiceId = lineItemProps.invoice_id;
+    if (existingInvoiceId) {
+      // ✅ NUEVA VALIDACIÓN: verificar que el invoice_id sea válido para este line item
+      const billDateYMD = getTodayYMD();
+      const validation = await isInvoiceIdValidForLineItem({
+        dealId,
+        lineItemId,
+        invoiceId: existingInvoiceId,
+        billDateYMD
+      });
+
+      if (validation.valid) {
+        // ✅ invoice_id válido, este line item YA está facturado correctamente
+        console.log(`✓ Line Item ya tiene factura válida: ${existingInvoiceId}`);
+        console.log(`  Expected key: ${validation.expectedKey}`);
+        console.log(`  Found key:    ${validation.foundKey}`);
+        return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
+      }
+
+      // ⚠️ invoice_id presente pero NO válido (posible clon de UI)
+      console.warn(`[urgent-lineitem] ⚠️ invoice_id present but NOT valid for expected key`);
+      console.warn(`  invoice_id:    ${existingInvoiceId}`);
+      console.warn(`  Expected key:  ${validation.expectedKey}`);
+      console.warn(`  Found key:     ${validation.foundKey || '(none)'}`);
+      console.warn(`  Reason:        ${validation.reason}`);
+      console.warn(`  → Treating as inherited clone, will clean and re-invoice`);
+      // Limpiar line item (eliminar invoice_id heredado)
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: {
+            invoice_id: '',
+            of_invoice_id: '',
+            invoice_key: '',
+            facturar_ahora: 'false',
+            cantidad_de_facturaciones_urgentes: '0',
+          },
+        });
+        console.log(`✓ Line Item limpiado (invoice_id heredado eliminado)`);
+      } catch (cleanErr) {
+        console.error(`⚠️ Error limpiando line item:`, cleanErr?.message);
+        // Continuar de todos modos con la facturación
+      }
+      // Continuar con facturación normal (no eturn aquí)
+    }
+
+   // 5) Obtener deal completo con line items
+     const { deal, lineItems } = await getDealWithLineItems(dealId);
 
     // 6) Buscar el line item específico
     const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));

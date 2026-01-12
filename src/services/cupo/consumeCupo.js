@@ -7,82 +7,77 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
 /**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
  * 
- * REGLAS (fuente de verdad):
- * 1) Invoice es la única fuente de verdad: invoice.of_cupo_consumido == true → ya consumió
+ * REGLAS
+ * 1) Ticket es la fuente de verdad: ticket.of_cupo_consumo_invoice_id == invoiceId → ya consumió
  * 2) Solo consume si lineItem.parte_del_cupo == true
  * 3) Solo consume si deal.cupo_activo == true
- * 4) Una invoice consume cupo UNA SOLA VEZ (idempotencia por invoice)
- * 
++ * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
  * TIPO DE CONSUMO:
  * - "Por Horas": ticket.total_de_horas_consumidas (fallback: ticket.of_cantidad)
  * - "Por Monto": ticket.monto_real_a_facturar (neto sin IVA)
  * 
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
- * - Invoice: of_cupo_consumido, of_cupo_consumo_valor, of_cupo_consumo_fecha
- * - Ticket: of_cupo_consumido, of_cupo_consumo_invoice_id (trazabilidad)
+ * + * - Ticket: of_cupo_consumido, of_cupo_consumo_invoice_id, of_cupo_consumo_valor, of_cupo_consumo_fecha
+
  * 
  * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Object} params.ticket - Ticket de HubSpot
- * @param {Object} params.lineItem - Line Item de HubSpot (puede ser null)
- * @param {Object} params.invoice - Invoice de HubSpot (recién creada)
+ * @param {string} params.dealId - ID del Deal
+ * @param {string} params.ticketId - ID del Ticket
+ * @param {string} params.lineItemId - ID del Line Item (puede ser null)
+ * @param {string} params.invoiceId - ID de la Invoice recién creada
  * @returns {Object} { consumed, reason, consumo, cupoRestanteNuevo }
  */
-export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice }) {
-  const dealId = String(deal?.id || deal?.properties?.hs_object_id);
-  const ticketId = String(ticket?.id || ticket?.properties?.hs_object_id);
-  const lineItemId = lineItem ? String(lineItem?.id || lineItem?.properties?.hs_object_id) : null;
-  const invoiceId = String(invoice?.id || invoice?.properties?.hs_object_id);
 
-  const dp = deal?.properties || {};
-  const tp = ticket?.properties || {};
-  const lp = lineItem?.properties || {};
-  const ip = invoice?.properties || {};
-
-  // 🔄 Si faltan datos de consumo, re-leer el ticket con esas props
-  try {
-    const tipoCupoTmp = safeString(dp.tipo_de_cupo);
-    const ticketKey = ticket?.id || ticket?.properties?.hs_object_id;
-    const propsToFetch = [];
-
-    if (tipoCupoTmp === 'Por Horas') {
-      if (!tp.total_de_horas_consumidas) propsToFetch.push('total_de_horas_consumidas');
-      if (!tp.of_cantidad) propsToFetch.push('of_cantidad');
-    } else if (tipoCupoTmp === 'Por Monto') {
-      if (!tp.monto_real_a_facturar) propsToFetch.push('monto_real_a_facturar');
-    }
-
-    if (ticketKey && propsToFetch.length > 0) {
-      const refreshed = await hubspotClient.crm.tickets.basicApi.getById(String(ticketKey), propsToFetch);
-      const refreshedProps = refreshed?.properties || {};
-      // Actualizar el objeto tp con los valores recargados
-      if (tipoCupoTmp === 'Por Horas') {
-        if (refreshedProps.total_de_horas_consumidas)
-          tp.total_de_horas_consumidas = refreshedProps.total_de_horas_consumidas;
-        if (refreshedProps.of_cantidad)
-          tp.of_cantidad = refreshedProps.of_cantidad;
-      } else if (tipoCupoTmp === 'Por Monto') {
-        if (refreshedProps.monto_real_a_facturar)
-          tp.monto_real_a_facturar = refreshedProps.monto_real_a_facturar;
-      }
-    }
-  } catch (e) {
-    console.warn(`[consumeCupo] ⚠️ No se pudo recargar ticket para consumo:`, e?.message);
-  }
-
+export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, invoiceId }) {
   console.log(`\n[consumeCupo] 💳 Iniciando validación de consumo de cupo`);
   console.log(`   Deal: ${dealId}`);
   console.log(`   Ticket: ${ticketId}`);
   console.log(`   Line Item: ${lineItemId || 'N/A'}`);
   console.log(`   Invoice: ${invoiceId}`);
 
-  // ========== VALIDACIÓN 1: Idempotencia por Invoice ==========
-  const yaConsumido = parseBool(ip.of_cupo_consumido);
-  if (yaConsumido) {
-    const reason = 'invoice ya consumió cupo (idempotencia)';
+  // ========== VALIDACIÓN 0: Invoice ID válido ==========
+  if (!invoiceId || invoiceId === 'undefined' || invoiceId === 'null') {
+    const reason = 'invoiceId inválido o vacío';
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   of_cupo_consumido: ${ip.of_cupo_consumido}`);
+    return { consumed: false, reason };
+  }
+ 
+// ========== RE-LEER DATOS NECESARIOS ==========
+  let deal, ticket, lineItem;
+
+  try {
+    // Re-leer Deal
+    deal = await hubspotClient.crm.deals.basicApi.getById(dealId, [
+      'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
+      'cupo_total', 'cupo_total_monto'
+    ]);
+
+    // Re-leer Ticket
+    ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
+      'of_cupo_consumo_invoice_id', 'total_de_horas_consumidas',
+      'of_cantidad', 'monto_real_a_facturar'
+    ]);
+
+    // Re-leer Line Item si existe
+    if (lineItemId && lineItemId !== 'undefined' && lineItemId !== 'null') {
+      lineItem = await hubspotClient.crm.lineItems.basicApi.getById(lineItemId, ['parte_del_cupo']);
+    }
+  } catch (err) {
+    console.error(`[consumeCupo] ❌ Error re-leyendo datos:`, err?.message);
+    return { consumed: false, reason: 'error al leer datos de HubSpot' };
+  }
+ 
+const dp = deal?.properties || {};
+  const tp = ticket?.properties || {};
+  const lp = lineItem?.properties || {};
+ 
+  // ========== VALIDACIÓN 1: Idempotencia por Ticket + Invoice ==========
+  const invoiceIdEnTicket = safeString(tp.of_cupo_consumo_invoice_id);
+  if (invoiceIdEnTicket === invoiceId) {
+    const reason = 'ticket ya consumió cupo con esta invoice (idempotencia)';
+    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
+    console.log(`   of_cupo_consumo_invoice_id: ${invoiceIdEnTicket}`);
     return { consumed: false, reason };
   }
 
@@ -90,9 +85,9 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
   if (!lineItemId || lineItemId === 'undefined' || lineItemId === 'null') {
     const reason = 'lineItemId no identificable';
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   of_line_item_ids: ${tp.of_line_item_ids}`);
     return { consumed: false, reason };
   }
+  
 
   // ========== VALIDACIÓN 3: parte_del_cupo ==========
   const parteDelCupo = parseBool(lp.parte_del_cupo);
@@ -103,6 +98,7 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
     return { consumed: false, reason };
   }
 
+  
   // ========== VALIDACIÓN 4: cupo_activo ==========
   const cupoActivo = parseBool(dp.cupo_activo);
   if (!cupoActivo) {
@@ -198,26 +194,20 @@ export async function consumeCupoAfterInvoice({ deal, ticket, lineItem, invoice 
     throw err;
   }
 
-  try {
-    await hubspotClient.crm.commerce.invoices.basicApi.update(invoiceId, { properties: invoiceUpdateProps });
-    console.log(`[consumeCupo] ✅ Invoice ${invoiceId} marcada con consumo`);
-  } catch (err) {
-    console.error(`[consumeCupo] ❌ Error actualizando invoice ${invoiceId}:`, err?.message);
-    throw err;
-  }
 
-  // ========== ACTUALIZAR TICKET (TRAZABILIDAD) ==========
+// ========== ACTUALIZAR TICKET (IDEMPOTENCIA + TRAZABILIDAD + VALOR) ==========
   const ticketUpdateProps = {
     of_cupo_consumido: 'true',
     of_cupo_consumo_invoice_id: invoiceId,
+    of_cupo_consumo_valor: String(consumo),
+    of_cupo_consumo_fecha: getTodayYMD(),
   };
-
   try {
     await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: ticketUpdateProps });
     console.log(`[consumeCupo] ✅ Ticket ${ticketId} marcado con consumo`);
-  } catch (err) {
+} catch (err) {
     console.error(`[consumeCupo] ⚠️ Error actualizando ticket ${ticketId}:`, err?.message);
-    // No lanzar error, es solo trazabilidad
+    // No lanzar error: trazabilidad no debe romper facturación
   }
 
   // ========== RESUMEN ==========
