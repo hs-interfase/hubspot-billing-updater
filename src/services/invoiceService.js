@@ -574,36 +574,38 @@ if (lineItemId) {
 try {
   const dealId = tp.of_deal_id;
   const lineItemIdRaw = tp.of_line_item_ids;
-  
+
   if (!dealId || !lineItemIdRaw) {
     console.log('[invoiceService] ⊘ No se consume cupo: falta of_deal_id o of_line_item_ids');
   } else {
-    // Si hay múltiples lineItems (CSV), usar solo el primero
-    const lineItemId = lineItemIdRaw.includes(',') 
-      ? lineItemIdRaw.split(',')[0].trim() 
-      : lineItemIdRaw.trim();
-    
-    if (lineItemIdRaw.includes(',')) {
-      console.log(`[invoiceService] ⚠️ Ticket tiene múltiples lineItems (${lineItemIdRaw}), usando primero: ${lineItemId}`);
+    const firstLineItemId = String(lineItemIdRaw).includes(',')
+      ? String(lineItemIdRaw).split(',')[0].trim()
+      : String(lineItemIdRaw).trim();
+
+    if (String(lineItemIdRaw).includes(',')) {
+      console.log(`[invoiceService] ⚠️ Ticket tiene múltiples lineItems (${lineItemIdRaw}), usando primero: ${firstLineItemId}`);
     }
-    
-    // Obtener Deal y Line Item
-    const [deal, lineItem] = await Promise.all([
+
+    const [deal, lineItem, invoiceResp] = await Promise.all([
       hubspotClient.crm.deals.basicApi.getById(dealId, [
         'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
         'cupo_total', 'cupo_total_monto', 'dealstage'
       ]),
-      hubspotClient.crm.lineItems.basicApi.getById(lineItemId, ['parte_del_cupo'])
+      hubspotClient.crm.lineItems.basicApi.getById(firstLineItemId, ['parte_del_cupo']),
+      hubspotClient.crm.objects.basicApi.getById('invoices', invoiceId, [
+        'of_cupo_consumido',
+        'of_cupo_consumo_valor',
+        'of_cupo_consumo_fecha',
+        'of_invoice_key',
+      ]),
     ]);
-    
-    // Re-leer invoice con propiedades de cupo (para idempotencia)
-  const invoiceResp = await hubspotClient.crm.objects.basicApi.getById('invoices', invoiceId, [
-   'of_cupo_consumido',
-   'of_cupo_consumo_valor',
-   'of_cupo_consumo_fecha',
-   'of_invoice_key',
- ]);
- await hubspotClient.crm.objects.basicApi.update('invoices', invoiceId, { properties: invoiceUpdateProps });
+
+    await consumeCupoAfterInvoice({
+      deal,
+      ticket: ticketFull,     // 👈 usá el ticket re-leído (tiene las props)
+      lineItem,
+      invoice: invoiceResp,   // 👈 invoice re-leída con props cupo/idempotencia
+    });
   }
 } catch (err) {
   console.error('[invoiceService] ❌ Error en consumo de cupo:', err?.message);
