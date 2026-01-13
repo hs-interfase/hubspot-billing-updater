@@ -572,33 +572,28 @@ if (lineItemId) {
 
 // 12) Consumo de cupo (idempotente, no rompe facturación)
 try {
-  const dealId = tp.of_deal_id;
-  const lineItemIdRaw = tp.of_line_item_ids;
-
-  if (!dealId || !lineItemIdRaw) {
-    console.log('[invoiceService] ⊘ No se consume cupo: falta of_deal_id o of_line_item_ids');
+  const dealId = String(tp.of_deal_id || '');
+  const lineItemIdRaw = String(tp.of_line_item_ids || '');
+  const firstLineItemId = lineItemIdRaw.includes(',')
+    ? lineItemIdRaw.split(',')[0].trim()
+    : lineItemIdRaw.trim();
+ 
+  if (!dealId) {
+    console.log('[invoiceService] ⊘ No se consume cupo: falta of_deal_id en ticket');
+  } else if (!invoiceId) {
+    console.log('[invoiceService] ⚠️ No se consume cupo: invoiceId undefined (bug interno)');
   } else {
-    const firstLineItemId = String(lineItemIdRaw).includes(',')
-      ? String(lineItemIdRaw).split(',')[0].trim()
-      : String(lineItemIdRaw).trim();
-
-    if (String(lineItemIdRaw).includes(',')) {
+    if (lineItemIdRaw.includes(',')) {
       console.log(`[invoiceService] ⚠️ Ticket tiene múltiples lineItems (${lineItemIdRaw}), usando primero: ${firstLineItemId}`);
     }
 
-    const [deal, lineItem] = await Promise.all([
-      hubspotClient.crm.deals.basicApi.getById(dealId, [
-        'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
-        'cupo_total', 'cupo_total_monto', 'dealstage'
-      ]),
-      hubspotClient.crm.lineItems.basicApi.getById(firstLineItemId, ['parte_del_cupo']),
-    ]);
+    console.log(`[invoiceService] 🔹 Consumiendo cupo: dealId=${dealId}, ticketId=${ticketId}, lineItemId=${firstLineItemId}, invoiceId=${invoiceId}`);
 
     await consumeCupoAfterInvoice({
-      deal,
-      ticket: ticketFull,     
-      lineItem,
-      invoice: { id: invoiceId, properties: {} },  
+      dealId,
+      ticketId,
+      lineItemId: firstLineItemId,
+      invoiceId,
     });
   }
 } catch (err) {
