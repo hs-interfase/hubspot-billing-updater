@@ -45,98 +45,115 @@ export async function runPhase3({ deal, lineItems }) {
 
   console.log(`   [Phase3] autoLineItems=${autoLineItems.length}`);
 
-  for (const li of autoLineItems) {
-    const lineItemId = String(li.id || li.properties?.hs_object_id);
-    const lp = li.properties || {};
-    const liName = lp.name || `LI ${lineItemId}`;
+for (const li of autoLineItems) {
+  const lineItemId = String(li.id || li.properties?.hs_object_id);
+  const lp = li.properties || {};
+  const liName = lp.name || `LI ${lineItemId}`;
 
-    console.log(`   [Phase3] Processing ${liName}`, { lineItemId });
+  console.log(`   [Phase3] Processing ${liName}`, { lineItemId });
 
-    try {
-      const facturarAhora = parseBool(lp.facturar_ahora);
-const nextBillingDate = getNextBillingDate(lp); // YYYY-MM-DD o null
-const targetForKey = facturarAhora ? today : nextBillingDate;
+  try {
+    const facturarAhora = parseBool(lp.facturar_ahora);
+    
+    // ✅ CRITICAL FIX: billingPeriodDate is ALWAYS nextBillingDate
+    // facturar_ahora changes WHEN we invoice (today), NOT which period
+    const billingPeriodDate = getNextBillingDate(lp);
 
-// (Opcional) compat: si tenés un campo legacy of_invoice_id en el futuro
-const existingInvoiceIdLegacy = safeString(lp.of_invoice_id);
+    console.log(`   [Phase3] 🔑 billingPeriodDate: ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`);
 
-// OJO: no usar invoice_id legacy como “ya facturado”
-// la idempotencia real ya la hicimos por invoice_key arriba
-if (existingInvoiceIdLegacy) {
-  console.log(`      [Phase3] note: legacy of_invoice_id present`, { existingInvoiceIdLegacy });
-}
+    if (!billingPeriodDate) {
+      console.log(`      [Phase3] no billing period date => skip`);
+      continue;
+    }
 
-if (existingInvoiceIdLegacy) {
-  console.log(`      [Phase3] note: legacy of_invoice_id present`, { existingInvoiceIdLegacy });
-}
-      // 2) FACTURAR AHORA (en automático)
-      if (facturarAhora) {
-        console.log(`      [Phase3] facturar_ahora=true => ticket->invoice`);
+    // 2) FACTURAR AHORA (urgente)
+    if (facturarAhora) {
+      console.log(`      [Phase3] ⚡ URGENT BILLING`);
+      console.log(`         ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
+      console.log(`         invoiceKey: ${dealId}::${lineItemId}::${billingPeriodDate}`);
+      console.log(`         invoice_date: ${today} (urgent)`);
 
-        // Ticket primero (siempre)
-        const { ticketId } = await createAutoBillingTicket(deal, li, today);
-                if (ticketId) ticketsEnsured++;
-        console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: today });
-
-        // Luego factura
-        const result = await createAutoInvoiceFromLineItem(deal, li, today);
-        if (result?.created) {
-          invoicesEmitted++;
-          console.log(`      [Phase3] invoice created`, { invoiceId: result.invoiceId });
-        } else {
-          console.log(`      [Phase3] invoice existed`, { invoiceId: result?.invoiceId });
-        }
-
-        // Asociar invoice -> ticket
-        if (ticketId && result?.invoiceId) {
-          await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
-          console.log(`      [Phase3] ticket updated with invoice`, { ticketId, invoiceId: result.invoiceId });
-        }
-
-        // Reset flag (para no repetir)
-        await resetFacturarAhoraFlag(lineItemId);
-        console.log(`      [Phase3] facturar_ahora reset`, { lineItemId });
-
-        continue;
+      // ✅ Ticket with PERIOD date (NOT today)
+      const { ticketId, created } = await createAutoBillingTicket(deal, li, billingPeriodDate);
+      if (ticketId) {
+        ticketsEnsured++;
+        
+        // ✅ Mark ticket as urgent
+        await updateTicket(ticketId, {
+          of_facturacion_urgente: 'true',
+          of_fecha_facturacion: today,  // When ordered
+          hs_resolution_due_date: today,  // Process today
+        });
+        
+        console.log(`      [Phase3] ticket ${created ? 'created' : 'reused'}: ${ticketId}`);
       }
 
-      // 3) Facturación programada: solo si la próxima fecha == hoy
-      if (!nextBillingDate) {
-        console.log(`      [Phase3] no next billing date => skip`);
-        continue;
-      }
-
-      if (nextBillingDate !== today) {
-        console.log(`      [Phase3] nextBillingDate != today => skip`, { nextBillingDate });
-        continue;
-      }
-
-      console.log(`      [Phase3] scheduled billing today => ticket->invoice`, { nextBillingDate });
-
-      // Ticket primero
-      const { ticketId } = await createAutoBillingTicket(deal, li, nextBillingDate);
-      if (ticketId) ticketsEnsured++;
-      console.log(`      [Phase3] auto ticket ok`, { ticketId, targetDate: nextBillingDate });
-
-      // Factura
-      const result = await createAutoInvoiceFromLineItem(deal, li, today);
+      // Crear factura con billingPeriodDate para invoiceKey
+      const result = await createAutoInvoiceFromLineItem(
+        deal, 
+        li, 
+        billingPeriodDate,  // ✅ For invoiceKey
+        today  // ✅ For hs_invoice_date
+      );
+      
       if (result?.created) {
         invoicesEmitted++;
-        console.log(`      [Phase3] invoice created`, { invoiceId: result.invoiceId });
+        console.log(`      [Phase3] invoice created: ${result.invoiceId}`);
       } else {
-        console.log(`      [Phase3] invoice existed`, { invoiceId: result?.invoiceId });
+        console.log(`      [Phase3] invoice existed: ${result?.invoiceId}`);
       }
 
       // Asociar invoice -> ticket
       if (ticketId && result?.invoiceId) {
         await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
-        console.log(`      [Phase3] ticket updated with invoice`, { ticketId, invoiceId: result.invoiceId });
       }
-    } catch (err) {
-      console.error(`      [Phase3] error`, err?.message || err);
-      errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
+
+      // Reset flag
+      await resetFacturarAhoraFlag(lineItemId);
+      console.log(`      [Phase3] facturar_ahora reset`);
+
+      continue;
     }
+
+    // 3) Facturación programada: solo si la próxima fecha == hoy
+    if (billingPeriodDate !== today) {
+      console.log(`      [Phase3] billingPeriodDate (${billingPeriodDate}) != today (${today}) => skip`);
+      continue;
+    }
+
+    console.log(`      [Phase3] 📅 SCHEDULED BILLING TODAY`);
+    console.log(`         ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
+    console.log(`         invoiceKey: ${dealId}::${lineItemId}::${billingPeriodDate}`);
+
+    // Ticket primero
+    const { ticketId } = await createAutoBillingTicket(deal, li, billingPeriodDate);
+    if (ticketId) ticketsEnsured++;
+    console.log(`      [Phase3] ticket ok: ${ticketId}`);
+
+    // Factura
+    const result = await createAutoInvoiceFromLineItem(
+      deal, 
+      li, 
+      billingPeriodDate,  // ✅ For both invoiceKey and hs_invoice_date
+      billingPeriodDate  // Same as period date
+    );
+    
+    if (result?.created) {
+      invoicesEmitted++;
+      console.log(`      [Phase3] invoice created: ${result.invoiceId}`);
+    } else {
+      console.log(`      [Phase3] invoice existed: ${result?.invoiceId}`);
+    }
+
+    // Asociar invoice -> ticket
+    if (ticketId && result?.invoiceId) {
+      await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
+    }
+  } catch (err) {
+    console.error(`      [Phase3] error:`, err?.message || err);
+    errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
   }
+}
 
   console.log(`   [Phase3] done`, { dealId, invoicesEmitted, ticketsEnsured, errors: errors.length });  return { invoicesEmitted, ticketsEnsured, errors };}
 

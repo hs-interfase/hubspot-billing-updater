@@ -4,6 +4,7 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 
+
 /**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
  * 
@@ -72,6 +73,8 @@ const dp = deal?.properties || {};
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
  
+const invoiceIdEnTicket = safeString(tp.of_invoice_id);
+
   // ========== VALIDACIÓN 1: Idempotencia por Ticket + Invoice ==========
   if (invoiceIdEnTicket === invoiceId) {
     const reason = 'ticket ya consumió cupo con esta invoice (idempotencia)';
