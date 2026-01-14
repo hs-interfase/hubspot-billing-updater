@@ -137,6 +137,35 @@ function parseLineItemIds(raw) {
   return s.split(/[;,]/).map(x => x.trim()).filter(Boolean);
 }
 
+/**
+ * Extrae el lineId de un ticket key y lo normaliza.
+ * Formato esperado: "dealId::LI:lineId::date" o "dealId::PYLI:lineId::date"
+ * 
+ * Ejemplos:
+ *   "123::LI:456::2026-01-14" → "456"
+ *   "123::LI:LI:456::2026-01-14" → "456" (normaliza duplicado)
+ *   "123::PYLI:789::2026-01-14" → "PYLI:789" (mantiene prefijo especial)
+ */
+function extractLineIdFromTicketKey(ticketKey) {
+  if (!ticketKey) return null;
+  const parts = ticketKey.split('::');
+  if (parts.length !== 3) return null;
+  
+  let lineIdPart = parts[1]; // Ej: "LI:123" o "PYLI:456" o "LI:LI:123" (bug)
+  
+  // Si tiene prefijo PYLI:, mantenerlo tal cual
+  if (lineIdPart.startsWith('PYLI:')) {
+    return lineIdPart;
+  }
+  
+  // Remover TODOS los prefijos LI: duplicados
+  while (lineIdPart.startsWith('LI:')) {
+    lineIdPart = lineIdPart.substring(3);
+  }
+  
+  return lineIdPart;
+}
+
 async function findCanonicalAndDuplicates({ dealId, expectedKey, billDateYMD, lineItemId }) {
   const tickets = await getTicketsForDeal(dealId);
 
@@ -149,7 +178,11 @@ async function findCanonicalAndDuplicates({ dealId, expectedKey, billDateYMD, li
     if (k === expectedKey) return true;
 
     // 2) Heurística para clones UI: mismo lineItem y misma fecha (o fecha vacía)
-    const sameLI = liIds.includes(String(lineItemId));
+    // ✅ Usar extractLineIdFromTicketKey para normalizar el lineId del ticket key
+    const ticketLineId = extractLineIdFromTicketKey(k);
+    const normalizedLineItemId = String(lineItemId);
+    
+    const sameLI = liIds.includes(String(lineItemId)) || ticketLineId === normalizedLineItemId;
     const sameDate = d === billDateYMD;
 
     return sameLI && (sameDate || !d);
@@ -243,6 +276,14 @@ export async function ensureTicketCanonical({
   console.log(`   stableLineId: ${stableLineId}`);
   console.log(`   billDateYMD: ${billDateYMD}`);
   console.log(`   expectedKey: ${expectedKey}`);
+  
+  // ✅ Verificación anti-duplicación de prefijo
+  if (expectedKey.includes('LI:LI:')) {
+    console.error(`\n❌ ERROR: expectedKey contiene prefijo duplicado LI:LI:`);
+    console.error(`   expectedKey: ${expectedKey}`);
+    console.error(`   stableLineId: ${stableLineId}`);
+    throw new Error(`Ticket key inválido con prefijo duplicado: ${expectedKey}`);
+  }
 
     await archiveClonedTicketsByKey({ expectedKey, dealId, dryRun: isDryRun() });
 
@@ -523,9 +564,10 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   const lp = lineItem.properties || {};
 
   // Determinar ID estable para idempotencia (usar origen PY si existe)
+  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
   const stableLineId = lp.of_line_item_py_origen_id
     ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : `LI:${lineItemId}`;
+    : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
 
   console.log('[ticketService] 🔍 AUTO - stableLineId:', stableLineId, '(real:', lineItemId, ')');
 
@@ -907,9 +949,10 @@ const dp = deal.properties || {};
 const lp = lineItem.properties || {};
 
 // Determinar ID estable para idempotencia (usar origen PY si existe)
+// ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
 const stableLineId = lp.of_line_item_py_origen_id
   ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-  : `LI:${lineItemId}`;
+  : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
 
 console.log('[ticketService] 🔍 AUTO - stableLineId:', stableLineId, '(real:', lineItemId, ')');
 

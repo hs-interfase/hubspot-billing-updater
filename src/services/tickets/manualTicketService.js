@@ -41,11 +41,13 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const lp = lineItem?.properties || {};
 
   // ✅ ID estable para idempotencia (sirve tanto para PY como para espejo UY)
+  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
   const stableLineId = lp.of_line_item_py_origen_id
     ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : `LI:${lineItemId}`;
+    : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
 
   console.log('[ticketService] 🔍 MANUAL - stableLineId:', stableLineId, '(real:', lineItemId, ')');
+  console.log('[ticketService] 🔍 MANUAL - billingDate:', billingDate);
 
   // Usar la nueva función de deduplicación
   const result = await ensureTicketCanonical({

@@ -12,13 +12,45 @@ function isYMD(ymd) {
 }
 
 /**
+ * canonicalLineId(raw)
+ * Normaliza el lineId removiendo prefijos duplicados.
+ * 
+ * Ejemplos:
+ *   "123" → "123"
+ *   "LI:123" → "123"
+ *   "LI:LI:123" → "123"
+ *   "PYLI:456" → "PYLI:456" (mantiene prefijo especial)
+ * 
+ * @param {string} raw - ID raw del line item
+ * @returns {string} - ID normalizado sin prefijo LI: duplicado
+ */
+export function canonicalLineId(raw) {
+  let s = toStr(raw);
+  if (!s) return s;
+
+  // Si tiene prefijo PYLI:, mantenerlo tal cual (es especial)
+  if (s.startsWith('PYLI:')) {
+    return s;
+  }
+
+  // Remover TODOS los prefijos "LI:" repetidos
+  while (s.startsWith('LI:')) {
+    s = s.substring(3);
+  }
+
+  return s;
+}
+
+/**
  * buildInvoiceKey(dealId, lineItemId, ymd)
  * ✅ CANONICAL FORMAT: <dealId>::LI:<lineItemId>::<YYYY-MM-DD>
  * This is the SINGLE SOURCE OF TRUTH for all keys (ticket & invoice)
+ * 
+ * IMPORTANTE: lineItemId se normaliza para evitar duplicar "LI:" prefix.
  */
 export function buildInvoiceKey(dealId, lineItemId, ymd) {
   const d = toStr(dealId);
-  const li = toStr(lineItemId);
+  const li = canonicalLineId(lineItemId); // ✅ Normalizar antes de usar
   const date = toStr(ymd);
 
   if (!d) throw new Error("buildInvoiceKey: dealId requerido");
@@ -26,8 +58,10 @@ export function buildInvoiceKey(dealId, lineItemId, ymd) {
   if (!date) throw new Error("buildInvoiceKey: ymd requerido");
   if (!isYMD(date)) throw new Error(`buildInvoiceKey: ymd inválido "${date}" (esperado YYYY-MM-DD)`);
 
-  // ✅ CANONICAL FORMAT with LI: prefix
-  return `${d}${SEP}LI:${li}${SEP}${date}`;
+  // ✅ CANONICAL FORMAT with single LI: prefix
+  // Si li ya tiene prefijo especial (ej: PYLI:), lo mantiene; sino agrega LI:
+  const prefix = li.startsWith('PYLI:') ? '' : 'LI:';
+  return `${d}${SEP}${prefix}${li}${SEP}${date}`;
 }
 
 /**
