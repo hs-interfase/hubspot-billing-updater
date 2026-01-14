@@ -8,7 +8,7 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
  * 
  * REGLAS
- * 1) Ticket es la fuente de verdad: ticket.of_cupo_consumo_invoice_id == invoiceId → ya consumió
+ * 1) Ticket es la fuente de verdad: ticket. == invoiceId → ya consumió
  * 2) Solo consume si lineItem.parte_del_cupo == true
  * 3) Solo consume si deal.cupo_activo == true
 + * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
@@ -18,7 +18,7 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
  * 
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
- * + * - Ticket: of_cupo_consumido, of_cupo_consumo_invoice_id, of_cupo_consumo_valor, of_cupo_consumo_fecha
+ * + * - Ticket: of_cupo_consumido, of_cupo_consumo_valor, 
 
  * 
  * @param {Object} params
@@ -55,7 +55,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
 
     // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
-      'of_cupo_consumo_invoice_id', 'total_de_horas_consumidas',
+      'total_de_horas_consumidas',
       'of_cantidad', 'monto_real_a_facturar'
     ]);
 
@@ -73,11 +73,9 @@ const dp = deal?.properties || {};
   const lp = lineItem?.properties || {};
  
   // ========== VALIDACIÓN 1: Idempotencia por Ticket + Invoice ==========
-  const invoiceIdEnTicket = safeString(tp.of_cupo_consumo_invoice_id);
   if (invoiceIdEnTicket === invoiceId) {
     const reason = 'ticket ya consumió cupo con esta invoice (idempotencia)';
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   of_cupo_consumo_invoice_id: ${invoiceIdEnTicket}`);
     return { consumed: false, reason };
   }
 
@@ -198,9 +196,7 @@ const dp = deal?.properties || {};
 // ========== ACTUALIZAR TICKET (IDEMPOTENCIA + TRAZABILIDAD + VALOR) ==========
   const ticketUpdateProps = {
     of_cupo_consumido: 'true',
-    of_cupo_consumo_invoice_id: invoiceId,
     of_cupo_consumo_valor: String(consumo),
-    of_cupo_consumo_fecha: getTodayYMD(),
   };
   try {
     await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: ticketUpdateProps });

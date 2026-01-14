@@ -146,7 +146,6 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_cupo_consumido',
       'of_cupo_consumido_fecha',
       'of_cupo_consumo_valor',
-      'of_cupo_consumo_invoice_id',
       
       // Contexto
       'of_moneda',
@@ -184,7 +183,6 @@ console.log('[DEBUG][CUPO] of_deal_id:', tp.of_deal_id);
 console.log('[DEBUG][CUPO] of_line_item_ids:', tp.of_line_item_ids);
 
 console.log('[DEBUG][CUPO] of_cupo_consumido:', tp.of_cupo_consumido);
-console.log('[DEBUG][CUPO] of_cupo_consumo_invoice_id:', tp.of_cupo_consumo_invoice_id);
 console.log('==========================================================================\n');
 
 console.log('\n-------------------- [DEBUG][CUPO] Props que contienen "cupo" --------------------');
@@ -233,7 +231,6 @@ console.log('-------------------------------------------------------------------
   showProp(tp, 'of_cupo_consumido');
   showProp(tp, 'of_cupo_consumido_fecha');
   showProp(tp, 'of_cupo_consumo_valor');
-  showProp(tp, 'of_cupo_consumo_invoice_id');
   
   console.log('\n🎯 CONTEXTO');
   showProp(tp, 'of_producto_nombres');
