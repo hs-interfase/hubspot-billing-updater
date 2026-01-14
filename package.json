@@ -7,7 +7,8 @@
 "scripts": {
   "dev": "vercel dev",
   "run:billing": "node ./src/runBilling.js",
-  "run:won": "node ./src/runBilling.js --allWon"
+  "run:won": "node ./src/runBilling.js --allWon",
+  "test:idempotency": "node ./src/__tests__/ticketKeyIdempotency.js"
 },
   "repository": {
     "type": "git",
