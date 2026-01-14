@@ -737,22 +737,60 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     // Asociación Invoice → Deal
     assocCalls.push(
       associateV4('invoices', invoiceId, 'deals', dealId)
-        .then(() => {
-          console.log(`✓ Asociación invoice→deal creada`);
-        }).catch(e => {
-          console.error(`✗ Error asociando invoice→deal:`, e.message);
-        })
+        .then(() => console.log(`✓ Asociación invoice→deal creada`))
+        .catch(e => console.error(`✗ Error asociando invoice→deal:`, e.message))
     );
     
-    // ... (rest of associations remain the same)
-
-/**
- * Obtiene una factura por ID.
- * 
- * @param {string} invoiceId - ID de la factura
- * @returns {Promise<Object>} Factura de HubSpot
- */
-export async function getInvoice(invoiceId) {
+    // Intentar asociar contacto principal del deal
+    try {
+      const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage(
+        'deals',
+        dealId,
+        'contacts',
+        10
+      );
+      const contactId = contacts.results?.[0]?.toObjectId || null;
+      if (contactId) {
+        assocCalls.push(
+          associateV4('invoices', invoiceId, 'contacts', contactId)
+            .then(() => console.log(`✓ Asociación invoice→contact creada`))
+            .catch(e => console.warn('⚠️ No se pudo asociar contacto'))
+        );
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudo obtener contacto del deal');
+    }
+    
+    await Promise.all(assocCalls);
+        console.log('--- ASOCIACIONES COMPLETADAS ---\n');
+        
+        // 8) Actualizar line item con invoice_id e invoice_key
+        await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+          properties: {
+            invoice_id: invoiceId,
+            invoice_key: invoiceKey,
+          },
+        });
+        
+        console.log(`✓ Line Item ${lineItemId} actualizado con invoice_id: ${invoiceId}`);
+        console.log('================================================\n');
+        
+        return { invoiceId, created: true };
+        
+      } catch (error) {
+        console.error('\n❌ Error creando factura:', error.response?.body || error.message);
+        console.error(error.stack);
+        throw error;
+      }
+    }
+    
+    /**
+     * Obtiene una factura por ID.
+     * 
+     * @param {string} invoiceId - ID de la factura
+     * @returns {Promise<Object>} Factura de HubSpot
+     */
+    export async function getInvoice(invoiceId) {
   try {
     const invoice = await hubspotClient.crm.objects.basicApi.getById(
       'invoices',

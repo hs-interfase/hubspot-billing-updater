@@ -41,7 +41,7 @@ async function getDealIdForLineItem(lineItemId) {
 }
 
 /**
- * ✅ CRITICAL: Calcula billingPeriodDate (nextBillingDate >= today)
+ * ✅ NUEVA: Calcula billingPeriodDate (nextBillingDate >= today)
  * SOURCE OF TRUTH para ticket key e invoice key.
  */
 function getBillingPeriodDate(lineItemProps) {
@@ -110,10 +110,9 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 }
 
 /**
- * ✅ FACTURACIÓN URGENTE DE LINE ITEM
+ * ✅ UPDATED: Procesa la facturación urgente de un Line Item.
  * 
- * REGLA CRÍTICA: Usa billingPeriodDate (nextBillingDate) para ticket key e invoice key,
- * NO usa TODAY. Esto evita duplicar tickets/invoices para la misma ocurrencia.
+ * CAMBIO CRÍTICO: Usa billingPeriodDate para ticket/invoice keys, NO today.
  */
 export async function processUrgentLineItem(lineItemId) {
   console.log('\n🔥 === FACTURACIÓN URGENTE LINE ITEM ===');
@@ -122,7 +121,7 @@ export async function processUrgentLineItem(lineItemId) {
   let shouldResetFlag = false;
 
   try {
-    // 1) Traer line item CON TODAS las fechas para calcular billingPeriodDate
+    // 1) Traer line item CON fechas para calcular billingPeriodDate
     const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'hs_object_id',
       'name',
@@ -130,7 +129,7 @@ export async function processUrgentLineItem(lineItemId) {
       'invoice_key',
       'invoice_id',
       'cantidad_de_facturaciones_urgentes',
-      // ✅ CRITICAL: Include all date fields for getBillingPeriodDate
+      // ✅ Incluir campos de fecha
       'hs_recurring_billing_start_date',
       'recurringbillingstartdate',
       'fecha_inicio_de_facturacion',
@@ -151,22 +150,20 @@ export async function processUrgentLineItem(lineItemId) {
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
 
-    shouldResetFlag = true; // ✅ Flag is true, we MUST reset it in finally
+    shouldResetFlag = true; // ✅ MUST reset in finally
 
-    // ✅ 3) Calculate billingPeriodDate (SOURCE OF TRUTH for keys)
+    // ✅ 3) Calcular billingPeriodDate (NO usar today para keys)
     const billingPeriodDate = getBillingPeriodDate(lineItemProps);
     const today = getTodayYMD();
 
-    console.log('\n🔑 === BILLING PERIOD CALCULATION ===');
+    console.log('\n🔑 === BILLING DATES ===');
     console.log(`   billingPeriodDate: ${billingPeriodDate || 'NULL'}`);
     console.log(`   today: ${today}`);
-    console.log(`   ℹ️  ticketKey will use: ${billingPeriodDate || 'N/A'} (NOT today)`);
-    console.log(`   ℹ️  invoiceKey will use: ${billingPeriodDate || 'N/A'} (NOT today)`);
-    console.log(`   ℹ️  hs_invoice_date will use: ${today} (urgent billing date)`);
+    console.log(`   ⚠️  ticketKey usa: ${billingPeriodDate || 'N/A'} (NOT today)`);
+    console.log(`   ⚠️  invoiceKey usa: ${billingPeriodDate || 'N/A'} (NOT today)`);
 
     if (!billingPeriodDate) {
-      console.error('❌ No billing period date found for this line item');
-      console.error('   Check: hs_recurring_billing_start_date, fecha_inicio_de_facturacion, fecha_2..24');
+      console.error('❌ No billing period date found');
       return { skipped: true, reason: 'no_billing_period_date' };
     }
 
@@ -185,24 +182,22 @@ export async function processUrgentLineItem(lineItemId) {
         dealId,
         lineItemId,
         invoiceId: existingInvoiceId,
-        billDateYMD: billingPeriodDate  // ✅ Use period date, NOT today
+        billDateYMD: billingPeriodDate  // ✅ Use period date
       });
 
       if (validation.valid) {
         console.log(`✓ Line Item ya tiene factura válida: ${existingInvoiceId}`);
-        console.log(`  Expected key: ${validation.expectedKey}`);
-        console.log(`  Found key:    ${validation.foundKey}`);
         return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
       }
 
-      console.warn(`[urgent-lineitem] ⚠️ invoice_id presente pero NO válido, limpiando...`);
+      console.warn(`[urgent-lineitem] ⚠️ invoice_id inválido, limpiando...`);
       try {
         await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
           properties: { invoice_id: '', of_invoice_id: '', invoice_key: '' },
         });
         console.log(`✓ Line Item limpiado`);
       } catch (cleanErr) {
-        console.error(`⚠️ Error limpiando line item:`, cleanErr?.message);
+        console.error(`⚠️ Error limpiando:`, cleanErr?.message);
       }
     }
 
@@ -210,35 +205,33 @@ export async function processUrgentLineItem(lineItemId) {
     const { deal, lineItems } = await getDealWithLineItems(dealId);
     const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
     if (!targetLineItem) {
-      console.error(`❌ Line Item ${lineItemId} no encontrado en el deal ${dealId}`);
       throw new Error('Line item no encontrado en el deal');
     }
 
     console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
-    // ✅ 7.a) Ensure canonical ticket with billingPeriodDate (NOT today)
+    // ✅ 7.a) Crear/reutilizar ticket con billingPeriodDate (NOT today)
     const { ticketId, created } = await createAutoBillingTicket(
       deal, 
       targetLineItem, 
-      billingPeriodDate  // ✅ CRITICAL: Use period date, NOT getTodayYMD()
+      billingPeriodDate  // ✅ CRITICAL: Use period date
     );
     
     console.log(`\n✅ Ticket ${created ? 'creado' : 'reutilizado'}: ${ticketId}`);
     console.log(`   ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
 
-    // ✅ 7.b) Mark ticket as urgent billing
+    // ✅ 7.b) Marcar ticket como urgente
     if (ticketId) {
       await updateTicket(ticketId, {
         of_facturacion_urgente: 'true',
-        of_fecha_facturacion: today,  // When vendor ordered it
-        hs_resolution_due_date: today,  // Process today
+        of_fecha_facturacion: today,
+        hs_resolution_due_date: today,
       });
-      console.log(`✅ Ticket marcado como facturación urgente`);
+      console.log(`✅ Ticket marcado como urgente`);
 
-      // Move to READY stage
+      // Mover a READY
       const readyStage = process.env.BILLING_TICKET_STAGE_READY;
       const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
-
       if (readyStage) {
         await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
           properties: {
@@ -246,25 +239,18 @@ export async function processUrgentLineItem(lineItemId) {
             ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
           },
         });
-        console.log(`✅ Ticket movido a READY (${readyStage})`);
+        console.log(`✅ Ticket movido a READY`);
       }
     }
 
-    // 7.c) Crear factura con billingPeriodDate para invoiceKey
-    const invoiceResult = await createAutoInvoiceFromLineItem(
-      deal, 
-      targetLineItem, 
-      billingPeriodDate,  // ✅ CRITICAL: Use period date for invoiceKey
-      today  // ✅ Invoice date (hs_invoice_date) = today
-    );
-
-    if (!invoiceResult || !invoiceResult.invoiceId) {
-      console.error('❌ No se pudo crear la factura');
-      throw new Error('Error al crear factura');
-    }
-
+// 7.c) Crear factura con billingPeriodDate para invoiceKey, today para hs_invoice_date
+const invoiceResult = await createAutoInvoiceFromLineItem(
+  deal, 
+  targetLineItem, 
+  billingPeriodDate,  // ✅ For invoiceKey
+  today  // ✅ For hs_invoice_date
+);
     console.log(`\n✅ Factura creada: ${invoiceResult.invoiceId}`);
-    console.log(`   invoiceKey: ${dealId}::${lineItemId}::${billingPeriodDate}`);
 
     // 7.d) Asociar factura al ticket
     if (ticketId) {
@@ -286,10 +272,9 @@ export async function processUrgentLineItem(lineItemId) {
       billingPeriodDate,
     };
   } catch (error) {
-    console.error('\n❌ Error en facturación urgente de Line Item:', error.message);
+    console.error('\n❌ Error en facturación urgente:', error.message);
     console.error(error.stack);
  
-    // Guardar error para debug
     try {
       await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
         properties: {
@@ -297,22 +282,22 @@ export async function processUrgentLineItem(lineItemId) {
           of_billing_error_at: String(getTodayMillis()),
         },
       });
-      console.log('⚠️ Guardado of_billing_error en Line Item');
+      console.log('⚠️ Guardado of_billing_error');
     } catch (e) {
       console.error('❌ No se pudo guardar of_billing_error:', e.message);
     }
 
     throw error;
   } finally {
-    // ✅ ALWAYS reset facturar_ahora flag, even on errors
+    // ✅ ALWAYS reset flag (even on errors)
     if (shouldResetFlag) {
       try {
         await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
           properties: { facturar_ahora: 'false' },
         });
-        console.log('✅ Flag facturar_ahora reseteado a false (finally)');
+        console.log('✅ Flag facturar_ahora reseteado (finally)');
       } catch (resetError) {
-        console.error('❌ Error reseteando facturar_ahora flag:', resetError.message);
+        console.error('❌ Error reseteando flag:', resetError.message);
       }
     }
   }
@@ -332,16 +317,12 @@ export async function processUrgentTicket(ticketId) {
       'subject',
       'facturar_ahora',
       'of_invoice_id',
-      'of_facturacion_urgente',
-      'of_fecha_de_facturacion',
-      'hs_resolution_due_date',
     ]);
 
     const ticketProps = ticket.properties || {};
     console.log(`Ticket: ${ticketProps.subject || ticketId}`);
 
-    const facturarAhora = parseBool(ticketProps.facturar_ahora);
-    if (!facturarAhora) {
+    if (!parseBool(ticketProps.facturar_ahora)) {
       console.log('⚠️ facturar_ahora no está en true, ignorando');
       return { skipped: true, reason: 'facturar_ahora_false' };
     }
@@ -349,31 +330,21 @@ export async function processUrgentTicket(ticketId) {
     shouldResetFlag = true;
 
     if (ticketProps.of_invoice_id) {
-      console.log(`⚠️ Ticket ya tiene factura: ${ticketProps.of_invoice_id}, ignorando');
+      console.log(`⚠️ Ticket ya tiene factura: ${ticketProps.of_invoice_id}`);
       return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
     }
 
     console.log('✅ Ticket válido, procediendo a facturar...\n');
 
-    // Mark as urgent before invoicing
-    const today = getTodayYMD();
-    await updateTicket(ticketId, {
-      of_facturacion_urgente: 'true',
-      of_fecha_facturacion: today,
-      hs_resolution_due_date: today,
-    });
-    console.log('✅ Ticket marcado como facturación urgente');
-
     const invoiceResult = await createInvoiceFromTicket(ticket);
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
-      console.error('❌ No se pudo crear la factura del ticket');
       throw new Error('Error al crear factura de ticket');
     }
 
     console.log(`✅ Factura creada: ${invoiceResult.invoiceId}`);
 
-    // Mover ticket a READY
+    // Mover a READY
     const readyStage = process.env.BILLING_TICKET_STAGE_READY;
     const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;
     if (readyStage) {
@@ -383,10 +354,10 @@ export async function processUrgentTicket(ticketId) {
           ...(pipelineId ? { hs_pipeline: pipelineId } : {}),
         },
       });
-      console.log(`✅ Ticket movido a READY (${readyStage})`);
+      console.log(`✅ Ticket movido a READY`);
     }
 
-    console.log('\n🎉 Facturación urgente de ticket completada exitosamente');
+    console.log('\n🎉 Facturación urgente de ticket completada');
 
     return {
       success: true,
@@ -411,15 +382,15 @@ export async function processUrgentTicket(ticketId) {
 
     throw error;
   } finally {
-    // ✅ ALWAYS reset facturar_ahora flag
+    // ✅ ALWAYS reset flag
     if (shouldResetFlag) {
       try {
         await hubspotClient.crm.tickets.basicApi.update(ticketId, {
           properties: { facturar_ahora: 'false' },
         });
-        console.log('✅ Flag facturar_ahora reseteado a false (finally)');
+        console.log('✅ Flag facturar_ahora reseteado (finally)');
       } catch (resetError) {
-        console.error('❌ Error reseteando facturar_ahora flag:', resetError.message);
+        console.error('❌ Error reseteando flag:', resetError.message);
       }
     }
   }
