@@ -486,9 +486,68 @@ if (tp.of_invoice_id) {
     return { invoiceId: null, created: false };
   }
   
-  console.log('\n--- PROPIEDADES VALIDADAS DE LA FACTURA ---');
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║         📄 CREACIÓN DE FACTURA - PROPIEDADES COMPLETAS        ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝');
+  
+  console.log('\n🔑 IDEMPOTENCIA Y REFERENCIAS');
+  console.log('   of_invoice_key:', validatedProps.of_invoice_key);
+  console.log('   ticket_id:', validatedProps.ticket_id);
+  
+  console.log('\n📋 TÍTULO Y DESCRIPCIÓN');
+  console.log('   hs_title:', validatedProps.hs_title);
+  console.log('   descripcion:', validatedProps.descripcion);
+  console.log('   nombre_producto:', validatedProps.nombre_producto);
+  console.log('   servicio:', validatedProps.servicio);
+  
+  console.log('\n💰 MONTOS Y CANTIDADES');
+  console.log('   cantidad:', validatedProps.cantidad);
+  console.log('   monto_a_facturar:', validatedProps.monto_a_facturar);
+  console.log('   of_monto_total_facturado:', validatedProps.of_monto_total_facturado);
+  console.log('   hs_currency:', validatedProps.hs_currency);
+  
+  console.log('\n💵 DESCUENTOS E IMPUESTOS');
+  console.log('   descuento (%):', validatedProps.descuento);
+  console.log('   descuento_por_unidad ($):', validatedProps.descuento_por_unidad);
+  console.log('   iva:', validatedProps.iva);
+  console.log('   exonera_irae:', validatedProps.exonera_irae);
+  
+  console.log('\n📅 FECHAS');
+  console.log('   hs_invoice_date:', validatedProps.hs_invoice_date);
+  console.log('   hs_due_date:', validatedProps.hs_due_date);
+  console.log('   fecha_de_facturacion:', validatedProps.fecha_de_facturacion);
+  console.log('   createdate:', validatedProps.createdate);
+  
+  console.log('\n👥 RESPONSABLES');
+  console.log('   responsable_asignado:', validatedProps.responsable_asignado);
+  console.log('   vendedor_factura:', validatedProps.vendedor_factura);
+  console.log('   hubspot_owner_id:', validatedProps.hubspot_owner_id);
+  console.log('   usuario_disparador_de_factura:', validatedProps.usuario_disparador_de_factura);
+  
+  console.log('\n🏢 CONTEXTO DEL NEGOCIO');
+  console.log('   nombre_empresa:', validatedProps.nombre_empresa);
+  console.log('   pais_operativo:', validatedProps.pais_operativo);
+  console.log('   unidad_de_negocio:', validatedProps.unidad_de_negocio);
+  console.log('   frecuencia_de_facturacion:', validatedProps.frecuencia_de_facturacion);
+  
+  console.log('\n📊 IMPACTOS Y PERIODOS');
+  console.log('   impacto_historico:', validatedProps.impacto_historico);
+  console.log('   impacto_facturado:', validatedProps.impacto_facturado);
+  console.log('   impacto_forecast:', validatedProps.impacto_forecast);
+  console.log('   periodo_a_facturar:', validatedProps.periodo_a_facturar);
+  console.log('   mensual:', validatedProps.mensual);
+  
+  console.log('\n📝 OTROS DATOS');
+  console.log('   etapa_de_la_factura:', validatedProps.etapa_de_la_factura);
+  console.log('   modo_de_generacion_de_factura:', validatedProps.modo_de_generacion_de_factura);
+  console.log('   hs_invoice_billable:', validatedProps.hs_invoice_billable);
+  console.log('   hs_comments:', validatedProps.hs_comments);
+  console.log('   motivo_de_pausa:', validatedProps.motivo_de_pausa);
+  console.log('   id_factura_nodum:', validatedProps.id_factura_nodum);
+  
+  console.log('\n📦 PROPIEDADES COMPLETAS (JSON):');
   console.log(JSON.stringify(validatedProps, null, 2));
-  console.log('-------------------------------------------\n');
+  console.log('\n════════════════════════════════════════════════════════════════\n');
   
   try {
     // 7) Crear la factura usando API directa
@@ -895,9 +954,52 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     return { invoiceId: null, created: false };
   }
   
-  console.log('\n--- PROPIEDADES VALIDADAS DE LA FACTURA ---');
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║   📄 CREACIÓN AUTOMÁTICA DE FACTURA - PROPIEDADES COMPLETAS   ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝');
+  
+  console.log('\n🔑 IDEMPOTENCIA Y REFERENCIAS');
+  console.log('   of_invoice_key:', validatedProps.of_invoice_key);
+  console.log('   Deal ID:', dealId);
+  console.log('   Line Item ID:', lineItemId);
+  
+  console.log('\n📋 TÍTULO Y DESCRIPCIÓN');
+  console.log('   hs_title:', validatedProps.hs_title);
+  console.log('   descripcion:', validatedProps.descripcion);
+  console.log('   nombre_producto:', validatedProps.nombre_producto);
+  console.log('   servicio:', validatedProps.servicio);
+  
+  console.log('\n💰 MONTOS Y CANTIDADES');
+  console.log('   cantidad:', quantity);
+  console.log('   precio unitario:', price);
+  console.log('   of_monto_total_facturado:', validatedProps.of_monto_total_facturado);
+  console.log('   hs_currency:', validatedProps.hs_currency);
+  
+  console.log('\n💵 DESCUENTOS E IMPUESTOS');
+  console.log('   descuento (%):', discountPercent);
+  console.log('   descuento ($):', discountAmount);
+  console.log('   iva aplicado:', hasIVA ? '22%' : 'No');
+  
+  console.log('\n📅 FECHAS');
+  console.log('   hs_invoice_date:', validatedProps.hs_invoice_date);
+  console.log('   hs_due_date:', validatedProps.hs_due_date);
+  console.log('   billingPeriodDate:', billingPeriodDate);
+  
+  console.log('\n👥 RESPONSABLES');
+  console.log('   hubspot_owner_id:', validatedProps.hubspot_owner_id);
+  console.log('   hs_external_recipient:', validatedProps.hs_external_recipient);
+  
+  console.log('\n🏢 CONTEXTO DEL NEGOCIO');
+  console.log('   nombre_empresa:', validatedProps.nombre_empresa);
+  console.log('   unidad_de_negocio:', validatedProps.unidad_de_negocio);
+  
+  console.log('\n📝 OTROS DATOS');
+  console.log('   etapa_de_la_factura:', validatedProps.etapa_de_la_factura);
+  console.log('   hs_invoice_billable:', validatedProps.hs_invoice_billable);
+  
+  console.log('\n📦 PROPIEDADES COMPLETAS (JSON):');
   console.log(JSON.stringify(validatedProps, null, 2));
-  console.log('------------------------------------------\n');
+  console.log('\n════════════════════════════════════════════════════════════════\n');
   
   try {
     // 6) Crear la factura usando API directa
