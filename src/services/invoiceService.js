@@ -29,14 +29,15 @@ function showProp(obj, key, label = key) {
 
 // Propiedades permitidas en el objeto Invoice de HubSpot
 const ALLOWED_INVOICE_PROPS = [
-  "cantidad","descripcion","descuento","descuento_por_unidad","etapa_de_la_factura",
-  "exonera_irae","fecha_de_caneclacion","fecha_de_emision","fecha_de_envio","fecha_de_pago",
-  "frecuencia_de_facturacion","hs_comments","hs_currency","hs_due_date","hs_invoice_billable",
-  "hs_invoice_date","hs_tax_id","hs_title","hubspot_owner_id","id_factura_nodum","iva",
-  "modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
-  "nombre_producto","of_invoice_key","pais_operativo","pedido_por","procede_de",
-  "responsable_asignado","reventa","servicio","ticket_id","unidad_de_negocio",
-  "usuario_disparador_de_factura","vendedor_factura"
+  "cantidad","createdate","descripcion","descuento","descuento_por_unidad","etapa_de_la_factura",
+  "exonera_irae","fecha_de_caneclacion","fecha_de_emision","fecha_de_envio","fecha_de_facturacion",
+  "fecha_de_pago","frecuencia_de_facturacion","hs_comments","hs_currency","hs_due_date",
+  "hs_invoice_billable","hs_invoice_date","hs_tax_id","hs_title","hubspot_owner_id",
+  "id_factura_nodum","impacto_facturado","impacto_forecast","impacto_historico","iva",
+  "mensual","modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
+  "nombre_producto","of_invoice_key","of_monto_total_facturado","pais_operativo","pedido_por",
+  "periodo_a_facturar","procede_de","responsable_asignado","reventa","servicio","ticket_id",
+  "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura"
 ];
 
 // Filtra un objeto dejando solo las propiedades permitidas (no null/undefined)
@@ -154,6 +155,28 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_frecuencia_de_facturacion',
       'of_propietario_secundario',
       'hubspot_owner_id',
+      'of_cliente',
+      'of_invoice_title',
+      'of_unidad_de_negocio',
+      
+      // Fechas adicionales
+      'fecha_de_vencimiento',
+      'of_impacto_historico',
+      'of_impacto_facturado',
+      'of_impacto_forecast',
+      
+      // Periodos
+      'of_periodo_a_facturar',
+      'of_periodo_de_facturacion',
+      
+      // Otros campos
+      'descripcion',
+      'comments',
+      'createdate',
+      'motivo_pausa',
+      'unidad_de_negocio',
+      'id_factura_nodum',
+      'etapa_factura',
       
       // Flags
       'facturar_ahora',
@@ -346,9 +369,9 @@ if (tp.of_invoice_id) {
     // 💰 Moneda (del ticket)
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     
-    // ✅ C.4) Fechas: invoice_date = hoy, due_date = fecha_esperada + 10 días
+    // ✅ C.4) Fechas: invoice_date = hoy, due_date calculado
     hs_invoice_date: toHubSpotDateOnly(fechaRealFacturacion),
-    hs_due_date: toHubSpotDateOnly(dueDateYMD),
+    hs_due_date: tp.fecha_de_vencimiento ? toHubSpotDateOnly(tp.fecha_de_vencimiento) : toHubSpotDateOnly(dueDateYMD),
     
     // ✅ Desactiva validaciones de HubSpot
     hs_invoice_billable: false,
@@ -359,7 +382,7 @@ if (tp.of_invoice_id) {
     
     // 🎯 Identidad del producto (del ticket)
     nombre_producto: tp.of_producto_nombres,
-    descripcion: tp.of_descripcion_producto,
+    descripcion: tp.of_descripcion_producto || tp.descripcion,
     servicio: tp.of_rubro,
     
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
@@ -373,16 +396,42 @@ if (tp.of_invoice_id) {
     exonera_irae: tp.of_exonera_irae,
     
     // 👥 Responsables
+    responsable_asignado: responsableAsignado,
     vendedor_factura: tp.of_propietario_secundario,
     
     // 📊 Frecuencia
-    frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion,
+    frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || (tp.repetitivo ? 'Mensual' : undefined),
     
-    // 🏢 Contexto
+    // 🏢 Contexto del negocio
+    nombre_empresa: tp.of_cliente,
     pais_operativo: tp.of_pais_operativo,
+    unidad_de_negocio: tp.of_unidad_de_negocio || tp.unidad_de_negocio,
+    
+    // 📅 Fechas adicionales
+    fecha_de_facturacion: tp.of_fecha_de_facturacion,
+    
+    // 📊 Impactos
+    impacto_historico: tp.of_impacto_historico,
+    impacto_facturado: tp.of_impacto_facturado,
+    impacto_forecast: tp.of_impacto_forecast,
+    
+    // 📆 Periodos
+    periodo_a_facturar: tp.of_periodo_a_facturar,
+    mensual: tp.of_periodo_de_facturacion,
+    
+    // 📝 Comentarios y metadata
+    hs_comments: tp.comments,
+    createdate: tp.createdate,
+    motivo_de_pausa: tp.motivo_pausa,
+    
+    // 🔢 IDs externos
+    id_factura_nodum: tp.id_factura_nodum,
     
     // 🔑 Etapa inicial
-    etapa_de_la_factura: 'Pendiente',
+    etapa_de_la_factura: tp.etapa_factura || 'Pendiente',
+    
+    // 🚀 Modo de generación
+    modo_de_generacion_de_factura: modoGeneracion,
   };
   
   // ✅ C.3) Agregar monto total facturado (solo si no es NaN)
@@ -406,9 +455,9 @@ if (tp.of_invoice_id) {
     of_monto_total_facturado: invoicePropsRaw.of_monto_total_facturado,
   });
 
-  // Agregar responsable_asignado solo si es numérico válido
-  if (responsableAsignado) {
-    invoicePropsRaw.responsable_asignado = responsableAsignado;
+  // Agregar usuario disparador si es manual
+  if (usuarioDisparador) {
+    invoicePropsRaw.usuario_disparador_de_factura = usuarioDisparador;
   }
   
   // Asignar al usuario administrativo si está configurado
