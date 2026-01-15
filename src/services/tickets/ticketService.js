@@ -604,7 +604,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
 
       const dealName = deal.properties?.dealname || 'Deal';
       const productName = lineItem.properties?.name || 'Producto';
-      const rubro = lineItem.properties?.servicio || 'Sin rubro';
+      const rubro = snapshots.of_rubro || 'Sin rubro';
       
       // Determinar vendedor
       const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;

@@ -88,7 +88,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       // 3) Título
       const dealName = dp.dealname || 'Deal';
       const productName = lp.name || 'Producto';
-      const rubro = lp.servicio || 'Sin rubro';
+      const rubro = snapshots.of_rubro || 'Sin rubro';
 
       // 4) Stage según fecha y flag
       const stage = getTicketStage(billDateYMD, lineItem);

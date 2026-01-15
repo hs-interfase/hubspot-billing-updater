@@ -95,6 +95,8 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
     of_rubro: safeString(lp.servicio),
+    of_subrubro: safeString(lp.subrubro),
+    observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(lp.pais_operativo),
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
