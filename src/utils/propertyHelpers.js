@@ -147,29 +147,50 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
  * Calcula el estado del cupo según las reglas del negocio.
  * 
  * Reglas:
- * - Si cupo_activo=false => "SIN_CUPO"
- * - Si cupo_restante <= 0 => "SIN_CUPO"
- * - Si cupo_restante <= cupo_umbral => "BAJO_UMBRAL"
- * - Si cupo_restante > cupo_umbral => "OK"
+ * - Si no hay cupo (cupo_activo=false) => null
+ * - Si cupo_restante <= 0 => "Agotado"
+ * - Si cupo_restante <= cupo_umbral => "Bajo Umbral"
+ * - Si cupo_restante > cupo_umbral => "Ok"
+ * - Si hay datos inconsistentes => "Inconsistente"
  * 
  * @param {Object} dealProps - Propiedades del deal
- * @returns {string|null} "SIN_CUPO" | "BAJO_UMBRAL" | "OK" | null
+ * @returns {string|null} "Ok" | "Bajo Umbral" | "Inconsistente" | "Agotado" | null
  */
 export function calculateCupoEstado(dealProps) {
   const cupoActivo = String(dealProps.cupo_activo || '').toLowerCase() === 'true';
   const cupoRestante = parseFloat(dealProps.cupo_restante);
   const cupoUmbral = parseFloat(dealProps.cupo_umbral);
 
-  // Si no está activo o restante <= 0
-  if (!cupoActivo || cupoRestante <= 0) {
-    return 'SIN_CUPO';
+  console.log(`[calculateCupoEstado] 🔍 Calculando estado:`);
+  console.log(`   cupo_activo: "${dealProps.cupo_activo}" → ${cupoActivo}`);
+  console.log(`   cupo_restante: "${dealProps.cupo_restante}" → ${cupoRestante}`);
+  console.log(`   cupo_umbral: "${dealProps.cupo_umbral}" → ${cupoUmbral}`);
+
+  // Si no hay cupo activo => null
+  if (!cupoActivo) {
+    console.log(`   → null (cupo_activo=false)`);
+    return null;
+  }
+  
+  // Si cupo_restante es NaN o negativo => Inconsistente
+  if (isNaN(cupoRestante) || cupoRestante < 0) {
+    console.log(`   → Inconsistente (cupo_restante inválido)`);
+    return 'Inconsistente';
+  }
+  
+  // Si cupo_restante = 0 => Agotado
+  if (cupoRestante === 0) {
+    console.log(`   → Agotado (cupo_restante = 0)`);
+    return 'Agotado';
   }
 
-  // Si hay umbral definido y estamos por debajo
-  if (!isNaN(cupoUmbral) && cupoRestante <= cupoUmbral) {
-    return 'BAJO_UMBRAL';
+  // Si hay umbral definido y estamos por debajo o igual
+  if (!isNaN(cupoUmbral) && cupoUmbral > 0 && cupoRestante <= cupoUmbral) {
+    console.log(`   → Bajo Umbral (restante ${cupoRestante} <= umbral ${cupoUmbral})`);
+    return 'Bajo Umbral';
   }
 
   // Cupo OK
-  return 'OK';
+  console.log(`   → Ok (restante ${cupoRestante} > umbral ${cupoUmbral})`);
+  return 'Ok';
 }

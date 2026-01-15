@@ -101,6 +101,7 @@ export async function getDealWithLineItems(dealId) {
     "name",
     "description",
     "price",
+    "hs_cost_of_goods_sold",
     "quantity",
     "amount",
     "discount",
@@ -132,7 +133,7 @@ export async function getDealWithLineItems(dealId) {
     "hs_billing_start_delay_type",
     "hs_billing_start_delay_days",
     "hs_billing_start_delay_months",  
-    
+
     // --- cupo (solo flag) ---
     "parte_del_cupo",
 
