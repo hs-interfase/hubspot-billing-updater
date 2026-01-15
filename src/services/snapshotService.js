@@ -57,7 +57,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
   const costoUnitario = parseNumber(lp.hs_cost_of_goods_sold, 0);
   
   // TAX & DISCOUNT desde Line Item
-  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0); // % descuento
+  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100; // ✅ Convertir basis points a %
   const descuentoMonto = parseNumber(lp.discount, 0); // descuento por unidad en moneda del deal
   const ivaValue = detectIVA(lineItem); // "true" si ID === '16912720'
 

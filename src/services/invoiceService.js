@@ -31,7 +31,7 @@ function showProp(obj, key, label = key) {
 const ALLOWED_INVOICE_PROPS = [
   "cantidad","createdate","descripcion","descuento","descuento_por_unidad","etapa_de_la_factura",
   "exonera_irae","fecha_de_caneclacion","fecha_de_emision","fecha_de_envio","fecha_de_facturacion",
-  "fecha_de_pago","frecuencia_de_facturacion","hs_comments","hs_currency","hs_due_date",
+  "fecha_de_pago","frecuencia_de_facturacion","hs_amount_billed","hs_comments","hs_currency","hs_due_date",
   "hs_invoice_billable","hs_invoice_date","hs_tax_id","hs_title","hubspot_owner_id",
   "id_factura_nodum","impacto_facturado","impacto_forecast","impacto_historico","iva",
   "mensual","modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
@@ -398,6 +398,7 @@ if (tp.of_invoice_id) {
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
     cantidad: cantidad,
     monto_a_facturar: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
+    hs_amount_billed: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ Total facturado (mismo que monto_a_facturar)
     descuento: discountPercent,
     descuento_por_unidad: discountAmount,
     
