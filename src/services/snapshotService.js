@@ -1,6 +1,7 @@
 // src/services/snapshotService.js
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
+import { toHubSpotDateOnly } from '../utils/dateUtils.js';
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.
@@ -150,7 +151,7 @@ export function extractDealSnapshots(deal) {
  * Combina snapshots de Deal y Line Item en un objeto listo para el Ticket.
  *
  * NUEVO MODELO DE FECHAS (sin período):
- * - expectedDate (planificada/esperada desde Line Item) → hs_resolution_due_date
+ * - expectedDate (planificada/esperada desde Line Item) → fecha_de_resolucion_esperada
  * - orderedDate (cuando se manda a facturar) → of_fecha_de_facturacion
  *
  * Regla: En MANUAL normal, orderedDate debe ser null (NO se setea).
@@ -172,22 +173,32 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
   const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
 
+  // ✅ C) Construir título del invoice
+  const liShort = safeString(lp.name) || `Flota`;
+  const invoiceTitle = `${safeString(dp.dealname) || 'Deal'} - ${liShort} - ${expectedDate}`;
+
   const out = {
     ...dealData,
     ...lineItemData,
 
-    // 📅 FECHA ESPERADA/PLANIFICADA (siempre desde Line Item)
-    hs_resolution_due_date: safeString(expectedDate),
+    // ✅ B) FECHA ESPERADA/PLANIFICADA (siempre desde billDateYMD usado en key)
+    // Convertir YYYY-MM-DD a timestamp ms (midnight UTC)
+    fecha_de_resolucion_esperada: expectedDate ? toHubSpotDateOnly(expectedDate) : null,
 
     // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
     // of_fecha_facturacion_real: (se setea después)
 
     motivo_cancelacion_ticket: motivoCancelacion,
+    
+    // ✅ C) Título del invoice para usar después
+    subject: invoiceTitle,
+    of_invoice_title: invoiceTitle,
   };
 
-  // 📅 FECHA ORDENADA A FACTURAR (solo si aplica)
+  // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
+  // Convertir YYYY-MM-DD a timestamp ms
   if (orderedDate) {
-    out.of_fecha_de_facturacion = safeString(orderedDate);
+    out.of_fecha_de_facturacion = toHubSpotDateOnly(orderedDate);
   }
 
   return out;

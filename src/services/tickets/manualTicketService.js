@@ -82,7 +82,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
       console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
-      console.log('[ticketService] 🔍 MANUAL - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
+      console.log('[ticketService] 🔍 MANUAL - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
       console.log('[ticketService] 🔍 MANUAL - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
       // 3) Título

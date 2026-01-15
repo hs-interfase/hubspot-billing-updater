@@ -82,7 +82,7 @@ for (const li of autoLineItems) {
         await updateTicket(ticketId, {
           of_facturacion_urgente: 'true',
           of_fecha_facturacion: today,  // When ordered
-          hs_resolution_due_date: today,  // Process today
+          fecha_de_resolucion_esperada: today,  // Process today
         });
         
         console.log(`      [Phase3] ticket ${created ? 'created' : 'reused'}: ${ticketId}`);

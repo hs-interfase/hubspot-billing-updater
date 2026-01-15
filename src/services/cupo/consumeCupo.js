@@ -185,6 +185,19 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
     cupoDeactivated = true;
   }
 
+  // ✅ A) Actualizar cupo_estado según reglas
+  const { calculateCupoEstado } = await import('../../utils/propertyHelpers.js');
+  const newCupoEstado = calculateCupoEstado({
+    cupo_activo: dealUpdateProps.cupo_activo ?? dp.cupo_activo,
+    cupo_restante: dealUpdateProps.cupo_restante,
+    cupo_umbral: dp.cupo_umbral,
+  });
+  
+  if (newCupoEstado) {
+    dealUpdateProps.cupo_estado = newCupoEstado;
+    console.log(`[consumeCupo] 📊 cupo_estado → ${newCupoEstado}`);
+  }
+
   // ========== ACTUALIZAR DEAL ==========
   try {
     await hubspotClient.crm.deals.basicApi.update(dealId, { properties: dealUpdateProps });

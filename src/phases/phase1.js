@@ -62,11 +62,26 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_restante = String(cupoTotal);
   }
 
+  // ✅ A) Actualizar cupo_estado según reglas
+  const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
+  const newCupoEstado = calculateCupoEstado({
+    cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
+    cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
+    cupo_umbral: dealProps.cupo_umbral,
+  });
+  
+  const currentCupoEstado = dealProps.cupo_estado;
+  if (newCupoEstado && newCupoEstado !== currentCupoEstado) {
+    updateProps.cupo_estado = newCupoEstado;
+    console.log(`[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
+  }
+
   if (Object.keys(updateProps).length === 0) {
     console.log(`[cupo:activate] dealId=${dealId} sin cambios (cupo_activo=${shouldActivate})`);
     return;
   }
 
+  console.log(`[cupo:activate] Updating deal ${dealId} with:`, Object.keys(updateProps).join(', '));
   await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties: updateProps });
   console.log(`[cupo:activate] ✅ Deal ${dealId} actualizado:`, updateProps);
 }

@@ -225,7 +225,7 @@ export async function processUrgentLineItem(lineItemId) {
       await updateTicket(ticketId, {
         of_facturacion_urgente: 'true',
         of_fecha_facturacion: today,
-        hs_resolution_due_date: today,
+        fecha_esperada_de_facturacion : today,
       });
       console.log(`✅ Ticket marcado como urgente`);
 

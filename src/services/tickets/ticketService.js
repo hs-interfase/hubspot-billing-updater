@@ -599,7 +599,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
       console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
-      console.log('[ticketService] 🔍 AUTO - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
+      console.log('[ticketService] 🔍 AUTO - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
       console.log('[ticketService] 🔍 AUTO - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
       const dealName = deal.properties?.dealname || 'Deal';
@@ -991,7 +991,7 @@ const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDat
   console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
   console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
-  console.log('[ticketService] 🔍 AUTO - hs_resolution_due_date:', snapshots.hs_resolution_due_date);
+  console.log('[ticketService] 🔍 AUTO - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
   console.log('[ticketService] 🔍 AUTO - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
   const dealName = deal.properties?.dealname || 'Deal';
