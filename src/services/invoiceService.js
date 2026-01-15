@@ -2,7 +2,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString } from '../utils/parsers.js';
-import { getTodayYMD, toHubSpotDate, toHubSpotDateOnly } from '../utils/dateUtils.js';
+import { getTodayYMD, toHubSpotDate, toHubSpotDateOnly, addDays } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
@@ -321,15 +321,25 @@ if (tp.of_invoice_id) {
   const responsableAsignadoRaw = process.env.USER_BILLING || '83169424';
   const responsableAsignado = toNumericOwnerOrNull(responsableAsignadoRaw);
   
-  // 5) Fecha real de facturación (momento de crear la factura)
-  const fechaRealFacturacion = getTodayYMD();
+  // 5) Fecha real de facturación con cascada de fallbacks
+  const invoiceDate = tp.of_fecha_de_facturacion 
+    || tp.fecha_de_resolucion_esperada 
+    || getTodayYMD();
   
-  // ✅ C.4) Calcular fecha de vencimiento desde fecha_de_resolucion_esperada del ticket (+10 días)
-  const billDate = tp.fecha_de_resolucion_esperada 
-    ? new Date(parseInt(tp.fecha_de_resolucion_esperada))  // timestamp ms de HubSpot
-    : new Date(fechaRealFacturacion);
-  billDate.setDate(billDate.getDate() + 10);
-  const dueDateYMD = billDate.toISOString().split('T')[0];
+  // Convertir a timestamp de HubSpot (DATE-ONLY)
+  const invoiceDateMs = toHubSpotDateOnly(invoiceDate);
+  
+  // ✅ C.4) Calcular fecha de vencimiento: fecha_de_vencimiento o invoiceDate + 10 días
+  let dueDateMs;
+  if (tp.fecha_de_vencimiento) {
+    dueDateMs = toHubSpotDateOnly(tp.fecha_de_vencimiento);
+  } else {
+    // Convertir invoiceDateMs a Date, sumar 10 días, reconvertir
+    const invoiceDateObj = new Date(parseInt(invoiceDateMs));
+    const dueDateObj = addDays(invoiceDateObj, 10);
+    const dueDateYMD = dueDateObj.toISOString().split('T')[0];
+    dueDateMs = toHubSpotDateOnly(dueDateYMD);
+  }
   
   // ✅ C) Calcular monto total con descuentos e impuestos
   const cantidad = parseNumber(tp.of_cantidad, 0);
@@ -369,9 +379,9 @@ if (tp.of_invoice_id) {
     // 💰 Moneda (del ticket)
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     
-    // ✅ C.4) Fechas: invoice_date = hoy, due_date calculado
-    hs_invoice_date: toHubSpotDateOnly(fechaRealFacturacion),
-    hs_due_date: tp.fecha_de_vencimiento ? toHubSpotDateOnly(tp.fecha_de_vencimiento) : toHubSpotDateOnly(dueDateYMD),
+    // ✅ C.4) Fechas: invoice_date y due_date calculados con dateUtils
+    hs_invoice_date: invoiceDateMs,
+    hs_due_date: dueDateMs,
     
     // ✅ Desactiva validaciones de HubSpot
     hs_invoice_billable: false,
