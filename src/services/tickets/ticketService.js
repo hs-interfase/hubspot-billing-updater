@@ -577,7 +577,10 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
     stableLineId,
     billDateYMD: billingDate,
     lineItemId,
-    buildTicketPayload: async ({ dealId, stableLineId, billDateYMD, expectedKey }) => {
+    buildTicketPayload: async ({ dealId: _dealId, stableLineId: _stableLineId, billDateYMD, expectedKey }) => {
+      // Re-declarar dp y lp dentro del scope de la función
+      const dp = deal.properties || {};
+      const lp = lineItem.properties || {};
       // Determinar fechas según reglas
       const expectedDate = billDateYMD;
       const orderedDate = billDateYMD; // En auto: orderedDate = expectedDate
