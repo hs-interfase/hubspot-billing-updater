@@ -1,16 +1,14 @@
 // src/services/manualTicketService.js
 
 import { hubspotClient } from '../../hubspotClient.js';
-import { TICKET_PIPELINE, TICKET_STAGES, isDryRun } from '../../config/constants.js';
-import { generateTicketKey } from '../../utils/idempotency.js';
+import { TICKET_PIPELINE, TICKET_STAGES } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
-import { applyCupoPreventiveAlertFromTicket } from "../alerts/cupoAlert.js";
+import { applyCupoPreventiveAlertFromTicket } from '../alerts/cupoAlert.js';
 
 // Helpers compartidos (para evitar duplicar lógica y evitar imports circulares)
 import {
-  safeCreateTicket,
   ensureTicketCanonical,
   getTicketStage,
   getDealCompanies,
@@ -24,7 +22,7 @@ import {
  * Reglas de fechas:
  * - expectedDate = billingDate (siempre)
  * - orderedDate = HOY solo si lineItem.facturar_ahora == true
- * - orderedDate = null en manual normal (se setea luego cuando el PM manda a facturar)
+ * - orderedDate = null en manual normal (se setea luego cuando el responsable manda a facturar)
  *
  * Con deduplicación: marca tickets clonados por UI como DUPLICADO_UI.
  *
@@ -41,7 +39,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   const lp = lineItem?.properties || {};
 
   // ✅ ID estable para idempotencia (sirve tanto para PY como para espejo UY)
-  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
+  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, generateTicketKey() / buildTicketKey ya lo manejan
   const stableLineId = lp.of_line_item_py_origen_id
     ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
     : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
@@ -55,10 +53,13 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
     stableLineId,
     billDateYMD: billingDate,
     lineItemId,
-    buildTicketPayload: async ({ dealId, stableLineId, billDateYMD, expectedKey }) => {
+    buildTicketPayload: async ({ billDateYMD, expectedKey }) => {
       // 1) Determinar fechas según reglas
       const expectedDate = billDateYMD;
-      const facturarAhora = parseBool(lp.facturar_ahora);
+
+      // ✅ Importante: NO redeclarar lp dentro de este bloque (evita TDZ)
+      const lineProps = lineItem?.properties || {};
+      const facturarAhora = parseBool(lineProps.facturar_ahora);
       const orderedDate = facturarAhora ? getTodayYMD() : null;
 
       console.log(`[ticketService] 📅 MANUAL - Fechas:`);
@@ -87,7 +88,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
 
       // 3) Título
       const dealName = dp.dealname || 'Deal';
-      const productName = lp.name || 'Producto';
+      const productName = lineProps.name || 'Producto';
       const rubro = snapshots.of_rubro || 'Sin rubro';
 
       // 4) Stage según fecha y flag
@@ -100,16 +101,13 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
         descripcionProducto = descripcionProducto ? `${notaUrgente}\n\n${descripcionProducto}` : notaUrgente;
       }
 
-      // 6) Owner (PM) y vendedor (informativo)
-      const lp = lineItem.properties || {};
+      // 6) Owner (responsable del ticket) y vendedor (informativo)
       const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
-      const pmAsignado = lp.responsable_asignado
-        ? String(lp.responsable_asignado)
-        : dp.hubspot_owner_id
-          ? String(dp.hubspot_owner_id)
-          : null;
 
-      console.log('[ticketService] MANUAL - vendedorId:', vendedorId, 'pmAsignado:', pmAsignado);
+      // ✅ Regla: responsable sale del Line Item (solo al crear ticket)
+      const responsable = lineProps.responsable_asignado ? String(lineProps.responsable_asignado) : null;
+
+      console.log('[ticketService] MANUAL - vendedorId:', vendedorId, 'responsable:', responsable);
 
       // 7) Props del ticket
       const ticketProps = {
@@ -124,13 +122,13 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
         ...snapshots,
 
         ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
-        ...(pmAsignado ? { hubspot_owner_id: pmAsignado } : {}),
+        ...(responsable ? { hubspot_owner_id: responsable } : {}),
 
         of_descripcion_producto: descripcionProducto,
       };
 
       console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
-      console.log('[ticketService] 🔍 MANUAL - responsable del ticket:', ticketProps.hubspot_owner_id);
+      console.log('[ticketService] 🔍 MANUAL - responsable del ticket (hubspot_owner_id):', ticketProps.hubspot_owner_id);
 
       return { properties: ticketProps };
     },
@@ -141,16 +139,12 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
   // Si se creó el ticket, crear asociaciones y alerta de cupo
   if (created && ticketId) {
     try {
-      const [companyIds, contactIds] = await Promise.all([
-        getDealCompanies(dealId), 
-        getDealContacts(dealId)
-      ]);
+      const [companyIds, contactIds] = await Promise.all([getDealCompanies(dealId), getDealContacts(dealId)]);
       await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
 
       // Alerta preventiva de cupo
       try {
-        // Re-leer ticket para tener todas las propiedades
-        const createdTicket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
+        const createdTicket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
           'of_monto_total',
           'monto_real_a_facturar',
           'of_fecha_de_facturacion',
@@ -163,14 +157,21 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
         console.warn('[ticketService] Error en alerta preventiva de cupo:', err?.message);
       }
 
-      const facturarAhora = parseBool(lp.facturar_ahora);
+      // ✅ NO uses "linp" acá (no existe en este scope). Reusa lp (outer) o vuelve a leer props:
+      const facturarAhoraPost = parseBool(lp.facturar_ahora);
       const stage = getTicketStage(billingDate, lineItem);
       const stageLabel =
         stage === TICKET_STAGES.READY ? 'READY' : stage === TICKET_STAGES.INVOICED ? 'INVOICED' : 'NEW';
-      const urgentLabel = facturarAhora ? ' [URGENTE]' : '';
+      const urgentLabel = facturarAhoraPost ? ' [URGENTE]' : '';
 
-      console.log(`[ticketService] ✓ Ticket manual creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`);
-      console.log(`[ticketService] Owner (PM): ${lp.responsable_asignado || dp.hubspot_owner_id || 'N/A'}, Vendedor: ${dp.hubspot_owner_id || 'N/A'}`);
+      console.log(
+        `[ticketService] ✓ Ticket manual creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`
+      );
+      console.log(
+        `[ticketService] Responsable (LI.responsable_asignado): ${lp.responsable_asignado || 'N/A'}, Vendedor (Deal): ${
+          dp.hubspot_owner_id || 'N/A'
+        }`
+      );
 
       if (duplicatesMarked > 0) {
         console.log(`[ticketService] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
