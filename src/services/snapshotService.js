@@ -38,12 +38,10 @@ function determineTicketFrequency(lineItem) {
  * Cualquier otro valor → "false"
  */
 function detectIVA(lineItem) {
-  const lp = lineItem?.properties || {};
-  const taxGroupId = String(lp.hs_tax_rate_group_id || '').trim();
-  
-  if (taxGroupId === '16912720') return 'true';
-  return 'false';
+  const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
+  return raw === '16912720' ? 'true' : 'false';
 }
+
 
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};

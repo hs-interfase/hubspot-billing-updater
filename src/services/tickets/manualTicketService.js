@@ -17,6 +17,47 @@ import {
 } from './ticketService.js';
 
 /**
+ * Limpia propiedades vacías del payload de tickets manuales.
+ * Regla: eliminar si v === null || v === undefined || v === ''
+ * 
+ * @param {Object} props - Objeto de propiedades (se muta)
+ * @returns {Array<{key: string, reason: string}>} - Props removidas
+ */
+function cleanTicketProps(props) {
+  const removed = [];
+  
+  for (const k of Object.keys(props)) {
+    const v = props[k];
+    if (v === null || v === undefined) {
+      removed.push({ key: k, reason: 'nullish' });
+      delete props[k];
+    } else if (v === '') {
+      removed.push({ key: k, reason: 'empty_string' });
+      delete props[k];
+    }
+  }
+  
+  return removed;
+}
+
+/**
+ * Valida que el payload de ticket incluya las propiedades mínimas requeridas.
+ * 
+ * @param {Object} props - Payload de ticket
+ * @returns {Array<string>} - Props faltantes
+ */
+function assertTicketMinimum(props) {
+  const required = ['of_ticket_key', 'of_deal_id', 'of_line_item_ids', 'of_producto_nombres'];
+  const missing = required.filter(k => !(k in props));
+  
+  if (missing.length) {
+    console.warn('[MANUAL][WARN] Missing required props', missing);
+  }
+  
+  return missing;
+}
+
+/**
  * Crea un ticket de orden de facturación manual.
  *
  * Reglas de fechas:
@@ -175,7 +216,9 @@ console.log('[MANUAL][SOURCE] SNAPSHOTS:');
 console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
 console.log('[MANUAL][SOURCE] ==========================================');
 
+// ✅ TicketProps (COMPLETO)
 const ticketProps = {
+  // Core HubSpot ticket
   subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
   hs_pipeline: TICKET_PIPELINE,
   hs_pipeline_stage: stage,
@@ -185,15 +228,17 @@ const ticketProps = {
   of_line_item_ids: lineItemId,
   of_ticket_key: expectedKey,
 
-  // Snapshot "inmutable"
+  // Snapshot "inmutable" (lo que ya venías copiando)
   ...snapshots,
 
-  // ✅ override final (normalizado)
-  of_iva: ivaValue,
-
-  // Campos “siempre”
+  // ✅ Campos que querés que SIEMPRE pasen desde LI/Deal
   of_producto_nombres: liName,
+
+  // si facturarAhora, descripcionProducto ya incluye nota urgente + snapshots.of_descripcion_producto
+  // si no, cae a descripcion del LI, y si no hay, null
   of_descripcion_producto: descripcionProducto || liDescripcion || null,
+
+  // Nota (si querés nota a nivel ticket)
   nota: liNota,
 
   // País / cupo
@@ -206,10 +251,14 @@ const ticketProps = {
   descuento_porcentaje_real: descuentoPctReal,
   descuento_unit_real: descuentoUnitReal,
 
+  // ✅ IVA: siempre 'true' o 'false' (nunca null/undefined)
+  of_iva: ivaValue,
+
+
+  // Owner + propietario secundario (solo si existen)
   ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
   ...(responsable ? { hubspot_owner_id: responsable } : {}),
 };
-
 
 // ✅ setear rubro solo si hay candidato (evita mandar null/undefined)
 if (rubroCandidate) {
@@ -220,9 +269,16 @@ if (rubroCandidate) {
 }
 
 // ✅ Limpiar vacíos para no mandar "" o null (pero preservar 0)
-for (const k of Object.keys(ticketProps)) {
-  const v = ticketProps[k];
-  if (v === null || v === undefined || v === '') delete ticketProps[k];
+const removed = cleanTicketProps(ticketProps);
+console.log('[MANUAL][REMOVED_BY_CLEAN]', removed);
+console.log('[MANUAL][PAYLOAD_KEYS_FINAL]', Object.keys(ticketProps).sort());
+
+// ✅ Validación de campos mínimos
+const missing = assertTicketMinimum(ticketProps);
+if (process.env.STRICT_TICKET_CREATE === 'true' && missing.length > 0) {
+  throw new Error(
+    `Refusing to create manual ticket, missing required props: ${missing.join(', ')}`
+  );
 }
 
 console.log('[MANUAL][TICKET_PAYLOAD_KEYS]', Object.keys(ticketProps).sort());
