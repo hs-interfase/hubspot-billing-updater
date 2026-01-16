@@ -819,27 +819,6 @@ export async function findTicketByKey(ticketKey) {
  * - Si es después: NEW
  */
 /*
-export function getTicketStage(billingDate, lineItem) {
-  const lp = lineItem?.properties || {};
-  
-  // Prioridad 1: Si el vendedor pidió facturar ahora → INVOICED
-  if (parseBool(lp.facturar_ahora)) {
-    return TICKET_STAGES.READY;
-  }
-  
-  // Prioridad 2: Si es hoy o mañana → READY
-  const today = getTodayYMD();
-
-const tomorrowStr = getTomorrowYMD(); // helper
-  
-  if (billingDate === today || billingDate === tomorrowStr) {
-    return TICKET_STAGES.READY;
-  }
-  
-  // Por defecto: NEW
-  return TICKET_STAGES.NEW;
-}
-
 /**
  * Obtiene los IDs de empresas asociadas al deal.
  */
