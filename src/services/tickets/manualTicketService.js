@@ -102,7 +102,7 @@ console.log(`  ticketKey: "${expectedKey}"`);
       const rubro = snapshots.of_rubro || null;
 
       // 4) Stage según fecha y flag
-      const stage = getTicketStage(billDateYMD, lineItem);
+const stage = TICKET_STAGES.NEW;        // siempre empieza en “Nueva orden de facturación”
 
       // 5) Facturar ahora -> nota urgente en descripción
       let descripcionProducto = snapshots.of_descripcion_producto || '';
@@ -129,10 +129,6 @@ const montoUnitarioReal = lineProps.monto_unitario_real ?? null;
 const cantidadReal = lineProps.cantidad_real ?? null;
 const descuentoPctReal = lineProps.descuento_porcentaje_real ?? null;
 const descuentoUnitReal = lineProps.descuento_unit_real ?? null;
-
-// ✅ IVA: parseBool para convertir null/undefined → false
-const ivaBoolean = parseBool(snapshots.of_iva);
-const ivaValue = ivaBoolean ? 'true' : 'false';
 
 // ✅ País / cupo (según tu modelo, suele venir del Deal)
 const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
@@ -263,10 +259,10 @@ console.log('[MANUAL][TICKET_PAYLOAD_KEYS]', Object.keys(ticketProps).sort());
 
       // ✅ NO uses "linp" acá (no existe en este scope). Reusa lp (outer) o vuelve a leer props:
       const facturarAhoraPost = parseBool(lp.facturar_ahora);
-      const stage = getTicketStage(billingDate, lineItem);
-      const stageLabel =
-        stage === TICKET_STAGES.READY ? 'READY' : stage === TICKET_STAGES.INVOICED ? 'INVOICED' : 'NEW';
-      const urgentLabel = facturarAhoraPost ? ' [URGENTE]' : '';
+const stage = TICKET_STAGES.NEW;
+const stageLabel = 'NEW';
+const urgentLabel = facturarAhoraPost ? ' [URGENTE]' : '';
+
 
       console.log(
         `[ticketService] ✓ Ticket manual creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`
