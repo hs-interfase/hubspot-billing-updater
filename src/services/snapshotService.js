@@ -2,7 +2,6 @@
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
-import { validateRubro } from './tickets/ticketService.js';
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.
