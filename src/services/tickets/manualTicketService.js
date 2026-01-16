@@ -130,11 +130,48 @@ const cantidadReal = lineProps.cantidad_real ?? null;
 const descuentoPctReal = lineProps.descuento_porcentaje_real ?? null;
 const descuentoUnitReal = lineProps.descuento_unit_real ?? null;
 
+// ✅ IVA: parseBool para convertir null/undefined → false
+const ivaBoolean = parseBool(snapshots.of_iva);
+const ivaValue = ivaBoolean ? 'true' : 'false';
+
 // ✅ País / cupo (según tu modelo, suele venir del Deal)
 const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
-const aplicaCupoClean = ["Por Horas","Por Monto"].includes(String(aplicaCupo).trim()) ? String(aplicaCupo).trim() : null;
+const aplicaCupoRaw = dp.of_aplica_para_cupo ?? dp.aplica_cupo ?? dp.cupo_activo ?? null;
+
+// ✅ Validar of_aplica_para_cupo contra valores permitidos
+const CUPO_VALID_OPTIONS = ['Por Horas', 'Por Monto'];
+const aplicaCupoNormalized = aplicaCupoRaw ? String(aplicaCupoRaw).trim() : null;
+const aplicaCupo = aplicaCupoNormalized && CUPO_VALID_OPTIONS.includes(aplicaCupoNormalized)
+  ? aplicaCupoNormalized
+  : null;
+
+if (aplicaCupoRaw && !aplicaCupo) {
+  console.warn(`[MANUAL][CUPO] ⚠️ Valor inválido para of_aplica_para_cupo: "${aplicaCupoRaw}" (esperado: ${CUPO_VALID_OPTIONS.join(' o ')}). Se omitirá.`);
+}
+
 // ✅ Rubro candidate (por ahora, dejamos servicioNormalized o snapshots.of_rubro)
 const rubroCandidate = servicioNormalized || snapshots.of_rubro || null;
+
+// ✅ LOGS DE DIAGNÓSTICO - SOURCE
+console.log('[MANUAL][SOURCE] ========== VALORES FUENTE ==========');
+console.log('[MANUAL][SOURCE] LINE ITEM:');
+console.log(`  name: "${liName || ''}"`);
+console.log(`  description: "${liDescripcion || ''}"`);
+console.log(`  nota: "${liNota || ''}"`);
+console.log(`  servicio (→of_rubro): "${servicioRaw || ''}"`);
+console.log(`  monto_unitario_real: ${montoUnitarioReal}`);
+console.log(`  cantidad_real: ${cantidadReal}`);
+console.log(`  descuento_porcentaje_real: ${descuentoPctReal}`);
+console.log(`  descuento_unit_real: ${descuentoUnitReal}`);
+console.log(`  facturar_ahora: ${facturarAhora}`);
+console.log('[MANUAL][SOURCE] DEAL:');
+console.log(`  of_pais_operativo: "${dp.of_pais_operativo || ''}"`);
+console.log(`  of_aplica_para_cupo (raw): "${aplicaCupoRaw || ''}"`);
+console.log(`  of_aplica_para_cupo (validated): "${aplicaCupo || '(omitido)'}"`);
+console.log('[MANUAL][SOURCE] SNAPSHOTS:');
+console.log(`  of_iva (raw): "${snapshots.of_iva || ''}"`);
+console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
+console.log('[MANUAL][SOURCE] ==========================================');
 
 // ✅ TicketProps (COMPLETO)
 const ticketProps = {
@@ -171,8 +208,12 @@ const ticketProps = {
   descuento_porcentaje_real: descuentoPctReal,
   descuento_unit_real: descuentoUnitReal,
 
-  // ❌ NO mandar si es cálculo / read-only:
-  // total_real_a_facturar: undefined,
+  // ✅ IVA: siempre 'true' o 'false' (nunca null/undefined)
+  of_iva: ivaValue,
+
+  // ❌ NO mandar propiedades inválidas:
+  // - total_real_a_facturar (es cálculo/read-only)
+  // - of_invoice_title (no existe en portal)
 
   // Owner + propietario secundario (solo si existen)
   ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
@@ -182,15 +223,18 @@ const ticketProps = {
 // ✅ setear rubro solo si hay candidato (evita mandar null/undefined)
 if (rubroCandidate) {
   ticketProps.of_rubro = rubroCandidate;
+  console.log(`[MANUAL][RUBRO] ✓ of_rubro seteado: "${rubroCandidate}"`);
+} else {
+  console.log(`[MANUAL][RUBRO] ⊘ of_rubro omitido (sin valor válido)`);
 }
 
-// ✅ opcional (pero recomendado): limpiar vacíos para no mandar "" o null
+// ✅ Limpiar vacíos para no mandar "" o null (pero preservar 0)
 for (const k of Object.keys(ticketProps)) {
   const v = ticketProps[k];
   if (v === null || v === undefined || v === '') delete ticketProps[k];
 }
 
-console.log('[ticketService][MANUAL] payload keys:', Object.keys(ticketProps));
+console.log('[MANUAL][TICKET_PAYLOAD_KEYS]', Object.keys(ticketProps).sort());
       console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
       console.log('[ticketService] 🔍 MANUAL - responsable del ticket (hubspot_owner_id):', ticketProps.hubspot_owner_id);
 
