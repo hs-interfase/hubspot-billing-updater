@@ -39,7 +39,9 @@ function determineTicketFrequency(lineItem) {
  */
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
-  return raw === '16912720' ? 'true' : 'false';
+  const result = raw === '16912720' ? 'true' : 'false';
+  console.log('[SNAPSHOT][IVA][A] detectIVA() ->', { raw, result });
+  return result;
 }
 
 
@@ -109,6 +111,9 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_monto_total: montoTotal, // ✅ monto total sugerido (snapshot inmutable)
     // ⚠️ total_real_a_facturar REMOVED: es propiedad calculada/read-only en HubSpot, NO debe enviarse
   };
+
+  console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });
+  return baseSnapshots;
 }
 /**
  * Convierte el tipo de cupo del line item a formato HubSpot.
@@ -191,6 +196,13 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     // ✅ C) Título del invoice para usar después
     subject: invoiceTitle,
   };
+
+  console.log('[SNAPSHOT][IVA][C] createTicketSnapshots() after merge ->', { of_iva: out.of_iva });
+
+  // ✅ Garantizar que of_iva siempre sea 'true' o 'false', nunca '' o null
+  const ivaRaw = out.of_iva;
+  out.of_iva = String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
+  console.log('[SNAPSHOT][IVA][FIX] of_iva normalizado ->', { before: ivaRaw, after: out.of_iva });
 
   // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
   // Convertir YYYY-MM-DD a timestamp ms

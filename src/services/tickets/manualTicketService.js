@@ -173,10 +173,17 @@ const liDescripcion = lineProps.description || null; // confirmaste que el LI us
 const liNota = lineProps.nota || null;               // dijiste que existe (si el internal name difiere, cambiar acá)
 
 // ✅ Reales desde LI
-const montoUnitarioReal = lineProps.monto_unitario_real ?? null;
-const cantidadReal = lineProps.cantidad_real ?? null;
-const descuentoPctReal = lineProps.descuento_porcentaje_real ?? null;
-const descuentoUnitReal = lineProps.descuento_unit_real ?? null;
+const montoUnitarioReal = lineProps.price ?? null;
+const cantidadReal = lineProps.quantity ?? null;
+const descuentoPctReal = lineProps.hs_discount_percentage ?? null;
+const descuentoUnitReal = lineProps.discount ?? null;
+
+console.log('[MANUAL][LI_NATIVE]', {
+  price: lineProps.price,
+  quantity: lineProps.quantity,
+  discount: lineProps.discount,
+  hs_discount_percentage: lineProps.hs_discount_percentage,
+});
 
 // ✅ País / cupo (según tu modelo, suele venir del Deal)
 const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
