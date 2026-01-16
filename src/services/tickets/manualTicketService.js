@@ -119,24 +119,79 @@ console.log(`  ticketKey: "${expectedKey}"`);
 
       console.log('[ticketService] MANUAL - vendedorId:', vendedorId, 'responsable:', responsable);
 
-      // 7) Props del ticket
-      const ticketProps = {
-        subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
-        hs_pipeline: TICKET_PIPELINE,
-        hs_pipeline_stage: stage,
+      // ✅ Fuente real (Line Item + Deal)
+const liName = lineProps.name || null;
+const liDescripcion = lineProps.description || null; // confirmaste que el LI usa "description"
+const liNota = lineProps.nota || null;               // dijiste que existe (si el internal name difiere, cambiar acá)
 
-        of_deal_id: dealId,
-        of_line_item_ids: lineItemId,
-        of_ticket_key: expectedKey,
+// ✅ Reales desde LI
+const montoUnitarioReal = lineProps.monto_unitario_real ?? null;
+const cantidadReal = lineProps.cantidad_real ?? null;
+const descuentoPctReal = lineProps.descuento_porcentaje_real ?? null;
+const descuentoUnitReal = lineProps.descuento_unit_real ?? null;
 
-        ...snapshots,
+// ✅ País / cupo (según tu modelo, suele venir del Deal)
+const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
+const aplicaCupo = dp.of_aplica_para_cupo ?? dp.aplica_cupo ?? dp.cupo_activo ?? null;
 
-        ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
-        ...(responsable ? { hubspot_owner_id: responsable } : {}),
+// ✅ Rubro candidate (por ahora, dejamos servicioNormalized o snapshots.of_rubro)
+const rubroCandidate = servicioNormalized || snapshots.of_rubro || null;
 
-        of_descripcion_producto: descripcionProducto,
-      };
+// ✅ TicketProps (COMPLETO)
+const ticketProps = {
+  // Core HubSpot ticket
+  subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
+  hs_pipeline: TICKET_PIPELINE,
+  hs_pipeline_stage: stage,
 
+  // Control / idempotencia
+  of_deal_id: dealId,
+  of_line_item_ids: lineItemId,
+  of_ticket_key: expectedKey,
+
+  // Snapshot "inmutable" (lo que ya venías copiando)
+  ...snapshots,
+
+  // ✅ Campos que querés que SIEMPRE pasen desde LI/Deal
+  of_producto_nombres: liName,
+
+  // si facturarAhora, descripcionProducto ya incluye nota urgente + snapshots.of_descripcion_producto
+  // si no, cae a descripcion del LI, y si no hay, null
+  of_descripcion_producto: descripcionProducto || liDescripcion || null,
+
+  // Nota (si querés nota a nivel ticket)
+  nota: liNota,
+
+  // País / cupo
+  of_pais_operativo: paisOperativo,
+  of_aplica_para_cupo: aplicaCupo,
+
+  // Reales
+  monto_unitario_real: montoUnitarioReal,
+  cantidad_real: cantidadReal,
+  descuento_porcentaje_real: descuentoPctReal,
+  descuento_unit_real: descuentoUnitReal,
+
+  // ❌ NO mandar si es cálculo / read-only:
+  // total_real_a_facturar: undefined,
+
+  // Owner + propietario secundario (solo si existen)
+  ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
+  ...(responsable ? { hubspot_owner_id: responsable } : {}),
+};
+
+// ✅ setear rubro solo si hay candidato (evita mandar null/undefined)
+if (rubroCandidate) {
+  ticketProps.of_rubro = rubroCandidate;
+}
+
+// ✅ opcional (pero recomendado): limpiar vacíos para no mandar "" o null
+for (const k of Object.keys(ticketProps)) {
+  const v = ticketProps[k];
+  if (v === null || v === undefined || v === '') delete ticketProps[k];
+}
+
+console.log('[ticketService][MANUAL] payload keys:', Object.keys(ticketProps));
       console.log('[ticketService] 🔍 MANUAL - of_propietario_secundario:', ticketProps.of_propietario_secundario);
       console.log('[ticketService] 🔍 MANUAL - responsable del ticket (hubspot_owner_id):', ticketProps.hubspot_owner_id);
 

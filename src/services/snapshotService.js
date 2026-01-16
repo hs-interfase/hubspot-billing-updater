@@ -2,6 +2,7 @@
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
+import { validateRubro } from './tickets/ticketService.js';
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.
@@ -47,6 +48,8 @@ function detectIVA(lineItem) {
 
 /**
  * Extrae los snapshots principales de un line item.
+ * ⚠️  NO incluye propiedades read-only/calculadas: total_real_a_facturar
+ * ⚠️  NO incluye propiedades inexistentes: of_invoice_title
  */
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};
@@ -91,10 +94,11 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   const repetitivo = !!rawFreq && !['unico', 'único', 'one_time'].includes(rawFreq);
 
-  return {
+  // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
+  const baseSnapshots = {
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
-    of_rubro: safeString(lp.servicio),
+    of_rubro_raw: safeString(lp.servicio), // ← Valor RAW para validación posterior
     of_subrubro: safeString(lp.subrubro),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
@@ -111,7 +115,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
     of_monto_total: montoTotal, // ✅ monto total sugerido (snapshot inmutable)
-    total_real_a_facturar: montoTotal, // ✅ Inicia igual que of_monto_total. En MANUAL es editable (no hay sync). En AUTO se mantiene igual.
+    // ⚠️ total_real_a_facturar REMOVED: es propiedad calculada/read-only en HubSpot, NO debe enviarse
   };
 }
 /**
