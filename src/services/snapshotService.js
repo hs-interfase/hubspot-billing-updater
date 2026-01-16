@@ -71,7 +71,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
   console.log('[DBG][SNAPSHOT] Tax/Discount TARGET (ticket):', {
     of_descuento: descuentoPorcentaje,
     of_descuento_monto: descuentoMonto,
-    iva: ivaValue,
+    of_iva: ivaValue,
   });
 
   // Calcular costo total (unitario × cantidad)
@@ -106,12 +106,12 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_margen: parseNumber(lp.porcentaje_margen, 0),
     of_descuento: descuentoPorcentaje, // ✅ % descuento (ej: 10 = 10%)
     of_descuento_monto: descuentoMonto, // ✅ descuento por unidad en moneda del deal
-    iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
+    of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
     of_monto_total: montoTotal, // ✅ monto total sugerido (snapshot inmutable)
-    monto_real_a_facturar: montoTotal, // ✅ Inicia igual que of_monto_total. En MANUAL es editable (no hay sync). En AUTO se mantiene igual.
+    total_real_a_facturar: montoTotal, // ✅ Inicia igual que of_monto_total. En MANUAL es editable (no hay sync). En AUTO se mantiene igual.
   };
 }
 /**

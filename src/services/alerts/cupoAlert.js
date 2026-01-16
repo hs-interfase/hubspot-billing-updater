@@ -74,8 +74,8 @@ export async function applyCupoPreventiveAlertFromTicket({ deal, ticket, lineIte
     // ⬇️ Cambiá por tu propiedad real en Ticket
     consumo = parseNumber(tp.of_cantidad_horas ?? tp.of_cantidad ?? tp.of_horas, 0);
   } else if (isMonto) {
-    // monto_real_a_facturar debería ser NETO (sin IVA)
-    consumo = parseNumber(tp.monto_real_a_facturar, 0);
+    // TOTAL_real_a_facturar debería ser NETO (sin IVA)
+    consumo = parseNumber(tp.total_real_a_facturar, 0);
   } else {
     return { applied: false, reason: `tipo_de_cupo desconocido: ${dp.tipo_de_cupo}` };
   }

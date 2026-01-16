@@ -75,8 +75,8 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
 
       console.log(`[ticketService] 💰 MANUAL - Montos iniciales:`);
       console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
-      console.log(`   - monto_real_a_facturar: ${snapshots.monto_real_a_facturar}`);
-      console.log(`   ℹ️ En tickets MANUALES, monto_real_a_facturar es EDITABLE por el responsable.`);
+      console.log(`   - total_real_a_facturar: ${snapshots.total_real_a_facturar}`);
+      console.log(`   ℹ️ En tickets MANUALES, total_real_a_facturar es EDITABLE por el responsable.`);
       console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item (snapshot inmutable).`);
 
       console.log(`[ticketService] 📊 MANUAL - Frecuencia:`);
@@ -85,6 +85,16 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
 
       console.log('[ticketService] 🔍 MANUAL - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
       console.log('[ticketService] 🔍 MANUAL - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
+
+const servicioRaw = lineProps.servicio || null;
+const servicioNormalized = servicioRaw ? String(servicioRaw).trim() : null;
+const ofRubroFinal = snapshots.of_rubro || null;
+
+console.log('[ticketService] 🏷️ RUBRO map (LI.servicio -> Ticket.of_rubro)');
+console.log(`  servicioRaw: "${servicioRaw || ''}"`);
+console.log(`  servicioNormalized: "${servicioNormalized || ''}"`);
+console.log(`  of_rubro: ${ofRubroFinal ? `"${ofRubroFinal}"` : '(no seteado)'}`);
+console.log(`  ticketKey: "${expectedKey}"`);
 
       // 3) Título
       const dealName = dp.dealname || 'Deal';
@@ -146,7 +156,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       try {
         const createdTicket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
           'of_monto_total',
-          'monto_real_a_facturar',
+          'total_real_a_facturar',
           'of_fecha_de_facturacion',
           'of_ticket_key',
           'of_deal_id',

@@ -15,7 +15,7 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
 + * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
  * TIPO DE CONSUMO:
  * - "Por Horas": ticket.total_de_horas_consumidas (fallback: ticket.of_cantidad)
- * - "Por Monto": ticket.monto_real_a_facturar (neto sin IVA)
+ * - "Por Monto": ticket.total_real_a_facturar (neto sin IVA)
  * 
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
@@ -57,7 +57,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'total_de_horas_consumidas',
-      'of_cantidad', 'monto_real_a_facturar'
+      'of_cantidad', 'total_real_a_facturar'
     ]);
 
     // Re-leer Line Item si existe
@@ -143,8 +143,8 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
     }
   } else if (tipoCupo === "Por Monto") {
     // Monto neto sin IVA
-    consumo = parseNumber(tp.monto_real_a_facturar, 0);
-    console.log(`[consumeCupo] 💰 Tipo: Por Monto | Consumo: ${consumo} (desde ticket.monto_real_a_facturar)`);
+    consumo = parseNumber(tp.total_real_a_facturar, 0);
+    console.log(`[consumeCupo] 💰 Tipo: Por Monto | Consumo: ${consumo} (desde ticket.total_real_a_facturar)`);
   } else {
     const reason = `tipo_de_cupo desconocido: "${tipoCupo}"`;
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
@@ -157,7 +157,7 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
     console.log(`   of_cantidad: ${tp.of_cantidad}`);
     console.log(`   total_de_horas_consumidas: ${tp.total_de_horas_consumidas}`);
-    console.log(`   monto_real_a_facturar: ${tp.monto_real_a_facturar}`);
+    console.log(`   total_real_a_facturar: ${tp.total_real_a_facturar}`);
     return { consumed: false, reason };
   }
 

@@ -2,7 +2,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString } from '../utils/parsers.js';
-import { getTodayYMD, toHubSpotDate, toHubSpotDateOnly, addDays } from '../utils/dateUtils.js';
+import { getTodayYMD, toHubSpotDate, toHubSpotDateOnly, addDays, parseBool } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
@@ -119,12 +119,12 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'fecha_de_resolucion_esperada',
       
       // Montos y cantidades
-      'monto_real_a_facturar',
+      '_real_a_facturar',
       'of_monto_total',
       'of_cantidad',
       'of_monto_unitario',
-      'total_de_horas_consumidas',
-      
+      'monto_unitario_real',
+
       // Producto
       'subject',
       'of_producto_nombres',
@@ -134,7 +134,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       // Tax & Discount
       'of_descuento',
       'of_descuento_monto',
-      'iva',
+      'of_iva',
       'of_exonera_irae',
       
       // Cupo - Alerta preventiva
@@ -156,18 +156,8 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_propietario_secundario',
       'hubspot_owner_id',
       'of_cliente',
-      'of_invoice_title',
-      'of_unidad_de_negocio',
+      'unidad_de_negocio',
       
-      // Fechas adicionales
-      'fecha_de_vencimiento',
-      'of_impacto_historico',
-      'of_impacto_facturado',
-      'of_impacto_forecast',
-      
-      // Periodos
-      'of_periodo_a_facturar',
-      'of_periodo_de_facturacion',
       
       // Otros campos
       'descripcion',
@@ -199,7 +189,7 @@ console.log('\n-------------------- [DEBUG][CUPO] Keys específicas ------------
 console.log('[DEBUG][CUPO] of_aplica_para_cupo:', tp.of_aplica_para_cupo);
 console.log('[DEBUG][CUPO] tipo_de_cupo (no va en ticket normalmente):', tp.tipo_de_cupo);
 
-console.log('[DEBUG][CUPO] monto_real_a_facturar:', tp.monto_real_a_facturar);
+console.log('[DEBUG][CUPO] total_real_a_facturar:', tp.total_real_a_facturar);
 console.log('[DEBUG][CUPO] total_de_horas_consumidas:', tp.total_de_horas_consumidas);
 console.log('[DEBUG][CUPO] of_cantidad:', tp.of_cantidad);
 
@@ -233,7 +223,7 @@ console.log('-------------------------------------------------------------------
   showProp(tp, 'fecha_de_resolucion_esperada');
   
   console.log('\n💰 MONTOS Y CANTIDADES');
-  showProp(tp, 'monto_real_a_facturar');
+  showProp(tp, 'total_real_a_facturar');
   showProp(tp, 'of_monto_total');
   showProp(tp, 'of_cantidad');
   showProp(tp, 'of_monto_unitario');
@@ -241,7 +231,7 @@ console.log('-------------------------------------------------------------------
   console.log('\n🧾 TAX & DISCOUNT');
   showProp(tp, 'of_descuento');
   showProp(tp, 'of_descuento_monto');
-  showProp(tp, 'iva');
+  showProp(tp, 'of_iva');
   showProp(tp, 'of_exonera_irae');
   
   console.log('\n💳 CUPO - ALERTA PREVENTIVA');
@@ -353,7 +343,7 @@ if (tp.of_invoice_id) {
     totalAfterDiscount = baseTotal * (1 - discountPercent / 100);
   }
   
-  const hasIVA = String(tp.iva).trim() === 'true';
+const hasIVA = parseBool(tp.of_iva);
   const ivaRate = hasIVA ? 0.22 : 0;
   const totalWithTax = totalAfterDiscount * (1 + ivaRate);
   
@@ -397,8 +387,8 @@ if (tp.of_invoice_id) {
     
     // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
     cantidad: cantidad,
-    monto_a_facturar: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
-    hs_amount_billed: parseNumber(tp.monto_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ Total facturado (mismo que monto_a_facturar)
+    monto_a_facturar: parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
+    hs_amount_billed: parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ Total facturado (mismo que monto_a_facturar)
     descuento: discountPercent,
     descuento_por_unidad: discountAmount,
     
@@ -455,7 +445,7 @@ if (tp.of_invoice_id) {
   console.log('[DBG][INVOICE] SOURCE (ticket):', {
     of_descuento: tp.of_descuento,
     of_descuento_monto: tp.of_descuento_monto,
-    iva: tp.iva,
+    of_iva: tp.of_iva,
     of_exonera_irae: tp.of_exonera_irae,
   });
   console.log('[DBG][INVOICE] TARGET (invoice):', {
