@@ -1,5 +1,4 @@
 // src/services/tickets/ticketUpdateService.js
-/*
 import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber } from '../../utils/parsers.js';
 
@@ -216,54 +215,87 @@ export async function processTicketUpdate(ticketId) {
  * @returns {Object} Propiedades calculadas en formato string para HubSpot
  */
 function computeRealProps(ticketProps) {
-  // Valores base desde snapshots
-  const montoUnitario = parseNumber(ticketProps.of_monto_unitario, 0);
-  const cantidad = parseNumber(ticketProps.of_cantidad, 0);
-  const costo = parseNumber(ticketProps.of_costo, 0);
-  const descuentoPorcentaje = parseNumber(ticketProps.of_descuento, 0); // decimal (ej: 0.1 = 10%)
-  const descuentoUnit = parseNumber(ticketProps.of_descuento_monto, 0); // por unidad
-  const iva = ticketProps.iva === 'true' || ticketProps.iva === true; // boolean
-  
-  // 1. Monto unitario real (igual al snapshot)
-  const montoUnitarioReal = montoUnitario;
-  
-  // 2. Cantidad real (igual al snapshot, puede haber sido editado manualmente)
-  const cantidadReal = cantidad;
-  
-  // 3. Subtotal real (antes de descuentos)
-  const subtotalReal = montoUnitarioReal * cantidadReal;
-  
-  // 4. Costo real (igual al snapshot)
-  const costoReal = costo;
-  
-  // 5. Descuento por unidad (igual al snapshot)
-  const descuentoUnitReal = descuentoUnit;
-  
-  // 6. Descuento porcentaje real (igual al snapshot)
-  const descuentoPorcentajeReal = descuentoPorcentaje;
-  
-  // 7. Descuento monto total
-  // = (porcentaje × subtotal) + (descuento_unit × cantidad)
-  const descuentoPorPorcentaje = descuentoPorcentajeReal * subtotalReal;
-  const descuentoPorUnidad = descuentoUnitReal * cantidadReal;
-  const descuentoMontoTotalReal = descuentoPorPorcentaje + descuentoPorUnidad;
-  
-  // 8. Total real a facturar
-  // = subtotal - descuento + IVA (22% en Uruguay si aplica)
-  const subtotalConDescuento = subtotalReal - descuentoMontoTotalReal;
-  const ivaRate = iva ? 0.22 : 0; // 22% IVA Uruguay
-  const ivaAmount = subtotalConDescuento * ivaRate;
-  const totalRealAFacturar = subtotalConDescuento + ivaAmount;
-  
-  // Retornar como strings (formato HubSpot)
-  return {
-    monto_unitario_real: String(montoUnitarioReal),
-    cantidad_real: String(cantidadReal),
-    subtotal_real: String(subtotalReal),
-    costo_real: String(costoReal),
-    descuento_unit: String(descuentoUnitReal),
-    descuento_porcentaje_real: String(descuentoPorcentajeReal),
-    descuento_monto_total_real: String(descuentoMontoTotalReal),
-    total_real_a_facturar: String(totalRealAFacturar),
-  };
+  try {
+    // DEBUG: Ver propiedades originales del ticket
+    console.log('\n[ticket:update:computeRealProps] 🔍 Propiedades originales recibidas:');
+    console.log(`  of_monto_unitario: ${ticketProps.of_monto_unitario || 'VACÍO'}`);
+    console.log(`  of_cantidad: ${ticketProps.of_cantidad || 'VACÍO'}`);
+    console.log(`  of_costo: ${ticketProps.of_costo || 'VACÍO'}`);
+    console.log(`  of_descuento: ${ticketProps.of_descuento || 'VACÍO'}`);
+    console.log(`  of_descuento_monto: ${ticketProps.of_descuento_monto || 'VACÍO'}`);
+    console.log(`  iva: ${ticketProps.iva || 'VACÍO'}`);
+    
+    // Valores base desde snapshots
+    const montoUnitario = parseNumber(ticketProps.of_monto_unitario, 0);
+    const cantidad = parseNumber(ticketProps.of_cantidad, 0);
+    const costo = parseNumber(ticketProps.of_costo, 0);
+    const descuentoPorcentaje = parseNumber(ticketProps.of_descuento, 0); // decimal (ej: 0.1 = 10%)
+    const descuentoUnit = parseNumber(ticketProps.of_descuento_monto, 0); // por unidad
+    const iva = ticketProps.iva === 'true' || ticketProps.iva === true; // boolean
+    
+    console.log('\n[ticket:update:computeRealProps] 🔢 Valores parseados:');
+    console.log(`  montoUnitario: ${montoUnitario}`);
+    console.log(`  cantidad: ${cantidad}`);
+    console.log(`  costo: ${costo}`);
+    console.log(`  descuentoPorcentaje: ${descuentoPorcentaje}`);
+    console.log(`  descuentoUnit: ${descuentoUnit}`);
+    console.log(`  iva: ${iva}`);
+    
+    // 1. Monto unitario real (igual al snapshot)
+    const montoUnitarioReal = montoUnitario;
+    
+    // 2. Cantidad real (igual al snapshot, puede haber sido editado manualmente)
+    const cantidadReal = cantidad;
+    
+    // 3. Subtotal real (antes de descuentos)
+    const subtotalReal = montoUnitarioReal * cantidadReal;
+    
+    // 4. Costo real (igual al snapshot)
+    const costoReal = costo;
+    
+    // 5. Descuento por unidad (igual al snapshot)
+    const descuentoUnitReal = descuentoUnit;
+    
+    // 6. Descuento porcentaje real (igual al snapshot)
+    const descuentoPorcentajeReal = descuentoPorcentaje;
+    
+    // 7. Descuento monto total
+    // = (porcentaje × subtotal) + (descuento_unit × cantidad)
+    const descuentoPorPorcentaje = descuentoPorcentajeReal * subtotalReal;
+    const descuentoPorUnidad = descuentoUnitReal * cantidadReal;
+    const descuentoMontoTotalReal = descuentoPorPorcentaje + descuentoPorUnidad;
+    
+    // 8. Total real a facturar
+    // = subtotal - descuento + IVA (22% en Uruguay si aplica)
+    const subtotalConDescuento = subtotalReal - descuentoMontoTotalReal;
+    const ivaRate = iva ? 0.22 : 0; // 22% IVA Uruguay
+    const ivaAmount = subtotalConDescuento * ivaRate;
+    const totalRealAFacturar = subtotalConDescuento + ivaAmount;
+    
+    // Retornar como strings (formato HubSpot)
+    return {
+      monto_unitario_real: String(montoUnitarioReal),
+      cantidad_real: String(cantidadReal),
+      subtotal_real: String(subtotalReal),
+      costo_real: String(costoReal),
+      descuento_unit: String(descuentoUnitReal),
+      descuento_porcentaje_real: String(descuentoPorcentajeReal),
+      descuento_monto_total_real: String(descuentoMontoTotalReal),
+      total_real_a_facturar: String(totalRealAFacturar),
+    };
+  } catch (err) {
+    console.error('[ticket:update:computeRealProps] ❌ Error calculando propiedades reales:', err?.message || err);
+    
+    // Retornar valores por defecto en caso de error
+    return {
+      monto_unitario_real: '0',
+      cantidad_real: '0',
+      subtotal_real: '0',
+      costo_real: '0',
+      descuento_unit: '0',
+      descuento_porcentaje_real: '0',
+      descuento_monto_total_real: '0',
+      total_real_a_facturar: '0',
+    };
+  }
 }
