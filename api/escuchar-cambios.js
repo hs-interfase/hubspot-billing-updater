@@ -20,6 +20,7 @@ import { processUrgentLineItem, processUrgentTicket } from '../src/services/urge
 import { hubspotClient, getDealWithLineItems } from '../src/hubspotClient.js';
 import { runPhasesForDeal } from '../src/phases/index.js';
 import { parseBool } from '../src/utils/parsers.js';
+import { processTicketUpdate } from '../src/services/tickets/ticketUpdateService.js';
 
 /**
  * Obtiene el dealId asociado a un line item.
@@ -166,14 +167,63 @@ export default async function handler(req, res) {
     
 // ====== RUTA 2: RECALCULACIÓN (actualizar o hs_billing_start_delay_type) ======
 if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
-  // Validar que sea line item
-  if (objectType !== 'line_item') {
+  
+  // CASO A: actualizar en TICKET → Procesamiento independiente
+  if (propertyName === 'actualizar' && objectType === 'ticket') {
+    console.log(`🔍 Validando actualizar en ticket: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
+    
+    if (!parseBool(propertyValue)) {
+      console.log('⚠️ Flag actualizar no está en true, ignorando');
+      return res.status(200).json({ 
+        message: 'actualizar flag not true, skipped',
+        receivedValue: propertyValue
+      });
+    }
+    
+    console.log(`🎫 → Actualizando ticket ${objectId}...`);
+    
+    try {
+      const result = await processTicketUpdate(objectId);
+      
+      console.log('✅ Actualización de ticket completada');
+      
+      return res.status(200).json({
+        success: true,
+        action: 'ticket_update',
+        objectId,
+        ticketId: objectId,
+        result,
+        eventId,
+      });
+    } catch (err) {
+      console.error(`❌ Error procesando ticket ${objectId}:`, err?.message || err);
+      return res.status(200).json({
+        error: true,
+        message: err?.message || 'Error procesando ticket',
+        objectId,
+      });
+    } finally {
+      // Resetear flag actualizar en ticket
+      try {
+        await hubspotClient.crm.tickets.basicApi.update(String(objectId), {
+          properties: { actualizar: false },
+        });
+        console.log(`✅ Flag 'actualizar' reseteado a false para ticket ${objectId}`);
+      } catch (err) {
+        console.error(`⚠️ Error reseteando 'actualizar' en ticket:`, err.message);
+      }
+      console.log('='.repeat(80) + '\n');
+    }
+  }
+  
+  // CASO B: hs_billing_start_delay_type solo aplica a LINE ITEMS
+  if (propertyName === 'hs_billing_start_delay_type' && objectType !== 'line_item') {
     console.log(`⚠️ ${propertyName} solo aplica a line items, ignorando`);
     return res.status(200).json({ message: 'Not a line_item event, ignored' });
   }
   
-  // Para "actualizar" requiere valor truthy (PERO para hs_billing_start_delay_type no importa el valor)
-  if (propertyName === 'actualizar') {
+  // CASO C: actualizar en LINE ITEM (flujo original sin cambios)
+  if (propertyName === 'actualizar' && objectType === 'line_item') {
     console.log(`🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(propertyValue)}`);
     
     if (!parseBool(propertyValue)) {
@@ -185,45 +235,49 @@ if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
     }
   }
   
-  console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
-  const result = await processRecalculation(objectId, propertyName);
-  
-  if (result.skipped) {
-    console.log(`⚠️ Recalculación omitida: ${result.reason}`);
+  // CASO D: hs_billing_start_delay_type en LINE ITEM (continúa sin validar valor)
+  // Solo ejecutar processRecalculation para LINE ITEMS (ambas propiedades)
+  if (objectType === 'line_item') {
+    console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
+    const result = await processRecalculation(objectId, propertyName);
+    
+    if (result.skipped) {
+      console.log(`⚠️ Recalculación omitida: ${result.reason}`);
+      console.log('='.repeat(80) + '\n');
+      return res.status(200).json({
+        skipped: true,
+        reason: result.reason,
+        objectId,
+        propertyName,
+      });
+    }
+    
+    // Resetear flag "actualizar" inmediatamente después de procesar (sin delay)
+    if (propertyName === "actualizar") {
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
+          properties: { actualizar: false },
+        });
+        console.log(`✅ Flag 'actualizar' reseteado a false para line item ${objectId}`);
+      } catch (err) {
+        console.error(`⚠️ Error reseteando 'actualizar':`, err.message);
+      }
+    }
+    
+    console.log('✅ Recalculación completada');
     console.log('='.repeat(80) + '\n');
+    
     return res.status(200).json({
-      skipped: true,
-      reason: result.reason,
+      success: true,
+      action: 'recalculation',
       objectId,
       propertyName,
+      dealId: result.dealId,
+      dealName: result.dealName,
+      billingResult: result.billingResult,
+      eventId,
     });
   }
-  
-  // Resetear flag "actualizar" inmediatamente después de procesar (sin delay)
-  if (propertyName === "actualizar") {
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
-        properties: { actualizar: false },
-      });
-      console.log(`✅ Flag 'actualizar' reseteado a false para line item ${objectId}`);
-    } catch (err) {
-      console.error(`⚠️ Error reseteando 'actualizar':`, err.message);
-    }
-  }
-  
-  console.log('✅ Recalculación completada');
-  console.log('='.repeat(80) + '\n');
-  
-  return res.status(200).json({
-    success: true,
-    action: 'recalculation',
-    objectId,
-    propertyName,
-    dealId: result.dealId,
-    dealName: result.dealName,
-    billingResult: result.billingResult,
-    eventId,
-  });
 }
     
     // ====== PROPIEDAD NO RECONOCIDA ======
