@@ -99,7 +99,7 @@ console.log(`  ticketKey: "${expectedKey}"`);
       // 3) Título
       const dealName = dp.dealname || 'Deal';
       const productName = lineProps.name || 'Producto';
-      const rubro = snapshots.of_rubro || 'Sin rubro';
+      const rubro = snapshots.of_rubro || null;
 
       // 4) Stage según fecha y flag
       const stage = getTicketStage(billDateYMD, lineItem);
@@ -136,7 +136,7 @@ const ivaValue = ivaBoolean ? 'true' : 'false';
 
 // ✅ País / cupo (según tu modelo, suele venir del Deal)
 const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
-const aplicaCupoRaw = dp.of_aplica_para_cupo ?? dp.aplica_cupo ?? dp.cupo_activo ?? null;
+const aplicaCupoRaw = dp.of_aplica_para_cupo ?? null;
 
 // ✅ Validar of_aplica_para_cupo contra valores permitidos
 const CUPO_VALID_OPTIONS = ['Por Horas', 'Por Monto'];
@@ -169,7 +169,6 @@ console.log(`  of_pais_operativo: "${dp.of_pais_operativo || ''}"`);
 console.log(`  of_aplica_para_cupo (raw): "${aplicaCupoRaw || ''}"`);
 console.log(`  of_aplica_para_cupo (validated): "${aplicaCupo || '(omitido)'}"`);
 console.log('[MANUAL][SOURCE] SNAPSHOTS:');
-console.log(`  of_iva (raw): "${snapshots.of_iva || ''}"`);
 console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
 console.log('[MANUAL][SOURCE] ==========================================');
 
@@ -211,9 +210,6 @@ const ticketProps = {
   // ✅ IVA: siempre 'true' o 'false' (nunca null/undefined)
   of_iva: ivaValue,
 
-  // ❌ NO mandar propiedades inválidas:
-  // - total_real_a_facturar (es cálculo/read-only)
-  // - of_invoice_title (no existe en portal)
 
   // Owner + propietario secundario (solo si existen)
   ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
