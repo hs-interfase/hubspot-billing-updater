@@ -104,6 +104,12 @@ export async function applyCupoPreventiveAlertFromTicket({ deal, ticket, lineIte
     of_cupo_consumo_estimado: String(consumo),
   };
 
+  // Guard: skip if empty
+  if (Object.keys(updateProps).length === 0) {
+    console.log('[cupoAlert] ⊘ SKIP_EMPTY_UPDATE: No properties to update');
+    return { applied: false, consumo, restanteProyectado, ticketId, updateProps: {} };
+  }
+
   await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: updateProps });
 
   return { applied: true, consumo, restanteProyectado, ticketId, updateProps };

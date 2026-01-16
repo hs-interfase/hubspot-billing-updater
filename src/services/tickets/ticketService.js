@@ -536,6 +536,12 @@ export async function createTicketAssociations(ticketId, dealId, lineItemId, com
  * Actualiza un ticket existente con datos adicionales.
  */
 export async function updateTicket(ticketId, properties) {
+  // Guard: skip if empty
+  if (!properties || Object.keys(properties).length === 0) {
+    console.log(`[ticketService] ⊘ SKIP_EMPTY_UPDATE: No properties to update for ticket ${ticketId}`);
+    return;
+  }
+
   try {
     await safeUpdateTicket(hubspotClient, ticketId, {
       properties,

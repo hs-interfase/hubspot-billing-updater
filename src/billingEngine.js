@@ -284,6 +284,12 @@ export async function updateLineItemSchedule(lineItem) {
       }
       clearCalendarFields(updatesIrregular);
 
+      // Guard: skip if empty
+      if (Object.keys(updatesIrregular).length === 0) {
+        console.log('[billingEngine] ⊘ SKIP_EMPTY_UPDATE: No irregular properties to update');
+        return lineItem;
+      }
+
       await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
         properties: updatesIrregular,
       });
@@ -382,6 +388,12 @@ export async function updateLineItemSchedule(lineItem) {
     'updates:',
     updatesRecurring
   );
+
+  // Guard: skip if empty
+  if (Object.keys(updatesRecurring).length === 0) {
+    console.log('[billingEngine] ⊘ SKIP_EMPTY_UPDATE: No recurring properties to update');
+    return lineItem;
+  }
 
   await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
     properties: updatesRecurring,

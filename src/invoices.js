@@ -1,6 +1,20 @@
 import { hubspotClient } from './hubspotClient.js';
 import { buildInvoiceKey, parseInvoiceKey } from './utils/invoiceKey.js';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠️ DEPRECATED - LEGACY FILE - DO NOT USE ⚠️
+// ═══════════════════════════════════════════════════════════════════════════════
+// This file is DEPRECATED and NOT imported anywhere in the codebase.
+// 
+// ✅ USE INSTEAD: src/services/invoiceService.js
+//    - createInvoiceFromTicket() - Authoritative invoice creation path
+//    - Uses of_invoice_key for strict idempotency
+//    - Enforces FREEZE RULE (no backend money calculations)
+//    - Uses buildValidatedUpdateProps for schema validation
+//
+// ⚠️ This file remains only for historical reference.
+// ⚠️ DO NOT add new code here or import from this file.
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /*
  * Módulo para crear facturas. Incluye funciones para facturar tickets (manual)
@@ -147,16 +161,18 @@ const invoiceKey = buildInvoiceKey(dealId, lineItemId, invoiceDate);
     console.log(`[invoices] DRY_RUN: no se crea factura real para line item ${lineItemId}`);
     return { invoiceId: null };
   }
-  const quantity = parseFloat(lp.quantity) || 0;
-  const price = parseFloat(lp.price) || 0;
-  const total = quantity * price;
+  
+  // ⚠️ FREEZE RULE: Backend NO calcula montos (NO qty*price)
+  // Use HubSpot-calculated amount from line item directly
+  const amountFromHubSpot = parseFloat(lp.amount) || 0;
+  
   const invoiceProps = {
     hs_currency: dp.deal_currency_code || 'USD',
     hs_invoice_date: invoiceDate,
     hs_due_date: invoiceDate,
     of_invoice_key: invoiceKey,
     of_invoice_status: 'draft',
-    amount: total.toString(),
+    amount: amountFromHubSpot.toString(),
     subject: lp.name || 'Factura automática',
   };
   try {

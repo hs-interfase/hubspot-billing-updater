@@ -87,6 +87,14 @@ async function updateInvoiceDirect(invoiceId, properties) {
   return response.data;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠️ REGLA NO NEGOCIABLE - FREEZE RULE ⚠️
+// ═══════════════════════════════════════════════════════════════════════════════
+// - Backend NO calcula montos: NO qty*price, NO descuentos, NO IVA.
+// - Solo copia RAW + usa propiedades CALCULADAS por HubSpot en el Ticket (total_real_a_facturar, etc.).
+// - IVA/descuento se copian solo como flags informativos.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
  * Crea una factura desde un ticket de orden de facturación.
  * La factura SIEMPRE toma datos del ticket (no del line item directamente).
@@ -119,11 +127,12 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'fecha_de_resolucion_esperada',
       
       // Montos y cantidades
-      '_real_a_facturar',
+      'total_real_a_facturar',         // ← Monto total calculado por HubSpot
+      'cantidad_real',                 // ← Cantidad ajustada (fallback: of_cantidad)
+      'monto_unitario_real',           // ← Monto unitario ajustado
       'of_monto_total',
-      'of_cantidad',
+      'of_cantidad',                   // ← Fallback para tickets viejos
       'of_monto_unitario',
-      'monto_unitario_real',
 
       // Producto
       'subject',
@@ -132,8 +141,10 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_rubro',
       
       // Tax & Discount
-      'of_descuento',
-      'of_descuento_monto',
+      'descuento_en_porcentaje',       // ← Descuento % ajustado (fallback: of_descuento)
+      'descuento_por_unidad_real',     // ← Descuento unitario ajustado (fallback: of_descuento_monto)
+      'of_descuento',                  // ← Fallback para tickets viejos
+      'of_descuento_monto',            // ← Fallback para tickets viejos
       'of_iva',
       'of_exonera_irae',
       
@@ -148,6 +159,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_cupo_consumido',
       'of_cupo_consumido_fecha',
       'of_cupo_consumo_valor',
+      'of_cupo_consumo_invoice_id',
       
       // Contexto
       'of_moneda',
@@ -158,13 +170,11 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_cliente',
       'unidad_de_negocio',
       
-      
       // Otros campos
       'descripcion',
       'comments',
       'createdate',
       'motivo_pausa',
-      'unidad_de_negocio',
       'id_factura_nodum',
       'etapa_factura',
       
@@ -178,19 +188,31 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   }
   
   const tp = ticketFull.properties || {};
-  console.log('\n==================== [DEBUG][CUPO] TICKET (ALL props) ====================');
-try {
-  console.log(JSON.stringify(tp, null, 2));
-} catch {
-  console.log(tp);
-}
+  
+  // ⚡ Guard verbose JSON dump behind env flag (reduce noise)
+  if (process.env.DBG_TICKET_FULL === 'true') {
+    console.log('\n==================== [DEBUG][CUPO] TICKET (ALL props) ====================');
+    try {
+      console.log(JSON.stringify(tp, null, 2));
+    } catch {
+      console.log(tp);
+    }
+    console.log('==========================================================================\n');
+  }
+
+  // ⚡ RESOLVED VARIABLES (early creation for debug logs AND later usage)
+  // These prove NO backend calculations - we only extract RAW values from HubSpot
+  const cantidadResolved = parseNumber(tp.cantidad_real ?? tp.of_cantidad, 0);
+  const montoUnitarioResolved = parseNumber(tp.monto_unitario_real ?? tp.of_monto_unitario, 0);
+  const descuentoPctResolved = parseNumber(tp.descuento_en_porcentaje ?? tp.of_descuento, 0);
+  const descuentoUnitResolved = parseNumber(tp.descuento_por_unidad_real ?? tp.of_descuento_monto, 0);
+  const totalFinalResolved = parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0);
+  const hasIVAResolved = parseBool(tp.of_iva);
 
 console.log('\n-------------------- [DEBUG][CUPO] Keys específicas --------------------');
 console.log('[DEBUG][CUPO] of_aplica_para_cupo:', tp.of_aplica_para_cupo);
-console.log('[DEBUG][CUPO] tipo_de_cupo (no va en ticket normalmente):', tp.tipo_de_cupo);
 
 console.log('[DEBUG][CUPO] total_real_a_facturar:', tp.total_real_a_facturar);
-console.log('[DEBUG][CUPO] total_de_horas_consumidas:', tp.total_de_horas_consumidas);
 console.log('[DEBUG][CUPO] of_cantidad:', tp.of_cantidad);
 
 console.log('[DEBUG][CUPO] of_deal_id:', tp.of_deal_id);
@@ -222,17 +244,17 @@ console.log('-------------------------------------------------------------------
   showProp(tp, 'fecha_real_de_facturacion');
   showProp(tp, 'fecha_de_resolucion_esperada');
   
-  console.log('\n💰 MONTOS Y CANTIDADES');
-  showProp(tp, 'total_real_a_facturar');
-  showProp(tp, 'of_monto_total');
-  showProp(tp, 'of_cantidad');
-  showProp(tp, 'of_monto_unitario');
+  console.log('\n💰 MONTOS Y CANTIDADES (valores RESUELTOS desde Ticket, NO backend calculations)');
+  console.log(`   cantidad: ${cantidadResolved} (source: cantidad_real ?? of_cantidad)`);
+  console.log(`   montoUnitario: ${montoUnitarioResolved} (info only, NO multiply) (source: monto_unitario_real ?? of_monto_unitario)`);
+  console.log(`   totalFinal: ${totalFinalResolved} (HubSpot-CALCULATED source of truth) (source: total_real_a_facturar ?? monto_a_facturar)`);
   
-  console.log('\n🧾 TAX & DISCOUNT');
-  showProp(tp, 'of_descuento');
-  showProp(tp, 'of_descuento_monto');
-  showProp(tp, 'of_iva');
-  showProp(tp, 'of_exonera_irae');
+  console.log('\n🧾 TAX & DISCOUNT (valores RESUELTOS, NO backend calculations)');
+  console.log(`   descuentoPct: ${descuentoPctResolved}% (source: descuento_en_porcentaje ?? of_descuento)`);
+  console.log(`   descuentoUnit: ${descuentoUnitResolved} (source: descuento_por_unidad_real ?? of_descuento_monto)`);
+  console.log(`   hasIVA: ${hasIVAResolved} (source: of_iva)`);
+  
+  console.log('\n⚠️  NO backend calculations: baseTotal, totalAfterDiscount, totalWithTax, IVA $ - REMOVED');
   
   console.log('\n💳 CUPO - ALERTA PREVENTIVA');
   showProp(tp, 'of_aplica_para_cupo');
@@ -331,35 +353,13 @@ if (tp.of_invoice_id) {
     dueDateMs = toHubSpotDateOnly(dueDateYMD);
   }
   
-  // ✅ C) Calcular monto total con descuentos e impuestos
-  const cantidad = parseNumber(tp.of_cantidad, 0);
-  const montoUnitario = parseNumber(tp.of_monto_unitario, 0);
-  const baseTotal = cantidad * montoUnitario;
-  
-  const discountPercent = parseNumber(tp.of_descuento, 0);
-  const discountAmount = parseNumber(tp.of_descuento_monto, 0);
-  let totalAfterDiscount = baseTotal - (discountAmount * cantidad);
-  if (discountPercent > 0) {
-    totalAfterDiscount = baseTotal * (1 - discountPercent / 100);
-  }
-  
-const hasIVA = parseBool(tp.of_iva);
-  const ivaRate = hasIVA ? 0.22 : 0;
-  const totalWithTax = totalAfterDiscount * (1 + ivaRate);
-  
-  console.log('💰 Cálculo de monto total (desde ticket):');
-  console.log('   Cantidad:', cantidad);
-  console.log('   Monto unitario:', montoUnitario);
-  console.log('   Base:', baseTotal);
-  console.log('   Descuento %:', discountPercent);
-  console.log('   Descuento $:', discountAmount);
-  console.log('   Después de descuento:', totalAfterDiscount);
-  console.log('   IVA:', hasIVA ? '22%' : 'No');
-  console.log('   ✅ TOTAL FINAL:', totalWithTax);
-  
-  if (isNaN(totalWithTax)) {
-    console.error('❌ ERROR_CALC_TOTAL: Total es NaN');
-  }
+  // 5.5) Use resolved variables (already created early for debug logs)
+  const cantidad = cantidadResolved;
+  const montoUnitario = montoUnitarioResolved; // Info only, NO multiply
+  const descuentoPct = descuentoPctResolved;
+  const descuentoUnit = descuentoUnitResolved;
+  const totalFinal = totalFinalResolved; // Source of truth for final amount
+  const hasIVA = hasIVAResolved;
   
   // 6) Preparar propiedades de la factura (mapeo Ticket → Factura)
   const invoicePropsRaw = {
@@ -385,19 +385,26 @@ const hasIVA = parseBool(tp.of_iva);
     descripcion: tp.of_descripcion_producto || tp.descripcion,
     servicio: tp.of_rubro,
     
-    // 💵 Montos (del ticket - VALORES AJUSTADOS POR EL RESPONSABLE)
+// 💵 Montos y cantidades (inputs RAW del Ticket, usados por HubSpot para calcular):
+// - cantidad: RAW input desde 'cantidad_real' (cantidad ajustada, NO snapshot)
+// - monto_a_facturar: HubSpot-CALCULATED desde 'total_real_a_facturar' (source of truth, NO backend calculation)
+// - hs_amount_billed: mismo que monto_a_facturar
     cantidad: cantidad,
-    monto_a_facturar: parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ CLAVE: Monto final ajustado
-    hs_amount_billed: parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0), // ⭐ Total facturado (mismo que monto_a_facturar)
-    descuento: discountPercent,
-    descuento_por_unidad: discountAmount,
-    
-    // 🧾 Impuestos y exoneraciones
-    iva: hasIVA ? 'true' : 'false',
-    exonera_irae: tp.of_exonera_irae,
+    monto_a_facturar: totalFinal,
+    hs_amount_billed: totalFinal,
+
+// 💵 Descuentos e impuestos (RAW inputs informativos del Ticket, NO backend calculations):
+// - descuento: RAW input desde 'descuento_en_porcentaje' (% descuento configurado)
+// - descuento_por_unidad: RAW input desde 'descuento_por_unidad_real' (descuento unitario configurado)
+// - iva: boolean flag desde 'of_iva' (indica si aplica IVA, NO calcula IVA)
+descuento: descuentoPct,
+descuento_por_unidad: descuentoUnit,
+iva: hasIVA ? 'true' : 'false',
+exonera_irae: tp.of_exonera_irae,
+
     
     // 👥 Responsables
-    responsable_asignado: responsableAsignado,
+    responsable_asignado: toNumericOwnerOrNull(tp.hubspot_owner_id || tp.responsable_asignado),
     vendedor_factura: tp.of_propietario_secundario,
     
     // 📊 Frecuencia
@@ -406,23 +413,17 @@ const hasIVA = parseBool(tp.of_iva);
     // 🏢 Contexto del negocio
     nombre_empresa: tp.of_cliente,
     pais_operativo: tp.of_pais_operativo,
-    unidad_de_negocio: tp.of_unidad_de_negocio || tp.unidad_de_negocio,
+    unidad_de_negocio: tp.unidad_de_negocio,
     
     // 📅 Fechas adicionales
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    
-    // 📊 Impactos
-    impacto_historico: tp.of_impacto_historico,
-    impacto_facturado: tp.of_impacto_facturado,
-    impacto_forecast: tp.of_impacto_forecast,
-    
+  
     // 📆 Periodos
     periodo_a_facturar: tp.of_periodo_a_facturar,
     mensual: tp.of_periodo_de_facturacion,
     
     // 📝 Comentarios y metadata
     hs_comments: tp.comments,
-    createdate: tp.createdate,
     motivo_de_pausa: tp.motivo_pausa,
     
     // 🔢 IDs externos
@@ -434,27 +435,38 @@ const hasIVA = parseBool(tp.of_iva);
     // 🚀 Modo de generación
     modo_de_generacion_de_factura: modoGeneracion,
   };
-  
-  // ✅ C.3) Agregar monto total facturado (solo si no es NaN)
-  if (!isNaN(totalWithTax)) {
-    invoicePropsRaw.of_monto_total_facturado = String(totalWithTax.toFixed(2));
-  }
 
-  // 🐛 DEBUG: Log mapeo Ticket → Invoice para tax/discount
-  console.log('\n[DBG][INVOICE] Tax/Discount TICKET → INVOICE:');
-  console.log('[DBG][INVOICE] SOURCE (ticket):', {
-    of_descuento: tp.of_descuento,
-    of_descuento_monto: tp.of_descuento_monto,
-    of_iva: tp.of_iva,
-    of_exonera_irae: tp.of_exonera_irae,
+  // 🐛 DEBUG: RAW values from Ticket (NO backend calculations)
+  console.log('\n[DBG][INVOICE] RAW Values TICKET → INVOICE (NO calculations):');
+  console.log('[DBG][INVOICE] SOURCE (ticket RAW props):');
+  console.log('  PRIMARY:');
+  console.log('    cantidad_real:', tp.cantidad_real);
+  console.log('    monto_unitario_real:', tp.monto_unitario_real, '(info only, NO multiply)');
+  console.log('    descuento_en_porcentaje:', tp.descuento_en_porcentaje);
+  console.log('    descuento_por_unidad_real:', tp.descuento_por_unidad_real);
+  console.log('    total_real_a_facturar:', tp.total_real_a_facturar, '(HubSpot-CALCULATED)');
+  console.log('    of_iva:', tp.of_iva);
+  console.log('  FALLBACKS (legacy):');
+  console.log('    of_cantidad:', tp.of_cantidad);
+  console.log('    of_monto_unitario:', tp.of_monto_unitario);
+  console.log('    of_descuento:', tp.of_descuento);
+  console.log('    of_descuento_monto:', tp.of_descuento_monto);
+  
+  console.log('[DBG][INVOICE] RESOLVED (used for payload):', {
+    cantidadResolved,
+    montoUnitarioResolved, // info only
+    descuentoPctResolved,
+    descuentoUnitResolved,
+    hasIVAResolved,
+    totalFinalResolved,
   });
-  console.log('[DBG][INVOICE] TARGET (invoice):', {
-    descuento: invoicePropsRaw.descuento,
-    descuento_por_unidad: invoicePropsRaw.descuento_por_unidad,
-    iva: invoicePropsRaw.iva,
-    exonera_irae: invoicePropsRaw.exonera_irae,
-    of_monto_total_facturado: invoicePropsRaw.of_monto_total_facturado,
-  });
+  
+  console.log('[DBG][INVOICE] TARGET (invoice props):');
+  console.log('  cantidad:', invoicePropsRaw.cantidad);
+  console.log('  monto_a_facturar:', invoicePropsRaw.monto_a_facturar);
+  console.log('  descuento:', invoicePropsRaw.descuento);
+  console.log('  descuento_por_unidad:', invoicePropsRaw.descuento_por_unidad);
+  console.log('  iva:', invoicePropsRaw.iva);
 
   // Agregar usuario disparador si es manual
   if (usuarioDisparador) {
@@ -494,7 +506,9 @@ const hasIVA = parseBool(tp.of_iva);
   console.log('\n💰 MONTOS Y CANTIDADES');
   console.log('   cantidad:', validatedProps.cantidad);
   console.log('   monto_a_facturar:', validatedProps.monto_a_facturar);
-  console.log('   of_monto_total_facturado:', validatedProps.of_monto_total_facturado);
+  if (validatedProps.of_monto_total_facturado) {
+    console.log('   of_monto_total_facturado:', validatedProps.of_monto_total_facturado);
+  }
   console.log('   hs_currency:', validatedProps.hs_currency);
   
   console.log('\n💵 DESCUENTOS E IMPUESTOS');
@@ -507,7 +521,9 @@ const hasIVA = parseBool(tp.of_iva);
   console.log('   hs_invoice_date:', validatedProps.hs_invoice_date);
   console.log('   hs_due_date:', validatedProps.hs_due_date);
   console.log('   fecha_de_facturacion:', validatedProps.fecha_de_facturacion);
-  console.log('   createdate:', validatedProps.createdate);
+  if (validatedProps.createdate) {
+    console.log('   createdate:', validatedProps.createdate);
+  }
   
   console.log('\n👥 RESPONSABLES');
   console.log('   responsable_asignado:', validatedProps.responsable_asignado);
@@ -692,15 +708,15 @@ const hasIVA = parseBool(tp.of_iva);
     
     await Promise.all(assocCalls);
     console.log('✓ Todas las asociaciones creadas');
-    
-    // 9) Actualizar ticket con fecha real de facturación y referencia a la factura
+
+        // 9) Actualizar ticket con fecha real de facturación y referencia a la factura
     console.log('\n--- ACTUALIZANDO TICKET ---');
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
         properties: {
           of_invoice_id: invoiceId,
           of_invoice_key: invoiceKey,
-          fecha_real_de_facturacion: fechaRealFacturacion,
+          fecha_real_de_facturacion: invoiceDateMs,
         },
       });
       console.log(`✓ Ticket actualizado con invoice_id=${invoiceId} y fecha real`);
@@ -727,7 +743,7 @@ if (lineItemId) {
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
     console.log('Invoice Key:', invoiceKey);
-    console.log('Responsable:', responsableAsignado || 'no asignado');
+    console.log('Responsable:', invoicePropsRaw.responsable_asignado || tp.hubspot_owner_id || 'no asignado');
     console.log('Modo de generación:', modoGeneracion);
     console.log('================================================\n');
 
@@ -837,44 +853,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     return { invoiceId: null, created: false };
   }
   
-  // 4) Calcular monto total con descuentos e impuestos
-  const quantity = parseNumber(lp.quantity);
-  const price = parseNumber(lp.price);
-  const baseTotal = quantity * price;
-  
-  // Aplicar descuento
-  const discountPercent = parseNumber(lp.hs_discount_percentage, 0);
-  const discountAmount = parseNumber(lp.discount, 0);
-  let totalAfterDiscount = baseTotal - (discountAmount * quantity);
-  if (discountPercent > 0) {
-    totalAfterDiscount = baseTotal * (1 - discountPercent / 100);
-  }
-  
-  // Aplicar IVA (detectar por hs_tax_rate_group_id)
-  const taxGroupId = String(lp.hs_tax_rate_group_id || '').trim();
-  const hasIVA = taxGroupId === '16912720'; // IVA Uruguay
-  const ivaRate = hasIVA ? 0.22 : 0; // 22% IVA
-  const totalWithTax = totalAfterDiscount * (1 + ivaRate);
-  
-  // ✅ C) Validar que el total no sea NaN
-  if (isNaN(totalWithTax)) {
-    console.error('❌ ERROR_CALC_TOTAL: Total calculado es NaN');
-    console.error('   quantity:', quantity, 'price:', price, 'discount%:', discountPercent, 'discount$:', discountAmount);
-    // No setear of_monto_total_facturado si es NaN
-  }
-  
-  console.log('💰 Cálculo de monto total:');
-  console.log('   Cantidad:', quantity);
-  console.log('   Precio unitario:', price);
-  console.log('   Base (qty × price):', baseTotal);
-  console.log('   Descuento %:', discountPercent);
-  console.log('   Descuento $:', discountAmount);
-  console.log('   Después de descuento:', totalAfterDiscount);
-  console.log('   IVA aplicado:', hasIVA ? '22%' : 'No');
-  console.log('   ✅ TOTAL FINAL:', totalWithTax);
-  console.log('   Moneda del deal:', dp.deal_currency_code || DEFAULT_CURRENCY);
-  
-  // ✅ C) Construir nombre de Invoice: "<DealName> - <li_short> - <billDateYMD>"
+  // 4) Construir nombre de Invoice: "<DealName> - <li_short> - <billDateYMD>"
   const dealName = dp.dealname || 'Deal';
   let liShort = lp.name || null;
   
@@ -924,11 +903,6 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
   };
   
-  // ✅ C.3) Monto total facturado (solo si no es NaN)
-  if (!isNaN(totalWithTax)) {
-    invoiceProps.of_monto_total_facturado = String(totalWithTax.toFixed(2));
-  }
-  
   // Asignar al usuario administrativo si está configurado
   if (process.env.INVOICE_OWNER_ID) {
     invoiceProps.hubspot_owner_id = process.env.INVOICE_OWNER_ID;
@@ -961,15 +935,8 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
   console.log('   servicio:', validatedProps.servicio);
   
   console.log('\n💰 MONTOS Y CANTIDADES');
-  console.log('   cantidad:', quantity);
-  console.log('   precio unitario:', price);
   console.log('   of_monto_total_facturado:', validatedProps.of_monto_total_facturado);
   console.log('   hs_currency:', validatedProps.hs_currency);
-  
-  console.log('\n💵 DESCUENTOS E IMPUESTOS');
-  console.log('   descuento (%):', discountPercent);
-  console.log('   descuento ($):', discountAmount);
-  console.log('   iva aplicado:', hasIVA ? '22%' : 'No');
   
   console.log('\n📅 FECHAS');
   console.log('   hs_invoice_date:', validatedProps.hs_invoice_date);
