@@ -619,7 +619,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
         subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
         hs_pipeline: AUTOMATED_TICKET_PIPELINE,
         hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
-        of_deal_id: _dealId,
+        of_deal_id: dealId,
         of_line_item_ids: lineItemId,
         of_ticket_key: expectedKey,
         ...snapshots,
@@ -913,3 +913,118 @@ await safeUpdateTicket(hubspotClient, ticketId, {
     throw err;
   }
 }
+
+/**
+ * Crea un ticket de orden de facturación automática en el pipeline específico.
+ * Idempotente: si ya existe un ticket con la misma clave, lo devuelve.
+ * 
+ * @param {Object} deal - El deal de HubSpot.
+ * @param {Object} lineItem - El line item de HubSpot.
+ * @param {string} billingDate - La fecha objetivo de facturación (YYYY-MM-DD).
+ * @returns {Object} { ticketId, created } - `created` es true si se creó, false si ya existía.
+ */
+/*
+export async function createAutoBillingTicket(deal, lineItem, billingDate) {
+const dealId = String(deal.id || deal.properties?.hs_object_id);
+const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
+const dp = deal.properties || {};
+const lp = lineItem.properties || {};
+
+// Determinar ID estable para idempotencia (usar origen PY si existe)
+// ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
+const stableLineId = lp.of_line_item_py_origen_id
+  ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
+  : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
+
+console.log('[ticketService] 🔍 AUTO - stableLineId:', stableLineId, '(real:', lineItemId, ')');
+
+const ticketKey = generateTicketKey(dealId, stableLineId, billingDate);
+console.log('[ticketService] 🔍 AUTO - ticketKey:', ticketKey); 
+  // Buscar ticket existente por clave
+  const existing = await findTicketByKey(ticketKey);
+  if (existing) {
+    return { ticketId: existing.id, created: false };
+  }
+  
+  // Si es DRY_RUN, no crear
+  if (isDryRun()) {
+    console.log(`[ticketService] DRY_RUN: no se crea ticket automático para ${ticketKey}`);
+    return { ticketId: null, created: false };
+  }
+  
+// Determinar fechas según reglas
+const expectedDate = billingDate;
+const orderedDate = billingDate; // En auto: orderedDate = expectedDate
+
+console.log(`[ticketService] 📅 AUTO - Fechas:`);
+console.log(`   - expectedDate: ${expectedDate} (siempre = billingDate)`);
+console.log(`   - orderedDate: ${orderedDate} (= expectedDate en auto)`);
+
+// Preparar el payload con nueva firma
+const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
+
+  console.log(`[ticketService] 💰 AUTO - Montos iniciales:`);
+  console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
+  console.log(`   - monto_real_a_facturar: ${snapshots.monto_real_a_facturar}`);
+  console.log(`   ℹ️ En tickets AUTOMÁTICOS, ambos montos permanecen iguales (snapshot inmutable).`);
+  console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item.`);
+
+  console.log(`[ticketService] 📊 AUTO - Frecuencia:`);
+  console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
+  console.log(`   - repetitivo: ${snapshots.repetitivo}`);
+
+  console.log('[ticketService] 🔍 AUTO - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
+  console.log('[ticketService] 🔍 AUTO - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
+
+  const dealName = deal.properties?.dealname || 'Deal';
+  const productName = lineItem.properties?.name || 'Producto';
+  const rubro = lineItem.properties?.servicio || 'Sin rubro';
+  
+// Determinar vendedor
+const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
+
+console.log('[ticketService] AUTO - vendedorId:', vendedorId);
+
+// Construir propiedades del ticket
+const ticketProps = {
+  subject: `${dealName} | ${productName} | ${rubro} | ${billingDate}`,
+  hs_pipeline: AUTOMATED_TICKET_PIPELINE,
+  hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+  // ❌ NO asignar hubspot_owner_id en tickets automáticos
+  of_deal_id: dealId,
+  of_line_item_ids: lineItemId,
+  of_ticket_key: ticketKey,
+  ...snapshots,
+};
+
+// Override of_propietario_secundario con vendedorId si existe
+if (vendedorId) {
+  ticketProps.of_propietario_secundario = vendedorId;
+}
+
+console.log('[ticketService] 🔍 AUTO - of_propietario_secundario:', ticketProps.of_propietario_secundario);
+console.log('[ticketService] 🔍 AUTO - hubspot_owner_id:', ticketProps.hubspot_owner_id);
+
+try {
+  // Crear el ticket
+const createResp = await safeCreateTicket(hubspotClient, { properties: ticketProps });
+  const ticketId = createResp.id || createResp.result?.id;
+
+  // Obtener y crear asociaciones
+  const [companyIds, contactIds] = await Promise.all([
+    getDealCompanies(dealId),
+    getDealContacts(dealId)
+  ]);
+  
+  await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+  
+    console.log(`[ticketService] Ticket automático creado: ${ticketId} para ${ticketKey}`);
+  console.log(`[ticketService] Vendedor: ${vendedorId}`);
+  
+  return { ticketId, created: true };
+  } catch (err) {
+    console.error('[ticketService] Error creando ticket automático:', err?.response?.body || err?.message || err);
+    throw err;
+  }
+}
+  */
