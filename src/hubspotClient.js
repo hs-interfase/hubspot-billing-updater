@@ -78,9 +78,6 @@ export async function getDealWithLineItems(dealId) {
     "deal_py_origen_id",
     "deal_uy_mirror_id",
     "es_mirror_de_py",
-
-    // --- asignaciones ---
-    "pm_asignado_cupo",
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -149,6 +146,7 @@ export async function getDealWithLineItems(dealId) {
     "invoice_key",
     "id_deal_origen",
     "pais_operativo",
+    "responsable_asignado",
     "unidad_de_negocio",
     "uy",
   ];

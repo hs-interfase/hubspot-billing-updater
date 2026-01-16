@@ -101,9 +101,10 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       }
 
       // 6) Owner (PM) y vendedor (informativo)
+      const lp = lineItem.properties || {};
       const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
-      const pmAsignado = dp.pm_asignado_cupo
-        ? String(dp.pm_asignado_cupo)
+      const pmAsignado = lp.responsable_asignado
+        ? String(lp.responsable_asignado)
         : dp.hubspot_owner_id
           ? String(dp.hubspot_owner_id)
           : null;
@@ -169,7 +170,7 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       const urgentLabel = facturarAhora ? ' [URGENTE]' : '';
 
       console.log(`[ticketService] ✓ Ticket manual creado: ${ticketId} para ${ticketKey} (stage: ${stageLabel}${urgentLabel})`);
-      console.log(`[ticketService] Owner (PM): ${dp.pm_asignado_cupo || dp.hubspot_owner_id || 'N/A'}, Vendedor: ${dp.hubspot_owner_id || 'N/A'}`);
+      console.log(`[ticketService] Owner (PM): ${lp.responsable_asignado || dp.hubspot_owner_id || 'N/A'}, Vendedor: ${dp.hubspot_owner_id || 'N/A'}`);
 
       if (duplicatesMarked > 0) {
         console.log(`[ticketService] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
