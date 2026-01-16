@@ -71,8 +71,15 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
       );
 
       // 2) Snapshots con firma nueva
-      const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
+const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
 
+// ✅ IVA normalizado (para logs y para payload)
+const ivaValue = String(snapshots.of_iva ?? 'false') === 'true' ? 'true' : 'false';
+const ivaBoolean = ivaValue === 'true';
+
+
+console.log('[MANUAL][SOURCE] SNAPSHOTS:');
+console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
       console.log(`[ticketService] 💰 MANUAL - Montos iniciales:`);
       console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
       console.log(`   - total_real_a_facturar: ${snapshots.total_real_a_facturar}`);
@@ -168,9 +175,7 @@ console.log('[MANUAL][SOURCE] SNAPSHOTS:');
 console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
 console.log('[MANUAL][SOURCE] ==========================================');
 
-// ✅ TicketProps (COMPLETO)
 const ticketProps = {
-  // Core HubSpot ticket
   subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
   hs_pipeline: TICKET_PIPELINE,
   hs_pipeline_stage: stage,
@@ -180,17 +185,15 @@ const ticketProps = {
   of_line_item_ids: lineItemId,
   of_ticket_key: expectedKey,
 
-  // Snapshot "inmutable" (lo que ya venías copiando)
+  // Snapshot "inmutable"
   ...snapshots,
 
-  // ✅ Campos que querés que SIEMPRE pasen desde LI/Deal
+  // ✅ override final (normalizado)
+  of_iva: ivaValue,
+
+  // Campos “siempre”
   of_producto_nombres: liName,
-
-  // si facturarAhora, descripcionProducto ya incluye nota urgente + snapshots.of_descripcion_producto
-  // si no, cae a descripcion del LI, y si no hay, null
   of_descripcion_producto: descripcionProducto || liDescripcion || null,
-
-  // Nota (si querés nota a nivel ticket)
   nota: liNota,
 
   // País / cupo
@@ -203,14 +206,10 @@ const ticketProps = {
   descuento_porcentaje_real: descuentoPctReal,
   descuento_unit_real: descuentoUnitReal,
 
-  // ✅ IVA: siempre 'true' o 'false' (nunca null/undefined)
-  of_iva: ivaValue,
-
-
-  // Owner + propietario secundario (solo si existen)
   ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
   ...(responsable ? { hubspot_owner_id: responsable } : {}),
 };
+
 
 // ✅ setear rubro solo si hay candidato (evita mandar null/undefined)
 if (rubroCandidate) {
