@@ -132,8 +132,7 @@ const descuentoUnitReal = lineProps.descuento_unit_real ?? null;
 
 // ✅ País / cupo (según tu modelo, suele venir del Deal)
 const paisOperativo = dp.of_pais_operativo ?? dp.pais_operativo ?? null;
-const aplicaCupo = dp.of_aplica_para_cupo ?? dp.aplica_cupo ?? dp.cupo_activo ?? null;
-
+const aplicaCupoClean = ["Por Horas","Por Monto"].includes(String(aplicaCupo).trim()) ? String(aplicaCupo).trim() : null;
 // ✅ Rubro candidate (por ahora, dejamos servicioNormalized o snapshots.of_rubro)
 const rubroCandidate = servicioNormalized || snapshots.of_rubro || null;
 
