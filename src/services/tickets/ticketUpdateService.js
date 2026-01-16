@@ -16,7 +16,7 @@ import { parseNumber } from '../../utils/parsers.js';
  * @param {string} ticketId - ID del ticket a procesar
  * @returns {Promise<Object>} Resultado del procesamiento
  */
-/*
+
 export async function processTicketUpdate(ticketId) {
   console.log(`\n${'='.repeat(80)}`);
   console.log(`[ticket:update] 🎫 Procesando actualización de ticket ${ticketId}`);
@@ -215,7 +215,6 @@ export async function processTicketUpdate(ticketId) {
  * @param {Object} ticketProps - Propiedades del ticket
  * @returns {Object} Propiedades calculadas en formato string para HubSpot
  */
-/*
 function computeRealProps(ticketProps) {
   // Valores base desde snapshots
   const montoUnitario = parseNumber(ticketProps.of_monto_unitario, 0);
@@ -268,4 +267,3 @@ function computeRealProps(ticketProps) {
     total_real_a_facturar: String(totalRealAFacturar),
   };
 }
-  */
