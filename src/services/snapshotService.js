@@ -45,11 +45,6 @@ function detectIVA(lineItem) {
   return 'false';
 }
 
-/**
- * Extrae los snapshots principales de un line item.
- * ⚠️  NO incluye propiedades read-only/calculadas: total_real_a_facturar
- * ⚠️  NO incluye propiedades inexistentes: of_invoice_title
- */
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};
 
@@ -197,7 +192,6 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     
     // ✅ C) Título del invoice para usar después
     subject: invoiceTitle,
-    of_invoice_title: invoiceTitle,
   };
 
   // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)

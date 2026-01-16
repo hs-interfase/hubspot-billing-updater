@@ -363,9 +363,7 @@ if (tp.of_invoice_id) {
   
   // 6) Preparar propiedades de la factura (mapeo Ticket → Factura)
   const invoicePropsRaw = {
-    // ✅ C.1) Título: usar of_invoice_title o subject del ticket
-    hs_title: tp.of_invoice_title || tp.subject || `Factura - Ticket ${ticketId}`,
-    
+  
     // 💰 Moneda (del ticket)
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     
