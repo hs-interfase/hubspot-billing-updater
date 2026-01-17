@@ -63,20 +63,36 @@ async function awaitTicketCalculatedReady(ticketId) {
   return null;
 }
 
-// Helper para resetear triggers en el Line Item (best-effort)
+// Helper para resetear triggers en el Line Item (MVP anti-loops)
 export async function resetTriggersFromLineItem(lineItemId) {
+  const propsToReset = {
+    facturar_ahora: 'false',
+    actualizar: 'false', // <- agregamos esto
+  };
+
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-      properties: { facturar_ahora: 'false' },
+      properties: propsToReset,
     });
+
     console.log(
-      `[ticketService][AUTO][TRIGGERS] ✓ facturar_ahora reseteado en LineItem ${lineItemId}`
+      `[TRIGGERS] ✓ reseteados en LineItem ${lineItemId}: ${Object.keys(propsToReset).join(', ')}`
     );
   } catch (err) {
-    console.warn(
-      `[ticketService][AUTO][TRIGGERS] ⚠️ Error al resetear facturar_ahora en LineItem ${lineItemId}:`,
-      err?.message
-    );
+    const msg = `[TRIGGERS] ❌ NO se pudo resetear triggers en LineItem ${lineItemId}. ` +
+      `Queda riesgo de loop. Error: ${err?.message || err}`;
+
+    // Intento guardar el mensaje para que "se sepa qué falló"
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { of_billing_error: msg },
+      });
+    } catch (_) {
+      // si también falla, al menos queda en logs
+    }
+
+    // Cortar ejecución (no seguir como si nada)
+    throw new Error(msg);
   }
 }
 
