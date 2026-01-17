@@ -66,8 +66,8 @@ export function extractLineItemSnapshots(lineItem, deal) {
     hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
   });
   console.log('[DBG][SNAPSHOT] Tax/Discount TARGET (ticket):', {
-    of_descuento: descuentoPorcentaje,
-    of_descuento_monto: descuentoMonto,
+    descuento_en_porcentaje: descuentoPorcentaje,
+    descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
   });
 
@@ -92,24 +92,18 @@ export function extractLineItemSnapshots(lineItem, deal) {
   const baseSnapshots = {
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
-    of_rubro_raw: safeString(lp.servicio), // ← Valor RAW para validación posterior
+    of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
     of_subrubro: safeString(lp.subrubro),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(lp.pais_operativo),
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
-    of_monto_unitario: precioUnitario, // ✅ price = monto unitario (valor hora para cupos)
-    of_cantidad: cantidad, // ✅ cantidad = horas reales para cupos (modificable por responsable)
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.porcentaje_margen, 0),
-    of_descuento: descuentoPorcentaje, // ✅ % descuento (ej: 10 = 10%)
-    of_descuento_monto: descuentoMonto, // ✅ descuento por unidad en moneda del deal
     of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
-    of_monto_total: montoTotal, // ✅ monto total sugerido (snapshot inmutable)
-    // ⚠️ total_real_a_facturar REMOVED: es propiedad calculada/read-only en HubSpot, NO debe enviarse
   };
 
   console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });

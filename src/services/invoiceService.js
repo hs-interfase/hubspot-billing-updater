@@ -128,11 +128,8 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       
       // Montos y cantidades
       'total_real_a_facturar',         // ← Monto total calculado por HubSpot
-      'cantidad_real',                 // ← Cantidad ajustada (fallback: of_cantidad)
-      'monto_unitario_real',           // ← Monto unitario ajustado
-      'of_monto_total',
-      'of_cantidad',                   // ← Fallback para tickets viejos
-      'of_monto_unitario',
+      'cantidad_real',               
+      'monto_unitario_real',         
 
       // Producto
       'subject',
@@ -141,10 +138,8 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_rubro',
       
       // Tax & Discount
-      'descuento_en_porcentaje',       // ← Descuento % ajustado (fallback: of_descuento)
-      'descuento_por_unidad_real',     // ← Descuento unitario ajustado (fallback: of_descuento_monto)
-      'of_descuento',                  // ← Fallback para tickets viejos
-      'of_descuento_monto',            // ← Fallback para tickets viejos
+      'descuento_en_porcentaje',    
+      'descuento_por_unidad_real', 
       'of_iva',
       'of_exonera_irae',
       
@@ -202,23 +197,22 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
 
   // ⚡ RESOLVED VARIABLES (early creation for debug logs AND later usage)
   // These prove NO backend calculations - we only extract RAW values from HubSpot
-  const cantidadResolved = parseNumber(tp.cantidad_real ?? tp.of_cantidad, 0);
-  const montoUnitarioResolved = parseNumber(tp.monto_unitario_real ?? tp.of_monto_unitario, 0);
-  const descuentoPctResolved = parseNumber(tp.descuento_en_porcentaje ?? tp.of_descuento, 0);
-  const descuentoUnitResolved = parseNumber(tp.descuento_por_unidad_real ?? tp.of_descuento_monto, 0);
-  const totalFinalResolved = parseNumber(tp.total_real_a_facturar ?? tp.monto_a_facturar, 0);
+  const cantidadResolved = parseNumber(tp.cantidad_real ?? null, 0);
+  const montoUnitarioResolved = parseNumber(tp.monto_unitario_real ?? null, 0);
+  const descuentoPctResolved = parseNumber(tp.descuento_en_porcentaje ?? null, 0);
+  const descuentoUnitResolved = parseNumber(tp.descuento_por_unidad_real ?? null, 0);
+  const totalFinalResolved = parseNumber(tp.total_real_a_facturar ?? null, 0);
   const hasIVAResolved = parseBool(tp.of_iva);
 
 console.log('\n-------------------- [DEBUG][CUPO] Keys específicas --------------------');
 console.log('[DEBUG][CUPO] of_aplica_para_cupo:', tp.of_aplica_para_cupo);
 
 console.log('[DEBUG][CUPO] total_real_a_facturar:', tp.total_real_a_facturar);
-console.log('[DEBUG][CUPO] of_cantidad:', tp.of_cantidad);
+console.log('[DEBUG][CUPO] cantidad:', tp.cantidad_real);
 
 console.log('[DEBUG][CUPO] of_deal_id:', tp.of_deal_id);
 console.log('[DEBUG][CUPO] of_line_item_ids:', tp.of_line_item_ids);
 
-console.log('[DEBUG][CUPO] of_cupo_consumido:', tp.of_cupo_consumido);
 console.log('==========================================================================\n');
 
 console.log('\n-------------------- [DEBUG][CUPO] Props que contienen "cupo" --------------------');
@@ -245,12 +239,12 @@ console.log('-------------------------------------------------------------------
   showProp(tp, 'fecha_de_resolucion_esperada');
   
   console.log('\n💰 MONTOS Y CANTIDADES (valores RESUELTOS desde Ticket, NO backend calculations)');
-  console.log(`   cantidad: ${cantidadResolved} (source: cantidad_real ?? of_cantidad)`);
-  console.log(`   montoUnitario: ${montoUnitarioResolved} (info only, NO multiply) (source: monto_unitario_real ?? of_monto_unitario)`);
-  console.log(`   totalFinal: ${totalFinalResolved} (HubSpot-CALCULATED source of truth) (source: total_real_a_facturar ?? monto_a_facturar)`);
+  console.log(`   cantidad: ${cantidadResolved} (source: cantidad_real`);
+  console.log(`   montoUnitario: ${montoUnitarioResolved} (info only, NO multiply) (source: monto_unitario_real`);
+  console.log(`   totalFinal: ${totalFinalResolved} (HubSpot-CALCULATED source of truth) (source: total_real_a_facturar`);
   
   console.log('\n🧾 TAX & DISCOUNT (valores RESUELTOS, NO backend calculations)');
-  console.log(`   descuentoPct: ${descuentoPctResolved}% (source: descuento_en_porcentaje ?? of_descuento)`);
+  console.log(`   descuentoPct: ${descuentoPctResolved}% (source: descuento_en_porcentaje)`);
   console.log(`   descuentoUnit: ${descuentoUnitResolved} (source: descuento_por_unidad_real ?? of_descuento_monto)`);
   console.log(`   hasIVA: ${hasIVAResolved} (source: of_iva)`);
   
@@ -445,10 +439,6 @@ exonera_irae: tp.of_exonera_irae,
   console.log('    total_real_a_facturar:', tp.total_real_a_facturar, '(HubSpot-CALCULATED)');
   console.log('    of_iva:', tp.of_iva);
   console.log('  FALLBACKS (legacy):');
-  console.log('    of_cantidad:', tp.of_cantidad);
-  console.log('    of_monto_unitario:', tp.of_monto_unitario);
-  console.log('    of_descuento:', tp.of_descuento);
-  console.log('    of_descuento_monto:', tp.of_descuento_monto);
   
   console.log('[DBG][INVOICE] RESOLVED (used for payload):', {
     cantidadResolved,

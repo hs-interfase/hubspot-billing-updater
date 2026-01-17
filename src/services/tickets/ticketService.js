@@ -596,9 +596,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
 
       console.log(`[ticketService] 💰 AUTO - Montos iniciales:`);
-      console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
       console.log(`   - total_real_a_facturar: ${snapshots.total_real_a_facturar}`);
-      console.log(`   ℹ️ En tickets AUTOMÁTICOS, ambos montos permanecen iguales (snapshot inmutable).`);
       console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item.`);
 
       console.log(`[ticketService] 📊 AUTO - Frecuencia:`);
@@ -610,7 +608,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
 
       const dealName = deal.properties?.dealname || 'Deal';
       const productName = lineItem.properties?.name || 'Producto';
-      const rubro = snapshots.of_rubro || 'Sin rubro';
+      const rubro = snapshots.of_rubro || null;
       
       // Determinar vendedor
       const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;

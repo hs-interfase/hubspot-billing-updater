@@ -122,7 +122,6 @@ const ivaBoolean = ivaValue === 'true';
 console.log('[MANUAL][SOURCE] SNAPSHOTS:');
 console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
       console.log(`[ticketService] 💰 MANUAL - Montos iniciales:`);
-      console.log(`   - of_monto_total: ${snapshots.of_monto_total}`);
       console.log(`   - total_real_a_facturar: ${snapshots.total_real_a_facturar}`);
       console.log(`   ℹ️ En tickets MANUALES, total_real_a_facturar es EDITABLE por el responsable.`);
       console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item (snapshot inmutable).`);
@@ -275,10 +274,6 @@ if (rubroCandidate) {
   console.log(`[MANUAL][RUBRO] ⊘ of_rubro omitido (sin valor válido)`);
 }
 
-// Eliminar of_rubro_raw del payload si existe
-if ('of_rubro_raw' in ticketProps) {
-  delete ticketProps.of_rubro_raw;
-}
 
 // ✅ Limpiar vacíos para no mandar "" o null (pero preservar 0)
 const removed = cleanTicketProps(ticketProps);

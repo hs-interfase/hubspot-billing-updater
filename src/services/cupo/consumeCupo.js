@@ -14,7 +14,7 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
  * 3) Solo consume si deal.cupo_activo == true
 + * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
  * TIPO DE CONSUMO:
- * - "Por Horas": ticket.total_de_horas_consumidas (fallback: ticket.of_cantidad)
+ * - "Por Horas": ticket.total_de_horas_consumidas 
  * - "Por Monto": ticket.total_real_a_facturar (neto sin IVA)
  * 
  * ESCRITURAS:
@@ -57,7 +57,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'total_de_horas_consumidas',
-      'of_cantidad', 'total_real_a_facturar'
+      'cantidad_real', 'total_real_a_facturar'
     ]);
 
     // Re-leer Line Item si existe
@@ -133,11 +133,10 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
   let consumo = 0;
 
   if (tipoCupo === "Por Horas") {
-    // Priorizar total_de_horas_consumidas, fallback a of_cantidad
     consumo = parseNumber(tp.total_de_horas_consumidas, 0);
     if (consumo === 0) {
-      consumo = parseNumber(tp.of_cantidad, 0);
-      console.log(`[consumeCupo] 💰 Tipo: Por Horas | Consumo: ${consumo} hrs (desde ticket.of_cantidad)`);
+      consumo = parseNumber(tp.cantidad_real, 0);
+      console.log(`[consumeCupo] 💰 Tipo: Por Horas | Consumo: ${consumo} hrs (desde ticket.cantidad_real)`);
     } else {
       console.log(`[consumeCupo] 💰 Tipo: Por Horas | Consumo: ${consumo} hrs (desde ticket.total_de_horas_consumidas)`);
     }
@@ -155,7 +154,7 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
   if (consumo <= 0 || isNaN(consumo)) {
     const reason = `consumo inválido: ${consumo} (NaN o <=0)`;
     console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   of_cantidad: ${tp.of_cantidad}`);
+    console.log(`   cantidad_real: ${tp.cantidad_real}`);
     console.log(`   total_de_horas_consumidas: ${tp.total_de_horas_consumidas}`);
     console.log(`   total_real_a_facturar: ${tp.total_real_a_facturar}`);
     return { consumed: false, reason };

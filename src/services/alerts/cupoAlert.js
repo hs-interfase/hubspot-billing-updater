@@ -71,8 +71,7 @@ export async function applyCupoPreventiveAlertFromTicket({ deal, ticket, lineIte
     tipoCupoRaw.includes("monto") || tipoCupoRaw.includes("monto".toLowerCase());
 
   if (isHoras) {
-    // ⬇️ Cambiá por tu propiedad real en Ticket
-    consumo = parseNumber(tp.of_cantidad_horas ?? tp.of_cantidad ?? tp.of_horas, 0);
+    consumo = parseNumber(tp.cantidad_real, 0);
   } else if (isMonto) {
     // TOTAL_real_a_facturar debería ser NETO (sin IVA)
     consumo = parseNumber(tp.total_real_a_facturar, 0);
