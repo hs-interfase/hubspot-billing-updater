@@ -88,30 +88,13 @@ for (const li of autoLineItems) {
         console.log(`      [Phase3] ticket ${created ? 'created' : 'reused'}: ${ticketId}`);
       }
 
-      // Crear factura con billingPeriodDate para invoiceKey
-      const result = await createAutoInvoiceFromLineItem(
-        deal, 
-        li, 
-        billingPeriodDate,  // ✅ For invoiceKey
-        today  // ✅ For hs_invoice_date
-      );
-      
-      if (result?.created) {
-        invoicesEmitted++;
-        console.log(`      [Phase3] invoice created: ${result.invoiceId}`);
-      } else {
-        console.log(`      [Phase3] invoice existed: ${result?.invoiceId}`);
-      }
-
-      // Asociar invoice -> ticket
-      if (ticketId && result?.invoiceId) {
-        await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
-      }
-
+      // Delegar a ticketService para facturación automática (único camino autorizado)
+      console.log('[Phase3] delegating to createAutoBillingTicket (ticket is source of truth, no direct invoice)');
+      const ticketResult = await createAutoBillingTicket(deal, li, billingPeriodDate);
+      console.log('[Phase3] ticketService.createAutoBillingTicket result:', ticketResult);
       // Reset flag
       await resetFacturarAhoraFlag(lineItemId);
       console.log(`      [Phase3] facturar_ahora reset`);
-
       continue;
     }
 
@@ -130,25 +113,10 @@ for (const li of autoLineItems) {
     if (ticketId) ticketsEnsured++;
     console.log(`      [Phase3] ticket ok: ${ticketId}`);
 
-    // Factura
-    const result = await createAutoInvoiceFromLineItem(
-      deal, 
-      li, 
-      billingPeriodDate,  // ✅ For both invoiceKey and hs_invoice_date
-      billingPeriodDate  // Same as period date
-    );
-    
-    if (result?.created) {
-      invoicesEmitted++;
-      console.log(`      [Phase3] invoice created: ${result.invoiceId}`);
-    } else {
-      console.log(`      [Phase3] invoice existed: ${result?.invoiceId}`);
-    }
-
-    // Asociar invoice -> ticket
-    if (ticketId && result?.invoiceId) {
-      await updateTicket(ticketId, { of_invoice_id: result.invoiceId });
-    }
+    // Delegar a ticketService para facturación automática (único camino autorizado)
+    console.log('[Phase3] delegating to createAutoBillingTicket (ticket is source of truth, no direct invoice)');
+    const ticketResult = await createAutoBillingTicket(deal, li, billingPeriodDate);
+    console.log('[Phase3] ticketService.createAutoBillingTicket result:', ticketResult);
   } catch (err) {
     console.error(`      [Phase3] error:`, err?.message || err);
     errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });

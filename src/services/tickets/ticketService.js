@@ -34,9 +34,13 @@ async function awaitTicketCalculatedReady(ticketId) {
     'of_exonera_irae',
   ];
 
-  const backoff = [200, 300, 500, 800, 1200, 1000]; // ~4s total
+  const backoff = [200, 300, 500, 800, 1200, 1000];
+  const maxTime = 60000;
+  let elapsed = 0;
+  let i = 0;
 
-  for (let i = 0; i < backoff.length; i++) {
+  while (elapsed < maxTime) {
+    const remaining = maxTime - elapsed;
     try {
       const ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), props);
       const val = ticketObj?.properties?.total_real_a_facturar;
@@ -46,10 +50,16 @@ async function awaitTicketCalculatedReady(ticketId) {
     } catch (e) {
       console.warn('[ticketService][AUTO] getById retry (ticket not ready yet or transient error):', e?.message);
     }
-    if (i < backoff.length - 1) {
-      await new Promise(res => setTimeout(res, backoff[i]));
+    const wait = Math.min(backoff[i % backoff.length], remaining);
+    if (wait > 0) {
+      await new Promise(res => setTimeout(res, wait));
+      elapsed += wait;
+      i++;
+    } else {
+      break;
     }
   }
+  console.warn('[ticketService][AUTO] Timeout esperando total_real_a_facturar en ticket', { ticketId });
   return null;
 }
 
