@@ -126,6 +126,12 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_line_item_ids: lineItemId,
           of_ticket_key: expectedKey,
           ...snapshots,
+          // Propiedades automáticas requeridas
+          monto_unitario_real: lineItem?.properties?.monto_unitario_real ?? null,
+          cantidad_real: lineItem?.properties?.cantidad_real ?? null,
+          descuento_en_porcentaje: lineItem?.properties?.descuento_en_porcentaje ?? null,
+          of_iva: lineItem?.properties?.of_iva ?? null,
+          descuento_por_unidad_real: lineItem?.properties?.descuento_por_unidad_real ?? null,
         };
 
         if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
