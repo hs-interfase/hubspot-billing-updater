@@ -97,6 +97,10 @@ export function extractLineItemSnapshots(lineItem, deal) {
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(lp.pais_operativo),
+      monto_unitario_real: precioUnitario,
+  cantidad_real: cantidad,
+  descuento_en_porcentaje: descuentoPorcentaje,
+  descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.porcentaje_margen, 0),
@@ -106,6 +110,15 @@ export function extractLineItemSnapshots(lineItem, deal) {
     repetitivo,
   };
 
+  
+  console.log('[SNAPSHOT][CRITICOS][AUTO]', {
+    monto_unitario_real: precioUnitario,
+    cantidad_real: cantidad,
+    descuento_en_porcentaje: descuentoPorcentaje,
+    descuento_por_unidad_real: descuentoMonto,
+    of_iva: ivaValue,
+  });
+  
   console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });
   return baseSnapshots;
 }
