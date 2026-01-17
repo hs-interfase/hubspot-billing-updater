@@ -255,7 +255,7 @@ const ticketProps = {
   // Reales
   monto_unitario_real: montoUnitarioReal,
   cantidad_real: cantidadReal,
-  descuento_porcentaje_real: descuentoPctReal,
+  descuento_en_porcentaje: (typeof descuentoPctReal === 'number' && isFinite(descuentoPctReal)) ? String(descuentoPctReal / 100) : (descuentoPctReal == null || descuentoPctReal === '') ? null : String(Number(descuentoPctReal) / 100),
   descuento_unit_real: descuentoUnitReal,
 
   // ✅ IVA: siempre 'true' o 'false' (nunca null/undefined)
@@ -273,6 +273,11 @@ if (rubroCandidate) {
   console.log(`[MANUAL][RUBRO] ✓ of_rubro seteado: "${rubroCandidate}"`);
 } else {
   console.log(`[MANUAL][RUBRO] ⊘ of_rubro omitido (sin valor válido)`);
+}
+
+// Eliminar of_rubro_raw del payload si existe
+if ('of_rubro_raw' in ticketProps) {
+  delete ticketProps.of_rubro_raw;
 }
 
 // ✅ Limpiar vacíos para no mandar "" o null (pero preservar 0)
