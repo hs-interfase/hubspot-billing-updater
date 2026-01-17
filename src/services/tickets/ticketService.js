@@ -1,4 +1,19 @@
 import { createInvoiceFromTicket } from '../invoiceService.js';
+// src/services/ticketService.js
+
+import { hubspotClient } from '../../hubspotClient.js';
+import { 
+  TICKET_PIPELINE, 
+  TICKET_STAGES, 
+  AUTOMATED_TICKET_PIPELINE,     
+  AUTOMATED_TICKET_INITIAL_STAGE, 
+  isDryRun 
+} from '../../config/constants.js';
+import { generateTicketKey } from '../../utils/idempotency.js';
+import { createTicketSnapshots } from '../snapshotService.js';
+import { getTodayYMD, getTomorrowYMD } from '../../utils/dateUtils.js';
+import { parseBool } from '../../utils/parsers.js';
+
 
 // Helper para resetear triggers en el Line Item (best-effort)
 export async function resetTriggersFromLineItem(lineItemId) {
@@ -139,20 +154,6 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
     await resetTriggersFromLineItem(lineItemId);
   }
 }
-// src/services/ticketService.js
-
-import { hubspotClient } from '../../hubspotClient.js';
-import { 
-  TICKET_PIPELINE, 
-  TICKET_STAGES, 
-  AUTOMATED_TICKET_PIPELINE,     
-  AUTOMATED_TICKET_INITIAL_STAGE, 
-  isDryRun 
-} from '../../config/constants.js';
-import { generateTicketKey } from '../../utils/idempotency.js';
-import { createTicketSnapshots } from '../snapshotService.js';
-import { getTodayYMD, getTomorrowYMD } from '../../utils/dateUtils.js';
-import { parseBool } from '../../utils/parsers.js';
 
 /**
  * Servicio para crear y gestionar tickets de "orden de facturación".
@@ -692,121 +693,4 @@ export async function updateTicket(ticketId, properties) {
     console.error('[ticketService] Error actualizando ticket:', err?.response?.body || err?.message);
     throw err;
   }
-}
-
-/**
- * Crea un ticket de orden de facturación automática en el pipeline específico.
- * Idempotente: si ya existe un ticket con la misma clave, lo devuelve.
- * Con deduplicación: marca tickets clonados por UI como DUPLICADO_UI.
- * 
- * @param {Object} deal - El deal de HubSpot.
- * @param {Object} lineItem - El line item de HubSpot.
- * @param {string} billingDate - La fecha objetivo de facturación (YYYY-MM-DD).
- * @returns {Object} { ticketId, created, duplicatesMarked } - `created` es true si se creó, false si ya existía.
- */
-export async function createAutoBillingTicket(deal, lineItem, billingDate) {
-  const dealId = String(deal.id || deal.properties?.hs_object_id);
-  const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
-  const dp = deal.properties || {};
-  const lp = lineItem.properties || {};
-
-  // Determinar ID estable para idempotencia (usar origen PY si existe)
-  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildInvoiceKey() lo agregará
-  const stableLineId = lp.of_line_item_py_origen_id
-    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
-
-  console.log('[ticketService] 🔍 AUTO - stableLineId:', stableLineId, '(real:', lineItemId, ')');
-
-  // Usar la nueva función de deduplicación
-  const result = await ensureTicketCanonical({
-    dealId,
-    stableLineId,
-    billDateYMD: billingDate,
-    lineItemId,
-    buildTicketPayload: async ({ dealId, stableLineId, billDateYMD, expectedKey }) => {
-      // Determinar fechas según reglas
-      const expectedDate = billDateYMD;
-      const orderedDate = billDateYMD; // En auto: orderedDate = expectedDate
-
-      console.log(`[ticketService] 📅 AUTO - Fechas:`);
-      console.log(`   - expectedDate: ${expectedDate} (siempre = billingDate)`);
-      console.log(`   - orderedDate: ${orderedDate} (= expectedDate en auto)`);
-
-      // Preparar el payload con nueva firma
-      const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
-
-      console.log(`[ticketService] 💰 AUTO - Montos iniciales:`);
-      console.log(`   - total_real_a_facturar: ${snapshots.total_real_a_facturar}`);
-      console.log(`   ℹ️ NO se sincroniza con cambios posteriores del Line Item.`);
-
-      console.log(`[ticketService] 📊 AUTO - Frecuencia:`);
-      console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
-      console.log(`   - repetitivo: ${snapshots.repetitivo}`);
-
-      console.log('[ticketService] 🔍 AUTO - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
-      console.log('[ticketService] 🔍 AUTO - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
-
-      const dealName = deal.properties?.dealname || 'Deal';
-      const productName = lineItem.properties?.name || 'Producto';
-      const rubro = snapshots.of_rubro || null;
-      
-      // Determinar vendedor
-      const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
-
-      console.log('[ticketService] AUTO - vendedorId:', vendedorId);
-
-      // Construir propiedades del ticket
-      const ticketProps = {
-        subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
-        hs_pipeline: AUTOMATED_TICKET_PIPELINE,
-        hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
-        of_deal_id: dealId,
-        of_line_item_ids: lineItemId,
-        of_ticket_key: expectedKey,
-        ...snapshots,
-      };
-
-      // Override of_propietario_secundario con vendedorId si existe
-      if (vendedorId) {
-        ticketProps.of_propietario_secundario = vendedorId;
-      }
-
-      console.log('[ticketService] 🔍 AUTO - of_propietario_secundario:', ticketProps.of_propietario_secundario);
-      console.log('[ticketService] 🔍 AUTO - hubspot_owner_id:', ticketProps.hubspot_owner_id);
-
-      return { properties: ticketProps };
-    },
-  });
-
-  const { ticketId, created, duplicatesMarked } = result;
-
-  // Si se creó el ticket, crear asociaciones
-  if (created && ticketId) {
-    try {
-      const [companyIds, contactIds] = await Promise.all([
-        getDealCompanies(dealId),
-        getDealContacts(dealId)
-      ]);
-      
-      await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-      
-      console.log(`[ticketService] ✓ Ticket automático creado: ${ticketId}`);
-      console.log(`[ticketService] Vendedor: ${dp.hubspot_owner_id || 'N/A'}`);
-      
-      if (duplicatesMarked > 0) {
-        console.log(`[ticketService] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
-      }
-    } catch (err) {
-      console.error('[ticketService] Error creando asociaciones:', err?.message);
-      throw err;
-    }
-  } else {
-    console.log(`[ticketService] ✓ Ticket automático existente: ${ticketId}`);
-    if (duplicatesMarked > 0) {
-      console.log(`[ticketService] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
-    }
-  }
-  
-  return { ticketId, created, duplicatesMarked };
 }
