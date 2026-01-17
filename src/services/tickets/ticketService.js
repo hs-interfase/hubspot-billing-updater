@@ -14,6 +14,44 @@ import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
 
+// Helper para esperar a que el ticket tenga total_real_a_facturar calculado y válido
+async function awaitTicketCalculatedReady(ticketId) {
+  const props = [
+    'of_ticket_key',
+    'of_deal_id',
+    'of_line_item_ids',
+    'of_invoice_id',
+    'of_invoice_key',
+    'of_fecha_de_facturacion',
+    'total_real_a_facturar',
+    'subject',
+    'of_producto_nombres',
+    'of_descripcion_producto',
+    'of_rubro',
+    'descuento_en_porcentaje',
+    'descuento_unit_real',
+    'of_iva',
+    'of_exonera_irae',
+  ];
+
+  const backoff = [200, 300, 500, 800, 1200, 1000]; // ~4s total
+
+  for (let i = 0; i < backoff.length; i++) {
+    try {
+      const ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), props);
+      const val = ticketObj?.properties?.total_real_a_facturar;
+      if (val !== null && val !== '' && Number.isFinite(Number(val))) {
+        return ticketObj;
+      }
+    } catch (e) {
+      console.warn('[ticketService][AUTO] getById retry (ticket not ready yet or transient error):', e?.message);
+    }
+    if (i < backoff.length - 1) {
+      await new Promise(res => setTimeout(res, backoff[i]));
+    }
+  }
+  return null;
+}
 
 // Helper para resetear triggers en el Line Item (best-effort)
 export async function resetTriggersFromLineItem(lineItemId) {
@@ -107,33 +145,13 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       console.log(`[ticketService][AUTO] ✓ Ticket creado: ${ticketId}`);
       console.log(`[ticketService][AUTO] Vendedor (deal hubspot_owner_id): ${dp.hubspot_owner_id || 'N/A'}`);
 
-      // ✅ Emitir factura inmediatamente (ticket es fuente de verdad)
-      // La firma real de createInvoiceFromTicket es:
-      // export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null)
-      // Debe recibir el objeto ticket, no solo el ticketId.
-      const ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
-        // Propiedades mínimas para facturación
-        'of_ticket_key',
-        'of_deal_id',
-        'of_line_item_ids',
-        'of_invoice_id',
-        'of_invoice_key',
-        'of_fecha_de_facturacion',
-        'total_real_a_facturar',
-        'cantidad_real',
-        'monto_unitario_real',
-        'subject',
-        'of_producto_nombres',
-        'of_descripcion_producto',
-        'of_rubro',
-        'descuento_en_porcentaje',
-        'descuento_unit_real',
-        'of_iva',
-        'of_exonera_irae',
-        // ...agrega más si tu invoiceService lo requiere...
-      ]);
+      // Esperar a que el ticket tenga total_real_a_facturar calculado y válido antes de emitir factura
+      const ticketObj = await awaitTicketCalculatedReady(ticketId);
+      if (!ticketObj) {
+        console.warn('[AUTO] Ticket aún no calculado, no se emite factura', { ticketId });
+        return { ticketId, created, duplicatesMarked };
+      }
       await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
-
       console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket ${ticketId}`);
     } else {
       console.log(
