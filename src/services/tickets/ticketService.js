@@ -1,3 +1,144 @@
+import { createInvoiceFromTicket } from '../invoiceService.js';
+
+// Helper para resetear triggers en el Line Item (best-effort)
+export async function resetTriggersFromLineItem(lineItemId) {
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { facturar_ahora: 'false' },
+    });
+    console.log(
+      `[ticketService][AUTO][TRIGGERS] ✓ facturar_ahora reseteado en LineItem ${lineItemId}`
+    );
+  } catch (err) {
+    console.warn(
+      `[ticketService][AUTO][TRIGGERS] ⚠️ Error al resetear facturar_ahora en LineItem ${lineItemId}:`,
+      err?.message
+    );
+  }
+}
+
+export async function createAutoBillingTicket(deal, lineItem, billingDate) {
+  const dealId = String(deal?.id || deal?.properties?.hs_object_id);
+  const lineItemId = String(lineItem?.id || lineItem?.properties?.hs_object_id);
+  const dp = deal?.properties || {};
+  const lp = lineItem?.properties || {};
+
+  // ✅ ID estable para idempotencia (usar origen PY si existe)
+  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, buildTicketKey() lo maneja
+  const stableLineId = lp.of_line_item_py_origen_id
+    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
+    : lineItemId;
+
+  console.log('[ticketService][AUTO] 🔍 stableLineId:', stableLineId, '(real:', lineItemId, ')');
+  console.log('[ticketService][AUTO] 🔍 billingDate:', billingDate);
+
+  let ticketId = null;
+  let created = false;
+  let duplicatesMarked = 0;
+
+  try {
+    // ✅ Mantener ensureTicketCanonical y tu payload actual (NO modificar lógica interna)
+    const result = await ensureTicketCanonical({
+      dealId,
+      stableLineId,
+      billDateYMD: billingDate,
+      lineItemId,
+      buildTicketPayload: async ({ dealId, stableLineId, billDateYMD, expectedKey }) => {
+        // === TU PAYLOAD ACTUAL DE AUTO (NO CAMBIAR REGLAS NI PROPS) ===
+        const expectedDate = billDateYMD;
+        const orderedDate = billDateYMD;
+        const snapshots = createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
+
+        const dealName = deal?.properties?.dealname || 'Deal';
+        const productName = lineItem?.properties?.name || 'Producto';
+        const rubro = snapshots.of_rubro || null;
+
+        const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
+
+        const ticketProps = {
+          subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
+          hs_pipeline: AUTOMATED_TICKET_PIPELINE,
+          hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+          of_deal_id: dealId,
+          of_line_item_ids: lineItemId,
+          of_ticket_key: expectedKey,
+          ...snapshots,
+        };
+
+        if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
+
+        return { properties: ticketProps };
+      },
+    });
+
+    ticketId = result.ticketId;
+    created = result.created;
+    duplicatesMarked = result.duplicatesMarked;
+
+    if (!ticketId) {
+      console.warn('[ticketService][AUTO] ⚠️ No ticketId devuelto. Se omite facturación.');
+      return { ticketId, created, duplicatesMarked };
+    }
+
+    // ✅ Asociaciones SOLO si se creó el ticket (como ya hacías)
+    if (created) {
+      const [companyIds, contactIds] = await Promise.all([
+        getDealCompanies(dealId),
+        getDealContacts(dealId),
+      ]);
+
+      await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+
+      console.log(`[ticketService][AUTO] ✓ Ticket creado: ${ticketId}`);
+      console.log(`[ticketService][AUTO] Vendedor (deal hubspot_owner_id): ${dp.hubspot_owner_id || 'N/A'}`);
+
+      // ✅ Emitir factura inmediatamente (ticket es fuente de verdad)
+      // La firma real de createInvoiceFromTicket es:
+      // export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null)
+      // Debe recibir el objeto ticket, no solo el ticketId.
+      const ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+        // Propiedades mínimas para facturación
+        'of_ticket_key',
+        'of_deal_id',
+        'of_line_item_ids',
+        'of_invoice_id',
+        'of_invoice_key',
+        'of_fecha_de_facturacion',
+        'total_real_a_facturar',
+        'cantidad_real',
+        'monto_unitario_real',
+        'subject',
+        'of_producto_nombres',
+        'of_descripcion_producto',
+        'of_rubro',
+        'descuento_en_porcentaje',
+        'descuento_unit_real',
+        'of_iva',
+        'of_exonera_irae',
+        // ...agrega más si tu invoiceService lo requiere...
+      ]);
+      await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
+
+      console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket ${ticketId}`);
+    } else {
+      console.log(
+        `[ticketService][AUTO] ⊘ Ticket ya existía, NO se emite factura (evita doble facturación): ${ticketId}`
+      );
+    }
+
+    if (duplicatesMarked > 0) {
+      console.log(`[ticketService][AUTO] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
+    }
+
+    return { ticketId, created, duplicatesMarked };
+  } catch (err) {
+    console.error('[ticketService][AUTO] ❌ Error en createAutoBillingTicket:', err?.message);
+    throw err;
+  } finally {
+    // ✅ Siempre resetear triggers (best-effort)
+    await resetTriggersFromLineItem(lineItemId);
+  }
+}
 // src/services/ticketService.js
 
 import { hubspotClient } from '../../hubspotClient.js';
