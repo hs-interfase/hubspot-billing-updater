@@ -149,30 +149,50 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       return { ticketId, created, duplicatesMarked };
     }
 
-    // ✅ Asociaciones SOLO si se creó el ticket (como ya hacías)
+    // Asociaciones SOLO si se creó el ticket
     if (created) {
       const [companyIds, contactIds] = await Promise.all([
         getDealCompanies(dealId),
         getDealContacts(dealId),
       ]);
-
       await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-
       console.log(`[ticketService][AUTO] ✓ Ticket creado: ${ticketId}`);
       console.log(`[ticketService][AUTO] Vendedor (deal hubspot_owner_id): ${dp.hubspot_owner_id || 'N/A'}`);
+    }
 
-      // Esperar a que el ticket tenga total_real_a_facturar calculado y válido antes de emitir factura
-      const ticketObj = await awaitTicketCalculatedReady(ticketId);
-      if (!ticketObj) {
-        console.warn('[AUTO] Ticket aún no calculado, no se emite factura', { ticketId });
-        return { ticketId, created, duplicatesMarked };
-      }
+    // === Lógica mínima de emisión de factura ===
+    // Solo emitir si: (a) el ticket es nuevo, o (b) ya existe, está en pipeline automático y no tiene factura
+    let ticketObj = null;
+    try {
+      ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+        'of_invoice_id',
+        'hs_pipeline',
+        'of_ticket_key',
+      ]);
+    } catch (e) {
+      console.warn('[ticketService][AUTO] ⚠️ No se pudo obtener ticket para chequeo de factura:', e?.message);
+    }
+
+    const hasInvoice = ticketObj?.properties?.of_invoice_id;
+    const isAutoPipeline = ticketObj?.properties?.hs_pipeline === AUTOMATED_TICKET_PIPELINE;
+
+    if (created) {
+      // Nuevo ticket: emitir siempre
       await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
-      console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket ${ticketId}`);
+      console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket NUEVO ${ticketId}`);
+    } else if (isAutoPipeline && !hasInvoice) {
+      // Ticket existente, pipeline correcto y sin factura
+      await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
+      console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket EXISTENTE (sin factura previa) ${ticketId}`);
     } else {
-      console.log(
-        `[ticketService][AUTO] ⊘ Ticket ya existía, NO se emite factura (evita doble facturación): ${ticketId}`
-      );
+      // No emitir
+      if (!isAutoPipeline) {
+        console.log(`[ticketService][AUTO] ⊘ Ticket ya existía pero NO está en pipeline automático, no se emite factura: ${ticketId}`);
+      } else if (hasInvoice) {
+        console.log(`[ticketService][AUTO] ⊘ Ticket ya existía y YA tiene factura, no se emite factura: ${ticketId}`);
+      } else {
+        console.log(`[ticketService][AUTO] ⊘ Ticket ya existía, no se emite factura: ${ticketId}`);
+      }
     }
 
     if (duplicatesMarked > 0) {
