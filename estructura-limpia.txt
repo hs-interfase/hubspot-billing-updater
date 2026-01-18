@@ -4,10 +4,10 @@
   ForEach-Object { $_ -replace '^\.\[\\/]', '' } |
   Set-Content -Encoding UTF8 estructura-limpia.txt
 
-
-
 .env
 .gitignore
+.\FIX_TICKET_IDEMPOTENCY.md
+.\IMPLEMENTATION_SUMMARY.md
 .\LICENSE
 .\package-lock.json
 .\package.json
@@ -17,9 +17,13 @@
 .\api\actualizar-webhook.js
 .\api\escuchar-cambios.js
 .\api\update-billing.js
+.\data\cron-failed-deals.json
+.\data\cron-state-deals.json
+.\data\cron-state-deals.lock
 .\docs\billing-flow.md
 .\docs\FLOW_DIAGRAM.md
 .\docs\HUBSPOT_PROPERTIES_CHECKLIST.md
+.\docs\INVOICE_CREATION_PATHS.md
 .\docs\MIGRATION_GUIDE.md
 .\docs\REFACTOR_DOCUMENTATION.md
 .\src\associations.js
@@ -33,16 +37,27 @@
 .\src\api\facturar-ahora.js
 .\src\config\constants.js
 .\src\config\propertyMapping.js
-.\src\phases\activateBilling.js
+.\src\jobs\cronDealsBatcj.js
 .\src\phases\index.js
 .\src\phases\phase1.js
 .\src\phases\phase2.js
 .\src\phases\phase3.js
 .\src\services\invoiceService.js
+.\src\services\mirrorLineItemsUyUpsert.js
 .\src\services\snapshotService.js
-.\src\services\ticketService.js
 .\src\services\urgentBillingService.js
+.\src\services\alerts\cupoAlert.js
+.\src\services\cupo\consumeCupo.js
+.\src\services\tickets\manualTicketService.js
+.\src\services\tickets\ticketCleanupService.js
+.\src\services\tickets\ticketService.js
+.\src\services\tickets\ticketUpdateService.js
 .\src\utils\dateDebugs.js
 .\src\utils\dateUtils.js
 .\src\utils\idempotency.js
+.\src\utils\invoiceKey.js
+.\src\utils\invoiceValidation.js
 .\src\utils\parsers.js
+.\src\utils\propertyHelpers.js
+.\src\__tests__\invoiceValidation.js
+.\src\__tests__\ticketKeyIdempotency.js
