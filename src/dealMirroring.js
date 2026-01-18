@@ -14,6 +14,7 @@ import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 
 
 
+
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
 
