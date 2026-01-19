@@ -143,6 +143,50 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
   return valid;
 }
 
+
+export function calculateCupoEstado(dealProps) {
+  const cupoActivo = String(dealProps.cupo_activo || '').toLowerCase() === 'true';
+
+  const cupoTotal = parseFloat(dealProps.cupo_total_calculado); // <- pasalo desde computeCupoStatus
+  const cupoConsumido = parseFloat(dealProps.cupo_consumido);
+  const cupoRestante = parseFloat(dealProps.cupo_restante);
+  const cupoUmbral = parseFloat(dealProps.cupo_umbral);
+
+  if (!cupoActivo) return 'Desactivado';
+
+  // mínimos
+  if (isNaN(cupoTotal) || isNaN(cupoConsumido) || isNaN(cupoRestante)) {
+    return 'Inconsistente';
+  }
+
+  const EPS = 0.01; // ajustable
+
+  // ✅ INCONSISTENTE: consumido + restante debe dar total
+  const diff = Math.abs((cupoConsumido + cupoRestante) - cupoTotal);
+  if (diff > EPS) {
+    return 'Inconsistente';
+  }
+
+  // ✅ PASADO: consumido > total (o restante < 0, pero si la suma es consistente, esto equivale)
+  if (cupoConsumido > cupoTotal + EPS) {
+    return 'Pasado';
+  }
+
+  // ✅ AGOTADO: restante <= 0 (incluye 0 exacto)
+  if (cupoRestante <= 0 + EPS) {
+    return 'Agotado';
+  }
+
+  // ✅ BAJO UMBRAL
+  if (!isNaN(cupoUmbral) && cupoUmbral > 0 && cupoRestante <= cupoUmbral + EPS) {
+    return 'Bajo Umbral';
+  }
+
+  return 'Ok';
+}
+
+
+
 /**
  * Calcula el estado del cupo según las reglas del negocio.
  * 
@@ -156,42 +200,35 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
  * @param {Object} dealProps - Propiedades del deal
  * @returns {string|null} "Ok" | "Bajo Umbral" | "Inconsistente" | "Agotado" | null
  */
+
 export async function updateDealCupo(deal, lineItems) {
   if (!deal || !deal.id) return { consumido: 0, restante: 0 };
 
-  const { consumido, restante } = computeCupoStatus(deal, lineItems);
+  const { consumido, restante, total } = computeCupoStatus(deal, lineItems);
+
+  const propsForEstado = {
+    ...deal.properties,
+    cupo_consumido: String(consumido),
+    cupo_restante: String(restante),
+    cupo_total_calculado: String(total), // SOLO para calcular
+  };
+
+  const estado = calculateCupoEstado(propsForEstado);
 
   const properties = {
     cupo_consumido: String(consumido),
     cupo_restante: String(restante),
+    cupo_estado: estado !== 'Desactivado' ? estado : '',
   };
 
-  // 🔥 recalcular estado SIEMPRE
-  const newEstado = calculateCupoEstado({
-    ...deal.properties,
-    ...properties,
-  });
-
-  // si no querés guardar "Desactivado" en el deal, acá podés omitirlo:
-  if (newEstado && newEstado !== 'Desactivado') {
-    properties.cupo_estado = newEstado;
-  } else if (newEstado === 'Desactivado') {
-    // opcional: limpiar estado
-    properties.cupo_estado = '';
-  }
-
-  // opcional recomendado: si llega a <=0, apagar cupo_activo (consistencia)
-  if (parseFloat(properties.cupo_restante) <= 0) {
+  // si está agotado o pasado → apagar cupo
+  if (estado === 'Agotado' || estado === 'Pasado') {
     properties.cupo_activo = 'false';
   }
 
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
-  } catch (err) {
-    console.error('[cupo] Error actualizando cupo del deal', deal.id, err?.response?.body || err?.message);
-  }
+  await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
 
-  return { consumido, restante };
+  return { consumido, restante, total, estado };
 }
 
 
