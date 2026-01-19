@@ -147,43 +147,37 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
 export function calculateCupoEstado(dealProps) {
   const cupoActivo = String(dealProps.cupo_activo || '').toLowerCase() === 'true';
 
-  const cupoTotal = parseFloat(dealProps.cupo_total_calculado); // <- pasalo desde computeCupoStatus
+  const cupoTotal =
+    parseFloat(dealProps.cupo_total_calculado) ||
+    parseFloat(dealProps.cupo_total) ||
+    parseFloat(dealProps.cupo_total_monto);
+
   const cupoConsumido = parseFloat(dealProps.cupo_consumido);
   const cupoRestante = parseFloat(dealProps.cupo_restante);
   const cupoUmbral = parseFloat(dealProps.cupo_umbral);
 
   if (!cupoActivo) return 'Desactivado';
 
-  // mínimos
   if (isNaN(cupoTotal) || isNaN(cupoConsumido) || isNaN(cupoRestante)) {
     return 'Inconsistente';
   }
 
-  const EPS = 0.01; // ajustable
+  const EPS = 0.01;
 
-  // ✅ INCONSISTENTE: consumido + restante debe dar total
   const diff = Math.abs((cupoConsumido + cupoRestante) - cupoTotal);
-  if (diff > EPS) {
-    return 'Inconsistente';
-  }
+  if (diff > EPS) return 'Inconsistente';
 
-  // ✅ PASADO: consumido > total (o restante < 0, pero si la suma es consistente, esto equivale)
-  if (cupoConsumido > cupoTotal + EPS) {
-    return 'Pasado';
-  }
+  if (cupoConsumido > cupoTotal + EPS) return 'Pasado';
 
-  // ✅ AGOTADO: restante <= 0 (incluye 0 exacto)
-  if (cupoRestante <= 0 + EPS) {
-    return 'Agotado';
-  }
+  if (cupoRestante <= 0 + EPS) return 'Agotado';
 
-  // ✅ BAJO UMBRAL
   if (!isNaN(cupoUmbral) && cupoUmbral > 0 && cupoRestante <= cupoUmbral + EPS) {
     return 'Bajo Umbral';
   }
 
   return 'Ok';
 }
+
 
 
 
