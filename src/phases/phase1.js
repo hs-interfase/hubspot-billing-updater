@@ -69,9 +69,26 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
     cupo_umbral: dealProps.cupo_umbral,
   });
-  
+
   const currentCupoEstado = dealProps.cupo_estado;
-  if (newCupoEstado && newCupoEstado !== currentCupoEstado) {
+  if (newCupoEstado === "Inconsistente") {
+    // Diagnóstico detallado
+    const total = parseFloat(dealProps.cupo_total) || parseFloat(dealProps.cupo_total_monto) || 0;
+    const consumido = parseFloat(updateProps.cupo_consumido ?? dealProps.cupo_consumido) || 0;
+    const restante = parseFloat(updateProps.cupo_restante ?? dealProps.cupo_restante) || 0;
+    const diff = Math.abs((consumido + restante) - total);
+    console.log("[cupo:activate][DIAG] Inconsistente diagnosticado", {
+      dealId,
+      cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
+      tipo_de_cupo: dealProps.tipo_de_cupo,
+      cupo_total: dealProps.cupo_total,
+      cupo_total_monto: dealProps.cupo_total_monto,
+      cupo_consumido: updateProps.cupo_consumido ?? dealProps.cupo_consumido,
+      cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
+      cupo_umbral: dealProps.cupo_umbral,
+      diff,
+    });
+  } else if (newCupoEstado && newCupoEstado !== currentCupoEstado) {
     updateProps.cupo_estado = newCupoEstado;
     console.log(`[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
   }
