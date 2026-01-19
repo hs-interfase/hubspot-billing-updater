@@ -252,7 +252,7 @@ const startRaw =
 
 // Actualiza el calendario y contadores de un line item en HubSpot.
 export async function updateLineItemSchedule(lineItem) {
-  if (!lineItem || !lineItem.id) {
+    if (!lineItem || !lineItem.id) {
     console.warn('[updateLineItemSchedule] lineItem inválido:', lineItem);
     return lineItem;
   }
@@ -261,6 +261,12 @@ export async function updateLineItemSchedule(lineItem) {
   const config = getEffectiveBillingConfig(lineItem);
   const { isIrregular, interval, startDate, maxOccurrences } = config;
 
+  // 🚩 GUARD CLAUSE: Si irregular === true, modo manual, no tocar calendario
+  if (p.irregular === true || p.irregular === "true") {
+    console.log("[updateLineItemSchedule] irregular=true → manual mode, no schedule updates", { lineItemId: lineItem.id });
+    return lineItem;
+  }
+
   // Helper: limpiar fechas_2..fecha_24 si quedaron de una config anterior
   const clearCalendarFields = (updatesObj) => {
     for (let i = 2; i <= 24; i++) {
@@ -268,6 +274,12 @@ export async function updateLineItemSchedule(lineItem) {
       if (p[key]) updatesObj[key] = '';
     }
   };
+
+  if (!lineItem || !lineItem.id) {
+    console.warn('[updateLineItemSchedule] lineItem inválido:', lineItem);
+    return lineItem;
+  }
+
 
   // Caso 1: irregular → sincroniza solo la fecha de inicio (y limpia calendario recomendado)
   if (isIrregular) {
