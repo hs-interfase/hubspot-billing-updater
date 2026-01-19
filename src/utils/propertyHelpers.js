@@ -156,41 +156,42 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
  * @param {Object} dealProps - Propiedades del deal
  * @returns {string|null} "Ok" | "Bajo Umbral" | "Inconsistente" | "Agotado" | null
  */
-export function calculateCupoEstado(dealProps) {
-  const cupoActivo = String(dealProps.cupo_activo || '').toLowerCase() === 'true';
-  const cupoRestante = parseFloat(dealProps.cupo_restante);
-  const cupoUmbral = parseFloat(dealProps.cupo_umbral);
+export async function updateDealCupo(deal, lineItems) {
+  if (!deal || !deal.id) return { consumido: 0, restante: 0 };
 
-  console.log(`[calculateCupoEstado] 🔍 Calculando estado:`);
-  console.log(`   cupo_activo: "${dealProps.cupo_activo}" → ${cupoActivo}`);
-  console.log(`   cupo_restante: "${dealProps.cupo_restante}" → ${cupoRestante}`);
-  console.log(`   cupo_umbral: "${dealProps.cupo_umbral}" → ${cupoUmbral}`);
+  const { consumido, restante } = computeCupoStatus(deal, lineItems);
 
-  // Si no hay cupo activo => null
-  if (!cupoActivo) {
-    console.log(`   → null (cupo_activo=false)`);
-    return null;
-  }
-  
-  // Si cupo_restante es NaN o negativo => Inconsistente
-  if (isNaN(cupoRestante) || cupoRestante < 0) {
-    console.log(`   → Inconsistente (cupo_restante inválido)`);
-    return 'Inconsistente';
-  }
-  
-  // Si cupo_restante = 0 => Agotado
-  if (cupoRestante === 0) {
-    console.log(`   → Agotado (cupo_restante = 0)`);
-    return 'Agotado';
+  const properties = {
+    cupo_consumido: String(consumido),
+    cupo_restante: String(restante),
+  };
+
+  // 🔥 recalcular estado SIEMPRE
+  const newEstado = calculateCupoEstado({
+    ...deal.properties,
+    ...properties,
+  });
+
+  // si no querés guardar "Desactivado" en el deal, acá podés omitirlo:
+  if (newEstado && newEstado !== 'Desactivado') {
+    properties.cupo_estado = newEstado;
+  } else if (newEstado === 'Desactivado') {
+    // opcional: limpiar estado
+    properties.cupo_estado = '';
   }
 
-  // Si hay umbral definido y estamos por debajo o igual
-  if (!isNaN(cupoUmbral) && cupoUmbral > 0 && cupoRestante <= cupoUmbral) {
-    console.log(`   → Bajo Umbral (restante ${cupoRestante} <= umbral ${cupoUmbral})`);
-    return 'Bajo Umbral';
+  // opcional recomendado: si llega a <=0, apagar cupo_activo (consistencia)
+  if (parseFloat(properties.cupo_restante) <= 0) {
+    properties.cupo_activo = 'false';
   }
 
-  // Cupo OK
-  console.log(`   → Ok (restante ${cupoRestante} > umbral ${cupoUmbral})`);
-  return 'Ok';
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
+  } catch (err) {
+    console.error('[cupo] Error actualizando cupo del deal', deal.id, err?.response?.body || err?.message);
+  }
+
+  return { consumido, restante };
 }
+
+

@@ -309,7 +309,7 @@ export async function updateLineItemSchedule(lineItem) {
     } else {
       // si no hay startDate, igual conviene limpiar calendario para no dejar basura
       const updatesIrregular = {};
-      clearCalendarFields(updatesIrregular);
+      clearCalendarFields(updatesIrregular)
       if (Object.keys(updatesIrregular).length) {
         await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
           properties: updatesIrregular,
