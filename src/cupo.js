@@ -49,6 +49,8 @@ export function computeCupoStatus(deal, lineItems) {
 }
 
 export async function updateDealCupo(deal, lineItems) {
+  console.log('[cupo:updateDealCupo] running', { dealId: deal.id, lineItems: lineItems?.length });
+
   if (!deal || !deal.id) return { consumido: 0, restante: 0 };
 
   const { consumido, restante } = computeCupoStatus(deal, lineItems);
