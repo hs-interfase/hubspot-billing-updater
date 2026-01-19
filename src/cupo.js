@@ -1,6 +1,6 @@
 import { hubspotClient } from './hubspotClient.js';
 import { hasParteDelCupoActiva } from './services/cupo/cupoUtils.js';
-import { calculateCupoEstado } from './services/cupo/calculateCupoEstado.js';
+import { calculateCupoEstado } from './utils/propertyHelpers.js';
 
 /*
  * Calcula y actualiza el cupo de un negocio.
