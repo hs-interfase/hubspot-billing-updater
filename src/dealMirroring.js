@@ -76,6 +76,8 @@ export function shouldMirrorDealToUruguay(deal, lineItems) {
   return hasUy ? { ok: true } : { ok: false, reason: 'no UY line items' };
 }
 
+
+
 /**
  * Crea o actualiza un negocio "espejo" en UY a partir de un negocio de PY.
  *
@@ -389,6 +391,8 @@ for (const li of uyLineItems) {
     () => props       // buildUyProps: usamos el props que ya armaste arriba
   );
 
+
+
   if (action === 'created') {
     createdLineItems++;
   }
@@ -398,6 +402,53 @@ for (const li of uyLineItems) {
 
 
   console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
+
+// 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
+console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
+
+const uyOrigenIdsSet = new Set(
+  (uyLineItems || []).map((li) => String(li.id || li.properties?.hs_object_id))
+);
+
+// Obtener todos los line items asociados al deal espejo
+const mirrorLineItemIds = await getAssocIdsV4('deals', String(targetDealId), 'line_items', 500);
+
+if (mirrorLineItemIds.length) {
+  const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+    inputs: mirrorLineItemIds.map((id) => ({ id: String(id) })),
+    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
+  });
+
+  for (const li of batchResp.results || []) {
+    const props = li.properties || {};
+
+    const origenId = String(props.of_line_item_py_origen_id || '').trim();
+    const isUy = String(props.uy || '').toLowerCase() === 'true';
+    const isUruguay = String(props.pais_operativo || '').toLowerCase() === 'uruguay';
+
+    // Solo prune si es espejo válido y su origen ya no existe
+    if (origenId && isUy && isUruguay && !uyOrigenIdsSet.has(origenId)) {
+      try {
+        // ✅ Desasociar el line item del deal espejo (NO borrar el objeto)
+        await hubspotClient.crm.associations.v4.basicApi.archive(
+          'line_items',
+          String(li.id),
+          'deals',
+          String(targetDealId)
+        );
+
+        console.log(
+          `[mirrorDealToUruguay] Prune: desasociado line item espejo UY ${li.id} (origen=${origenId})`
+        );
+      } catch (err) {
+        console.warn(
+          `[mirrorDealToUruguay] Prune: error al desasociar line item espejo UY ${li.id}`,
+          err?.response?.body || err
+        );
+      }
+    }
+  }
+}
 
   // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
   if (interfaseCompanyId) {
