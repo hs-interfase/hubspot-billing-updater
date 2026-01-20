@@ -57,7 +57,10 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'total_de_horas_consumidas',
-      'cantidad_real', 'total_real_a_facturar'
+      'cantidad_real', 'total_real_a_facturar',
+       'cupo_consumo_invoice_id',  
+      'of_cupo_consumido',         
+      'of_invoice_id',
     ]);
 
     // Re-leer Line Item si existe
@@ -73,14 +76,15 @@ const dp = deal?.properties || {};
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
  
-const invoiceIdEnTicket = safeString(tp.of_invoice_id);
+// ========== VALIDACIÓN 1: Idempotencia REAL por Cupo ==========
+const cupoInvoiceIdEnTicket = safeString(tp.cupo_consumo_invoice_id || tp.of_cupo_consumo_invoice_id);
 
-  // ========== VALIDACIÓN 1: Idempotencia por Ticket + Invoice ==========
-  if (invoiceIdEnTicket === invoiceId) {
-    const reason = 'ticket ya consumió cupo con esta invoice (idempotencia)';
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    return { consumed: false, reason };
-  }
+if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
+  const reason = 'ticket ya consumió cupo con esta invoice (idempotencia cupo_consumo_invoice_id)';
+  console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
+  return { consumed: false, reason };
+}
+
 
   // ========== VALIDACIÓN 2: Line Item identificable ==========
   if (!lineItemId || lineItemId === 'undefined' || lineItemId === 'null') {
@@ -212,11 +216,21 @@ const invoiceIdEnTicket = safeString(tp.of_invoice_id);
   const ticketUpdateProps = {
     of_cupo_consumido: 'true',
     of_cupo_consumo_valor: String(consumo),
+    cupo_consumo_invoice_id: String(invoiceId),
+    of_cupo_consumido_fecha: getTodayYMD(),
   };
   try {
-    await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: ticketUpdateProps });
-    console.log(`[consumeCupo] ✅ Ticket ${ticketId} marcado con consumo`);
-} catch (err) {
+    const cleanProps = Object.fromEntries(
+      Object.entries(ticketUpdateProps).filter(([_, v]) => v !== undefined)
+    );
+
+    if (Object.keys(cleanProps).length === 0) {
+      console.log('[consumeCupo] ⊘ SKIP: no hay props para actualizar ticket');
+    } else {
+      await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: cleanProps });
+      console.log(`[consumeCupo] ✅ Ticket ${ticketId} marcado con consumo`);
+    }
+  } catch (err) {
     console.error(`[consumeCupo] ⚠️ Error actualizando ticket ${ticketId}:`, err?.message);
     // No lanzar error: trazabilidad no debe romper facturación
   }
