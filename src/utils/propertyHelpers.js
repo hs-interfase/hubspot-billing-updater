@@ -196,10 +196,6 @@ export function calculateCupoEstado(dealProps) {
   return 'Ok';
 }
 
-
-
-
-
 /**
  * Calcula el estado del cupo según las reglas del negocio.
  * 
@@ -231,7 +227,7 @@ export async function updateDealCupo(deal, lineItems) {
   const properties = {
     cupo_consumido: String(consumido),
     cupo_restante: String(restante),
-    cupo_estado: estado !== 'Desactivado' ? estado : '',
+    cupo_estado: estado,
   };
 
   // si está agotado o pasado → apagar cupo
