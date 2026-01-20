@@ -13,16 +13,6 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 
 
-
-
-// Propiedad del line item (checkbox) que marca la línea como operada en UY.
-const LINEA_PARA_UY_PROP = 'uy';
-
-const LINE_ITEM_COST_PROP = 'hs_cost_of_goods_sold';
-
-// ID de asociación por defecto entre line items y deals (HUBSPOT_DEFINED).
-const LINE_ITEM_TO_DEAL_ASSOC_ID = 20;
-
 // Helper para obtener IDs de objetos asociados a un objeto dado.
 // Usa la API v4 para paginar asociaciones.
 async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
@@ -43,6 +33,135 @@ async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
   } while (after);
   return out;
 }
+
+async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
+  console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
+
+  const uyOrigenIdsSet = new Set(
+    (uyLineItemsFromPy || []).map((li) => String(li?.id || li?.properties?.hs_object_id))
+  );
+
+  // Todos los LIs asociados al espejo
+  const mirrorLineItemIds = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
+  if (!mirrorLineItemIds.length) {
+    return { prunedCount: 0 };
+  }
+
+  const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+    inputs: mirrorLineItemIds.map((id) => ({ id: String(id) })),
+    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
+  });
+
+  let prunedCount = 0;
+
+  for (const li of batchResp.results || []) {
+    const p = li.properties || {};
+
+    const origenId = String(p.of_line_item_py_origen_id || '').trim();
+    if (!origenId) {
+      // ✅ Regla: legacy sin origen NO se toca
+      continue;
+    }
+
+    const uyFlag = String(p.uy || '').toLowerCase() === 'true';
+    const isUruguay = String(p.pais_operativo || '').toLowerCase() === 'uruguay';
+
+    // Solo prune si es UY válido, y su origen ya no existe en el set (borrado o uy=false en PY)
+    if (uyFlag && isUruguay && !uyOrigenIdsSet.has(origenId)) {
+      try {
+        // ✅ Orden correcto: from=line_items -> to=deals
+        await hubspotClient.crm.associations.v4.basicApi.archive(
+          'line_items',
+          String(li.id),
+          'deals',
+          String(mirrorDealId)
+        );
+
+        prunedCount++;
+        console.log(
+          `[mirrorDealToUruguay] Prune: desasociado LI espejo UY ${li.id} (${p.name || ''}) (origen=${origenId})`
+        );
+      } catch (err) {
+        console.warn(
+          `[mirrorDealToUruguay] Prune: error al desasociar LI espejo UY ${li.id} (origen=${origenId})`,
+          err?.response?.body || err
+        );
+      }
+    }
+  }
+
+  return { prunedCount };
+}
+
+async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
+  const assocIds = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
+  if (!assocIds.length) {
+    console.log('[mirrorDealToUruguay] Post-prune: espejo sin asociaciones de line items -> archivar');
+  } else {
+    const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+      inputs: assocIds.map((id) => ({ id: String(id) })),
+      properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
+    });
+
+    // ✅ Solo consideramos “line items espejo válidos” (no legacy)
+    const validMirrorItems = (batchResp.results || []).filter((li) => {
+      const p = li.properties || {};
+      const origenId = String(p.of_line_item_py_origen_id || '').trim();
+      const uyFlag = String(p.uy || '').toLowerCase() === 'true';
+      const isUruguay = String(p.pais_operativo || '').toLowerCase() === 'uruguay';
+      return origenId && uyFlag && isUruguay;
+    });
+
+    console.log('[mirrorDealToUruguay] Post-prune: validMirrorItems=', validMirrorItems.length);
+
+    if (validMirrorItems.length > 0) {
+      return { archived: false, remainingValidCount: validMirrorItems.length };
+    }
+  }
+
+  console.log('[mirrorDealToUruguay] Espejo quedó sin line items válidos -> archivando deal espejo', {
+    mirrorDealId,
+    sourceDealId,
+  });
+
+  try {
+    await hubspotClient.crm.deals.basicApi.archive(String(mirrorDealId));
+    console.log('[mirrorDealToUruguay] ✅ Deal espejo archivado:', mirrorDealId);
+  } catch (err) {
+    console.warn(
+      '[mirrorDealToUruguay] ⚠️ No se pudo archivar deal espejo',
+      mirrorDealId,
+      err?.response?.body || err
+    );
+    return { archived: false, remainingValidCount: 0, error: 'archive_failed' };
+  }
+
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+      properties: { deal_uy_mirror_id: '' },
+    });
+    console.log('[mirrorDealToUruguay] ✅ Deal PY actualizado: deal_uy_mirror_id limpiado');
+  } catch (err) {
+    console.warn(
+      '[mirrorDealToUruguay] ⚠️ No se pudo limpiar deal_uy_mirror_id en PY',
+      sourceDealId,
+      err?.response?.body || err
+    );
+  }
+
+  return { archived: true, remainingValidCount: 0 };
+}
+
+
+// ...existing code...
+
+// Propiedad del line item (checkbox) que marca la línea como operada en UY.
+const LINEA_PARA_UY_PROP = 'uy';
+
+const LINE_ITEM_COST_PROP = 'hs_cost_of_goods_sold';
+
+// ID de asociación por defecto entre line items y deals (HUBSPOT_DEFINED).
+const LINE_ITEM_TO_DEAL_ASSOC_ID = 20;
 
 // Interpreta cadenas y números provenientes de HubSpot como booleanos.
 function parseBoolFromHubspot(raw) {
@@ -405,50 +524,30 @@ for (const li of uyLineItems) {
 
 // 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
 console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
-
-const uyOrigenIdsSet = new Set(
-  (uyLineItems || []).map((li) => String(li.id || li.properties?.hs_object_id))
-);
-
-// Obtener todos los line items asociados al deal espejo
-const mirrorLineItemIds = await getAssocIdsV4('deals', String(targetDealId), 'line_items', 500);
-
-if (mirrorLineItemIds.length) {
-  const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
-    inputs: mirrorLineItemIds.map((id) => ({ id: String(id) })),
-    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
-  });
-
-  for (const li of batchResp.results || []) {
-    const props = li.properties || {};
-
-    const origenId = String(props.of_line_item_py_origen_id || '').trim();
-    const isUy = String(props.uy || '').toLowerCase() === 'true';
-    const isUruguay = String(props.pais_operativo || '').toLowerCase() === 'uruguay';
-
-    // Solo prune si es espejo válido y su origen ya no existe
-    if (origenId && isUy && isUruguay && !uyOrigenIdsSet.has(origenId)) {
-      try {
-        // ✅ Desasociar el line item del deal espejo (NO borrar el objeto)
-        await hubspotClient.crm.associations.v4.basicApi.archive(
-          'line_items',
-          String(li.id),
-          'deals',
-          String(targetDealId)
-        );
-
-        console.log(
-          `[mirrorDealToUruguay] Prune: desasociado line item espejo UY ${li.id} (origen=${origenId})`
-        );
-      } catch (err) {
-        console.warn(
-          `[mirrorDealToUruguay] Prune: error al desasociar line item espejo UY ${li.id}`,
-          err?.response?.body || err
-        );
-      }
-    }
-  }
+try {
+  const { prunedCount } = await pruneMirrorUyLineItems(targetDealId, uyLineItems);
+  console.log(`[mirrorDealToUruguay] Prune completado: pruned=${prunedCount}`);
+} catch (err) {
+  console.warn('[mirrorDealToUruguay] ⚠️ Prune falló', err?.response?.body || err);
 }
+// 4c) Si el espejo quedó sin line items asociados, archivar deal espejo y limpiar link en PY
+try {
+  const res = await maybeArchiveMirrorDealIfEmpty(sourceDealId, targetDealId);
+  if (res.archived) {
+    // Si archivamos, no tiene sentido seguir asociando compañías/contactos/etc.
+    return {
+      mirrored: true,
+      sourceDealId: String(sourceDealId),
+      targetDealId: String(targetDealId),
+      uyLineItemsCount: uyLineItems.length,
+      createdLineItems,
+      mirrorArchivedBecauseEmpty: true,
+    };
+  }
+} catch (err) {
+  console.warn('[mirrorDealToUruguay] ⚠️ Check de espejo vacío falló', err?.response?.body || err);
+}
+
 
   // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
   if (interfaseCompanyId) {
