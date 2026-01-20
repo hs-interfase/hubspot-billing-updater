@@ -7,7 +7,7 @@ import {
   computeLastBillingDateFromLineItems,
   computeBillingCountersForLineItem,
 } from '../billingEngine.js';
-import { updateDealCupo } from '../cupo.js';
+import { updateDealCupo } from '../utils/propertyHelpers.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
