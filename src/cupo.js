@@ -1,5 +1,6 @@
 // src/utils/propertyHelpers.js
-import { parseNumber, parseBool, safeString } from "./parsers.js";
+import { parseNumber, parseBool, safeString } from './utils/parsers.js';
+
 
 export function calculateCupoEstado(input) {
   const cupoActivo = parseBool(input.cupo_activo);

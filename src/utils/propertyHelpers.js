@@ -9,6 +9,7 @@
 
 import { hubspotClient } from '../hubspotClient.js';
 
+
 // Cache de schemas por objectType
 const schemaCache = new Map();
 
