@@ -1,5 +1,8 @@
 // src/utils/propertyHelpers.js
 import { parseNumber, parseBool, safeString } from './utils/parsers.js';
+import { hubspotClient } from './hubspotClient.js';
+import { hasParteDelCupoActiva } from './services/cupo/cupoUtils.js';
+import { calculateCupoEstado } from './utils/propertyHelpers.js';
 
 
 export function calculateCupoEstado(input) {
