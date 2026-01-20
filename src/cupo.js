@@ -1,92 +1,57 @@
-import { hubspotClient } from './hubspotClient.js';
-import { hasParteDelCupoActiva } from './services/cupo/cupoUtils.js';
-import { calculateCupoEstado } from './utils/propertyHelpers.js';
+// src/utils/propertyHelpers.js
+import { parseNumber, parseBool, safeString } from "./parsers.js";
 
-/*
- * Calcula y actualiza el cupo de un negocio.
- * Solo considera line items con `parte_del_cupo=true` y `facturacion_activa=true`.
- */
+export function calculateCupoEstado(input) {
+  const cupoActivo = parseBool(input.cupo_activo);
 
-export function computeCupoStatus(deal, lineItems) {
-  if (!deal || !deal.properties) {
-    return { consumido: 0, restante: 0 };
-  }
-  const props = deal.properties;
-  const tipo = (props.tipo_de_cupo || '').toString().trim().toUpperCase();
+  const tipo = safeString(input.tipo_de_cupo).trim();
+  const consumido = parseNumber(input.cupo_consumido, NaN);
+  const restante = parseNumber(input.cupo_restante, NaN);
+  const umbral = parseNumber(input.cupo_umbral, NaN);
 
-  const totalHoras = parseFloat(props.cupo_total) || 0;
-  const totalMonto = parseFloat(props.cupo_total_monto) || 0;
-  const totalGenerico = parseFloat(props.cupo_total) || 0;
+  // Total según tipo
+  const totalHoras = parseNumber(input.cupo_total, NaN);
+  const totalMonto = parseNumber(input.cupo_total_monto, NaN);
+  const totalGenerico = parseNumber(input.cupo_total, NaN);
 
-  let total;
-  if (tipo === 'HORAS' || tipo === 'POR HORAS') {
-    total = totalHoras || totalGenerico;
-  } else if (tipo === 'MONTO' || tipo === 'POR MONTO') {
-    total = totalMonto || totalGenerico;
-  } else {
-    total = totalGenerico;
-  }
+  let total = NaN;
+  if (tipo === "Por Horas") total = !isNaN(totalHoras) ? totalHoras : totalGenerico;
+  else if (tipo === "Por Monto") total = !isNaN(totalMonto) ? totalMonto : totalGenerico;
+  else total = totalGenerico;
 
-  let consumido = 0;
-  for (const li of lineItems || []) {
-    const lp = li.properties || {};
-    const parteDelCupo = lp.parte_del_cupo === true || lp.parte_del_cupo === 'true';
-    const facturacionActiva = lp.facturacion_activa === true || lp.facturacion_activa === 'true';
-    if (!parteDelCupo || !facturacionActiva) continue;
+  // ✅ Regla: si cupo_activo=false y cupo_total null => cupo_estado null
+  // (en HubSpot normalmente se guarda como '' para “vacío”)
+  const totalMissing =
+    input.cupo_total == null || String(input.cupo_total).trim() === "";
+  const totalMontoMissing =
+    input.cupo_total_monto == null || String(input.cupo_total_monto).trim() === "";
 
-    const qty = parseFloat(lp.quantity) || 0;
-    const price = parseFloat(lp.price) || 0;
+  const noHayTotalConfigurado =
+    totalMissing && totalMontoMissing; // por si es Monto y solo usas cupo_total_monto
 
-    if (tipo === 'HORAS' || tipo === 'POR HORAS') {
-      consumido += qty;
-    } else {
-      consumido += qty * price;
-    }
-  }
+  if (!cupoActivo && noHayTotalConfigurado) return "";
 
-  const restante = total - consumido;
-  return { consumido, restante };
-}
+  // Si faltan números clave y hay total, es inconsistente (no puedo validar)
+  if (isNaN(total) || isNaN(consumido) || isNaN(restante)) return "Inconsistente";
 
-export async function updateDealCupo(deal, lineItems) {
-  console.log('[cupo:updateDealCupo] running', { dealId: deal.id, lineItems: lineItems?.length });
+  const EPS = 0.01;
 
-  if (!deal || !deal.id) return { consumido: 0, restante: 0 };
+  // ✅ Regla: si restante + consumido != total => Inconsistente
+  const diff = Math.abs((consumido + restante) - total);
+  if (diff > EPS) return "Inconsistente";
 
-  const { consumido, restante } = computeCupoStatus(deal, lineItems);
+  // ✅ Regla: si restante < 0 => Pasado
+  if (restante < 0 - EPS) return "Pasado";
 
-  const dp = deal.properties || {};
-  const cupoActivo = String(dp.cupo_activo || '').toLowerCase() === 'true';
+  // ✅ Regla: si cupo_activo=false y restante == 0 => Agotado
+  // (en general, si restante <= 0 también es agotado, pero Pasado ya capturó negativos)
+  if (restante <= 0 + EPS) return "Agotado";
 
-  const properties = {
-    cupo_consumido: String(consumido),
-    cupo_restante: String(restante),
-  };
+  // ✅ Regla: si cupo_activo=false (y restante > 0) => Desactivado
+  if (!cupoActivo) return "Desactivado";
 
-  // ✅ 1) Estado de cupo (para que la alerta funcione)
-  // Regla: si cupo está desactivado, el estado lo calcula el helper ("Desactivado")
-  // pero si hay LI parte_del_cupo activa y cupo_activo=false => Inconsistente
-  const hayParteCupoActiva = hasParteDelCupoActiva(lineItems);
+  // ✅ Regla: si restante <= umbral => Bajo Umbral
+  if (!isNaN(umbral) && restante <= umbral + EPS) return "Bajo Umbral";
 
-  let estado;
-  if (!cupoActivo && hayParteCupoActiva) {
-    estado = 'Inconsistente';
-  } else {
-    estado = calculateCupoEstado({ ...dp, ...properties });
-  }
-
-  // Si no querés guardar "Desactivado" en cupo_estado, lo podés limpiar:
-  if (estado === 'Desactivado') {
-    properties.cupo_estado = ''; // o no setearlo
-  } else if (estado) {
-    properties.cupo_estado = estado;
-  }
-
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
-  } catch (err) {
-    console.error('[cupo] Error actualizando cupo del deal', deal.id, err?.response?.body || err?.message);
-  }
-
-  return { consumido, restante, estado };
+  return "Ok";
 }

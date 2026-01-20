@@ -143,7 +143,6 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
   return valid;
 }
 
-
 export function calculateCupoEstado(dealProps) {
   const cupoActivo = String(dealProps.cupo_activo || '').toLowerCase() === 'true';
 
@@ -156,27 +155,47 @@ export function calculateCupoEstado(dealProps) {
   const cupoRestante = parseFloat(dealProps.cupo_restante);
   const cupoUmbral = parseFloat(dealProps.cupo_umbral);
 
-  if (!cupoActivo) return 'Desactivado';
+  const totalIsMissing =
+    dealProps.cupo_total_calculado == null ||
+    String(dealProps.cupo_total_calculado).trim() === '';
 
+  const EPS = 0.01;
+
+  // ✅ Regla: si cupo_activo=false y cupo total null => cupo_estado null (vacío)
+  // (en tu caso, como estás usando cupo_total_calculado SOLO para calcular,
+  // este check mejor hacerlo con cupo_total/cupo_total_monto reales)
+  const hasAnyTotalConfigured =
+    String(dealProps.cupo_total || '').trim() !== '' ||
+    String(dealProps.cupo_total_monto || '').trim() !== '';
+
+  if (!cupoActivo && !hasAnyTotalConfigured) return ''; // “null” en HubSpot
+
+  // Si faltan números → inconsistente (salvo el caso anterior)
   if (isNaN(cupoTotal) || isNaN(cupoConsumido) || isNaN(cupoRestante)) {
     return 'Inconsistente';
   }
 
-  const EPS = 0.01;
-
+  // ✅ Regla: consumido + restante != total => inconsistente
   const diff = Math.abs((cupoConsumido + cupoRestante) - cupoTotal);
   if (diff > EPS) return 'Inconsistente';
 
-  if (cupoConsumido > cupoTotal + EPS) return 'Pasado';
+  // ✅ Regla: restante negativo => Pasado
+  if (cupoRestante < 0 - EPS) return 'Pasado';
 
+  // ✅ Regla: restante 0 (o casi) => Agotado
   if (cupoRestante <= 0 + EPS) return 'Agotado';
 
-  if (!isNaN(cupoUmbral) && cupoUmbral > 0 && cupoRestante <= cupoUmbral + EPS) {
+  // ✅ Regla: si cupo_activo=false y restante > 0 => Desactivado
+  if (!cupoActivo) return 'Desactivado';
+
+  // ✅ Regla: restante <= umbral => Bajo Umbral
+  if (!isNaN(cupoUmbral) && cupoRestante <= cupoUmbral + EPS) {
     return 'Bajo Umbral';
   }
 
   return 'Ok';
 }
+
 
 
 
