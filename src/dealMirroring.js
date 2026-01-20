@@ -38,60 +38,74 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
   console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
 
   const uyOrigenIdsSet = new Set(
-    (uyLineItemsFromPy || []).map((li) => String(li?.id || li?.properties?.hs_object_id))
+    (uyLineItemsFromPy || [])
+      .map((li) => String(li?.id ?? li?.properties?.hs_object_id ?? '').trim())
+      .filter(Boolean)
   );
 
-  // Todos los LIs asociados al espejo
   const mirrorLineItemIds = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
-  if (!mirrorLineItemIds.length) {
-    return { prunedCount: 0 };
-  }
+  if (!mirrorLineItemIds.length) return { prunedCount: 0 };
 
   const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
     inputs: mirrorLineItemIds.map((id) => ({ id: String(id) })),
-    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
+    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name', 'hs_lastmodifieddate', 'createdate'],
   });
 
   let prunedCount = 0;
 
+  // ⬇️ track duplicados por origen
+  const seenByOrigen = new Map(); // origenId -> li (el que nos quedamos)
+
   for (const li of batchResp.results || []) {
     const p = li.properties || {};
-
     const origenId = String(p.of_line_item_py_origen_id || '').trim();
-    if (!origenId) {
-      // ✅ Regla: legacy sin origen NO se toca
-      continue;
-    }
+    if (!origenId) continue;
 
     const uyFlag = String(p.uy || '').toLowerCase() === 'true';
     const isUruguay = String(p.pais_operativo || '').toLowerCase() === 'uruguay';
+    if (!uyFlag || !isUruguay) continue;
 
-    // Solo prune si es UY válido, y su origen ya no existe en el set (borrado o uy=false en PY)
-    if (uyFlag && isUruguay && !uyOrigenIdsSet.has(origenId)) {
+    const origenExists = uyOrigenIdsSet.has(origenId);
+
+    // ✅ Caso 1: huérfano -> borrar
+    if (!origenExists) {
       try {
-        // ✅ Orden correcto: from=line_items -> to=deals
         await hubspotClient.crm.associations.v4.basicApi.archive(
           'line_items',
           String(li.id),
           'deals',
           String(mirrorDealId)
         );
-
         prunedCount++;
-        console.log(
-          `[mirrorDealToUruguay] Prune: desasociado LI espejo UY ${li.id} (${p.name || ''}) (origen=${origenId})`
-        );
+        console.log(`[mirrorDealToUruguay] Prune: desasociado huérfano ${li.id} (${p.name || ''}) (origen=${origenId})`);
       } catch (err) {
-        console.warn(
-          `[mirrorDealToUruguay] Prune: error al desasociar LI espejo UY ${li.id} (origen=${origenId})`,
-          err?.response?.body || err
-        );
+        console.warn(`[mirrorDealToUruguay] Prune: error huérfano ${li.id} (origen=${origenId})`, err?.response?.body || err);
       }
+      continue;
+    }
+
+    // ✅ Caso 2: duplicado -> dejar 1, borrar el resto
+    if (seenByOrigen.has(origenId)) {
+      try {
+        await hubspotClient.crm.associations.v4.basicApi.archive(
+          'line_items',
+          String(li.id),
+          'deals',
+          String(mirrorDealId)
+        );
+        prunedCount++;
+        console.log(`[mirrorDealToUruguay] Prune: desasociado DUPLICADO ${li.id} (${p.name || ''}) (origen=${origenId})`);
+      } catch (err) {
+        console.warn(`[mirrorDealToUruguay] Prune: error duplicado ${li.id} (origen=${origenId})`, err?.response?.body || err);
+      }
+    } else {
+      seenByOrigen.set(origenId, li);
     }
   }
 
   return { prunedCount };
 }
+
 
 async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
   const assocIds = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
@@ -151,9 +165,6 @@ async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
 
   return { archived: true, remainingValidCount: 0 };
 }
-
-
-// ...existing code...
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
 const LINEA_PARA_UY_PROP = 'uy';
@@ -448,7 +459,7 @@ for (const li of uyLineItems) {
   props.hubspot_owner_id = userAdminMirror;
 
   // 🔑 Idempotencia: guardar ID del line item origen (PY)
-  props.of_line_item_py_origen_id = String(li.id || li.properties?.hs_object_id);
+props.of_line_item_py_origen_id = String(li.id).trim();
 
   // ✅ COSTO → price (parseado como float)
   const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
