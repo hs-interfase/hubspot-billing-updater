@@ -442,7 +442,7 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
 
     // actualizar cupo a nivel deal espejo usando sus props (no pisar inputs)
     try {
-      await updateDealCupo(mirrorResult.targetDealId, mirrorLineItems, mirrorDeal);
+      await updateDealCupo(mirrorDeal, mirrorLineItems);
     } catch (err) {
       console.error('[phase1] Error updateDealCupo en espejo UY', mirrorResult.targetDealId, err);
     }
@@ -471,7 +471,7 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
 
    // 5) Actualizar cupo a nivel negocio pasando también el negocio completo
    try {
-     await updateDealCupo(dealId, lineItems, deal);
+     await updateDealCupo(deal, lineItems );
    } catch (err) {
      console.error('[phase1] Error updateDealCupo deal', dealId, err);
    }
