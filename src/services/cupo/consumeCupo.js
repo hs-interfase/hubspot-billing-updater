@@ -207,7 +207,7 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
     console.log(`[consumeCupo] ✅ Deal ${dealId} actualizado`);
     console.log(`[consumeCupo] 📝 Props:`, dealUpdateProps);
   } catch (err) {
-    console.error(`[consumeCupo] ❌ Error actualizando deal ${dealId}:`, err?.message);
+    console.error(`[consumeCupo] ❌ Error! actualizando deal ${dealId}:`, err?.message);
     throw err;
   }
 
