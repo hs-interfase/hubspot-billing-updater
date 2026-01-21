@@ -11,6 +11,8 @@ import { updateDealCupo } from '../utils/propertyHelpers.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
+import { computeCupoEstadoFrom } from '../utils/calculateCupoEstado.js';
+
 
 logDateEnvOnce();
 
@@ -61,7 +63,7 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_restante = String(cupoTotal);
   }
 
-  // ✅ A) Actualizar cupo_estado según reglas
+/*  // ✅ A) Actualizar cupo_estado según reglas
   const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
   const newCupoEstado = calculateCupoEstado({
     cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
@@ -91,6 +93,59 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_estado = newCupoEstado;
     console.log(`[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
   }
+*/
+
+// ✅ A) Actualizar cupo_estado según reglas
+const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
+
+// armamos un "merged" para que el estado use SIEMPRE todos los campos necesarios
+const merged = { ...dealProps, ...updateProps };
+
+const newCupoEstado = calculateCupoEstado({
+  cupo_activo: merged.cupo_activo,
+  tipo_de_cupo: merged.tipo_de_cupo,
+  cupo_total: merged.cupo_total,
+  cupo_total_monto: merged.cupo_total_monto,
+  cupo_consumido: merged.cupo_consumido,
+  cupo_restante: merged.cupo_restante,
+  cupo_umbral: merged.cupo_umbral,
+});
+
+const currentCupoEstado = dealProps.cupo_estado;
+
+if (newCupoEstado === "Inconsistente") {
+  // Diagnóstico detallado (usá merged para que no mienta)
+  const total =
+    parseFloat(merged.cupo_total) ||
+    parseFloat(merged.cupo_total_monto) ||
+    NaN;
+
+  const consumido = parseFloat(merged.cupo_consumido);
+  const restante = parseFloat(merged.cupo_restante);
+
+  const diff =
+    isNaN(total) || isNaN(consumido) || isNaN(restante)
+      ? null
+      : Math.abs((consumido + restante) - total);
+
+  console.log("[cupo:activate][DIAG] Inconsistente diagnosticado", {
+    dealId,
+    cupo_activo: merged.cupo_activo,
+    tipo_de_cupo: merged.tipo_de_cupo,
+    cupo_total: merged.cupo_total,
+    cupo_total_monto: merged.cupo_total_monto,
+    cupo_consumido: merged.cupo_consumido,
+    cupo_restante: merged.cupo_restante,
+    cupo_umbral: merged.cupo_umbral,
+    diff,
+  });
+} else if (newCupoEstado !== (currentCupoEstado ?? "")) {
+  // si querés evitar escribir '' cuando ya está vacío, este check lo cuida
+  updateProps.cupo_estado = newCupoEstado;
+  console.log(
+    `[cupo:activate] cupo_estado: ${currentCupoEstado || "(null)"} → ${newCupoEstado || "(null)"}`
+  );
+}
 
   if (Object.keys(updateProps).length === 0) {
     console.log(`[cupo:activate] dealId=${dealId} sin cambios (cupo_activo=${shouldActivate})`);
