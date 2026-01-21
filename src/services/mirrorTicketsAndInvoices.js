@@ -18,9 +18,9 @@
 // - función para ejecutar billing en un deal (mirror) en modos: update/urgent/auto.
 // - función para asegurar que line items del mirror estén up-to-date (si tu mirror ya lo hace en update, podés no usarla).
 
-import { logger } from "../logger.js";
+//import { logger } from "../";
 
-const log = logger.child({ module: "mirrorTicketsAndInvoices" });
+// const log = logger.child({ module: "mirrorTicketsAndInvoices" });
 
 /**
  * Ajustá estos nombres si tus properties difieren.
@@ -115,19 +115,19 @@ export async function onOriginalTicketFacturarAhora(adapter, originalTicketId, {
 
   // Guard anti-loop: si el evento vino de un mirror, ignorar.
   if (parseBool(originalTicket?.properties?.[MIRROR_PROPS.isMirror])) {
-    log.info({ originalTicketId }, "[mirror] Ignorado: ticket es mirror (anti-loop)");
+console.log("[mirror] Ignorado: ticket es mirror (anti-loop)", { originalTicketId });
     return { skipped: true, why: "ticket_is_mirror" };
   }
 
   const originalDealId = await adapter.getDealIdFromTicket(originalTicket);
   if (!originalDealId) {
-    log.warn({ originalTicketId }, "[mirror] No se pudo resolver deal desde ticket original");
+console.warn("[mirror] No se pudo resolver deal desde ticket original", { originalTicketId });
     return { skipped: true, why: "no_deal_from_ticket" };
   }
 
   const mirrorDealId = await adapter.getMirrorDealIdForDeal(originalDealId);
   if (!mirrorDealId) {
-    log.info({ originalDealId, originalTicketId }, "[mirror] Deal no tiene mirror, no aplica");
+console.log("[mirror] Deal no tiene mirror, no aplica", { originalDealId, originalTicketId });
     return { skipped: true, why: "no_mirror_deal" };
   }
 
@@ -248,10 +248,11 @@ export async function upsertMirrorTicketLinkAndSync(
 
     // Si tu createTicket necesita associations al deal mirror, pasalo en associationsPayload.
     mirrorTicket = await adapter.createTicket(createProps, { mirrorDealId });
-    log.info(
-      { originalTicketId, mirrorTicketId: mirrorTicket?.id, mirrorDealId },
-      "[mirror] Ticket mirror creado (fallback)"
-    );
+console.log("[mirror] Ticket mirror creado (fallback)", {
+  originalTicketId,
+  mirrorTicketId: mirrorTicket?.id,
+  mirrorDealId,
+});
   }
 
   const mirrorTicketIdFinal = mirrorTicket.id;
@@ -289,7 +290,7 @@ export async function upsertMirrorTicketLinkAndSync(
  */
 export async function onOriginalInvoiceCreated(adapter, originalInvoiceId, opts = {}) {
   // Implementar cuando tengas claro dónde se crean y cómo se linkean.
-  log.info({ originalInvoiceId, opts }, "[mirror] Invoice mirror: pendiente de implementar");
+console.log("[mirror] Invoice mirror: pendiente de implementar", { originalInvoiceId, opts });
   return { skipped: true, why: "not_implemented" };
 }
 
