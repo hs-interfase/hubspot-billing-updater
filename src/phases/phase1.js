@@ -10,7 +10,6 @@ import {
 import { updateDealCupo } from '../utils/propertyHelpers.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
-import { getTodayYMD } from "../utils/dateUtils.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 
 logDateEnvOnce();
@@ -62,7 +61,7 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_restante = String(cupoTotal);
   }
 
-  // ✅ A) Actualizar cupo_estado según reglas
+  /*// ✅ A) Actualizar cupo_estado según reglas
   const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
   const newCupoEstado = calculateCupoEstado({
     cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
@@ -92,7 +91,7 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_estado = newCupoEstado;
     console.log(`[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
   }
-
+*/
   if (Object.keys(updateProps).length === 0) {
     console.log(`[cupo:activate] dealId=${dealId} sin cambios (cupo_activo=${shouldActivate})`);
     return;
