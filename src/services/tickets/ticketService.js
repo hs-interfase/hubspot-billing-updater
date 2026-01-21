@@ -298,6 +298,43 @@ async function getTicketsForDeal(dealId) {
     return [];
   }
 }
+export async function safeCreateTicket(hubspotClient, payload) {
+  let current = structuredClone(payload);
+
+  for (let i = 0; i < 5; i++) {
+    try {
+      return await hubspotClient.crm.tickets.basicApi.create(current);
+    } catch (e) {
+      const missing = getMissingPropertyNameFromHubSpotError(e);
+      if (!missing) throw e;
+
+      if (current?.properties?.[missing] === undefined) throw e;
+
+      console.warn(`[ticketService] Missing property "${missing}". Retrying without it...`);
+      delete current.properties[missing];
+    }
+  }
+  throw new Error("safeCreateTicket: too many retries removing missing properties");
+}
+
+export async function safeUpdateTicket(hubspotClient, ticketId, payload) {
+  let current = structuredClone(payload);
+
+  for (let i = 0; i < 5; i++) {
+    try {
+      return await hubspotClient.crm.tickets.basicApi.update(ticketId, current);
+    } catch (e) {
+      const missing = getMissingPropertyNameFromHubSpotError(e);
+      if (!missing) throw e;
+
+      if (current?.properties?.[missing] === undefined) throw e;
+
+      console.warn(`[ticketService] Missing property "${missing}". Retrying update without it...`);
+      delete current.properties[missing];
+    }
+  }
+  throw new Error("safeUpdateTicket: too many retries removing missing properties");
+}
 
 /**
  * Marca tickets duplicados "clonados por UI" para que no molesten.
@@ -572,44 +609,6 @@ export function getMissingPropertyNameFromHubSpotError(e) {
   const msg = body?.message || "";
   const m = msg.match(/Property \"(.+?)\" does not exist/);
   return m?.[1] || null;
-}
-
-export async function safeCreateTicket(hubspotClient, payload) {
-  let current = structuredClone(payload);
-
-  for (let i = 0; i < 5; i++) {
-    try {
-      return await hubspotClient.crm.tickets.basicApi.create(current);
-    } catch (e) {
-      const missing = getMissingPropertyNameFromHubSpotError(e);
-      if (!missing) throw e;
-
-      if (current?.properties?.[missing] === undefined) throw e;
-
-      console.warn(`[ticketService] Missing property "${missing}". Retrying without it...`);
-      delete current.properties[missing];
-    }
-  }
-  throw new Error("safeCreateTicket: too many retries removing missing properties");
-}
-
-export async function safeUpdateTicket(hubspotClient, ticketId, payload) {
-  let current = structuredClone(payload);
-
-  for (let i = 0; i < 5; i++) {
-    try {
-      return await hubspotClient.crm.tickets.basicApi.update(ticketId, current);
-    } catch (e) {
-      const missing = getMissingPropertyNameFromHubSpotError(e);
-      if (!missing) throw e;
-
-      if (current?.properties?.[missing] === undefined) throw e;
-
-      console.warn(`[ticketService] Missing property "${missing}". Retrying update without it...`);
-      delete current.properties[missing];
-    }
-  }
-  throw new Error("safeUpdateTicket: too many retries removing missing properties");
 }
 
 /**
