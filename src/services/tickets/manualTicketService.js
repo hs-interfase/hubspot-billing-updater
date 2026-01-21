@@ -152,10 +152,10 @@ console.log(`  ticketKey: "${expectedKey}"`);
 const stage = TICKET_STAGES.NEW;        // siempre empieza en “Nueva orden de facturación”
 
       // 5) Facturar ahora -> nota urgente en descripción
-      let descripcionProducto = snapshots.of_descripcion_producto || '';
+      let avisosSistema = snapshots.of_billing_error || '';
       if (facturarAhora) {
         const notaUrgente = '⚠️ URGENTE: Vendedor solicitó facturar ahora.';
-        descripcionProducto = descripcionProducto ? `${notaUrgente}\n\n${descripcionProducto}` : notaUrgente;
+        avisosSistema = avisosSistema ? `${notaUrgente}\n\n${avisosSistema}` : notaUrgente;
       }
 
       // 6) Owner (responsable del ticket) y vendedor (informativo)
