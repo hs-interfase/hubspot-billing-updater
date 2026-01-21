@@ -147,6 +147,7 @@ console.log(`  ticketKey: "${expectedKey}"`);
       const dealName = dp.dealname || 'Deal';
       const productName = lineProps.name || 'Producto';
       const rubro = snapshots.of_rubro || null;
+    
 
       // 4) Stage según fecha y flag
 const stage = TICKET_STAGES.NEW;        // siempre empieza en “Nueva orden de facturación”
@@ -242,7 +243,7 @@ const ticketProps = {
 
   // si facturarAhora, descripcionProducto ya incluye nota urgente + snapshots.of_descripcion_producto
   // si no, cae a descripcion del LI, y si no hay, null
-  of_descripcion_producto: descripcionProducto || liDescripcion || null,
+  of_descripcion_producto: liDescripcion || null,
 
   // Nota (si querés nota a nivel ticket)
   nota: liNota,
