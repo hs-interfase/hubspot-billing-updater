@@ -14,7 +14,7 @@ import { toHubSpotDateOnly } from '../utils/dateUtils.js';
  * ⚠️ Esta es la ÚNICA función que debe usarse para calcular frecuencia de facturación.
  * NO duplicar esta lógica en otros lugares.
  */
-function determineTicketFrequency(lineItem) {
+export function determineTicketFrequency(lineItem) {
   const lp = lineItem?.properties || {};
 
   const isIrregular = parseBool(lp.irregular);

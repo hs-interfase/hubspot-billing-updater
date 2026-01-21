@@ -5,6 +5,8 @@ import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoic
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
+import { determineTicketFrequency } from './snapshotService.js';
+
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
@@ -162,10 +164,17 @@ export async function processUrgentLineItem(lineItemId) {
     console.log(`   ⚠️  ticketKey usa: ${billingPeriodDate || 'N/A'} (NOT today)`);
     console.log(`   ⚠️  invoiceKey usa: ${billingPeriodDate || 'N/A'} (NOT today)`);
 
-    if (!billingPeriodDate) {
-      console.error('❌ No billing period date found');
-      return { skipped: true, reason: 'no_billing_period_date' };
-    }
+if (!billingPeriodDate) {
+  const tf = determineTicketFrequency(lineItem); // 'Único' | 'Frecuente' | 'Irregular'
+
+  if (tf === 'Único') {
+    billingPeriodDate = getTodayYMD();
+    console.warn(`⚠️ billingPeriodDate NULL. TicketFrequency=Único => default today (${billingPeriodDate})`);
+  } else {
+    console.error('❌ No billing period date found');
+    return { skipped: true, reason: 'no_billing_period_date' };
+  }
+}
 
     // 4) Resolver dealId
     const dealId = await getDealIdForLineItem(lineItemId);
