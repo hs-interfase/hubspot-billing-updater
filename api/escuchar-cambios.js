@@ -21,6 +21,106 @@ import { hubspotClient, getDealWithLineItems } from '../src/hubspotClient.js';
 import { runPhasesForDeal } from '../src/phases/index.js';
 import { parseBool } from '../src/utils/parsers.js';
 import { processTicketUpdate } from '../src/services/tickets/ticketUpdateService.js';
+import { onOriginalActualizar, onOriginalTicketFacturarAhora } from '../src/services/mirrorTicketsAndInvoices.js';
+
+
+///////////////////////////////////////
+//////////////////////////////////////
+
+//Helper en caso de duplicacion de deal
+const MIRROR_DEAL_ID_PROP = "deal_uy_mirror_id"; 
+
+async function getMirrorDealIdForDeal(originalDealId) {
+  const d = await hubspotClient.crm.deals.basicApi.getById(String(originalDealId), [
+    MIRROR_DEAL_ID_PROP,
+  ]);
+  const v = d?.properties?.[MIRROR_DEAL_ID_PROP];
+  const mirrorDealId = v ? String(v).trim() : null;
+  return mirrorDealId || null;
+}
+
+
+// ===== MIRROR ADAPTER (mínimo, seguro) =====
+
+async function getDealIdFromTicketId(ticketId) {
+  const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+    "tickets",
+    String(ticketId),
+    "deals",
+    100
+  );
+  const dealIds = (resp.results || [])
+    .map((r) => String(r.toObjectId))
+    .filter(Boolean);
+  return dealIds.length ? dealIds[0] : null;
+}
+
+async function searchMirrorTicketByOriginalId(originalTicketId) {
+  const search = {
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: "of_mirror_ticket", operator: "EQ", value: String(originalTicketId) },
+        ],
+      },
+    ],
+    properties: ["hs_object_id", "subject", "of_is_mirror", "of_mirror_ticket", "of_original_key", "of_ticket_key"],
+    limit: 1,
+  };
+
+  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(search);
+  return resp?.results?.[0] || null;
+}
+
+const mirrorAdapter = {
+  getMirrorDealIdForDeal,
+
+  getDealIdFromTicket: async (ticket) => {
+    const ticketId = ticket?.id || ticket?.properties?.hs_object_id;
+    return ticketId ? getDealIdFromTicketId(ticketId) : null;
+  },
+
+  getTicketById: async (ticketId) =>
+    hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+      "subject",
+      "of_is_mirror",
+      "of_mirror_ticket",
+      "of_original_key",
+      "of_ticket_key",
+      "of_fecha_de_facturacion",
+      "nota",
+      "observaciones_ventas",
+      "reventa",
+      "renovacion_automatica",
+      "of_producto_nombres",
+      "of_descripcion_producto",
+    ]),
+
+  updateTicket: async (ticketId, properties) =>
+    hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties }),
+
+  searchMirrorTicketByOriginalId,
+
+  // Creamos ticket mirror MINIMO sin asociar al deal todavía (para no pelear con associationTypeIds hoy).
+  // Si querés asociación, lo hacemos luego con el typeId correcto.
+  createTicket: async (properties /*, { mirrorDealId }*/) =>
+    hubspotClient.crm.tickets.basicApi.create({ properties }),
+
+  // Para of_original_key
+  getTicketKey: (ticket) => ticket?.properties?.of_ticket_key || null,
+
+  // Para este MVP: correr fases en el DEAL mirror para que se actualicen line items/fechas/etc.
+  runBillingForDeal: async (dealId, { mode, reason }) => {
+    const dealWithLineItems = await getDealWithLineItems(dealId);
+    const billingResult = await runPhasesForDeal(dealWithLineItems);
+    return { billingResult, ticketId: billingResult?.ticketId || null, mode, reason };
+  },
+};
+
+
+//////////////////////////////////////////
+//////////////////////////////////////////
+
 
 /**
  * Obtiene el dealId asociado a un line item.
@@ -137,6 +237,13 @@ export default async function handler(req, res) {
       } else if (objectType === 'ticket') {
         console.log('🎫 → Facturación urgente de Ticket...');
         result = await processUrgentTicket(objectId);
+        try {
+  const mirrorRes = await onOriginalTicketFacturarAhora(mirrorAdapter, objectId, { reason: "facturar_ahora" });
+  console.log("🪞 Mirror ticket facturar_ahora:", mirrorRes);
+} catch (e) {
+  console.error("⚠️ Error mirror ticket facturar_ahora:", e?.message || e);
+}
+
       } else {
         console.error(`❌ Tipo de objeto no soportado: ${objectType}`);
         return res.status(400).json({ error: `Unsupported object type: ${objectType}` });
@@ -242,7 +349,8 @@ if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
     const result = await processRecalculation(objectId, propertyName);
     
     if (result.skipped) {
-      console.log(`⚠️ Recalculación omitida: ${result.reason}`);
+       
+  console.log(`⚠️ Recalculación omitida: ${result.reason}`);
       console.log('='.repeat(80) + '\n');
       return res.status(200).json({
         skipped: true,
@@ -251,6 +359,13 @@ if (['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
         propertyName,
       });
     }
+   try {
+      const mirrorRes = await onOriginalActualizar(mirrorAdapter, result.dealId, { reason: propertyName });
+      console.log("🪞 Mirror recalculation:", mirrorRes);
+    } catch (e) {
+      console.error("⚠️ Error mirror recalculation:", e?.message || e);
+    }
+    
     
     // Resetear flag "actualizar" inmediatamente después de procesar (sin delay)
     if (propertyName === "actualizar") {
