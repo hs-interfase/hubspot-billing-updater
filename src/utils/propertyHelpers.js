@@ -13,6 +13,50 @@ import { hubspotClient } from '../hubspotClient.js';
 // Cache de schemas por objectType
 const schemaCache = new Map();
 
+function computeCupoStatus(deal, lineItems) {
+  const p = deal?.properties || {};
+
+  const tipo = (p.tipo_de_cupo || '').toString().trim();
+  const cupoActivo = String(p.cupo_activo || '').toLowerCase() === 'true';
+
+  // Total según tipo (si cupo no está activo o tipo vacío, total puede ser 0)
+  let total = 0;
+  if (tipo === 'Por Horas') {
+    total = parseFloat(p.cupo_total);
+  } else if (tipo === 'Por Monto') {
+    total = parseFloat(p.cupo_total_monto ?? p.cupo_total);
+  } else {
+    // fallback: intenta algo razonable
+    total = parseFloat(p.cupo_total) || parseFloat(p.cupo_total_monto);
+  }
+  if (isNaN(total)) total = 0;
+
+  // Consumido
+  let consumido = parseFloat(p.cupo_consumido);
+  if (isNaN(consumido)) consumido = 0;
+
+  // Restante: si falta, lo calculo. Si existe, lo dejo, pero puedo normalizar
+  let restante = parseFloat(p.cupo_restante);
+  if (isNaN(restante)) {
+    restante = total - consumido;
+  }
+
+  // Normalización suave: si cupo está activo y total existe, forzar coherencia básica
+  // (evita que quede viejo/restos raros)
+  if (cupoActivo && total > 0) {
+    const restanteCalc = total - consumido;
+
+    // si hay discrepancia grande, preferimos el cálculo
+    const EPS = 0.01;
+    if (Math.abs(restante - restanteCalc) > EPS) {
+      restante = restanteCalc;
+    }
+  }
+
+  return { consumido, restante, total };
+}
+
+
 /**
  * Obtiene el schema de propiedades de un tipo de objeto de HubSpot.
  * Cachea el resultado para no llamar múltiples veces.

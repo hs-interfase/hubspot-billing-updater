@@ -1,7 +1,7 @@
 // src/utils/cupoEstado.js (nuevo archivo recomendado)
 // O si no querés archivo nuevo, al menos exportalo desde propertyHelpers sin imports raros.
 
-import { parseNumber, parseBool, safeString } from './utils/parsers.js';
+import { parseNumber, parseBool, safeString } from './parsers.js';
 
 export function calculateCupoEstado(input) {
   const cupoActivo = parseBool(input.cupo_activo);

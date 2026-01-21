@@ -5,6 +5,7 @@ import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 
 
+
 /**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
  * 
@@ -50,15 +51,22 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
   try {
     // Re-leer Deal
     deal = await hubspotClient.crm.deals.basicApi.getById(dealId, [
-      'cupo_activo', 'tipo_de_cupo', 'cupo_consumido', 'cupo_restante',
-      'cupo_total', 'cupo_total_monto'
+      'cupo_activo', 
+      'tipo_de_cupo', 
+      'cupo_consumido', 
+      'cupo_restante',
+      'cupo_total', 
+      'cupo_total_monto',
+      'cupo_umbral', 
+      'cupo_estado'
     ]);
 
     // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'total_de_horas_consumidas',
-      'cantidad_real', 'total_real_a_facturar',
-       'cupo_consumo_invoice_id',  
+      'cantidad_real', 
+      'total_real_a_facturar',
+      'cupo_consumo_invoice_id',  
       'of_cupo_consumido',         
       'of_invoice_id',
     ]);
@@ -188,7 +196,7 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
     cupoDeactivated = true;
   }
 
-  // ✅ A) Actualizar cupo_estado según reglas
+  /*// ✅ A) Actualizar cupo_estado según reglas
   const { calculateCupoEstado } = await import('../../utils/propertyHelpers.js');
   const newCupoEstado = calculateCupoEstado({
     cupo_activo: dealUpdateProps.cupo_activo ?? dp.cupo_activo,
@@ -210,6 +218,36 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
     console.error(`[consumeCupo] ❌ Error! actualizando deal ${dealId}:`, err?.message);
     throw err;
   }
+*/
+
+// ✅ A) Actualizar cupo_estado según reglas
+const { calculateCupoEstado } = await import('../../utils/propertyHelpers.js');
+
+const merged = { ...dp, ...dealUpdateProps };
+
+const newCupoEstado = calculateCupoEstado({
+  cupo_activo: merged.cupo_activo,
+  tipo_de_cupo: merged.tipo_de_cupo,
+  cupo_total: merged.cupo_total,
+  cupo_total_monto: merged.cupo_total_monto,
+  cupo_consumido: merged.cupo_consumido,
+  cupo_restante: merged.cupo_restante,
+  cupo_umbral: merged.cupo_umbral,
+});
+
+// ✅ SIEMPRE setear (incluye "")
+dealUpdateProps.cupo_estado = newCupoEstado;
+// ========== ACTUALIZAR DEAL ==========
+try {
+  await hubspotClient.crm.deals.basicApi.update(dealId, { properties: dealUpdateProps });
+  console.log(`[consumeCupo] ✅ Deal ${dealId} actualizado`);
+  console.log(`[consumeCupo] 📝 Props:`, dealUpdateProps);
+} catch (err) {
+  console.error(`[consumeCupo] ❌ Error! actualizando deal ${dealId}:`, err?.message);
+  throw err;
+}
+
+console.log(`[consumeCupo] 📊 cupo_estado → ${newCupoEstado || '(vacío)'}`);
 
 
 // ========== ACTUALIZAR TICKET (IDEMPOTENCIA + TRAZABILIDAD + VALOR) ==========

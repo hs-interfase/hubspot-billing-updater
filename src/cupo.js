@@ -5,7 +5,7 @@ import { hasParteDelCupoActiva } from './services/cupo/cupoUtils.js';
 import { calculateCupoEstado } from './utils/propertyHelpers.js';
 
 
-export function calculateCupoEstado(input) {
+/*export function calculateCupoEstado(input) {
   const cupoActivo = parseBool(input.cupo_activo);
 
   const tipo = safeString(input.tipo_de_cupo).trim();
@@ -59,3 +59,4 @@ export function calculateCupoEstado(input) {
 
   return "Ok";
 }
+*/
