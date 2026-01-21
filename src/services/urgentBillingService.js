@@ -155,7 +155,7 @@ export async function processUrgentLineItem(lineItemId) {
     shouldResetFlag = true; // ✅ MUST reset in finally
 
     // ✅ 3) Calcular billingPeriodDate (NO usar today para keys)
-    const billingPeriodDate = getBillingPeriodDate(lineItemProps);
+    let billingPeriodDate = getBillingPeriodDate(lineItemProps);
     const today = getTodayYMD();
 
     console.log('\n🔑 === BILLING DATES ===');
