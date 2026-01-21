@@ -155,7 +155,7 @@ export async function processUrgentLineItem(lineItemId) {
     shouldResetFlag = true; // ✅ MUST reset in finally
 
     // ✅ 3) Calcular billingPeriodDate (NO usar today para keys)
-    let billingPeriodDate = getBillingPeriodDate(lineItemProps);
+    const billingPeriodDate = getBillingPeriodDate(lineItemProps);
     const today = getTodayYMD();
 
     console.log('\n🔑 === BILLING DATES ===');
@@ -165,15 +165,18 @@ export async function processUrgentLineItem(lineItemId) {
     console.log(`   ⚠️  invoiceKey usa: ${billingPeriodDate || 'N/A'} (NOT today)`);
 
 if (!billingPeriodDate) {
-  const tf = determineTicketFrequency(lineItem); // 'Único' | 'Frecuente' | 'Irregular'
+  console.error('❌ No billing period date found');
 
-  if (tf === 'Único') {
-    billingPeriodDate = getTodayYMD();
-    console.warn(`⚠️ billingPeriodDate NULL. TicketFrequency=Único => default today (${billingPeriodDate})`);
-  } else {
-    console.error('❌ No billing period date found');
-    return { skipped: true, reason: 'no_billing_period_date' };
-  }
+  const msg =
+    'No se pudo facturar porque falta la fecha de facturación. ' +
+    'Definir la fecha de facturación correspondiente en el ítem y volver a ejecutar “Facturar ahora”.';
+
+  await updateLineItem(lineItem.id, {
+    of_billing_error: msg,
+    facturar_ahora: 'false',
+  });
+
+  return { skipped: true, reason: 'no_billing_period_date' };
 }
 
     // 4) Resolver dealId
