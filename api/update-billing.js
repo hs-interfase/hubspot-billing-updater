@@ -99,6 +99,7 @@ async function fetchRecurrentDeals() {
   }));
 }
 
+
 // Handler para Vercel: GET /api/update-billing
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {

@@ -11,6 +11,7 @@
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
+import { propagateAndExecuteMirror } from './services/mirrori/mirrorFlagPropagation.js';
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
@@ -247,6 +248,14 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   }
 
   const srcProps = deal.properties || {};
+
+  if (options?.mode && parseBoolFromHubspot(srcProps.es_mirror_de_py)) {
+  console.log('[mirrorDealToUruguay] skip mode propagation: source deal is a mirror', {
+    dealId: String(sourceDealId),
+    mode: options.mode,
+  });
+  options = { ...options, mode: null };
+}
   
   // Moneda del negocio origen
   const sourceCurrency = srcProps.deal_currency_code || null;
@@ -424,67 +433,29 @@ console.log(`[mirrorDealToUruguay] Upsert de ${uyLineItems.length} líneas UY en
 // Variable de entorno para el propietario
 const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
 
+let lastMirrorLineItemId = null;
 for (const li of uyLineItems) {
   const srcPropsLi = li.properties || {};
-  
-  // 🔍 DEBUG: Ver todas las keys disponibles
-  console.log('[mirrorDealToUruguay] 🔍 DEBUG - keys properties:', Object.keys(srcPropsLi));
-  
+  // ...existing code...
   const props = {};
-
-  // ❌ Lista de propiedades a EXCLUIR (no copiar del original)
-  const excludedProps = new Set([
-    'uy',                        // No copiar el flag original (se pondrá true)
-    'pais_operativo',           // Se establece manualmente como Uruguay
-    'hubspot_owner_id',         // Se establece manualmente
-    'price',                    // Se calcula desde el costo
-    'hs_cost_of_goods_sold',   // Se pondrá en 0
-    'discount',                 // No copiar descuentos
-    'hs_discount_percentage',   
-    'tax',
-    'hs_tax_amount',
-    'of_line_item_py_origen_id',
-  ]);
-
-  // Copiar todas las propiedades EXCEPTO las excluidas
+  // ...existing code...
   for (const key of Object.keys(srcPropsLi)) {
     if (!excludedProps.has(key)) {
       props[key] = srcPropsLi[key];
     }
   }
-
-  // ✅ Establecer propiedades específicas del espejo UY
+  // ...existing code...
   props.uy = 'true';
   props.pais_operativo = 'Uruguay';
   props.hubspot_owner_id = userAdminMirror;
-
-  // 🔑 Idempotencia: guardar ID del line item origen (PY)
-props.of_line_item_py_origen_id = String(li.id).trim();
-
-  // ✅ COSTO → price (parseado como float)
+  props.of_line_item_py_origen_id = String(li.id).trim();
+  // ...existing code...
   const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
-
-  console.log('[mirrorDealToUruguay] 🔍 DEBUG - Costo parseado:', {
-    hs_cost_of_goods_sold_raw: srcPropsLi.hs_cost_of_goods_sold,
-    unitCost_parsed: unitCost,
-    isNaN: isNaN(unitCost),
-    isValid: !isNaN(unitCost) && unitCost > 0
-  });
-
+  // ...existing code...
   if (isNaN(unitCost) || unitCost <= 0) {
-    // Sin costo válido
-    console.log(
-      '[mirrorDealToUruguay] ⚠️ Línea UY sin hs_cost_of_goods_sold válido:',
-      srcPropsLi.name,
-      '- Costo original:',
-      srcPropsLi.hs_cost_of_goods_sold
-    );
-
+    // ...existing code...
     props.price = '0';
     props.hs_cost_of_goods_sold = '0';
-    
-    // Intentar marcar como "missing cost" (si la propiedad existe, sino usar nota)
-    // Puedes ajustar esto según las propiedades custom que tengas
     if ('mirror_missing_cost' in srcPropsLi) {
       props.mirror_missing_cost = 'true';
     } else {
@@ -492,41 +463,21 @@ props.of_line_item_py_origen_id = String(li.id).trim();
       props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
     }
   } else {
-    // Costo válido: setear price = unitCost
+    // ...existing code...
     props.price = String(unitCost);
     props.hs_cost_of_goods_sold = '0';
-
-    console.log(
-      '[mirrorDealToUruguay] ✅ Línea UY espejada:',
-      srcPropsLi.name,
-      '→ price =',
-      unitCost,
-      '(de hs_cost_of_goods_sold)'
-    );
+    // ...existing code...
   }
-
-  console.log('[mirrorDealToUruguay] 🔍 DEBUG - Propiedades finales a crear:', {
-    name: props.name,
-    pais_operativo: props.pais_operativo,
-    uy: props.uy,
-    hubspot_owner_id: props.hubspot_owner_id,
-    price: props.price,
-    hs_cost_of_goods_sold: props.hs_cost_of_goods_sold,
-    nota: props.nota
-  });
-
+  // ...existing code...
   const { action, id } = await upsertUyLineItem(
-    targetDealId,     // mirror deal id
-    li,               // line item PY origen (para identificar por id)
-    () => props       // buildUyProps: usamos el props que ya armaste arriba
+    targetDealId,
+    li,
+    () => props
   );
-
-
-
+  lastMirrorLineItemId = id;
   if (action === 'created') {
     createdLineItems++;
   }
-
   console.log(`[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`);
 }
 
@@ -659,9 +610,32 @@ try {
     }
   }
 
+  // Propagación de intención SOLO para line items
+  if (options.mode && typeof options.mode === 'string' && options.mode.startsWith('line_item.')) {
+    if (lastMirrorLineItemId) {
+      try {
+        await propagateAndExecuteMirror({
+          mode: options.mode,
+          mirrorDealId: targetDealId,
+          mirrorLineItemId: lastMirrorLineItemId,
+          logLabel: 'mirrorDealToUruguay'
+        });
+      } catch (err) {
+        console.warn('[mirrorDealToUruguay] propagateAndExecuteMirror error:', err?.message || err);
+      }
+    } else {
+      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: no mirrorLineItemId');
+    }
+  } else {
+    if (options.mode) {
+      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: mode no es line_item.*');
+    } else {
+      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: no mode');
+    }
+  }
+
   // 8) Devolver resumen
   console.log('[mirrorDealToUruguay] ✅ Duplicación completada');
-  
   return {
     mirrored: true,
     sourceDealId: String(sourceDealId),
