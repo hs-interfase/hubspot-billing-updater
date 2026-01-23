@@ -24,119 +24,6 @@ import { hubspotClient, getDealWithLineItems } from "../src/hubspotClient.js";
 import { runPhasesForDeal } from "../src/phases/index.js";
 import { parseBool } from "../src/utils/parsers.js";
 import { processTicketUpdate } from "../src/services/tickets/ticketUpdateService.js";
-import {
-  onOriginalActualizar,
-  onOriginalTicketFacturarAhora,
-} from "../src/services/mirrorTicketsAndInvoices.js";
-
-///////////////////////////////////////
-///////////////////////////////////////
-// Helper en caso de duplicacion de deal
-const MIRROR_DEAL_ID_PROP = "deal_uy_mirror_id";
-
-async function getMirrorDealIdForDeal(originalDealId) {
-  const d = await hubspotClient.crm.deals.basicApi.getById(String(originalDealId), [
-    MIRROR_DEAL_ID_PROP,
-  ]);
-  const v = d?.properties?.[MIRROR_DEAL_ID_PROP];
-  const mirrorDealId = v ? String(v).trim() : null;
-  return mirrorDealId || null;
-}
-
-// ===== MIRROR ADAPTER (mínimo, seguro) =====
-async function getDealIdFromTicketId(ticketId) {
-  const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-    "tickets",
-    String(ticketId),
-    "deals",
-    100
-  );
-  const dealIds = (resp.results || [])
-    .map((r) => String(r.toObjectId))
-    .filter(Boolean);
-  return dealIds.length ? dealIds[0] : null;
-}
-
-async function searchMirrorTicketByOriginalId(originalTicketId) {
-  const search = {
-    filterGroups: [
-      {
-        filters: [
-          {
-            propertyName: "of_mirror_ticket",
-            operator: "EQ",
-            value: String(originalTicketId),
-          },
-        ],
-      },
-    ],
-    properties: [
-      "hs_object_id",
-      "subject",
-      "of_is_mirror",
-      "of_mirror_ticket",
-      "of_original_key",
-      "of_ticket_key",
-    ],
-    limit: 1,
-  };
-
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(search);
-  return resp?.results?.[0] || null;
-}
-
-const mirrorAdapter = {
-  getMirrorDealIdForDeal,
-
-  getDealIdFromTicket: async (ticket) => {
-    const ticketId = ticket?.id || ticket?.properties?.hs_object_id;
-    return ticketId ? getDealIdFromTicketId(ticketId) : null;
-  },
-
-  getTicketById: async (ticketId) =>
-    hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
-      "subject",
-      "of_is_mirror",
-      "of_mirror_ticket",
-      "of_original_key",
-      "of_ticket_key",
-      "of_fecha_de_facturacion",
-      "nota",
-      "observaciones_ventas",
-      "reventa",
-      "renovacion_automatica",
-      "of_producto_nombres",
-      "of_descripcion_producto",
-    ]),
-
-  updateTicket: async (ticketId, properties) =>
-    hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties }),
-
-  searchMirrorTicketByOriginalId,
-
-  // Creamos ticket mirror MINIMO sin asociar al deal todavía (para no pelear con associationTypeIds hoy).
-  // Si querés asociación, lo hacemos luego con el typeId correcto.
-  createTicket: async (properties /*, { mirrorDealId }*/) =>
-    hubspotClient.crm.tickets.basicApi.create({ properties }),
-
-  // Para of_original_key
-  getTicketKey: (ticket) => ticket?.properties?.of_ticket_key || null,
-
-  // Para este MVP: correr fases en el DEAL mirror para que se actualicen line items/fechas/etc.
-  runBillingForDeal: async (dealId, { mode, reason }) => {
-    const dealWithLineItems = await getDealWithLineItems(dealId);
-    const billingResult = await runPhasesForDeal(dealWithLineItems);
-    return {
-      billingResult,
-      ticketId: billingResult?.ticketId || null,
-      mode,
-      reason,
-    };
-  },
-};
-
-//////////////////////////////////////////
-//////////////////////////////////////////
 
 /**
  * Obtiene el dealId asociado a un line item.
@@ -161,19 +48,19 @@ async function getDealIdForLineItem(lineItemId) {
  * IMPORTANTE: Phase 1 SIEMPRE se ejecuta (mirroring, fechas, cupo).
  * Phase 2 y 3 solo se ejecutan si facturacion_activa=true.
  */
-async function processRecalculation(lineItemId, propertyName) {
+async function processRecalculation(lineItemId, propertyName, { mode } = {}) {
   console.log(
     `\n🔄 [Recalculation] Procesando ${propertyName} para line item ${lineItemId}...`
   );
 
-  // 1. Obtener deal asociado
+  // 1) Obtener deal asociado
   const dealId = await getDealIdForLineItem(lineItemId);
   if (!dealId) {
     console.error(`❌ No se encontró deal asociado al line item ${lineItemId}`);
     return { skipped: true, reason: "No associated deal" };
   }
 
-  // 2. Obtener deal info para logging
+  // 2) Obtener deal info para logging
   const deal = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
     "facturacion_activa",
     "dealname",
@@ -182,14 +69,13 @@ async function processRecalculation(lineItemId, propertyName) {
   const dealName = dealProps.dealname || "Sin nombre";
 
   console.log(`📋 Deal: ${dealName} (${dealId})`);
+  console.log(`🚀 Ejecutando runPhasesForDeal... mode=${mode || "none"}`);
 
-  // 3. Ejecutar fases de facturación
-  // Phase 1 se ejecuta SIEMPRE (mirroring, normalización de fechas, etc.)
-  // Phase 2 y 3 verifican internamente facturacion_activa
-  console.log("🚀 Ejecutando runPhasesForDeal...");
-
+  // 3) Ejecutar fases de facturación (pasando mode)
   const dealWithLineItems = await getDealWithLineItems(dealId);
-  const billingResult = await runPhasesForDeal(dealWithLineItems);
+
+  // runPhasesForDeal firma: ({ deal, lineItems, mode })
+  const billingResult = await runPhasesForDeal({ ...dealWithLineItems, mode });
 
   console.log("✅ Recalculación completada:", {
     ticketsCreated: billingResult.ticketsCreated || 0,
@@ -256,7 +142,9 @@ export default async function handler(req, res) {
 
       if (!parseBool(propertyValue)) {
         console.log("⚠️ facturar_ahora no está en true, ignorando");
-        return res.status(200).json({ message: "Property value not true, skipped" });
+        return res
+          .status(200)
+          .json({ message: "Property value not true, skipped" });
       }
 
       let result;
@@ -267,20 +155,6 @@ export default async function handler(req, res) {
       } else if (objectType === "ticket") {
         console.log("🎫 → Facturación urgente de Ticket...");
         result = await processUrgentTicket(objectId);
-
-        try {
-          const mirrorRes = await onOriginalTicketFacturarAhora(
-            mirrorAdapter,
-            objectId,
-            { reason: "facturar_ahora" }
-          );
-          console.log("🪞 Mirror ticket facturar_ahora:", mirrorRes);
-        } catch (e) {
-          console.error(
-            "⚠️ Error mirror ticket facturar_ahora:",
-            e?.message || e
-          );
-        }
       } else {
         console.error(`❌ Tipo de objeto no soportado: ${objectType}`);
         return res
@@ -333,6 +207,7 @@ export default async function handler(req, res) {
 
         try {
           const result = await processTicketUpdate(objectId);
+
           console.log("✅ Actualización de ticket completada");
 
           return res.status(200).json({
@@ -363,20 +238,27 @@ export default async function handler(req, res) {
               `✅ Flag 'actualizar' reseteado a false para ticket ${objectId}`
             );
           } catch (err) {
-            console.error("⚠️ Error reseteando 'actualizar' en ticket:", err.message);
+            console.error(
+              "⚠️ Error reseteando 'actualizar' en ticket:",
+              err.message
+            );
           }
-
           console.log("=".repeat(80) + "\n");
         }
       }
 
       // CASO B: hs_billing_start_delay_type solo aplica a LINE ITEMS
-      if (propertyName === "hs_billing_start_delay_type" && objectType !== "line_item") {
+      if (
+        propertyName === "hs_billing_start_delay_type" &&
+        objectType !== "line_item"
+      ) {
         console.log(`⚠️ ${propertyName} solo aplica a line items, ignorando`);
-        return res.status(200).json({ message: "Not a line_item event, ignored" });
+        return res
+          .status(200)
+          .json({ message: "Not a line_item event, ignored" });
       }
 
-      // CASO C: actualizar en LINE ITEM (flujo original sin cambios)
+      // CASO C: actualizar en LINE ITEM (validar value=true)
       if (propertyName === "actualizar" && objectType === "line_item") {
         console.log(
           `🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(
@@ -394,12 +276,12 @@ export default async function handler(req, res) {
       }
 
       // CASO D: hs_billing_start_delay_type en LINE ITEM (continúa sin validar valor)
-
-      // Solo ejecutar processRecalculation para LINE ITEMS (ambas propiedades)
       if (objectType === "line_item") {
         console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
 
-        const result = await processRecalculation(objectId, propertyName);
+        const result = await processRecalculation(objectId, propertyName, {
+          mode,
+        });
 
         if (result.skipped) {
           console.log(`⚠️ Recalculación omitida: ${result.reason}`);
@@ -410,15 +292,6 @@ export default async function handler(req, res) {
             objectId,
             propertyName,
           });
-        }
-
-        try {
-          const mirrorRes = await onOriginalActualizar(mirrorAdapter, result.dealId, {
-            reason: propertyName,
-          });
-          console.log("🪞 Mirror recalculation:", mirrorRes);
-        } catch (e) {
-          console.error("⚠️ Error mirror recalculation:", e?.message || e);
         }
 
         // Resetear flag "actualizar" inmediatamente después de procesar (sin delay)
