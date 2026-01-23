@@ -10,8 +10,8 @@
 // - Empresa y contactos SÍ pueden ser "Mixto" si operan en ambos países
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
-import { propagateAndExecuteMirror } from './services/mirrori/mirrorFlagPropagation.js';
+import { upsertUyLineItem } from './services/mirror/mirrorLineItemsUyUpsert.js';
+import { propagateAndExecuteMirror } from './services/mirror/mirrorFlagPropagation.js';
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
