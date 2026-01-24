@@ -2,7 +2,7 @@
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
-import { getTodayYMD, getTodayMillis, toHubspotDate, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
+import { getTodayYMD, getTodayMillis, toHubSpotDate, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { determineTicketFrequency } from './snapshotService.js';
