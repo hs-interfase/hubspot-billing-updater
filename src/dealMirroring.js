@@ -389,6 +389,25 @@ async function findExistingMirrorByOrigin(sourceDealId) {
     ],
     properties: ['dealname', 'deal_py_origen_id', 'es_mirror_de_py', 'deal_uy_mirror_id'],
     limit: 10,
+  });
+  return resp.results || [];
+}
+
+
+if (!targetDealId) {
+  const mirrors = await findExistingMirrorByOrigin(sourceDealId);
+
+  if (mirrors.length === 1) {
+    targetDealId = String(mirrors[0].id);
+    console.log('[mirrorDealToUruguay] Backstop: encontré espejo por deal_py_origen_id:', targetDealId);
+
+    // Re-asegurar el vínculo en el PY para próximas corridas
+    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+      properties: { deal_uy_mirror_id: String(targetDealId) },
+    });
+
+  } else if (mirrors.length > 1) {
+    console.warn('[mirrorDealToUruguay] ERROR: múltiples espejos para el mismo PY. No crear otro.', {
       sourceDealId,
       mirrorIds: mirrors.map(m => m.id),
     });
