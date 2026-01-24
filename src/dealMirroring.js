@@ -469,10 +469,11 @@ if (!targetDealId) {
 // 4) Upsert en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
 console.log(`[mirrorDealToUruguay] Upsert de ${uyLineItems.length} líneas UY en espejo`);
 
+
+
 // Variable de entorno para el propietario
 const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
-
-let lastMirrorLineItemId = null;
+let intendedMirrorLineItemId = null;
 
 for (const li of uyLineItems) {
   const srcPropsLi = li.properties || {};
@@ -514,6 +515,16 @@ for (const li of uyLineItems) {
   lastMirrorLineItemId = id;
   if (action === 'created') createdLineItems++;
 
+  // match exacto del LI que disparó el webhook en PY
+  if (options?.sourceLineItemId && String(li.id) === String(options.sourceLineItemId)) {
+    intendedMirrorLineItemId = String(id);
+    console.log('[mirrorDealToUruguay] ✅ Matched sourceLineItemId -> mirrorLineItemId', {
+      sourceLineItemId: String(options.sourceLineItemId),
+      mirrorLineItemId: intendedMirrorLineItemId,
+      mode: options?.mode,
+    });
+  }
+
   console.log(
     `[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`
   );
@@ -521,21 +532,19 @@ for (const li of uyLineItems) {
 
 
 
+
+
 console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
 // 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
 console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
+let archiveRes;
+let pruneOk = true;
 try {
   const { prunedCount } = await pruneMirrorUyLineItems(targetDealId, uyLineItems);
   console.log(`[mirrorDealToUruguay] Prune completado: pruned=${prunedCount}`);
-} catch (err) {
-  console.warn('[mirrorDealToUruguay] ⚠️ Prune falló', err?.response?.body || err);
-}
-// 4c) Si el espejo quedó sin line items asociados, archivar deal espejo y limpiar link en PY
-try {
-  const res = await maybeArchiveMirrorDealIfEmpty(sourceDealId, targetDealId);
-  if (res.archived) {
-    // Si archivamos, no tiene sentido seguir asociando compañías/contactos/etc.
+  archiveRes = await maybeArchiveMirrorDealIfEmpty(sourceDealId, targetDealId);
+  if (archiveRes.archived) {
     return {
       mirrored: true,
       sourceDealId: String(sourceDealId),
@@ -546,8 +555,10 @@ try {
     };
   }
 } catch (err) {
-  console.warn('[mirrorDealToUruguay] ⚠️ Check de espejo vacío falló', err?.response?.body || err);
+  pruneOk = false;
+  console.warn('[mirrorDealToUruguay] ⚠️ Prune/archivado falló', err?.response?.body || err);
 }
+
 
 
   // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
@@ -649,29 +660,40 @@ try {
     }
   }
 
-  // Propagación de intención SOLO para line items
-  if (options.mode && typeof options.mode === 'string' && options.mode.startsWith('line_item.')) {
-    if (lastMirrorLineItemId) {
-      try {
-        await propagateAndExecuteMirror({
-          mode: options.mode,
-          mirrorDealId: targetDealId,
-          mirrorLineItemId: lastMirrorLineItemId,
-          logLabel: 'mirrorDealToUruguay'
-        });
-      } catch (err) {
-        console.warn('[mirrorDealToUruguay] propagateAndExecuteMirror error:', err?.message || err);
-      }
-    } else {
-      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: no mirrorLineItemId');
+
+
+// ✅ Propagar intención solo si prune/archivado fue OK
+if (!pruneOk) {
+  console.log('[mirrorDealToUruguay] skip propagate: prune/archivado falló');
+} else if (options?.mode && typeof options.mode === 'string' && options.mode.startsWith('line_item.')) {
+  if (intendedMirrorLineItemId) {
+    try {
+      await propagateAndExecuteMirror({
+        mode: options.mode,
+        mirrorDealId: String(targetDealId),
+        mirrorLineItemId: String(intendedMirrorLineItemId),
+        logLabel: 'mirrorDealToUruguay',
+      });
+      console.log('[mirrorDealToUruguay] ✅ Intención propagada al espejo', {
+        mode: options.mode,
+        mirrorDealId: String(targetDealId),
+        mirrorLineItemId: String(intendedMirrorLineItemId),
+      });
+    } catch (err) {
+      console.warn('[mirrorDealToUruguay] propagateAndExecuteMirror error:', err?.message || err);
     }
   } else {
-    if (options.mode) {
-      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: mode no es line_item.*');
-    } else {
-      console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: no mode');
-    }
+    console.warn('[mirrorDealToUruguay] ⚠️ No encontré mirror LI para sourceLineItemId; NO propago intención', {
+      mode: options.mode,
+      sourceLineItemId: String(options?.sourceLineItemId || ''),
+      mirrorDealId: String(targetDealId),
+    });
   }
+} else {
+  if (options?.mode) {
+    console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: mode no es line_item.*', { mode: options.mode });
+  }
+}
 
   // 8) Devolver resumen
   console.log('[mirrorDealToUruguay] ✅ Duplicación completada');
