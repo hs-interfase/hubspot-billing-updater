@@ -235,9 +235,8 @@ if (!billingPeriodDate) {
     // ✅ 7.b) Marcar ticket como urgente
     if (ticketId) {
       await updateTicket(ticketId, {
-        of_facturacion_urgente: 'true',
-        of_fecha_facturacion: today,
-        fecha_esperada_de_facturacion : today,
+        fecha_de_resolucion_esperada: toHubSpotDate(billingPeriodDate),
+        of_fecha_de_facturacion: todayYMD, 
       });
       console.log(`✅ Ticket marcado como urgente`);
 
