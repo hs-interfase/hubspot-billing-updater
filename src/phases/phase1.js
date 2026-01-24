@@ -264,7 +264,10 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
   }
 }
 
-export async function runPhase1(dealId, { mode } = {}) {
+export async function runPhase1(dealId, {
+   mode,
+   sourceLineItemId
+  } = {}) {
   if (!dealId) throw new Error("runPhase1 requiere un dealId");
 
   // Obtener negocio y line items
@@ -424,7 +427,10 @@ export async function runPhase1(dealId, { mode } = {}) {
   // 1) Mirroring (si corresponde)
   let mirrorResult = null;
   try {
-    mirrorResult = await mirrorDealToUruguay(dealId, { mode });
+    mirrorResult = await mirrorDealToUruguay(dealId, {
+      mode,
+      sourceLineItemId,
+    });
   } catch (err) {
     console.error("[phase1] Error en mirrorDealToUruguay:", err?.response?.body || err);
   }
