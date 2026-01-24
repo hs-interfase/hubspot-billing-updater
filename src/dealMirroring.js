@@ -521,25 +521,7 @@ for (const li of uyLineItems) {
 
 
 
-// obligatorias mirror
-props.uy = 'true';
-props.pais_operativo = 'Uruguay';
-props.hubspot_owner_id = userAdminMirror;
-props.of_line_item_py_origen_id = String(li.id).trim();
-
-// costo -> price
-const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
-if (isNaN(unitCost) || unitCost <= 0) {
-  props.price = '0';
-  props.hs_cost_of_goods_sold = '0';
-  const existingNote = props.nota || '';
-  props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
-} else {
-  props.price = String(unitCost);
-  props.hs_cost_of_goods_sold = '0';
-}
-
-  console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
+console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
 // 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
 console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
