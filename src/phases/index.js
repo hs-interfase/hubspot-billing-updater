@@ -20,7 +20,14 @@ import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupSe
  * @param {Array} params.lineItems - Line Items del Deal
  * @returns {Object} Resumen de ejecución
  */
-export async function runPhasesForDeal({ deal, lineItems, mode, sourceLineItemId } = {}) {
+// src/phases/index.js (función completa)
+
+export async function runPhasesForDeal({
+  deal,
+  lineItems,
+  mode,
+  sourceLineItemId,
+} = {}) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
 
   console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
@@ -40,44 +47,58 @@ export async function runPhasesForDeal({ deal, lineItems, mode, sourceLineItemId
 
   // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
   try {
-    console.log(`🧹 PRE: Limpieza de tickets clonados/duplicados (por of_ticket_key/of_invoice_key)...`);
-    const cleanupResult = await cleanupClonedTicketsForDeal({ dealId, lineItems });
+    console.log(
+      `🧹 PRE: Limpieza de tickets clonados/duplicados (por of_ticket_key/of_invoice_key)...`
+    );
+    const cleanupResult = await cleanupClonedTicketsForDeal({
+      dealId,
+      lineItems,
+    });
     results.cleanup = cleanupResult || results.cleanup;
     console.log(
       `   ✅ Cleanup completado: scanned=${results.cleanup.scanned}, duplicates=${results.cleanup.duplicates}, deprecated=${results.cleanup.deprecated}\n`
     );
   } catch (err) {
     console.error(`   ❌ Error en Cleanup PRE:`, err?.message || err);
-    results.cleanup.error = err?.message || 'Error desconocido';
-    // Importante: NO frenamos el proceso por esto, seguimos con phases.
+    results.cleanup.error = err?.message || "Error desconocido";
+    // NO frenamos el proceso
   }
 
   // ========== PHASE 1: Fechas, calendario, cupo ==========
   try {
     console.log(`📅 PHASE 1: Actualizando fechas, calendario y cupo...`);
+
+    // Solo pasamos sourceLineItemId si realmente vino (opcional)
     await runPhase1(dealId, { mode, sourceLineItemId });
+
     results.phase1.success = true;
     console.log(`   ✅ Phase 1 completada\n`);
   } catch (err) {
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
-    results.phase1.error = err?.message || 'Error desconocido';
+    results.phase1.error = err?.message || "Error desconocido";
   }
 
   // ========== PHASE 2: Tickets manuales ==========
   try {
-    console.log(`🎫 PHASE 2: Generando tickets manuales (facturacion_automatica=false)...`);
+    console.log(
+      `🎫 PHASE 2: Generando tickets manuales (facturacion_automatica=false)...`
+    );
     const phase2Result = await runPhase2({ deal, lineItems });
     results.phase2 = phase2Result;
     results.ticketsCreated = phase2Result.ticketsCreated || 0;
-    console.log(`   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`);
+    console.log(
+      `   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`
+    );
   } catch (err) {
     console.error(`   ❌ Error en Phase 2:`, err?.message || err);
-    results.phase2.error = err?.message || 'Error desconocido';
+    results.phase2.error = err?.message || "Error desconocido";
   }
 
   // ========== PHASE 3: Facturas automáticas ==========
   try {
-    console.log(`💰 PHASE 3: Emitiendo facturas automáticas (facturacion_automatica=true)...`);
+    console.log(
+      `💰 PHASE 3: Emitiendo facturas automáticas (facturacion_automatica=true)...`
+    );
     const phase3Result = await runPhase3({ deal, lineItems });
     results.phase3 = phase3Result;
     results.autoInvoicesEmitted = phase3Result.invoicesEmitted || 0;
@@ -91,7 +112,7 @@ export async function runPhasesForDeal({ deal, lineItems, mode, sourceLineItemId
     );
   } catch (err) {
     console.error(`   ❌ Error en Phase 3:`, err?.message || err);
-    results.phase3.error = err?.message || 'Error desconocido';
+    results.phase3.error = err?.message || "Error desconocido";
   }
 
   console.log(`🏁 Deal ${dealId} completado:`);
@@ -100,4 +121,5 @@ export async function runPhasesForDeal({ deal, lineItems, mode, sourceLineItemId
 
   return results;
 }
+
 

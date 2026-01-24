@@ -46,6 +46,8 @@ async function getDealIdForLineItem(lineItemId) {
  * IMPORTANTE: Phase 1 SIEMPRE se ejecuta (mirroring, fechas, cupo).
  * Phase 2 y 3 solo se ejecutan si facturacion_activa=true.
  */
+// api/escuchar-cambios.js (solo la función)
+
 async function processRecalculation(lineItemId, propertyName, { mode } = {}) {
   console.log(
     `\n🔄 [Recalculation] Procesando ${propertyName} para line item ${lineItemId}...`
@@ -69,11 +71,19 @@ async function processRecalculation(lineItemId, propertyName, { mode } = {}) {
   console.log(`📋 Deal: ${dealName} (${dealId})`);
   console.log(`🚀 Ejecutando runPhasesForDeal... mode=${mode || "none"}`);
 
-  // 3) Ejecutar fases de facturación (pasando mode)
+  // 3) Ejecutar fases de facturación
   const dealWithLineItems = await getDealWithLineItems(dealId);
 
-  // runPhasesForDeal firma: ({ deal, lineItems, mode })
-  const billingResult = await runPhasesForDeal({ ...dealWithLineItems, mode, sourceLineItemId });
+  // sourceLineItemId SOLO tiene sentido en triggers de line_item con intención
+  const shouldPassSource =
+    typeof mode === "string" && mode.startsWith("line_item.");
+  const sourceLineItemId = shouldPassSource ? String(lineItemId) : undefined;
+
+  const billingResult = await runPhasesForDeal({
+    ...dealWithLineItems,
+    mode,
+    sourceLineItemId,
+  });
 
   console.log("✅ Recalculación completada:", {
     ticketsCreated: billingResult.ticketsCreated || 0,
@@ -82,6 +92,7 @@ async function processRecalculation(lineItemId, propertyName, { mode } = {}) {
 
   return { success: true, dealId, dealName, billingResult };
 }
+
 
 /**
  * Handler principal del webhook.
