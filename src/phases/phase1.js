@@ -274,6 +274,9 @@ export async function runPhase1(dealId, {
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
+  // Sanear identidad de line items clonados por UI (solo si no es espejo)
+  await sanitizeClonedLineItemIdentity(deal, lineItems);
+
   // ========= DEBUG HELPERS =========
   const DBG_PHASE1 = process.env.DBG_PHASE1 === "true";
 
@@ -423,6 +426,26 @@ export async function runPhase1(dealId, {
 
     console.log("\n═══════════════════════════════════════════════════════════\n");
   }
+
+  async function sanitizeClonedLineItemIdentity(deal, lineItems) {
+  const isMirror = parseBool(deal.properties.es_mirror_de_py);
+
+  if (isMirror) return;
+
+  for (const li of lineItems) {
+    const p = li.properties || {};
+
+    if (p.of_line_item_py_origen_id) {
+      await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+        properties: {
+          of_line_item_py_origen_id: null,
+        },
+      });
+
+      li.properties.of_line_item_py_origen_id = null;
+    }
+  }
+}
 
   // 1) Mirroring (si corresponde)
   let mirrorResult = null;
