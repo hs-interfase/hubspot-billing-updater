@@ -277,6 +277,9 @@ export async function runPhase1(dealId, {
   // Sanear identidad de line items clonados por UI (solo si no es espejo)
   await sanitizeClonedLineItemIdentity(deal, lineItems);
 
+  // Derivar intención de facturación urgente
+  const shouldPropagateUrgentBilling = mode === "line_item.facturar_ahora" && sourceLineItemId;
+
   // ========= DEBUG HELPERS =========
   const DBG_PHASE1 = process.env.DBG_PHASE1 === "true";
 
@@ -456,6 +459,25 @@ export async function runPhase1(dealId, {
     });
   } catch (err) {
     console.error("[phase1] Error en mirrorDealToUruguay:", err?.response?.body || err);
+  }
+
+  // Propagar facturar_ahora al line item espejo si corresponde
+  if (
+    shouldPropagateUrgentBilling &&
+    mirrorResult?.mirrored &&
+    mirrorResult?.mirrorLineItemId
+  ) {
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(
+        String(mirrorResult.mirrorLineItemId),
+        {
+          properties: { facturar_ahora: "true" },
+        }
+      );
+      console.log(`[phase1] Propagado facturar_ahora al mirror LI ${mirrorResult.mirrorLineItemId}`);
+    } catch (err) {
+      console.warn(`[phase1] Error propagando facturar_ahora al mirror LI`, mirrorResult.mirrorLineItemId, err?.message);
+    }
   }
 
   // Si no hay line items en el negocio original, terminamos
