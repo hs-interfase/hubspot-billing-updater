@@ -6,14 +6,12 @@
  * Propiedades soportadas:
  * 1. facturar_ahora (Line Item/Ticket) → Facturación urgente inmediata
  * 2. actualizar (Line Item) → Recalcula todas las fases de facturación
- * 3. hs_billing_start_delay_type (Line Item) → Normaliza delays a fechas
  *
  * Configuración en HubSpot:
  * - Suscripciones en la misma URL: https://hubspot-billing-updater.vercel.app/api/escuchar-cambios
  * - Line Item → Property Change → facturar_ahora
  * - Ticket → Property Change → facturar_ahora
  * - Line Item → Property Change → actualizar
- * - Line Item → Property Change → hs_billing_start_delay_type
  */
 
 import {
@@ -42,7 +40,7 @@ async function getDealIdForLineItem(lineItemId) {
 }
 
 /**
- * Procesa eventos de "actualizar" o "hs_billing_start_delay_type".
+ * Procesa eventos de "actualizar".
  * Ejecuta las 3 fases de facturación para el deal asociado.
  *
  * IMPORTANTE: Phase 1 SIEMPRE se ejecuta (mirroring, fechas, cupo).
@@ -185,8 +183,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // ====== RUTA 2: RECALCULACIÓN (actualizar o hs_billing_start_delay_type) ======
-    if (["actualizar", "hs_billing_start_delay_type"].includes(propertyName)) {
+    // ====== RUTA 2: RECALCULACIÓN (actualizar) ======
+    if (["actualizar" ].includes(propertyName)) {
       // CASO A: actualizar en TICKET → Procesamiento independiente
       if (propertyName === "actualizar" && objectType === "ticket") {
         console.log(
@@ -247,18 +245,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // CASO B: hs_billing_start_delay_type solo aplica a LINE ITEMS
-      if (
-        propertyName === "hs_billing_start_delay_type" &&
-        objectType !== "line_item"
-      ) {
-        console.log(`⚠️ ${propertyName} solo aplica a line items, ignorando`);
-        return res
-          .status(200)
-          .json({ message: "Not a line_item event, ignored" });
-      }
-
-      // CASO C: actualizar en LINE ITEM (validar value=true)
+      // CASO B: actualizar en LINE ITEM (validar value=true)
       if (propertyName === "actualizar" && objectType === "line_item") {
         console.log(
           `🔍 Validando actualizar: value="${propertyValue}", parsed=${parseBool(
@@ -275,7 +262,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // CASO D: hs_billing_start_delay_type en LINE ITEM (continúa sin validar valor)
+      // CASO C: hs_billing_start_delay_type en LINE ITEM (continúa sin validar valor)
       if (objectType === "line_item") {
         console.log(`🔄 → Recalculación de facturación (${propertyName})...`);
 
