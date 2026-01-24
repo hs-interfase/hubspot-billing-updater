@@ -336,14 +336,18 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     console.log(`[mirrorDealToUruguay] Espejo existente: ${targetDealId}`);
 
     try {
+
       const updateProps = {
         // País operativo siempre Uruguay en el espejo
         pais_operativo: 'Uruguay',
-        
         // Sincronizar nombre con sufijo - UY
         dealname: srcProps.dealname
           ? `${srcProps.dealname} - UY`
           : 'Negocio UY',
+        // Sincronizar facturacion_activa si existe
+        ...(srcProps.facturacion_activa ? { facturacion_activa: srcProps.facturacion_activa } : {}),
+        // Sincronizar moneda si existe
+        ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
       };
 
       // Sincronizar pipeline y etapa del negocio original (si están definidos)
@@ -422,23 +426,22 @@ if (!targetDealId) {
 
   if (!targetDealId) {
     // 3b) Crear un nuevo negocio espejo con país operativo Uruguay
+
     const newDealProps = {
       // Nombre = nombre original + sufijo UY
       dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
-
       // Mantener pipeline y etapa del negocio origen (si existen)
       ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
       ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
-
       // ✅ País operativo Uruguay (no mixto)
       pais_operativo: 'Uruguay',
-      
       // ✅ Marcadores de espejo
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
-
       // Moneda del deal original
       ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
+      // Sincronizar facturacion_activa si existe
+      ...(srcProps.facturacion_activa ? { facturacion_activa: srcProps.facturacion_activa } : {}),
     };
 
     console.log('[mirrorDealToUruguay] Creando nuevo espejo UY con país operativo: Uruguay');
