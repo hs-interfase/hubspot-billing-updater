@@ -78,20 +78,28 @@ export async function runPhasesForDeal({
     results.phase1.error = err?.message || "Error desconocido";
   }
 
-  // ========== PHASE 2: Tickets manuales ==========
-  try {
-    console.log(
-      `🎫 PHASE 2: Generando tickets manuales (facturacion_automatica=false)...`
-    );
-    const phase2Result = await runPhase2({ deal, lineItems });
-    results.phase2 = phase2Result;
-    results.ticketsCreated = phase2Result.ticketsCreated || 0;
-    console.log(
-      `   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`
-    );
-  } catch (err) {
-    console.error(`   ❌ Error en Phase 2:`, err?.message || err);
-    results.phase2.error = err?.message || "Error desconocido";
+  // ========== PHASE 2: Tickets manuales ========== 
+  const isUrgent =
+    mode === 'line_item.facturar_ahora' ||
+    mode === 'ticket.facturar_ahora';
+
+  if (!isUrgent) {
+    try {
+      console.log(
+        `🎫 PHASE 2: Generando tickets manuales (facturacion_automatica=false)...`
+      );
+      const phase2Result = await runPhase2({ deal, lineItems });
+      results.phase2 = phase2Result;
+      results.ticketsCreated = phase2Result.ticketsCreated || 0;
+      console.log(
+        `   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`
+      );
+    } catch (err) {
+      console.error(`   ❌ Error en Phase 2:`, err?.message || err);
+      results.phase2.error = err?.message || "Error desconocido";
+    }
+  } else {
+    console.log('⏩ Phase 2 salteada por modo urgente (facturar_ahora)');
   }
 
   // ========== PHASE 3: Facturas automáticas ==========
