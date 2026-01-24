@@ -510,10 +510,9 @@ for (const li of uyLineItems) {
     props.hs_cost_of_goods_sold = '0';
   }
 
-  const { action, id } = await upsertUyLineItem(targetDealId, li, () => props);
+const { action, id } = await upsertUyLineItem(targetDealId, li, () => props);
 
-  lastMirrorLineItemId = id;
-  if (action === 'created') createdLineItems++;
+if (action === 'created') createdLineItems++;
 
   // match exacto del LI que disparó el webhook en PY
   if (options?.sourceLineItemId && String(li.id) === String(options.sourceLineItemId)) {
