@@ -73,7 +73,7 @@ async function processRecalculation(lineItemId, propertyName, { mode } = {}) {
   const dealWithLineItems = await getDealWithLineItems(dealId);
 
   // runPhasesForDeal firma: ({ deal, lineItems, mode })
-  const billingResult = await runPhasesForDeal({ ...dealWithLineItems, mode });
+  const billingResult = await runPhasesForDeal({ ...dealWithLineItems, mode, sourceLineItemId });
 
   console.log("✅ Recalculación completada:", {
     ticketsCreated: billingResult.ticketsCreated || 0,
@@ -268,6 +268,7 @@ export default async function handler(req, res) {
 
         const result = await processRecalculation(objectId, propertyName, {
           mode,
+          sourceLineItemId: objectId 
         });
 
         if (result.skipped) {

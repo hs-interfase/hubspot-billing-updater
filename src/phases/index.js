@@ -20,7 +20,7 @@ import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupSe
  * @param {Array} params.lineItems - Line Items del Deal
  * @returns {Object} Resumen de ejecución
  */
-export async function runPhasesForDeal({ deal, lineItems, mode } = {}) {
+export async function runPhasesForDeal({ deal, lineItems, mode, sourceLineItemId } = {}) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
 
   console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
@@ -55,7 +55,7 @@ export async function runPhasesForDeal({ deal, lineItems, mode } = {}) {
   // ========== PHASE 1: Fechas, calendario, cupo ==========
   try {
     console.log(`📅 PHASE 1: Actualizando fechas, calendario y cupo...`);
-    await runPhase1(dealId, { mode });
+    await runPhase1(dealId, { mode, sourceLineItemId });
     results.phase1.success = true;
     console.log(`   ✅ Phase 1 completada\n`);
   } catch (err) {
