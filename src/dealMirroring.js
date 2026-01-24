@@ -35,6 +35,42 @@ async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
   return out;
 }
 
+const LINE_ITEM_MIRROR_ALLOWLIST = new Set([
+  // texto / producto
+  'name',
+  'of_producto_nombres',
+  'of_descripcion_producto',
+  'nota',
+  'observaciones_ventas',
+  'of_rubro',
+  'of_subrubro',
+  'reventa',
+  'renovacion_automatica',
+
+  // facturación
+  'facturacion_activa',
+  'facturacion_automatica',
+  'facturar_ahora',
+  'actualizar',
+  'irregular',
+  'pausa',
+  'motivo_de_pausa',
+
+  // recurring / schedule
+  'hs_recurring_billing_frequency',
+  'recurringbillingfrequency',
+  'hs_recurring_billing_start_date',
+  'hs_billing_start_delay_type',
+  'hs_billing_start_delay_days',
+  'hs_billing_start_delay_months',
+  'hs_recurring_billing_number_of_payments',
+
+  // cupo (si aplica por LI)
+  'parte_del_cupo',
+  'cantidad_real',
+  'of_fecha_de_facturacion',
+]);
+
 async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
   console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
 
@@ -353,25 +389,6 @@ async function findExistingMirrorByOrigin(sourceDealId) {
     ],
     properties: ['dealname', 'deal_py_origen_id', 'es_mirror_de_py', 'deal_uy_mirror_id'],
     limit: 10,
-  });
-  return resp.results || [];
-}
-
-
-if (!targetDealId) {
-  const mirrors = await findExistingMirrorByOrigin(sourceDealId);
-
-  if (mirrors.length === 1) {
-    targetDealId = String(mirrors[0].id);
-    console.log('[mirrorDealToUruguay] Backstop: encontré espejo por deal_py_origen_id:', targetDealId);
-
-    // Re-asegurar el vínculo en el PY para próximas corridas
-    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-      properties: { deal_uy_mirror_id: String(targetDealId) },
-    });
-
-  } else if (mirrors.length > 1) {
-    console.warn('[mirrorDealToUruguay] ERROR: múltiples espejos para el mismo PY. No crear otro.', {
       sourceDealId,
       mirrorIds: mirrors.map(m => m.id),
     });
@@ -434,28 +451,31 @@ console.log(`[mirrorDealToUruguay] Upsert de ${uyLineItems.length} líneas UY en
 const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
 
 let lastMirrorLineItemId = null;
+
 for (const li of uyLineItems) {
   const srcPropsLi = li.properties || {};
-  // ...existing code...
   const props = {};
-  // ...existing code...
+
+  // copiar SOLO allowlist
   for (const key of Object.keys(srcPropsLi)) {
-    if (!excludedProps.has(key)) {
+    if (LINE_ITEM_MIRROR_ALLOWLIST.has(key)) {
       props[key] = srcPropsLi[key];
     }
   }
-  // ...existing code...
+
+  // obligatorias mirror
   props.uy = 'true';
   props.pais_operativo = 'Uruguay';
   props.hubspot_owner_id = userAdminMirror;
   props.of_line_item_py_origen_id = String(li.id).trim();
-  // ...existing code...
+
+  // costo -> price
   const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
-  // ...existing code...
   if (isNaN(unitCost) || unitCost <= 0) {
-    // ...existing code...
     props.price = '0';
     props.hs_cost_of_goods_sold = '0';
+
+    // opcional
     if ('mirror_missing_cost' in srcPropsLi) {
       props.mirror_missing_cost = 'true';
     } else {
@@ -463,24 +483,39 @@ for (const li of uyLineItems) {
       props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
     }
   } else {
-    // ...existing code...
     props.price = String(unitCost);
     props.hs_cost_of_goods_sold = '0';
-    // ...existing code...
   }
-  // ...existing code...
-  const { action, id } = await upsertUyLineItem(
-    targetDealId,
-    li,
-    () => props
-  );
+
+  const { action, id } = await upsertUyLineItem(targetDealId, li, () => props);
+
   lastMirrorLineItemId = id;
-  if (action === 'created') {
-    createdLineItems++;
-  }
-  console.log(`[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`);
+  if (action === 'created') createdLineItems++;
+
+  console.log(
+    `[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`
+  );
 }
 
+
+
+// obligatorias mirror
+props.uy = 'true';
+props.pais_operativo = 'Uruguay';
+props.hubspot_owner_id = userAdminMirror;
+props.of_line_item_py_origen_id = String(li.id).trim();
+
+// costo -> price
+const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
+if (isNaN(unitCost) || unitCost <= 0) {
+  props.price = '0';
+  props.hs_cost_of_goods_sold = '0';
+  const existingNote = props.nota || '';
+  props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
+} else {
+  props.price = String(unitCost);
+  props.hs_cost_of_goods_sold = '0';
+}
 
   console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
 
