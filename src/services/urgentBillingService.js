@@ -2,7 +2,7 @@
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
-import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
+import { getTodayYMD, getTodayMillis, toHubspotDate, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { determineTicketFrequency } from './snapshotService.js';
@@ -236,7 +236,7 @@ if (!billingPeriodDate) {
     if (ticketId) {
       await updateTicket(ticketId, {
         fecha_de_resolucion_esperada: toHubSpotDate(billingPeriodDate),
-        of_fecha_de_facturacion: todayYMD, 
+        of_fecha_de_facturacion: today, 
       });
       console.log(`✅ Ticket marcado como urgente`);
 
