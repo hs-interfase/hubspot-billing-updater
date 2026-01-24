@@ -12,44 +12,41 @@ import { processUrgentLineItem } from "../urgentBillingService.js";
 
 export async function propagateAndExecuteMirror({
   mode,
-  mirrorDealId = null,
+  mirrorDealId = null,       // (se mantiene por compatibilidad / logs)
   mirrorLineItemId = null,
   logLabel = "mirrorFlagPropagation",
 } = {}) {
-  // 1) Propagar flag (idempotente)
-  const propRes = await propagateToMirror({ mode, mirrorLineItemId, logLabel });
-
-  // 2) Ejecutar acción en espejo según mode (solo line_item por ahora)
-  try {
-    if (mode === "line_item.actualizar") {
-      if (!mirrorDealId) {
-        return { ok: false, step: "execute", reason: "missing_mirrorDealId", mode, propRes };
-      }
-      const dealWithLineItems = await getDealWithLineItems(mirrorDealId);
-      const billingResult = await runPhasesForDeal(dealWithLineItems);
-      return { ok: true, mode, propRes, executed: "runPhasesForDeal", mirrorDealId, billingResult };
-    }
-
-    if (mode === "line_item.facturar_ahora") {
-      if (!mirrorLineItemId) {
-        return { ok: false, step: "execute", reason: "missing_mirrorLineItemId", mode, propRes };
-      }
-      const urgentRes = await processUrgentLineItem(mirrorLineItemId);
-      return { ok: true, mode, propRes, executed: "processUrgentLineItem", mirrorLineItemId, urgentRes };
-    }
-
-    return { ok: true, mode, propRes, executed: "none" };
-  } catch (e) {
-    const msg = e?.message || String(e);
-    console.error(`[${logLabel}] ⚠️ Error ejecutando acción en espejo`, {
+  // Guardrails mínimos
+  if (!mode || typeof mode !== "string") {
+    return { ok: false, step: "validate", reason: "missing_mode", mode };
+  }
+  if (!mirrorLineItemId) {
+    return {
+      ok: false,
+      step: "validate",
+      reason: "missing_mirrorLineItemId",
       mode,
       mirrorDealId,
       mirrorLineItemId,
-      msg,
-    });
-    return { ok: false, mode, propRes, error: msg };
+    };
   }
+
+  // 1) Propagar flag (esto es lo único que queremos hacer)
+  const propRes = await propagateToMirror({ mode, mirrorLineItemId, logLabel });
+
+  // 2) NO ejecutar nada acá.
+  // La ejecución la hace el webhook cuando HubSpot dispare el evento del cambio de propiedad.
+  return {
+    ok: true,
+    mode,
+    propRes,
+    executed: "none",
+    note: "Webhook will process mirror event; no direct execution to avoid double processing.",
+    mirrorDealId,
+    mirrorLineItemId,
+  };
 }
+
 
 function modeToFlag(mode) {
   if (!mode || typeof mode !== "string") return null;
