@@ -42,10 +42,11 @@ const LINE_ITEM_MIRROR_ALLOWLIST = new Set([
   'of_descripcion_producto',
   'nota',
   'observaciones_ventas',
-  'of_rubro',
-  'of_subrubro',
+  'servicio',
   'reventa',
   'renovacion_automatica',
+  'irregular',
+  'unidad_de_negocio',
 
   // facturación
   'facturacion_activa',
@@ -60,15 +61,9 @@ const LINE_ITEM_MIRROR_ALLOWLIST = new Set([
   'hs_recurring_billing_frequency',
   'recurringbillingfrequency',
   'hs_recurring_billing_start_date',
-  'hs_billing_start_delay_type',
-  'hs_billing_start_delay_days',
-  'hs_billing_start_delay_months',
   'hs_recurring_billing_number_of_payments',
+  'hs_recurring_billing_terms',
 
-  // cupo (si aplica por LI)
-  'parte_del_cupo',
-  'cantidad_real',
-  'of_fecha_de_facturacion',
 ]);
 
 async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {

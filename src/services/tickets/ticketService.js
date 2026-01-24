@@ -278,7 +278,6 @@ async function getTicketsForDeal(dealId) {
         'of_ticket_key',
         'of_fecha_de_facturacion',
         'of_line_item_ids',
-        'of_estado',
         'of_es_duplicado_clon',
         'of_deal_id',
         'hs_pipeline_stage',
