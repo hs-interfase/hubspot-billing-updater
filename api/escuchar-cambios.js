@@ -141,58 +141,41 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing objectId" });
     }
 
-    // ====== RUTA 1: FACTURACIÓN URGENTE (facturar_ahora) ======
-    if (propertyName === "facturar_ahora") {
-      console.log(
-        `🔍 Validando facturar_ahora: value="${propertyValue}", parsed=${parseBool(
-          propertyValue
-        )}`
-      );
+// ====== RUTA: FACTURAR AHORA (DISPARADOR) ======
+if (propertyName === "facturar_ahora") {
+  console.log(
+    `🔍 Validando facturar_ahora: value="${propertyValue}", parsed=${parseBool(
+      propertyValue
+    )}`
+  );
 
-      if (!parseBool(propertyValue)) {
-        console.log("⚠️ facturar_ahora no está en true, ignorando");
-        return res
-          .status(200)
-          .json({ message: "Property value not true, skipped" });
-      }
+  if (!parseBool(propertyValue)) {
+    console.log("⚠️ facturar_ahora no está en true, ignorando");
+    return res.status(200).json({ skipped: true });
+  }
 
-      let result;
+  console.log("🚀 facturar_ahora → delegando a runPhasesForDeal");
 
-      if (objectType === "line_item") {
-        console.log("📋 → Facturación urgente de Line Item...");
-        result = await processUrgentLineItem(objectId);
-      } else if (objectType === "ticket") {
-        console.log("🎫 → Facturación urgente de Ticket...");
-        result = await processUrgentTicket(objectId);
-      } else {
-        console.error(`❌ Tipo de objeto no soportado: ${objectType}`);
-        return res
-          .status(400)
-          .json({ error: `Unsupported object type: ${objectType}` });
-      }
+  const { deal, lineItems } = await getDealWithLineItemsFromObject({
+    objectType,
+    objectId,
+  });
 
-      if (result.skipped) {
-        console.log(`⚠️ Proceso omitido: ${result.reason}`);
-        return res.status(200).json({
-          skipped: true,
-          reason: result.reason,
-          objectId,
-          objectType,
-        });
-      }
+  await runPhasesForDeal({
+    deal,
+    lineItems,
+    mode: `${objectType}.facturar_ahora`,
+    sourceLineItemId: objectType === "line_item" ? objectId : null,
+  });
 
-      console.log("✅ Facturación urgente completada");
-      console.log("=".repeat(80) + "\n");
+  return res.status(200).json({
+    success: true,
+    action: "run_phases_for_deal",
+    dealId: deal.id,
+    mode: `${objectType}.facturar_ahora`,
+  });
+}
 
-      return res.status(200).json({
-        success: true,
-        action: "urgent_billing",
-        objectId,
-        objectType,
-        invoiceId: result.invoiceId,
-        eventId,
-      });
-    }
 
     // ====== RUTA 2: RECALCULACIÓN (actualizar) ======
     if (["actualizar" ].includes(propertyName)) {
