@@ -1,35 +1,31 @@
 // src/billingEngine.js
 import { hubspotClient } from './hubspotClient.js';
+import { resolveNextBillingDate } from './utils/resolveNextBillingDate.js';
+import { getTodayYMD, parseLocalDate, formatDateISO } from "./utils/dateUtils.js";
+
 
 // -----------------------------
 // Helpers de fechas / frecuencia
 // -----------------------------
-
-function parseLocalDate(raw) {
-  if (!raw) return null;
-  const str = raw.toString().trim();
-
-  // Formato YYYY-MM-DD
-  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) {
-    const year = Number(m[1]);
-    const month = Number(m[2]); // 1-12
-    const day = Number(m[3]);   // 1-31
-    return new Date(year, month - 1, day);
+// Helper: calcula la próxima fecha >= todayYmd usando startRaw e interval
+function computeNextFromInterval({ startRaw, interval, todayYmd, addInterval, formatDateISO, parseLocalDate }) {
+  if (!startRaw || !interval) return null;
+  const start = parseLocalDate(startRaw);
+  if (!start || Number.isNaN(start.getTime())) return null;
+  const startYmd = formatDateISO(start);
+  if (startYmd >= todayYmd) return startYmd;
+  let current = new Date(start.getTime());
+  let prevMs = current.getTime();
+  for (let iter = 0; iter < 5000; iter++) {
+    current = addInterval(current, interval);
+    const ms = current.getTime();
+    if (!Number.isFinite(ms)) return null;
+    const ymd = formatDateISO(current);
+    if (ymd >= todayYmd) return ymd;
+    if (ms === prevMs) break; // no avanza
+    prevMs = ms;
   }
-
-  const d = new Date(str);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
-}
-
-function formatDateISO(date) {
-  const d = new Date(date.getTime());
-  d.setHours(0, 0, 0, 0);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
+  return null;
 }
 
 /**
@@ -134,6 +130,8 @@ function addInterval(date, interval) {
   return d;
 }
 
+
+
 /**
  * Lee las propiedades del line item y devuelve la configuración efectiva de facturación.
  * - Usa primero las propiedades nativas de HubSpot.
@@ -229,7 +227,7 @@ const startRaw =
   const maxOccurrences =
     numberOfPayments && Number.isFinite(numberOfPayments)
       ? numberOfPayments
-      : 48;
+      : 24;
 
   console.log('[getEffectiveBillingConfig][SUMMARY]', {
     lineItemId: lineItem.id,
@@ -320,15 +318,14 @@ export async function updateLineItemSchedule(lineItem) {
     return lineItem;
   }
 
-  // Caso 2: falta startDate → usar hoy como default SIN re-asignar constante
+  // Caso 2: falta startDate → usar hoy como default (BILLING_TZ)
   let effectiveStart = startDate;
   if (!effectiveStart) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    effectiveStart = today;
+    const todayYmd = getTodayYMD();
+    effectiveStart = parseLocalDate(todayYmd);
     console.log('[updateLineItemSchedule] Sin fecha de inicio, usando hoy', {
       lineItemId: lineItem.id,
-      today: formatDateISO(today),
+      today: todayYmd,
       frequency: config.frequency,
     });
   }
@@ -380,6 +377,68 @@ export async function updateLineItemSchedule(lineItem) {
 
   if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
     updatesRecurring.fecha_inicio_de_facturacion = isoDates[0];
+  }
+
+  // --- NUEVA LÓGICA billing_anchor_date ---
+  try {
+    const todayYmd = getTodayYMD();
+    const terms = (p.hs_recurring_billing_terms ?? "").toString().trim().toUpperCase();
+    const isAutoRenew = terms === "AUTOMATICALLY RENEW";
+    const nPayments = parseInt((p.hs_recurring_billing_number_of_payments ?? "").toString(), 10) || 0;
+    const needsAnchor = isAutoRenew || (!isAutoRenew && nPayments > 24);
+
+    if (needsAnchor) {
+      const startRawForAnchor =
+        p.hs_recurring_billing_start_date ||
+        p.recurringbillingstartdate ||
+        p.fecha_inicio_de_facturacion ||
+        isoDates[0] ||
+        null;
+
+      const nextFromPreview = isoDates.find(d => d && d >= todayYmd) || null;
+      let computedNext = null;
+      if (!nextFromPreview) {
+        computedNext = computeNextFromInterval({
+          startRaw: startRawForAnchor,
+          interval,
+          todayYmd,
+          addInterval,
+          formatDateISO,
+          parseLocalDate
+        });
+      }
+      const nextAnchorYmd = nextFromPreview || computedNext;
+      const currentAnchor = (p.billing_anchor_date ?? "").toString().slice(0, 10);
+      if (nextAnchorYmd && currentAnchor !== nextAnchorYmd) {
+        updatesRecurring.billing_anchor_date = nextAnchorYmd;
+        console.log("[updateLineItemSchedule] ✅ billing_anchor_date seteada", {
+          lineItemId: lineItem.id,
+          needsAnchor,
+          isAutoRenew,
+          nPayments,
+          startRawForAnchor,
+          nextFromPreview,
+          computedNext,
+          billing_anchor_date: nextAnchorYmd
+        });
+      } else {
+        console.log("[updateLineItemSchedule] billing_anchor_date sin cambios", {
+          lineItemId: lineItem.id,
+          needsAnchor,
+          isAutoRenew,
+          nPayments,
+          startRawForAnchor,
+          nextFromPreview,
+          computedNext,
+          billing_anchor_date: currentAnchor
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[updateLineItemSchedule] ⚠️ no se pudo setear billing_anchor_date", {
+      lineItemId: lineItem.id,
+      error: e?.message || e,
+    });
   }
 
   // fecha_2 … fecha_24 (tu realidad)
@@ -488,28 +547,39 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const emitidos = Number(p.pagos_emitidos) || 0;
 
   if (total > 0 && emitidos >= total) {
-    // contrato terminado para esta línea
     return null;
   }
 
-  // 2) Lógica de fechas: elegir la MENOR fecha >= hoy (sin asumir orden)
-  const todayStart = startOfDay(today);
+  // Usar getTodayYMD para comparar días (BILLING_TZ)
+  const todayYmd = getTodayYMD();
   const allDates = collectAllBillingDatesFromLineItem(lineItem);
 
-  if (!allDates.length) return null;
+  // ✅ upcomingDates (YYYY-MM-DD) desde todas las fechas futuras que haya
+  const upcomingDates = (allDates || [])
+    .filter((d) => d instanceof Date && !Number.isNaN(d.getTime()))
+    .filter((d) => formatDateISO(d) >= todayYmd)
+    .map((d) => formatDateISO(d));
 
-  let candidate = null;
-  for (const d of allDates) {
-    if (!(d instanceof Date) || Number.isNaN(d.getTime())) continue;
-    if (d.getTime() < todayStart.getTime()) continue;
+  // ✅ interval + startRaw usando tu lógica existente
+  const config = getEffectiveBillingConfig(lineItem);
 
-    if (!candidate || d.getTime() < candidate.getTime()) {
-      candidate = d;
-    }
-  }
+  const startRaw =
+    p.hs_recurring_billing_start_date ||
+    p.recurringbillingstartdate ||
+    p.fecha_inicio_de_facturacion ||
+    null;
 
-  return candidate; // puede ser null si todas quedaron en el pasado
+  const nextYmd = resolveNextBillingDate({
+    lineItemProps: p,
+    upcomingDates,
+    startRaw,
+    interval: config.interval,
+    addInterval, // 👈 tu helper del billingEngine
+  });
+
+  return nextYmd ? parseLocalDate(nextYmd) : null;
 }
+
 
 export function computeNextBillingDateFromLineItems(lineItems, today = new Date()) {
   let minDate = null;

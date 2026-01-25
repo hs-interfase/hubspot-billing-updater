@@ -1,12 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { hubspotClient } from '../hubspotClient.js';
+import { pathToFileURL } from 'node:url';
+import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
-import { runPhasesForDeal } from '../runPhasesForDeal.js'; // ajustá path
+import { runPhasesForDeal } from '../phases/index.js';
 
-const STATE_PATH = process.env.CRON_STATE_PATH || path.resolve(process.cwd(), 'cron_state_deals.json');
-const FAILED_PATH = process.env.CRON_FAILED_PATH || path.resolve(process.cwd(), 'cron_failed_deals.json');
-const LOCK_PATH = process.env.CRON_LOCK_PATH || path.resolve(process.cwd(), 'cron_state_deals.lock');
+const STATE_PATH =
+  process.env.CRON_STATE_PATH ||
+  path.resolve(process.cwd(), 'cron_state_deals.json');
+
+const FAILED_PATH =
+  process.env.CRON_FAILED_PATH ||
+  path.resolve(process.cwd(), 'cron_failed_deals.json');
+
+const LOCK_PATH =
+  process.env.CRON_LOCK_PATH ||
+  path.resolve(process.cwd(), 'cron_state_deals.lock');
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID; // dealstage cancelado (value exacto)
 
@@ -19,17 +28,56 @@ const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 // micro pausa para no golpear HubSpot
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
 
+// ✅ TTL del lock: si el proceso murió, no queda bloqueado para siempre
+const LOCK_TTL_MS = Number(process.env.CRON_LOCK_TTL_MS || 60 * 60 * 1000);
+
 function readJson(p, fallback) {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; }
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return fallback;
+  }
 }
+
 function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
 }
-function acquireLock() {
-  try { fs.writeFileSync(LOCK_PATH, String(Date.now()), { flag: 'wx' }); return true; } catch { return false; }
+
+function acquireLock({ ttlMs = LOCK_TTL_MS } = {}) {
+  try {
+    // si existe lock, revisar edad
+    if (fs.existsSync(LOCK_PATH)) {
+      const stat = fs.statSync(LOCK_PATH);
+      const age = Date.now() - stat.mtimeMs;
+
+      if (age > ttlMs) {
+        console.warn(
+          `[cron] stale lock (${Math.round(age / 1000)}s) -> removing`
+        );
+        try {
+          fs.unlinkSync(LOCK_PATH);
+        } catch {}
+      } else {
+        return false;
+      }
+    }
+
+    fs.writeFileSync(LOCK_PATH, String(Date.now()), { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
 }
-function releaseLock() { try { fs.unlinkSync(LOCK_PATH); } catch {} }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function releaseLock() {
+  try {
+    fs.unlinkSync(LOCK_PATH);
+  } catch {}
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 async function withRetry(fn, { maxRetries = 5 } = {}) {
   let attempt = 0;
@@ -43,7 +91,9 @@ async function withRetry(fn, { maxRetries = 5 } = {}) {
       const retryable = status === 429 || (status >= 500 && status <= 599);
       if (!retryable || attempt > maxRetries) throw e;
       const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1));
-      console.warn(`[cron] retryable error (status=${status}) attempt=${attempt}/${maxRetries}: ${msg} -> wait ${backoffMs}ms`);
+      console.warn(
+        `[cron] retryable error (status=${status}) attempt=${attempt}/${maxRetries}: ${msg} -> wait ${backoffMs}ms`
+      );
       await sleep(backoffMs);
     }
   }
@@ -59,7 +109,11 @@ function addFailed(dealId, reason) {
   }
 
   const fresh = readJson(FAILED_PATH, { date: today, items: [] });
-  fresh.items.push({ dealId: String(dealId), reason: String(reason), at: new Date().toISOString() });
+  fresh.items.push({
+    dealId: String(dealId),
+    reason: String(reason),
+    at: new Date().toISOString(),
+  });
   writeJson(FAILED_PATH, fresh);
 }
 
@@ -77,6 +131,7 @@ export async function runDealsBatchCron() {
     const state = readJson(STATE_PATH, { after: null, lastRunYMD: null });
 
     // Reiniciar cursor cada día (opcional, pero recomendado)
+    // Con "más recientes primero" puede re-procesar algunos, pero garantiza priorizar los últimos cambios.
     if (state.lastRunYMD !== today) {
       console.log(`[cron] new day (${state.lastRunYMD} -> ${today}) reset after=null`);
       state.after = null;
@@ -92,18 +147,35 @@ export async function runDealsBatchCron() {
     let ok = 0;
     let failed = 0;
 
-    console.log('[cron] start', { today, after: state.after, maxRunMs: MAX_RUN_MS, pageLimit: PAGE_LIMIT });
+    console.log('[cron] start', {
+      today,
+      after: state.after,
+      maxRunMs: MAX_RUN_MS,
+      pageLimit: PAGE_LIMIT,
+      sort: '-hs_lastmodifieddate',
+    });
 
     // Mientras haya tiempo, ir pidiendo páginas y procesando
     while (Date.now() < deadline) {
       const resp = await withRetry(() =>
         hubspotClient.crm.deals.searchApi.doSearch({
-          filterGroups: [{
-            filters: CANCELLED_STAGE_ID
-              ? [{ propertyName: 'dealstage', operator: 'NEQ', value: String(CANCELLED_STAGE_ID) }]
-              : [],
-          }],
-          properties: ['dealname', 'dealstage'],
+          filterGroups: [
+            {
+              filters: CANCELLED_STAGE_ID
+                ? [
+                    {
+                      propertyName: 'dealstage',
+                      operator: 'NEQ',
+                      value: String(CANCELLED_STAGE_ID),
+                    },
+                  ]
+                : [],
+            },
+          ],
+          // ✅ incluimos hs_lastmodifieddate para ordenar y para debug si querés
+          properties: ['dealname', 'dealstage', 'hs_object_id', 'hs_lastmodifieddate'],
+          // ✅ más recientes primero
+          sorts: ['-hs_lastmodifieddate'],
           limit: PAGE_LIMIT,
           after: state.after || undefined,
         })
@@ -129,13 +201,15 @@ export async function runDealsBatchCron() {
         // intento 1
         try {
           console.log(`\n[cron] -> ${name} (${dealId})`);
-          await runPhasesForDeal({ dealId });
+          const { deal, lineItems } = await getDealWithLineItems(dealId);
+          await runPhasesForDeal({ deal, lineItems });
           ok++;
         } catch (e1) {
           // retry 1 vez
           console.warn(`[cron] retry once deal=${dealId}:`, e1?.message || e1);
           try {
-            await runPhasesForDeal({ dealId });
+            const { deal, lineItems } = await getDealWithLineItems(dealId);
+            await runPhasesForDeal({ deal, lineItems });
             ok++;
           } catch (e2) {
             failed++;
@@ -163,14 +237,21 @@ export async function runDealsBatchCron() {
       }
     }
 
-    console.log('\n[cron] done', { processed, ok, failed, savedAfter: readJson(STATE_PATH, {}).after });
+    console.log('\n[cron] done', {
+      processed,
+      ok,
+      failed,
+      savedAfter: readJson(STATE_PATH, {}).after,
+    });
+
     return { processed, ok, failed };
   } finally {
     releaseLock();
   }
 }
 
-// Ejecutar directo
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runDealsBatchCron().then(() => process.exit(0)).catch(() => process.exit(1));
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runDealsBatchCron()
+    .then(() => process.exit(0))
+    .catch(() => process.exit(1));
 }
