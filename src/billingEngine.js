@@ -318,6 +318,7 @@ export async function updateLineItemSchedule(lineItem) {
     return lineItem;
   }
 
+
   // Caso 2: falta startDate → usar hoy como default (BILLING_TZ)
   let effectiveStart = startDate;
   if (!effectiveStart) {
@@ -335,7 +336,9 @@ export async function updateLineItemSchedule(lineItem) {
     const iso = formatDateISO(effectiveStart);
     const updatesOneTime = {
       recurringbillingstartdate: iso,
+      billing_next_date: iso,
     };
+    if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${iso}`);
 
     if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
       updatesOneTime.fecha_inicio_de_facturacion = iso;
@@ -374,6 +377,35 @@ export async function updateLineItemSchedule(lineItem) {
   const updatesRecurring = {
     recurringbillingstartdate: isoDates[0],
   };
+
+
+const todayYmd = getTodayYMD();
+const upcomingDates = (isoDates || []).filter(d => d && d >= todayYmd);
+
+const startRaw =
+  p.hs_recurring_billing_start_date ||
+  p.recurringbillingstartdate ||
+  p.fecha_inicio_de_facturacion ||
+  isoDates[0] ||
+  null;
+
+const nextYmd = resolveNextBillingDate({
+  lineItemProps: p,
+  upcomingDates,
+  startRaw,
+  interval: config.interval,   // ✅ NO null
+  addInterval,
+});
+
+if (nextYmd) {
+  updatesRecurring.billing_next_date = nextYmd;
+  if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${nextYmd}`);
+}
+
+ if (nextYmd) {
+   updatesRecurring.billing_next_date = nextYmd;
+   if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${nextYmd}`);
+ }
 
   if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
     updatesRecurring.fecha_inicio_de_facturacion = isoDates[0];
@@ -552,6 +584,12 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
 
   // Usar getTodayYMD para comparar días (BILLING_TZ)
   const todayYmd = getTodayYMD();
+
+  // ✅ fuente de verdad si existe
+ const persisted = (p.billing_next_date ?? "").toString().slice(0, 10);
+ if (persisted && persisted >= todayYmd) {
+   return parseLocalDate(persisted);
+ }
   const allDates = collectAllBillingDatesFromLineItem(lineItem);
 
   // ✅ upcomingDates (YYYY-MM-DD) desde todas las fechas futuras que haya
@@ -610,6 +648,14 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
  */
 export function computeLineItemCounters(lineItem, today = new Date()) {
   const props = lineItem.properties || {};
+   const persisted = (props.billing_next_date ?? "").toString().slice(0,10);
+ if (persisted) {
+   const d = parseLocalDate(persisted);
+   if (d && !Number.isNaN(d.getTime())) {
+     // solo reemplazamos proximaFecha, no tocamos ultimaFecha
+     // (mínimo cambio)
+   }
+ }
   const fechas = [];
 
   // Añadir la fecha de inicio de facturación

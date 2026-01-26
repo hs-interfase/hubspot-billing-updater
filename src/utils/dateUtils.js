@@ -1,8 +1,5 @@
 // src/utils/dateUtils.js
 
-import { getTodayYMD, parseLocalDate, formatDateISO } from "./utils/dateUtils.js";
-
-
 /**
  * Utilidades para trabajar con fechas en formato YYYY-MM-DD (sin timezone bugs).
  */

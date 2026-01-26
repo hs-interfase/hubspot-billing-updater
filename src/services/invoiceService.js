@@ -307,6 +307,17 @@ if (tp.of_invoice_id) {
   const expected = invoiceKey;
 
   if (ticketKey && ticketKey === expected) {
+    // ✅ Ultra conservador: solo si lineItemId y fechaPlan existen
+    if (lineItemId && fechaPlan) {
+      await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+        properties: {
+          billing_last_billed_date: fechaPlan,
+        },
+      });
+      if (process.env.DBG_PHASE1 === 'true') {
+        console.log(`[billing_last_billed_date] LI ${lineItemId} => ${fechaPlan}`);
+      }
+    }
     console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id} (invoice_key OK)`);
     return { invoiceId: tp.of_invoice_id, created: false };
   }
@@ -720,8 +731,12 @@ if (lineItemId) {
       properties: {
         invoice_id: invoiceId,
         invoice_key: invoiceKey,
+        billing_last_billed_date: fechaPlan,
       },
     });
+    if (process.env.DBG_PHASE1 === 'true') {
+      console.log(`[billing_last_billed_date] LI ${lineItemId} => ${fechaPlan}`);
+    }
     console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
   } catch (e) {
     console.warn('⚠️ No se pudo actualizar line item:', e.message);

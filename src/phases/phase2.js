@@ -75,10 +75,14 @@ export async function runPhase2({ deal, lineItems }) {
     console.log(`      fecha_2: ${lp.fecha_2 || 'undefined'}, fecha_3: ${lp.fecha_3 || 'undefined'}, fecha_4: ${lp.fecha_4 || 'undefined'}`);
     
     try {
-      // Obtener la próxima fecha de facturación
-      const nextBillingDate = getNextBillingDate(lp);
+      // Obtener la próxima fecha de facturación (FUENTE: billing_next_date si existe)
+      const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
+      const nextBillingDate =
+        (persistedNext && persistedNext >= today)
+          ? persistedNext
+          : getNextBillingDate(lp);
       
-      console.log(`      → getNextBillingDate retornó: ${nextBillingDate}`);
++      console.log(`      → nextBillingDate: ${nextBillingDate} (persisted=${persistedNext || 'null'})`);
       
       if (!nextBillingDate) {
         console.log(`      ⚠️  Sin próxima fecha de facturación, saltando...`);
@@ -139,6 +143,10 @@ function calculateLookaheadDate(today, days) {
   date.setDate(date.getDate() + days);
   return formatDateISO(date);
 }
+
+
+// LEGACY (migración): usa startDate + fecha_2..fecha_24.
+// Fuente de verdad nueva: lineItemProps.billing_next_date (priorizada arriba).
 
 /**
  * Obtiene la próxima fecha de facturación de un line item.
