@@ -178,4 +178,4 @@ function getNextBillingDate(lineItemProps) {
   futureDates.sort((a, b) => a.getTime() - b.getTime());
   return formatDateISO(futureDates[0]);
 }
-*/s
+*/

@@ -27,8 +27,11 @@ async function syncBillingLastBilledDateFromTicket(ticketObj) {
     const ticketId = String(ticketObj?.id || ticketObj?.properties?.hs_object_id || '');
 
     // SOLO fecha esperada (plan). NO usar of_fecha_de_facturacion.
-    const expectedYMD = String(tp.fecha_resolucion_esperada || '').slice(0, 10);
-    if (!expectedYMD) return;
+   const expectedYMD =
+  toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
+  extractBillDateFromTicketKey(tp.of_ticket_key);
+
+if (!expectedYMD) return;
 
     // asumimos 1 solo line item id numérico en of_line_item_ids
     const lineItemId = String(tp.of_line_item_ids || '').split(',')[0].trim();
@@ -346,7 +349,10 @@ const lineItemId = rawLineItemIds?.includes(',')
   ? rawLineItemIds.split(',')[0].trim()
   : rawLineItemIds;
 
-const fechaPlan = safeString(tp.fecha_resolucion_esperada); // YYYY-MM-DD
+const fechaPlan =
+  toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
+  extractBillDateFromTicketKey(tp.of_ticket_key) ||
+  null;
 console.log('Line Item ID (para invoiceKey):', lineItemId);
 console.log('Fecha plan (para invoiceKey):', fechaPlan);
 const invoiceKeyStrict =
@@ -369,7 +375,7 @@ if (tp.of_invoice_id) {
     if (lineItemId && fechaPlan) {
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
         properties: {
-          billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)),
+        ...(fechaPlan ? { billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)) } : {}),
         },
       });
       if (process.env.DBG_PHASE1 === 'true') {
@@ -783,25 +789,24 @@ exonera_irae: tp.of_exonera_irae,
       console.warn('⚠️ No se pudo actualizar ticket:', e.message);
     }
     
-    // 10) Actualizar line item con referencia a la factura
-if (lineItemId) {
-  console.log('\n--- ACTUALIZANDO LINE ITEM ---');
-  try {
-    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
-      properties: {
-        invoice_id: invoiceId,
-        invoice_key: invoiceKey,
-billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)),
-      },
-    });
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log(`[billing_last_billed_date] LI ${lineItemId} => ${fechaPlan}`);
+
+    // 10) Actualizar line item con referencia a la factura (bloque sugerido)
+    if (lineItemId) {
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+          properties: {
+            ...(fechaPlan ? { billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)) } : {}),
+            ...(invoiceId ? { invoice_id: invoiceId } : {}),
+          }
+        });
+        if (process.env.DBG_PHASE1 === 'true') {
+          console.log(`[billing_last_billed_date] LI ${lineItemId} => ${fechaPlan}`);
+        }
+        console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
+      } catch (e) {
+        console.warn('⚠️ No se pudo actualizar line item:', e.message);
+      }
     }
-    console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
-  } catch (e) {
-    console.warn('⚠️ No se pudo actualizar line item:', e.message);
-  }
-}
     
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
