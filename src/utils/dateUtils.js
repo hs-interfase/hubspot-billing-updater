@@ -5,6 +5,37 @@
  */
 
 /**
+ * Convierte cualquier valor tipo HubSpot (ms string/number, ISO string, Date, YMD)
+ * a YYYY-MM-DD en BILLING_TZ (sin hora).
+ */
+export function toYMDInBillingTZ(value) {
+  if (!value) return '';
+
+  // Ya está en YMD
+  if (isYMD(value)) return value.trim();
+
+  // Si viene como ms number o string numérica
+  if (typeof value === 'number' || /^\d+$/.test(String(value).trim())) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms)) return '';
+    const tz = process.env.BILLING_TZ || "America/Montevideo";
+    const parts = getYMDPartsInTZ(new Date(ms), tz);
+    if (!parts) return '';
+    return `${parts.year}-${String(parts.month).padStart(2,'0')}-${String(parts.day).padStart(2,'0')}`;
+  }
+
+  // Si viene como ISO o parseable
+  const d = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(d.getTime())) return '';
+
+  const tz = process.env.BILLING_TZ || "America/Montevideo";
+  const parts = getYMDPartsInTZ(d, tz);
+  if (!parts) return '';
+  return `${parts.year}-${String(parts.month).padStart(2,'0')}-${String(parts.day).padStart(2,'0')}`;
+}
+
+
+/**
  * Devuelve { year, month, day } de una fecha "ahora" en un timezone dado.
  * month viene 1-12.
  */

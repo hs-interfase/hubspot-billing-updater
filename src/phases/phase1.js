@@ -239,6 +239,8 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
   }
 
   // 2) contadores + persistencia
+  // --- LÓGICA DE TOTAL DE AVISOS Y PAGOS COMENTADA TEMPORALMENTE ---
+  /*
   for (const li of lineItems) {
     try {
       const counters = computeBillingCountersForLineItem(li, today);
@@ -254,6 +256,7 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
       console.error('[phase1] Error guardando contadores en line item', li.id, err);
     }
   }
+  */
 }
 
 export async function runPhase1(dealId) {

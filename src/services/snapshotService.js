@@ -161,7 +161,7 @@ export function extractDealSnapshots(deal) {
  * Combina snapshots de Deal y Line Item en un objeto listo para el Ticket.
  *
  * NUEVO MODELO DE FECHAS (sin período):
- * - expectedDate (planificada/esperada desde Line Item) → fecha_de_resolucion_esperada
+ * - expectedDate (planificada/esperada desde Line Item) → fecha_resolucion_esperada
  * - orderedDate (cuando se manda a facturar) → of_fecha_de_facturacion
  *
  * Regla: En MANUAL normal, orderedDate debe ser null (NO se setea).
@@ -193,7 +193,7 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
 
     // ✅ B) FECHA ESPERADA/PLANIFICADA (siempre desde billDateYMD usado en key)
     // Convertir YYYY-MM-DD a timestamp ms (midnight UTC)
-    fecha_de_resolucion_esperada: expectedDate ? toHubSpotDateOnly(expectedDate) : null,
+    fecha_resolucion_esperada: expectedDate ? toHubSpotDateOnly(expectedDate) : null,
 
     // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
     // of_fecha_facturacion_real: (se setea después)

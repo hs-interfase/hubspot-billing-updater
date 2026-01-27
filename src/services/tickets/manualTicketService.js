@@ -3,7 +3,7 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { TICKET_PIPELINE, TICKET_STAGES } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
-import { getTodayYMD } from '../../utils/dateUtils.js';
+import { getTodayYMD, toHubSpotDate } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
 import { applyCupoPreventiveAlertFromTicket } from '../alerts/cupoAlert.js';
 
@@ -130,7 +130,7 @@ console.log(`  of_iva (resolved): "${ivaValue}" (boolean: ${ivaBoolean})`);
       console.log(`   - of_frecuencia_de_facturacion: ${snapshots.of_frecuencia_de_facturacion}`);
       console.log(`   - repetitivo: ${snapshots.repetitivo}`);
 
-      console.log('[ticketService] 🔍 MANUAL - fecha_de_resolucion_esperada:', snapshots.fecha_de_resolucion_esperada);
+      console.log('[ticketService] 🔍 MANUAL - fecha_resolucion_esperada:', snapshots.fecha_resolucion_esperada);
       console.log('[ticketService] 🔍 MANUAL - of_fecha_de_facturacion:', snapshots.of_fecha_de_facturacion ?? '(no seteada)');
 
 const servicioRaw = lineProps.servicio || null;
@@ -237,7 +237,8 @@ const ticketProps = {
 
   // Snapshot "inmutable" (lo que ya venías copiando)
   ...snapshots,
-
+  fecha_resolucion_esperada: toHubSpotDate(billDateYMD),
+  of_fecha_de_facturacion: toHubSpotDate(billDateYMD),
   // ✅ Campos que querés que SIEMPRE pasen desde LI/Deal
   of_producto_nombres: liName,
 

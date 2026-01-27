@@ -1,6 +1,6 @@
-import { createInvoiceFromTicket } from '../invoiceService.js';
 // src/services/ticketService.js
 
+import { createInvoiceFromTicket } from '../invoiceService.js';
 import { hubspotClient } from '../../hubspotClient.js';
 import { 
   TICKET_PIPELINE, 
@@ -11,7 +11,7 @@ import {
 } from '../../config/constants.js';
 import { generateTicketKey } from '../../utils/idempotency.js';
 import { createTicketSnapshots } from '../snapshotService.js';
-import { getTodayYMD, getTomorrowYMD } from '../../utils/dateUtils.js';
+import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
 
 // Helper para esperar a que el ticket tenga total_real_a_facturar calculado y válido
@@ -61,6 +61,137 @@ async function awaitTicketCalculatedReady(ticketId) {
   }
   console.warn('[ticketService][AUTO] Timeout esperando total_real_a_facturar en ticket', { ticketId });
   return null;
+}
+
+
+async function syncBillingLastBilledDateFromTicket({ ticketId, lineItemId }) {
+  try {
+    const t = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+      'fecha_resolucion_esperada',
+      'of_line_item_ids',
+      'of_deal_id',
+      'of_ticket_key',
+    ]);
+    const tp = t?.properties || {};
+    const expectedYMD = (tp.fecha_resolucion_esperada || '').slice(0, 10);
+    if (!expectedYMD) return;
+
+    // anti-clon básico: validar line item en el ticket (si existe)
+    if (tp.of_line_item_ids) {
+      const ids = String(tp.of_line_item_ids).split(',').map(s => s.trim());
+      if (!ids.includes(String(lineItemId))) return;
+    }
+
+    console.log('[syncBillingLastBilledDateFromTicket] set billing_last_billed_date', {
+      ticketId,
+      lineItemId,
+      expectedYMD,
+      ticketKey: tp.of_ticket_key,
+    });
+
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { billing_last_billed_date: expectedYMD },
+    });
+  } catch (e) {
+    console.warn('[syncBillingLastBilledDateFromTicket] error:', e?.message || e);
+  }
+}
+
+
+
+// --- Helper para sincronizar line item tras ticket canónico ---
+async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, billDateYMD }) {
+  // 1) Leer ticket (props mínimos)
+  let ticket;
+  try {
+    ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+      'fecha_resolucion_esperada',
+      'of_deal_id',
+      'of_line_item_ids',
+      'of_ticket_key',
+    ]);
+  } catch (e) {
+    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer ticket:', e?.message);
+    return;
+  }
+
+  const tp = ticket?.properties || {};
+
+  // ✅ Tomamos la fecha "canónica" (evita UTC -1 día)
+  const ticketDateYMD = billDateYMD || toYMDInBillingTZ(tp.fecha_resolucion_esperada);
+  if (!ticketDateYMD) return;
+
+  // 2) Anti-clon (soft)
+  if (tp.of_deal_id && String(tp.of_deal_id) !== String(dealId)) return;
+  if (tp.of_line_item_ids) {
+    const ids = String(tp.of_line_item_ids).split(',').map(x => x.trim()).filter(Boolean);
+    if (!ids.includes(String(lineItemId))) return;
+  }
+  if (!tp.of_ticket_key) return;
+
+  // 3) Leer line item (solo lo necesario)
+  let lineItem;
+  try {
+    lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      'billing_next_date',
+      'last_ticketed_date',
+      'billing_last_billed_date',
+      'hs_recurring_billing_start_date',
+      'recurringbillingfrequency',
+      'hs_recurring_billing_frequency',
+      'hs_recurring_billing_number_of_payments',
+      'number_of_payments',
+      'fecha_inicio_de_facturacion',
+    ]);
+  } catch (e) {
+    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer line item:', e?.message);
+    return;
+  }
+
+  const lp = lineItem?.properties || {};
+  const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
+  const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
+
+  // 4) last_ticketed_date = max(...)
+  let newLastTicketedYMD = currentLastTicketedYMD;
+  if (!currentLastTicketedYMD || ticketDateYMD > currentLastTicketedYMD) {
+    newLastTicketedYMD = ticketDateYMD;
+  }
+
+  // 5) billing_next_date
+  // avanzar si (a) next == billDate o (b) next está vacío.
+  // pero si next ya está adelantado (> billDate), no tocar.
+  let newNextYMD = currentNextYMD;
+
+  if (currentNextYMD === billDateYMD || !currentNextYMD) {
+    if (currentNextYMD && currentNextYMD > billDateYMD) {
+      // no tocar
+    } else {
+      const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
+
+      // ✅ mediodía UTC + 1 día para evitar “-1 día” por TZ
+      const base = new Date(billDateYMD + 'T12:00:00Z');
+      base.setUTCDate(base.getUTCDate() + 1);
+
+      const fakeLineItem = { properties: { ...lp } };
+      const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
+      newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
+    }
+  }
+
+  // 6) Update solo si cambió algo
+  const updates = {};
+  if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
+  if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD; // '' => null
+
+  if (!Object.keys(updates).length) return;
+
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
+    console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} actualizado:`, updates);
+  } catch (e) {
+    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo actualizar line item:', e?.message);
+  }
 }
 
 // Helper para resetear triggers en el Line Item (MVP anti-loops)
@@ -200,9 +331,10 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       // No emitir
       if (!isAutoPipeline) {
         console.log(`[ticketService][AUTO] ⊘ Ticket ya existía pero NO está en pipeline automático, no se emite factura: ${ticketId}`);
-      } else if (hasInvoice) {
-        console.log(`[ticketService][AUTO] ⊘ Ticket ya existía y YA tiene factura, no se emite factura: ${ticketId}`);
-      } else {
+     } else if (hasInvoice) {
+  console.log(`[ticketService][AUTO] ⊘ Ticket ya existía y YA tiene factura, no se emite factura: ${ticketId}`);
+}
+else {
         console.log(`[ticketService][AUTO] ⊘ Ticket ya existía, no se emite factura: ${ticketId}`);
       }
     }
@@ -516,11 +648,15 @@ export async function ensureTicketCanonical({
 
   const expectedKey = buildTicketKey(dealId, stableLineId, billDateYMD);
 
-  console.log(`[ticketService] 🔍 ensureTicketCanonical`);
-  console.log(`   dealId: ${dealId}`);
-  console.log(`   stableLineId: ${stableLineId}`);
-  console.log(`   billDateYMD: ${billDateYMD}`);
-  console.log(`   expectedKey: ${expectedKey}`);
+  if (process.env.DBG_TICKET_KEY === 'true') {
+    console.log('[DBG_TICKET_KEY][ticketService] build', {
+      dealId,
+      stableLineId,
+      lineItemId,
+      billDateYMD,
+      expectedKey,
+    });
+  }
   
   // ✅ Verificación anti-duplicación de prefijo
   if (expectedKey.includes('LI:LI:')) {
@@ -552,7 +688,17 @@ export async function ensureTicketCanonical({
         reason: `Existe ticketKey canónica ${expectedKey}`,
       });
     }
-    
+    try {
+  await syncLineItemAfterCanonicalTicket({
+    dealId,
+    lineItemId,
+    ticketId: canonical.id,
+    billDateYMD,
+  });
+} catch (e) {
+  console.warn('[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (canonical) error:', e?.message);
+}
+
     return { 
       ticketId: canonical.id, 
       created: false, 
@@ -587,6 +733,18 @@ export async function ensureTicketCanonical({
     });
   }
 
+try {
+  await syncLineItemAfterCanonicalTicket({
+    dealId,
+    lineItemId,
+    ticketId: newId,
+    billDateYMD,
+  });
+} catch (e) {
+  console.warn('[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (created) error:', e?.message);
+}
+
+  
   return { 
     ticketId: newId, 
     created: true, 

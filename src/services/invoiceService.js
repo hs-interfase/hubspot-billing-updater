@@ -1,3 +1,10 @@
+// Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)
+function extractBillDateFromTicketKey(ticketKey) {
+  if (!ticketKey) return null;
+  const parts = String(ticketKey).split('::');
+  const last = parts[parts.length - 1];
+  return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
+}
 // src/services/invoiceService.js
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
@@ -12,6 +19,37 @@ import axios from 'axios';
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
 
+
+// Sincroniza billing_last_billed_date en el line item a partir del ticket (fecha esperada)
+async function syncBillingLastBilledDateFromTicket(ticketObj) {
+  try {
+    const tp = ticketObj?.properties || {};
+    const ticketId = String(ticketObj?.id || ticketObj?.properties?.hs_object_id || '');
+
+    // SOLO fecha esperada (plan). NO usar of_fecha_de_facturacion.
+    const expectedYMD = String(tp.fecha_resolucion_esperada || '').slice(0, 10);
+    if (!expectedYMD) return;
+
+    // asumimos 1 solo line item id numérico en of_line_item_ids
+    const lineItemId = String(tp.of_line_item_ids || '').split(',')[0].trim();
+    if (!lineItemId) return;
+
+    const billingLastBilledMs = String(toHubSpotDateOnly(expectedYMD));
+
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { billing_last_billed_date: billingLastBilledMs },
+    });
+
+    console.log('[syncBillingLastBilledDateFromTicket] set billing_last_billed_date', {
+      ticketId,
+      lineItemId,
+      expectedYMD,
+      billing_last_billed_date_ms: billingLastBilledMs,
+    });
+  } catch (e) {
+    console.warn('[syncBillingLastBilledDateFromTicket] error:', e?.message || e);
+  }
+}
 
 // ========= DEBUG HELPERS =========
 function statusOf(obj, key) {
@@ -124,7 +162,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       // Fechas
       'of_fecha_de_facturacion',
       'fecha_real_de_facturacion',
-      'fecha_de_resolucion_esperada',
+      'fecha_resolucion_esperada',
       
       // Montos y cantidades
       'total_real_a_facturar',         // ← Monto total calculado por HubSpot
@@ -183,6 +221,22 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   }
   
   const tp = ticketFull.properties || {};
+
+  function extractBillDateFromTicketKey(ticketKey) {
+    const parts = String(ticketKey || '').split('::');
+    const last = parts[parts.length - 1];
+    return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
+  }
+
+  if (process.env.DBG_TICKET_KEY === 'true') {
+    console.log('[DBG_TICKET_KEY][invoiceService] ticket', {
+      ticketId,
+      of_ticket_key: tp.of_ticket_key,
+      fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
+      date_from_key: extractBillDateFromTicketKey(tp.of_ticket_key),
+      of_line_item_ids: tp.of_line_item_ids,
+    });
+  }
   
   // ⚡ Guard verbose JSON dump behind env flag (reduce noise)
   if (process.env.DBG_TICKET_FULL === 'true') {
@@ -236,7 +290,7 @@ console.log('-------------------------------------------------------------------
   console.log('\n📅 FECHAS');
   showProp(tp, 'of_fecha_de_facturacion');
   showProp(tp, 'fecha_real_de_facturacion');
-  showProp(tp, 'fecha_de_resolucion_esperada');
+  showProp(tp, 'fecha_resolucion_esperada');
   
   console.log('\n💰 MONTOS Y CANTIDADES (valores RESUELTOS desde Ticket, NO backend calculations)');
   console.log(`   cantidad: ${cantidadResolved} (source: cantidad_real`);
@@ -290,12 +344,14 @@ const lineItemId = rawLineItemIds?.includes(',')
   ? rawLineItemIds.split(',')[0].trim()
   : rawLineItemIds;
 
-const fechaPlan = safeString(tp.of_fecha_de_facturacion); // YYYY-MM-DD
-
+const fechaPlan = safeString(tp.fecha_resolucion_esperada); // YYYY-MM-DD
+console.log('Line Item ID (para invoiceKey):', lineItemId);
+console.log('Fecha plan (para invoiceKey):', fechaPlan);
 const invoiceKeyStrict =
   (dealId && lineItemId && fechaPlan)
     ? generateInvoiceKey(dealId, lineItemId, fechaPlan)
     : null;
+
 
 // fallback SOLO si no hay strict (menos ideal)
 const invoiceKey = invoiceKeyStrict || safeString(tp.of_ticket_key) || `ticket::${ticketId}`;
@@ -311,13 +367,15 @@ if (tp.of_invoice_id) {
     if (lineItemId && fechaPlan) {
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
         properties: {
-          billing_last_billed_date: fechaPlan,
+          billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)),
         },
       });
       if (process.env.DBG_PHASE1 === 'true') {
         console.log(`[billing_last_billed_date] LI ${lineItemId} => ${fechaPlan}`);
       }
     }
+    // NUEVO: sincronizar siempre, por robustez
+    await syncBillingLastBilledDateFromTicket(ticketFull);
     console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id} (invoice_key OK)`);
     return { invoiceId: tp.of_invoice_id, created: false };
   }
@@ -340,7 +398,7 @@ if (tp.of_invoice_id) {
   
   // 5) Fecha real de facturación con cascada de fallbacks
   const invoiceDate = tp.of_fecha_de_facturacion 
-    || tp.fecha_de_resolucion_esperada 
+    || tp.fecha_resolucion_esperada 
     || getTodayYMD();
   
   // Convertir a timestamp de HubSpot (DATE-ONLY)
@@ -731,7 +789,7 @@ if (lineItemId) {
       properties: {
         invoice_id: invoiceId,
         invoice_key: invoiceKey,
-        billing_last_billed_date: fechaPlan,
+billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)),
       },
     });
     if (process.env.DBG_PHASE1 === 'true') {
@@ -781,6 +839,8 @@ try {
   // NO lanzar error: consumo de cupo es complementario, no debe romper facturación
 }
 
+    // NUEVO: sincronizar siempre después de crear y actualizar ticket/line item
+    await syncBillingLastBilledDateFromTicket(ticketFull);
     return { invoiceId, created: true };
   } catch (err) {
     console.error('\n❌ ERROR CREANDO FACTURA DESDE TICKET:');

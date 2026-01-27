@@ -127,6 +127,9 @@ export async function getDealWithLineItems(dealId) {
     "hs_recurring_billing_number_of_payments",
     "hs_recurring_billing_terms",
     'billing_anchor_date',
+    'billing_next_date',
+    "billing_last_billed_date",
+    "last_ticketed_date",
 
     // --- delays en fechas ---
     "hs_billing_start_delay_type",

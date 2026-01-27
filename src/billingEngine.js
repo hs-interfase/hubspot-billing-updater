@@ -332,28 +332,42 @@ export async function updateLineItemSchedule(lineItem) {
   }
 
   // Caso 3: no hay intervalo → pago único: sincroniza fecha inicio y limpia calendario (ajuste 2)
-  if (!interval) {
-    const iso = formatDateISO(effectiveStart);
-    const updatesOneTime = {
-      recurringbillingstartdate: iso,
-      billing_next_date: iso,
-    };
-    if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${iso}`);
+// Caso 3: no hay intervalo → pago único
+if (!interval) {
+  const iso = formatDateISO(effectiveStart);
 
-    if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
-      updatesOneTime.fecha_inicio_de_facturacion = iso;
-    }
+  // ✅ Regla nueva: si ya existe last_ticketed_date, ese pago único ya tuvo ticket
+  // entonces NO hay “próxima sin ticket” → next = null
+  const lastTicketedYmd = (p.last_ticketed_date || '').toString().slice(0, 10);
 
-    // ✅ Ajuste 2: limpiar fechas_2..fecha_24 para evitar tickets fantasma
-    clearCalendarFields(updatesOneTime);
+  const nextYmd = lastTicketedYmd ? '' : iso;
 
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updatesOneTime,
-    });
+  const updatesOneTime = {
+    recurringbillingstartdate: iso,
+    billing_next_date: nextYmd, // '' => null en HubSpot
+  };
 
-    lineItem.properties = { ...p, ...updatesOneTime };
-    return lineItem;
+  if (process.env.DBG_PHASE1 === "true") {
+    console.log(
+      `[billing_next_date] LI ${lineItem.id} => ${nextYmd || '(null)'}` +
+      (lastTicketedYmd ? ` (last_ticketed_date=${lastTicketedYmd})` : '')
+    );
   }
+
+  if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
+    updatesOneTime.fecha_inicio_de_facturacion = iso;
+  }
+
+  // limpiar fechas_2..fecha_24 para evitar basura/tickets fantasma
+  clearCalendarFields(updatesOneTime);
+
+  await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+    properties: updatesOneTime,
+  });
+
+  lineItem.properties = { ...p, ...updatesOneTime };
+  return lineItem;
+}
 
   // Generar calendario para recurrentes
   const dates = [];
@@ -380,7 +394,22 @@ export async function updateLineItemSchedule(lineItem) {
 
 
 const todayYmd = getTodayYMD();
-const upcomingDates = (isoDates || []).filter(d => d && d >= todayYmd);
+
+// ✅ si ya hay last_ticketed_date, la “próxima” debe ser DESPUÉS de esa fecha
+const lastTicketedYmd = (p.last_ticketed_date || '').slice(0, 10);
+
+let effectiveTodayYmd = todayYmd;
+if (lastTicketedYmd) {
+  const d = parseLocalDate(lastTicketedYmd);  // usa tu helper existente
+  if (d) {
+    d.setDate(d.getDate() + 1);               // +1 día
+    const plusOne = formatDateISO(d);         // YYYY-MM-DD
+    if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
+  }
+}
+
+// ✅ ahora filtramos usando effectiveTodayYmd (no “hoy”)
+const upcomingDates = (isoDates || []).filter(d => d && d >= effectiveTodayYmd);
 
 const startRaw =
   p.hs_recurring_billing_start_date ||
@@ -395,7 +424,14 @@ const nextYmd = resolveNextBillingDate({
   startRaw,
   interval: config.interval,   // ✅ NO null
   addInterval,
+  // ✅ si tu resolveNextBillingDate acepta todayYmd, pasalo:
+  todayYmd: effectiveTodayYmd,
 });
+
+if (nextYmd) {
+  updatesRecurring.billing_next_date = nextYmd;
+  if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${nextYmd}`);
+}
 
 if (nextYmd) {
   updatesRecurring.billing_next_date = nextYmd;
@@ -583,7 +619,12 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   }
 
   // Usar getTodayYMD para comparar días (BILLING_TZ)
-  const todayYmd = getTodayYMD();
+  // ✅ respetar el "today" recibido (para poder avanzar desde billDate+1)
+let todayYmd = getTodayYMD();
+if (today instanceof Date && !Number.isNaN(today.getTime())) {
+  todayYmd = formatDateISO(today); // YYYY-MM-DD
+}
+
 
   // ✅ fuente de verdad si existe
  const persisted = (p.billing_next_date ?? "").toString().slice(0, 10);
