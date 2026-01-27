@@ -3,6 +3,7 @@
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from '../services/tickets/ticketService.js';
+import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 
 /**
  * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true
@@ -54,17 +55,15 @@ export async function runPhase3({ deal, lineItems }) {
     try {
       const facturarAhora = parseBool(lp.facturar_ahora);
 
-      // ✅ CRITICAL FIX: billingPeriodDate is ALWAYS nextBillingDate
-      // facturar_ahora changes WHEN we invoice (today), NOT which period
-      let billingPeriodDate = getNextBillingDate(lp);
+const billingPeriodDate = resolvePlanYMD({
+  lineItemProps: lp,
+  context: { flow: 'PHASE3', dealId, lineItemId },
+});
 
-      // Fallback: if one-time (not recurring) and no billingPeriodDate, use hs_recurring_billing_start_date
-      if (!billingPeriodDate && !parseBool(lp.es_recurring)) {
-        billingPeriodDate = lp.hs_recurring_billing_start_date || lp.recurringbillingstartdate || lp.fecha_inicio_de_facturacion || null;
-        if (billingPeriodDate) {
-          console.log(`   [Phase3] 🟡 Fallback: using hs_recurring_billing_start_date as billingPeriodDate for one-time payment: ${billingPeriodDate}`);
-        }
-      }
+console.log(
+  `   [Phase3] 🔑 billingPeriodDate(planYMD): ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
+);
+
 
       console.log(
         `   [Phase3] 🔑 billingPeriodDate: ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
@@ -93,8 +92,7 @@ export async function runPhase3({ deal, lineItems }) {
           try {
             await updateTicket(ticketResult.ticketId, {
               of_facturacion_urgente: 'true',
-              of_fecha_facturacion: today, // When ordered
-              fecha_resolucion_esperada: today, // Process today
+              of_fecha_facturacion: today,
             });
             console.log(`      [Phase3] ticket urgent marked: ${ticketResult.ticketId}`);
           } catch (e) {
@@ -142,6 +140,7 @@ export async function runPhase3({ deal, lineItems }) {
  * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
  * Devuelve la fecha más cercana >= hoy.
  */
+/*
 function getNextBillingDate(lineItemProps) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -179,3 +178,4 @@ function getNextBillingDate(lineItemProps) {
   futureDates.sort((a, b) => a.getTime() - b.getTime());
   return formatDateISO(futureDates[0]);
 }
+*/s

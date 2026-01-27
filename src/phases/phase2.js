@@ -4,6 +4,7 @@ import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
 import { createManualBillingTicket } from '../services/tickets/manualTicketService.js';
+import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 
 /**
  * PHASE 2: Generación de tickets manuales para line items con facturacion_automatica!=true.
@@ -76,14 +77,19 @@ export async function runPhase2({ deal, lineItems }) {
     
     try {
       // Obtener la próxima fecha de facturación (FUENTE: billing_next_date si existe)
-      const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
-      const nextBillingDate =
-        (persistedNext && persistedNext >= today)
-          ? persistedNext
-          : getNextBillingDate(lp);
-      
-+      console.log(`      → nextBillingDate: ${nextBillingDate} (persisted=${persistedNext || 'null'})`);
-      
+const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
+
+const planYMD = resolvePlanYMD({
+  lineItemProps: lp,
+  context: { flow: 'PHASE2', dealId, lineItemId },
+});
+
+console.log(
+  `      → planYMD: ${planYMD || 'null'} (persisted billing_next_date=${persistedNext || 'null'})`
+);
+
+const nextBillingDate = planYMD; // en Phase2 “planYMD” ES la fecha que ticketear
+
       if (!nextBillingDate) {
         console.log(`      ⚠️  Sin próxima fecha de facturación, saltando...`);
         continue;

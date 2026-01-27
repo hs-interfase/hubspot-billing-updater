@@ -40,13 +40,15 @@ async function syncBillingLastBilledDateFromTicket(ticketObj) {
       properties: { billing_last_billed_date: billingLastBilledMs },
     });
 
+  if (process.env.DBG_PHASE1 === 'true') {
     console.log('[syncBillingLastBilledDateFromTicket] set billing_last_billed_date', {
       ticketId,
       lineItemId,
       expectedYMD,
       billing_last_billed_date_ms: billingLastBilledMs,
     });
-  } catch (e) {
+  }
+} catch (e) {
     console.warn('[syncBillingLastBilledDateFromTicket] error:', e?.message || e);
   }
 }
@@ -1091,7 +1093,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
      * @param {string} invoiceId - ID de la factura
      * @returns {Promise<Object>} Factura de HubSpot
      */
-    export async function getInvoice(invoiceId) {
+export async function getInvoice(invoiceId) {
   try {
     const invoice = await hubspotClient.crm.objects.basicApi.getById(
       'invoices',

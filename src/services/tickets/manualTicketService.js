@@ -1,4 +1,4 @@
-// src/services/manualTicketService.js
+// src/services/tickets/manualTicketService.js
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { TICKET_PIPELINE, TICKET_STAGES } from '../../config/constants.js';
