@@ -349,8 +349,8 @@ const lineItemId = rawLineItemIds?.includes(',')
   : rawLineItemIds;
 
 const fechaPlan =
-  toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
   extractBillDateFromTicketKey(tp.of_ticket_key) ||
+  toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
   null;
 console.log('Line Item ID (para invoiceKey):', lineItemId);
 console.log('Fecha plan (para invoiceKey):', fechaPlan);

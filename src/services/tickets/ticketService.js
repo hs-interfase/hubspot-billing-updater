@@ -158,26 +158,26 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     newLastTicketedYMD = ticketDateYMD;
   }
 
-  // 5) billing_next_date
-  // avanzar si (a) next == billDate o (b) next está vacío.
-  // pero si next ya está adelantado (> billDate), no tocar.
-  let newNextYMD = currentNextYMD;
+// 5) billing_next_date
+// Recalcular si next está vacío o si next <= last_ticketed (no representa “próxima sin ticket”).
+// Si next ya está adelantado (> ticketDate), no tocar.
+let newNextYMD = currentNextYMD;
 
-  if (currentNextYMD === billDateYMD || !currentNextYMD) {
-    if (currentNextYMD && currentNextYMD > billDateYMD) {
-      // no tocar
-    } else {
-      const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
+if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
+  if (currentNextYMD && currentNextYMD > ticketDateYMD) {
+    // no tocar
+  } else {
+    const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
 
-      // ✅ mediodía UTC + 1 día para evitar “-1 día” por TZ
-      const base = new Date(billDateYMD + 'T12:00:00Z');
-      base.setUTCDate(base.getUTCDate() + 1);
+    // ✅ mediodía UTC + 1 día para evitar “-1 día” por TZ
+    const base = new Date(ticketDateYMD + 'T12:00:00Z');
+    base.setUTCDate(base.getUTCDate() + 1);
 
-      const fakeLineItem = { properties: { ...lp } };
-      const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
-      newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
-    }
+    const fakeLineItem = { properties: { ...lp } };
+    const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
+    newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
   }
+}
 
   // 6) Update solo si cambió algo
   const updates = {};
