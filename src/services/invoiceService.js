@@ -1,15 +1,9 @@
-// Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)
-function extractBillDateFromTicketKey(ticketKey) {
-  if (!ticketKey) return null;
-  const parts = String(ticketKey).split('::');
-  const last = parts[parts.length - 1];
-  return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
-}
+
 // src/services/invoiceService.js
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
-import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly, addDays } from '../utils/dateUtils.js';
+import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
@@ -18,6 +12,14 @@ import axios from 'axios';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
+
+// Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)
+function extractBillDateFromTicketKey(ticketKey) {
+  if (!ticketKey) return null;
+  const parts = String(ticketKey).split('::');
+  const last = parts[parts.length - 1];
+  return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
+}  
 
 
 // Sincroniza billing_last_billed_date en el line item a partir del ticket (fecha esperada)
@@ -403,15 +405,17 @@ if (tp.of_invoice_id) {
   const responsableAsignadoRaw = process.env.USER_BILLING || '83169424';
   const responsableAsignado = toNumericOwnerOrNull(responsableAsignadoRaw);
   
-// 5) Fecha de invoice: solo si viene explícita (no inventar)
-// Si no viene, no seteamos hs_invoice_date ni calculamos hs_due_date antes de crear.
-const invoiceDate = tp.of_fecha_de_facturacion || null;
-const invoiceDateMs = invoiceDate ? toHubSpotDateOnly(invoiceDate) : null;
+// 5) Fechas (igual que AUTO): invoice_date = hoy, due_date = hoy + 10 días
+const invoiceDateYMD = getTodayYMD(); // 'YYYY-MM-DD' en BILLING_TZ
 
-// ✅ Vencimiento: SOLO si viene explícito
-const dueDateMs = tp.fecha_de_vencimiento
-  ? toHubSpotDateOnly(tp.fecha_de_vencimiento)
-  : null;
+// sumar 10 días sin romper por timezone
+const baseDate = new Date(invoiceDateYMD + 'T12:00:00Z');
+baseDate.setUTCDate(baseDate.getUTCDate() + 10);
+const dueDateYMD = baseDate.toISOString().slice(0, 10);
+
+const invoiceDateMs = toHubSpotDateOnly(invoiceDateYMD);
+const dueDateMs = toHubSpotDateOnly(dueDateYMD);
+
 
   // 5.5) Use resolved variables (already created early for debug logs)
   const cantidad = cantidadResolved;
@@ -428,9 +432,9 @@ const dueDateMs = tp.fecha_de_vencimiento
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     
     // ✅ C.4) Fechas: invoice_date y due_date calculados con dateUtils
-    /*hs_invoice_date: invoiceDateMs,
+    hs_invoice_date: invoiceDateMs,
     hs_due_date: dueDateMs,
-    */
+    
     // ✅ Desactiva validaciones de HubSpot
     hs_invoice_billable: false,
     
@@ -770,7 +774,7 @@ exonera_irae: tp.of_exonera_irae,
         properties: {
           of_invoice_id: invoiceId,
           of_invoice_key: invoiceKey,
-          fecha_real_de_facturacion: invoiceDateMs,
+fecha_real_de_facturacion: invoiceDateYMD,
         },
       });
       console.log(`✓ Ticket actualizado con invoice_id=${invoiceId} y fecha real`);
