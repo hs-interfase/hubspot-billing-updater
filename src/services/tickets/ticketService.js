@@ -280,7 +280,6 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           expectedKey,
           billDateYMD,
           expectedDate,
-          resolved_ms: ms,
         });
 
         if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
