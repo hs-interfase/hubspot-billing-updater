@@ -275,14 +275,6 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           ...snapshots,
         };
 
-        // Override fecha_resolucion_esperada ONLY if ms is valid
-        const ms = toHubSpotDateOnly(billDateYMD);
-        if (ms) {
-          ticketProps.fecha_resolucion_esperada = String(ms);
-        } else {
-          delete ticketProps.fecha_resolucion_esperada;
-        }
-
         // Minimal debug log
         console.log('[ticketPayload]', {
           expectedKey,
