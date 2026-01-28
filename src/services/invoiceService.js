@@ -403,25 +403,16 @@ if (tp.of_invoice_id) {
   const responsableAsignadoRaw = process.env.USER_BILLING || '83169424';
   const responsableAsignado = toNumericOwnerOrNull(responsableAsignadoRaw);
   
-  // 5) Fecha real de facturación con cascada de fallbacks
-  const invoiceDate = tp.of_fecha_de_facturacion 
-    || null;
-  
-  // Convertir a timestamp de HubSpot (DATE-ONLY)
-  const invoiceDateMs = toHubSpotDateOnly(invoiceDate);
-  
-  // ✅ C.4) Calcular fecha de vencimiento: fecha_de_vencimiento o invoiceDate + 10 días
-  let dueDateMs;
-  if (tp.fecha_de_vencimiento) {
-    dueDateMs = toHubSpotDateOnly(tp.fecha_de_vencimiento);
-  } else {
-    // Convertir invoiceDateMs a Date, sumar 10 días, reconvertir
-    const invoiceDateObj = new Date(parseInt(invoiceDateMs));
-    const dueDateObj = addDays(invoiceDateObj, 10);
-    const dueDateYMD = dueDateObj.toISOString().split('T')[0];
-    dueDateMs = toHubSpotDateOnly(dueDateYMD);
-  }
-  
+// 5) Fecha de invoice: solo si viene explícita (no inventar)
+// Si no viene, no seteamos hs_invoice_date ni calculamos hs_due_date antes de crear.
+const invoiceDate = tp.of_fecha_de_facturacion || null;
+const invoiceDateMs = invoiceDate ? toHubSpotDateOnly(invoiceDate) : null;
+
+// ✅ Vencimiento: SOLO si viene explícito
+const dueDateMs = tp.fecha_de_vencimiento
+  ? toHubSpotDateOnly(tp.fecha_de_vencimiento)
+  : null;
+
   // 5.5) Use resolved variables (already created early for debug logs)
   const cantidad = cantidadResolved;
   const montoUnitario = montoUnitarioResolved; // Info only, NO multiply
@@ -437,9 +428,9 @@ if (tp.of_invoice_id) {
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     
     // ✅ C.4) Fechas: invoice_date y due_date calculados con dateUtils
-    hs_invoice_date: invoiceDateMs,
+    /*hs_invoice_date: invoiceDateMs,
     hs_due_date: dueDateMs,
-    
+    */
     // ✅ Desactiva validaciones de HubSpot
     hs_invoice_billable: false,
     
@@ -795,6 +786,7 @@ exonera_irae: tp.of_exonera_irae,
           properties: {
             ...(fechaPlan ? { billing_last_billed_date: String(toHubSpotDateOnly(fechaPlan)) } : {}),
             ...(invoiceId ? { invoice_id: invoiceId } : {}),
+            ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
           }
         });
         if (process.env.DBG_PHASE1 === 'true') {
