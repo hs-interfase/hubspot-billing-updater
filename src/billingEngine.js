@@ -407,7 +407,7 @@ if (lastTicketedYmd) {
     if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
   }
 }
-
+/*
 // ✅ ahora filtramos usando effectiveTodayYmd (no “hoy”)
 const upcomingDates = (isoDates || []).filter(d => d && d >= effectiveTodayYmd);
 
@@ -442,6 +442,48 @@ if (nextYmd) {
    updatesRecurring.billing_next_date = nextYmd;
    if (process.env.DBG_PHASE1 === "true") console.log(`[billing_next_date] LI ${lineItem.id} => ${nextYmd}`);
  }
+*/
+
+
+// --- billing_next_date (anchor-based, sin usar calendario) ---
+const anchorStartRaw =
+  p.hs_recurring_billing_start_date ||
+  p.recurringbillingstartdate ||
+  p.fecha_inicio_de_facturacion ||
+  isoDates[0] ||
+  null;
+
+// effectiveTodayYmd ya lo calculaste arriba (hoy o last_ticketed_date+1)
+const nextYmd = computeNextFromInterval({
+  startRaw: anchorStartRaw,
+  interval,                 // OJO: usá "interval" (del config destructurado arriba)
+  todayYmd: effectiveTodayYmd,
+  addInterval,
+  formatDateISO,
+  parseLocalDate,
+});
+
+if (nextYmd) {
+  updatesRecurring.billing_next_date = nextYmd;
+  if (process.env.DBG_PHASE1 === "true") {
+    console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => ${nextYmd}`, {
+      anchorStartRaw,
+      effectiveTodayYmd,
+    });
+  }
+} else {
+  // Si tu contrato permite "no hay próxima", lo dejamos vacío para no inventar.
+  // (Esto preserva el comportamiento: HubSpot null/empty)
+  updatesRecurring.billing_next_date = '';
+  if (process.env.DBG_PHASE1 === "true") {
+    console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => (null)`, {
+      anchorStartRaw,
+      effectiveTodayYmd,
+    });
+  }
+}
+
+
 
   if (Object.prototype.hasOwnProperty.call(p, 'fecha_inicio_de_facturacion')) {
     updatesRecurring.fecha_inicio_de_facturacion = isoDates[0];
