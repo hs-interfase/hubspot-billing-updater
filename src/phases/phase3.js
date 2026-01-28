@@ -92,7 +92,7 @@ console.log(
           try {
             await updateTicket(ticketResult.ticketId, {
               of_facturacion_urgente: 'true',
-              of_fecha_facturacion: today,
+              of_fecha_de_facturacion: today,
             });
             console.log(`      [Phase3] ticket urgent marked: ${ticketResult.ticketId}`);
           } catch (e) {
