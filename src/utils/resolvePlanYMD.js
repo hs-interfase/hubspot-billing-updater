@@ -52,7 +52,7 @@ export function resolvePlanYMD({ lineItemProps = {}, ticketProps = {}, context =
     console.log('[resolvePlanYMD]', {
       context, // ej: { flow:'PHASE2', dealId, lineItemId, ticketId }
       input: {
-        ticket_fecha_resolucion_esperada: fromTicketRaw || null,
+        fecha_resolucion_esperada: fromTicketRaw || null,
         billing_next_date: lineItemProps?.billing_next_date || null,
         hs_recurring_billing_start_date: lineItemProps?.hs_recurring_billing_start_date || null,
       },

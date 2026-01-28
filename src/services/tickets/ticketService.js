@@ -11,7 +11,7 @@ import {
 } from '../../config/constants.js';
 import { generateTicketKey } from '../../utils/idempotency.js';
 import { createTicketSnapshots } from '../snapshotService.js';
-import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
+import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
 
 // Helper para esperar a que el ticket tenga total_real_a_facturar calculado y válido
@@ -273,8 +273,23 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_line_item_ids: lineItemId,
           of_ticket_key: expectedKey,
           ...snapshots,
-
         };
+
+        // Override fecha_resolucion_esperada ONLY if ms is valid
+        const ms = toHubSpotDateOnly(billDateYMD);
+        if (ms) {
+          ticketProps.fecha_resolucion_esperada = String(ms);
+        } else {
+          delete ticketProps.fecha_resolucion_esperada;
+        }
+
+        // Minimal debug log
+        console.log('[ticketPayload]', {
+          expectedKey,
+          billDateYMD,
+          expectedDate,
+          resolved_ms: ms,
+        });
 
         if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
 
@@ -308,9 +323,10 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
     try {
       ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
         'of_invoice_id',
-          'of_invoice_key',
+        'of_invoice_key',
         'hs_pipeline',
         'of_ticket_key',
+        'fecha_resolucion_esperada',
       ]);
     } catch (e) {
       console.warn('[ticketService][AUTO] ⚠️ No se pudo obtener ticket para chequeo de factura:', e?.message);

@@ -12,7 +12,7 @@ import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
-
+import { sanitizeLineItemDatesIfCloned } from '../utils/cloneUtil.js';
 
 logDateEnvOnce();
 
@@ -230,13 +230,37 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
   // 1) calendario
-  for (const li of lineItems) {
-    try {
-      await updateLineItemSchedule(li);
-    } catch (err) {
-      console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
+// 1) calendario
+for (const li of lineItems) {
+  try {
+    // 0) SANITIZER: si el line item es clonado, limpiar fechas sucias
+    const updates = sanitizeLineItemDatesIfCloned(li);
+    if (updates && Object.keys(updates).length) {
+      await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
+      // actualizar en memoria para que schedule recalcule con datos limpios
+      li.properties = { ...(li.properties || {}), ...updates };
+
+      if (process.env.DBG_PHASE1 === 'true') {
+        console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+      }
     }
+
+    // 1) calendario normal
+    await updateLineItemSchedule(li);
+
+    if (process.env.DBG_PHASE1 === 'true') {
+      console.log('[phase1][post-updateLineItemSchedule]', {
+        lineItemId: li.id,
+        billing_next_date: li.properties?.billing_next_date,
+        last_ticketed_date: li.properties?.last_ticketed_date,
+        billing_last_billed_date: li.properties?.billing_last_billed_date,
+      });
+    }
+  } catch (err) {
+    console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
   }
+}
+
 
   // 2) contadores + persistencia
   // --- LÓGICA DE TOTAL DE AVISOS Y PAGOS COMENTADA TEMPORALMENTE ---

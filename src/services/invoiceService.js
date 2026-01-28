@@ -9,7 +9,7 @@ function extractBillDateFromTicketKey(ticketKey) {
 import { hubspotClient } from '../hubspotClient.js';
 import { generateInvoiceKey } from '../utils/idempotency.js';
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
-import { getTodayYMD, toHubSpotDate, toHubSpotDateOnly, addDays } from '../utils/dateUtils.js';
+import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly, addDays } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
@@ -343,7 +343,6 @@ console.log('-------------------------------------------------------------------
 // 1) Calcular invoiceKey estricta (si hay data suficiente)
 const dealId = safeString(tp.of_deal_id);
 
-// OJO: si of_line_item_ids puede venir CSV, tomar el primero
 const rawLineItemIds = safeString(tp.of_line_item_ids);
 const lineItemId = rawLineItemIds?.includes(',')
   ? rawLineItemIds.split(',')[0].trim()
@@ -406,8 +405,7 @@ if (tp.of_invoice_id) {
   
   // 5) Fecha real de facturación con cascada de fallbacks
   const invoiceDate = tp.of_fecha_de_facturacion 
-    || tp.fecha_resolucion_esperada 
-    || getTodayYMD();
+    || null;
   
   // Convertir a timestamp de HubSpot (DATE-ONLY)
   const invoiceDateMs = toHubSpotDateOnly(invoiceDate);
@@ -508,14 +506,14 @@ exonera_irae: tp.of_exonera_irae,
   // 🐛 DEBUG: RAW values from Ticket (NO backend calculations)
   console.log('\n[DBG][INVOICE] RAW Values TICKET → INVOICE (NO calculations):');
   console.log('[DBG][INVOICE] SOURCE (ticket RAW props):');
-  console.log('  PRIMARY:');
-  console.log('    cantidad_real:', tp.cantidad_real);
-  console.log('    monto_unitario_real:', tp.monto_unitario_real, '(info only, NO multiply)');
-  console.log('    descuento_en_porcentaje:', tp.descuento_en_porcentaje);
-  console.log('    descuento_por_unidad_real:', tp.descuento_por_unidad_real);
-  console.log('    total_real_a_facturar:', tp.total_real_a_facturar, '(HubSpot-CALCULATED)');
-  console.log('    of_iva:', tp.of_iva);
-  console.log('  FALLBACKS (legacy):');
+  console.log('PRIMARY:');
+  console.log('cantidad_real:', tp.cantidad_real);
+  console.log('monto_unitario_real:', tp.monto_unitario_real, '(info only, NO multiply)');
+  console.log('descuento_en_porcentaje:', tp.descuento_en_porcentaje);
+  console.log('descuento_por_unidad_real:', tp.descuento_por_unidad_real);
+  console.log('total_real_a_facturar:', tp.total_real_a_facturar, '(HubSpot-CALCULATED)');
+  console.log('of_iva:', tp.of_iva);
+  console.log('FALLBACKS (legacy):');
   
   console.log('[DBG][INVOICE] RESOLVED (used for payload):', {
     cantidadResolved,
