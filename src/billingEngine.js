@@ -447,6 +447,7 @@ if (nextYmd) {
 
 // --- billing_next_date (anchor-based, sin usar calendario) ---
 const anchorStartRaw =
+ (p.billing_anchor_date || "").toString().slice(0, 10) ||
   p.hs_recurring_billing_start_date ||
   p.recurringbillingstartdate ||
   p.fecha_inicio_de_facturacion ||
@@ -489,15 +490,13 @@ if (nextYmd) {
     updatesRecurring.fecha_inicio_de_facturacion = isoDates[0];
   }
 
-  // --- NUEVA LÓGICA billing_anchor_date ---
-  try {
+  /*try {
     const todayYmd = getTodayYMD();
     const terms = (p.hs_recurring_billing_terms ?? "").toString().trim().toUpperCase();
     const isAutoRenew = terms === "AUTOMATICALLY RENEW";
     const nPayments = parseInt((p.hs_recurring_billing_number_of_payments ?? "").toString(), 10) || 0;
-    const needsAnchor = isAutoRenew || (!isAutoRenew && nPayments > 24);
 
-    if (needsAnchor) {
+    if (interval) {
       const startRawForAnchor =
         p.hs_recurring_billing_start_date ||
         p.recurringbillingstartdate ||
@@ -545,11 +544,42 @@ if (nextYmd) {
       }
     }
   } catch (e) {
-    console.warn("[updateLineItemSchedule] ⚠️ no se pudo setear billing_anchor_date", {
+       console.warn("[updateLineItemSchedule] ⚠️ no se pudo setear billing_anchor_date", {
       lineItemId: lineItem.id,
       error: e?.message || e,
     });
   }
+    */
+
+  // --- billing_anchor_date (default = hs_recurring_billing_start_date; NO auto-mover) ---
+try {
+  if (interval) {
+    const startFromHS =
+      (p.hs_recurring_billing_start_date ?? "").toString().slice(0, 10) || "";
+
+    const currentAnchor =
+      (p.billing_anchor_date ?? "").toString().slice(0, 10) || "";
+
+    // ✅ Solo inicializar si está vacío
+    if (startFromHS && !currentAnchor) {
+      updatesRecurring.billing_anchor_date = startFromHS;
+
+      if (process.env.DBG_PHASE1 === "true") {
+        console.log("[updateLineItemSchedule] ✅ billing_anchor_date inicializada (default=start_date)", {
+          lineItemId: lineItem.id,
+          billing_anchor_date: startFromHS
+        });
+      }
+    }
+  }
+} catch (e) {
+  console.warn("[updateLineItemSchedule] ⚠️ no se pudo inicializar billing_anchor_date", {
+    lineItemId: lineItem.id,
+    error: e?.message || e,
+  });
+}
+
+
 
   // fecha_2 … fecha_24 (tu realidad)
   for (let i = 1; i < 24; i++) {
