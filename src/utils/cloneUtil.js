@@ -10,6 +10,9 @@ export function sanitizeLineItemIfCloned({ isCloned }) {
 
     // Anchor (para forzar recalculo desde fecha_inicio_de_facturacion / start_date)
     billing_anchor_date: '',
+       // --- IRREGULAR (clave para tu caso) ---
+    irregular: '',
+    fecha_irregular_puntual: '',
 
     // Referencias potencialmente clonadas (si existen como propiedades en tu portal)
     invoice_id: '',
@@ -38,6 +41,22 @@ export function sanitizeLineItemDatesIfCloned(lineItem) {
       billing_next_date: '',
       // ojo: Phase1 probablemente NO deba limpiar anchor acá
       // lo dejamos como estaba para no cambiar comportamiento
+    };
+  }
+  return {};
+}
+
+// Mantener compatibilidad con Phase1 (para que no crashee)
+export function sanitizeLineItemDatesIfCloned(lineItem) {
+  // si querés dejar la heurística vieja, dejala; si no, return {}
+  const props = lineItem?.properties || {};
+  const lastTicketed = (props.last_ticketed_date || '').slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastTicketed && lastTicketed > today) {
+    return {
+      last_ticketed_date: '',
+      billing_last_billed_date: '',
+      billing_next_date: '',
     };
   }
   return {};
