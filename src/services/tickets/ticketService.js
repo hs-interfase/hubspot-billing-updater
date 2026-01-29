@@ -117,31 +117,41 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 
   const tp = ticket?.properties || {};
 
-  // ✅ Tomamos la fecha "canónica" (evita UTC -1 día)
+  // ✅ Fecha canónica del ticket (evita UTC -1)
   const ticketDateYMD = billDateYMD || toYMDInBillingTZ(tp.fecha_resolucion_esperada);
   if (!ticketDateYMD) return;
 
-  // 2) Anti-clon (soft)
+  // Deal mismatch = no es nuestro ticket (hard guard)
   if (tp.of_deal_id && String(tp.of_deal_id) !== String(dealId)) return;
-  if (tp.of_line_item_ids) {
-    const ids = String(tp.of_line_item_ids).split(',').map(x => x.trim()).filter(Boolean);
-    if (!ids.includes(String(lineItemId))) return;
-  }
+
+  // Regla B acordada: si no hay ticket_key, no podemos validar mismatch aquí
   if (!tp.of_ticket_key) return;
 
-  // 3) Leer line item (solo lo necesario)
+  // 2) Leer line item (necesitamos PY origin para comparar keys)
   let lineItem;
   try {
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'billing_next_date',
       'last_ticketed_date',
       'billing_last_billed_date',
+      'billing_anchor_date',
+      'of_line_item_py_origen_id',
       'hs_recurring_billing_start_date',
       'recurringbillingfrequency',
       'hs_recurring_billing_frequency',
       'hs_recurring_billing_number_of_payments',
       'number_of_payments',
       'fecha_inicio_de_facturacion',
+
+      // Estas pueden o no existir en line_item; si te diera error en tu portal,
+      // las sacamos y listo (la lógica de limpieza sigue igual)
+      'invoice_id',
+      'invoice_key',
+      'of_invoice_id',
+      'of_invoice_key',
+      'of_invoice_status',
+      'of_ticket_id',
+      'of_ticket_key',
     ]);
   } catch (e) {
     console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer line item:', e?.message);
@@ -150,44 +160,79 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 
   const lp = lineItem?.properties || {};
 
-  // 3.5) Si fue catalogado como clonado, limpiamos historial copiado por HubSpot
-  if (isCloned) {
-    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-      properties: {
-        last_ticketed_date: '',
-        billing_last_billed_date: '',
-        billing_next_date: '', // recomendado
-      },
-    });
-    lp.last_ticketed_date = '';
-    lp.billing_last_billed_date = '';
-    lp.billing_next_date = '';
+  // 3) isCloned = mismatch ticket↔lineItem (ACUERDO)
+  const liIds = tp.of_line_item_ids
+    ? String(tp.of_line_item_ids).split(',').map(x => x.trim()).filter(Boolean)
+    : [];
+
+  const belongsByIds = liIds.length ? liIds.includes(String(lineItemId)) : false;
+
+  const ticketLineId = extractLineIdFromTicketKey(String(tp.of_ticket_key).trim());
+
+  const expectedPy = lp.of_line_item_py_origen_id
+    ? `PYLI:${String(lp.of_line_item_py_origen_id).trim()}`
+    : null;
+
+  const belongsByKey =
+    ticketLineId === String(lineItemId) ||
+    (expectedPy && ticketLineId === expectedPy);
+
+  const isCloned = !(belongsByIds || belongsByKey);
+
+// 3.5) Si es clon UI / mismatch ticket↔lineItem → limpiar (ACUERDO)
+if (isCloned) {
+  console.warn('[syncLineItemAfterCanonicalTicket] CLONE_MISMATCH -> limpiando line item', {
+    dealId,
+    lineItemId,
+    ticketId,
+    ticketKey: tp.of_ticket_key,
+    ticketLineId,
+    expectedPy,
+    of_line_item_ids: tp.of_line_item_ids,
+  });
+
+  try {
+    const { sanitizeLineItemIfCloned } = await import('../utils/cloneUtils.js');
+    const propsToClear = sanitizeLineItemIfCloned({ isCloned: true });
+
+    if (Object.keys(propsToClear).length) {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: propsToClear,
+      });
+    }
+  } catch (e) {
+    console.warn('[syncLineItemAfterCanonicalTicket] Limpieza clon falló:', e?.message || e);
+    return;
   }
 
-const currentLastBilledYMD  = (lp.billing_last_billed_date || '').slice(0, 10);
+  // IMPORTANTE:
+  // Si es clon, NO seguimos con cálculo de fechas.
+  // La idea es dejar el line item “virgen” para que Phase1 / billingEngine
+  // recalculen desde anchor / fecha_inicio_de_facturacion.
+  return;
+}
+
+  // 4) Estado actual (normal)
+  const currentLastBilledYMD = (lp.billing_last_billed_date || '').slice(0, 10);
   const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
 
-
-
-  // 4) last_ticketed_date = max(...)
+  // 5) last_ticketed_date = max(current, ticketDateYMD)
   let newLastTicketedYMD = currentLastTicketedYMD;
   if (!currentLastTicketedYMD || ticketDateYMD > currentLastTicketedYMD) {
     newLastTicketedYMD = ticketDateYMD;
   }
 
-// 5) billing_next_date
-// Recalcular si next está vacío o si next <= last_ticketed (no representa “próxima sin ticket”).
-// Si next ya está adelantado (> ticketDate), no tocar.
-let newNextYMD = currentNextYMD;
+  // 6) billing_next_date = próxima sin ticket (> last_ticketed_date)
+  // Recalcular si:
+  // - está vacío, o
+  // - next <= newLastTicketedYMD (no representa “próxima sin ticket”)
+  let newNextYMD = currentNextYMD;
 
-if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
-  if (currentNextYMD && currentNextYMD > ticketDateYMD) {
-    // no tocar
-  } else {
+  if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
     const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
 
-    // ✅ mediodía UTC + 1 día para evitar “-1 día” por TZ
+    // Base: el día siguiente al ticket (en UTC noon) para evitar desfases
     const base = new Date(ticketDateYMD + 'T12:00:00Z');
     base.setUTCDate(base.getUTCDate() + 1);
 
@@ -195,22 +240,36 @@ if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
     const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
     newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
   }
-}
 
-  // 6) Update solo si cambió algo
+  // Guard extra por si algo raro devolvió igual o menor:
+  if (newNextYMD && newNextYMD <= newLastTicketedYMD) {
+    // si esto pasa, preferimos dejar vacío y que Phase1/engine lo recalculen después
+    console.warn('[syncLineItemAfterCanonicalTicket] next inválida (<= last_ticketed). Se deja vacío.', {
+      lineItemId,
+      newLastTicketedYMD,
+      newNextYMD,
+      currentNextYMD,
+    });
+    newNextYMD = '';
+  }
+
+  // 7) Update solo si cambió
   const updates = {};
   if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
-  if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD; // '' => null
+  if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD;
 
   if (!Object.keys(updates).length) return;
 
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
-    console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} actualizado:`, updates);
+    console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} actualizado:`, updates, {
+      currentLastBilledYMD, // solo debug, NO tocamos last_billed aquí
+    });
   } catch (e) {
     console.warn('[syncLineItemAfterCanonicalTicket] No se pudo actualizar line item:', e?.message);
   }
 }
+
 
 // Helper para resetear triggers en el Line Item (MVP anti-loops)
 export async function resetTriggersFromLineItem(lineItemId) {
