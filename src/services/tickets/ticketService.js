@@ -796,6 +796,53 @@ export async function ensureTicketCanonical({
     };
   }
 
+  // 2.5) PRE-CREACIÓN: si el line item trae un of_ticket_key que no le pertenece → limpiar props clonadas
+  try {
+    const liObj = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      'of_ticket_key',
+      'of_line_item_py_origen_id',
+    ]);
+
+    const lp = liObj?.properties || {};
+    const liTicketKey = (lp.of_ticket_key || '').trim();
+
+    if (liTicketKey) {
+      const ticketLineId = extractLineIdFromTicketKey(liTicketKey);
+
+      const expectedPy = lp.of_line_item_py_origen_id
+        ? `PYLI:${String(lp.of_line_item_py_origen_id).trim()}`
+        : null;
+
+      const belongsByKey =
+        ticketLineId === String(lineItemId) ||
+        (expectedPy && ticketLineId === expectedPy);
+
+      const isClonedByKeyMismatch = !belongsByKey;
+
+      if (isClonedByKeyMismatch) {
+        console.warn('[ensureTicketCanonical] CLONE_KEY_MISMATCH pre-create -> limpiando line item', {
+          dealId,
+          lineItemId,
+          liTicketKey,
+          ticketLineId,
+          expectedPy,
+        });
+
+        const propsToClear = sanitizeLineItemIfCloned({ isCloned: true });
+
+        if (propsToClear && Object.keys(propsToClear).length > 0) {
+          await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+            properties: propsToClear,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[ensureTicketCanonical] pre-create clone cleanup failed:', e?.message || e);
+    // NO cortamos el flujo: seguimos para no romper facturación
+  }
+
+
   // 3) Si no existe, crear ticket canónico
   console.log(`   🆕 Creando ticket canónico...`);
   

@@ -12,7 +12,7 @@ import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
-import { sanitizeLineItemDatesIfCloned } from '../utils/cloneUtil.js'; 
+import { sanitizeLineItemIfClonedByTicketKey } from '../utils/cloneUtil.js'; 
 
 logDateEnvOnce();
 
@@ -229,19 +229,18 @@ function deriveDealBillingFrequency(lineItems) {
 async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
-  // 1) calendario
 // 1) calendario
 for (const li of lineItems) {
   try {
     // 0) SANITIZER: si el line item es clonado, limpiar fechas sucias
-    const updates = sanitizeLineItemDatesIfCloned(li);
+    const updates = sanitizeLineItemIfClonedByTicketKey(li);
     if (updates && Object.keys(updates).length) {
       await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
       // actualizar en memoria para que schedule recalcule con datos limpios
       li.properties = { ...(li.properties || {}), ...updates };
 
       if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+        console.log('[phase1][sanitizeLineItemIfClonedByTicketKey]', { lineItemId: li.id, updates });
       }
     }
 
