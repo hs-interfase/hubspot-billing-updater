@@ -13,6 +13,7 @@ import { generateTicketKey } from '../../utils/idempotency.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../../utils/dateUtils.js';
 import { parseBool } from '../../utils/parsers.js';
+import { sanitizeLineItemIfCloned } from '../../utils/cloneUtil.js';
 
 // Helper para esperar a que el ticket tenga total_real_a_facturar calculado y válido
 async function awaitTicketCalculatedReady(ticketId) {
@@ -192,25 +193,29 @@ if (isCloned) {
   });
 
   try {
-    const { sanitizeLineItemIfCloned } = await import('../../utils/cloneUtil.js');
     const propsToClear = sanitizeLineItemIfCloned({ isCloned: true });
 
-    if (Object.keys(propsToClear).length) {
+    // Guard extra: solo intentar update si hay algo que limpiar
+    if (propsToClear && Object.keys(propsToClear).length > 0) {
       await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
         properties: propsToClear,
       });
     }
   } catch (e) {
-    console.warn('[syncLineItemAfterCanonicalTicket] Limpieza clon falló:', e?.message || e);
+    console.warn(
+      '[syncLineItemAfterCanonicalTicket] Limpieza clon falló:',
+      e?.message || e
+    );
     return;
   }
 
   // IMPORTANTE:
   // Si es clon, NO seguimos con cálculo de fechas.
-  // La idea es dejar el line item “virgen” para que Phase1 / billingEngine
+  // Dejamos el line item “virgen” para que Phase1 / billingEngine
   // recalculen desde anchor / fecha_inicio_de_facturacion.
   return;
 }
+
 
   // 4) Estado actual (normal)
   const currentLastBilledYMD = (lp.billing_last_billed_date || '').slice(0, 10);
