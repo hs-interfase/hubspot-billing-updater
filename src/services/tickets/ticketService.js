@@ -149,8 +149,26 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
 
   const lp = lineItem?.properties || {};
+
+  // 3.5) Si fue catalogado como clonado, limpiamos historial copiado por HubSpot
+  if (isCloned) {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: {
+        last_ticketed_date: '',
+        billing_last_billed_date: '',
+        billing_next_date: '', // recomendado
+      },
+    });
+    lp.last_ticketed_date = '';
+    lp.billing_last_billed_date = '';
+    lp.billing_next_date = '';
+  }
+
+const currentLastBilledYMD  = (lp.billing_last_billed_date || '').slice(0, 10);
   const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
+
+
 
   // 4) last_ticketed_date = max(...)
   let newLastTicketedYMD = currentLastTicketedYMD;

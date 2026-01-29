@@ -127,6 +127,7 @@ export async function getDealWithLineItems(dealId) {
     "hs_recurring_billing_number_of_payments",
     "hs_recurring_billing_terms",
     'billing_anchor_date',
+    'fecha_irregular_puntual',
     'billing_next_date',
     "billing_last_billed_date",
     "last_ticketed_date",
@@ -145,6 +146,7 @@ export async function getDealWithLineItems(dealId) {
     "servicio",
     "subrubro",
     "reventa",
+    "billing_error",
 
     // --- referencias ---
     "invoice_id",
