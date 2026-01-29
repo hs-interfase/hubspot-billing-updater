@@ -192,7 +192,7 @@ if (isCloned) {
   });
 
   try {
-    const { sanitizeLineItemIfCloned } = await import('../utils/cloneUtils.js');
+    const { sanitizeLineItemIfCloned } = await import('../../utils/cloneUtil.js');
     const propsToClear = sanitizeLineItemIfCloned({ isCloned: true });
 
     if (Object.keys(propsToClear).length) {
