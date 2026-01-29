@@ -45,19 +45,3 @@ export function sanitizeLineItemDatesIfCloned(lineItem) {
   }
   return {};
 }
-
-// Mantener compatibilidad con Phase1 (para que no crashee)
-export function sanitizeLineItemDatesIfCloned(lineItem) {
-  // si querés dejar la heurística vieja, dejala; si no, return {}
-  const props = lineItem?.properties || {};
-  const lastTicketed = (props.last_ticketed_date || '').slice(0, 10);
-  const today = new Date().toISOString().slice(0, 10);
-  if (lastTicketed && lastTicketed > today) {
-    return {
-      last_ticketed_date: '',
-      billing_last_billed_date: '',
-      billing_next_date: '',
-    };
-  }
-  return {};
-}
