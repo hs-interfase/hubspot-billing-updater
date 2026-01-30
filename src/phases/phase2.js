@@ -73,7 +73,7 @@ export async function runPhase2({ deal, lineItems }) {
     console.log(`      recurringbillingstartdate: ${lp.recurringbillingstartdate || 'undefined'}`);
     console.log(`      hs_recurring_billing_start_date: ${lp.hs_recurring_billing_start_date || 'undefined'}`);
     console.log(`      fecha_inicio_de_facturacion: ${lp.fecha_inicio_de_facturacion || 'undefined'}`);
-    console.log(`      fecha_2: ${lp.fecha_2 || 'undefined'}, fecha_3: ${lp.fecha_3 || 'undefined'}, fecha_4: ${lp.fecha_4 || 'undefined'}`);
+    // console.log(`      fecha_2: ${lp.fecha_2 || 'undefined'}, fecha_3: ${lp.fecha_3 || 'undefined'}, fecha_4: ${lp.fecha_4 || 'undefined'}`);
     
     try {
       // Obtener la próxima fecha de facturación (FUENTE: billing_next_date si existe)

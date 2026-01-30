@@ -229,7 +229,6 @@ function deriveDealBillingFrequency(lineItems) {
 async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
-  // 1) calendario
 // 1) calendario
 for (const li of lineItems) {
   try {
