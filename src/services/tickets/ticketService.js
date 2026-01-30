@@ -151,7 +151,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   const lp = lineItem?.properties || {};
 
   // 3.5) Si fue catalogado como clonado, limpiamos historial copiado por HubSpot
-  if (isCloned) {
+/*  if (isCloned) {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: {
         last_ticketed_date: '',
@@ -165,7 +165,8 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
 
 const currentLastBilledYMD  = (lp.billing_last_billed_date || '').slice(0, 10);
-  const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
+ */
+ const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
 
 
