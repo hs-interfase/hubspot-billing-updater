@@ -649,7 +649,6 @@ tickets.sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b));
       await hubspotClient.crm.tickets.basicApi.archive(id);
     }
   }
-
   return { kept, archived: clones };
 }
 export async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
@@ -682,7 +681,6 @@ export async function countCanonicalTicketsForStableLine({ dealId, stableLineId 
   const uniq = new Set(real.map((t) => (t.properties?.of_ticket_key || '').toString()));
   return uniq.size;
 }
-
 
 /**
  * Asegura que existe un ticket canónico y marca los duplicados.
