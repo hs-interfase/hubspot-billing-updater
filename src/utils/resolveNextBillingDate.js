@@ -80,14 +80,23 @@ export function resolveNextBillingDate({
   const anchorDate = anchorRaw ? parseLocalDate(anchorRaw) : null;
   const anchorYmd = anchorDate ? formatDateISO(anchorDate) : null;
 
-  if (anchorYmd && anchorYmd >= todayYmd) {
-    console.log("📌 [billing] usando billing_anchor_date", {
+  if (anchorYmd) {
+    console.log("📌 [billing] usando billing_anchor_date como ANCHOR (motor)", {
       anchorYmd,
       isAutoRenew,
       nPayments,
     });
-    return anchorYmd;
+
+    // ✅ Anchor = start del motor. Calcula la próxima ocurrencia >= hoy con interval
+    const computedFromAnchor = computeNextFromStart({
+      startRaw: anchorYmd,
+      interval,
+      addInterval,
+    });
+
+    return computedFromAnchor || nextFromPreview;
   }
+
 
   // si falta anchor: calcular infinito
   const computed = computeNextFromStart({ startRaw, interval, addInterval });

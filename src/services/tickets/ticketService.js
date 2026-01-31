@@ -136,6 +136,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
       'billing_next_date',
       'last_ticketed_date',
       'billing_last_billed_date',
+      'billing_anchor_date',
       'hs_recurring_billing_start_date',
       'recurringbillingfrequency',
       'hs_recurring_billing_frequency',
@@ -651,6 +652,37 @@ tickets.sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b));
 
   return { kept, archived: clones };
 }
+async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
+  const prefix = `${dealId}::LI:${stableLineId}::`;
+
+  const res = await hubspotClient.crm.tickets.searchApi.doSearch({
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: 'of_ticket_key', operator: 'CONTAINS_TOKEN', value: prefix },
+        ],
+      },
+    ],
+    properties: ['of_ticket_key', 'of_estado'],
+    limit: 200,
+  });
+
+  const tickets = res?.results || [];
+
+  // contamos SOLO los que NO son duplicados UI
+  const real = tickets.filter((t) => {
+    const p = t.properties || {};
+    const estado = (p.of_estado || '').toString().toUpperCase();
+    if (estado === 'DUPLICADO_UI') return false;
+    if (estado === 'DEPRECATED') return false;
+    return true;
+  });
+
+  // únicos por key por seguridad
+  const uniq = new Set(real.map((t) => (t.properties?.of_ticket_key || '').toString()));
+  return uniq.size;
+}
+
 
 /**
  * Asegura que existe un ticket canónico y marca los duplicados.
@@ -669,6 +701,7 @@ export async function ensureTicketCanonical({
   billDateYMD,
   lineItemId,
   buildTicketPayload,
+  maxPayments,
 }) {
    if (!lineItemId) throw new Error('ensureTicketCanonical: lineItemId es requerido para deduplicación UI');
 
