@@ -5,6 +5,7 @@ import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/d
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
 import { createManualBillingTicket } from '../services/tickets/manualTicketService.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
+import { countCanonicalTicketsForStableLine } from '../services/tickets/ticketService.js';
 
 /**
  * PHASE 2: Generación de tickets manuales para line items con facturacion_automatica!=true.
@@ -121,7 +122,26 @@ const nextBillingDate = planYMD; // en Phase2 “planYMD” ES la fecha que tick
       // Crear ticket (está dentro del lookahead)
       console.log(`      🎫 ¡DENTRO DEL LOOKAHEAD! Creando ticket...`);
       console.log(`      Fecha: ${nextBillingDate}, faltan ${daysUntilBilling} días`);
-      
+      // Número total de pagos configurado (string o número)
+const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
+const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
+
+if (totalPayments > 0) {
+  // ID estable: usa prefijo PYLI: si existe of_line_item_py_origen_id, si no el id numérico
+  const stableLineId = lp.of_line_item_py_origen_id
+    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
+    : lineItemId;
+
+  // Cuenta tickets canónicos existentes para esta familia
+  const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
+
+  // Si ya alcanzó o superó el límite, no se crea otro ticket
+  if (issued >= totalPayments) {
+    console.log(`⚠️ Pagos emitidos (${issued}) ≥ total pagos (${totalPayments}) para LI ${lineItemId}, se omite ticket`);
+    continue;
+  }
+}
+
       const result = await createManualBillingTicket(deal, li, nextBillingDate);
       
       if (result.created) {

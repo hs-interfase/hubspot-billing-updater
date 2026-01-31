@@ -4,6 +4,7 @@ import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from '../services/tickets/ticketService.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
+import { countCanonicalTicketsForStableLine } from '../services/tickets/ticketService.js';
 
 /**
  * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true
@@ -82,6 +83,26 @@ console.log(
         console.log(`         invoice_date: ${today} (urgent)`);
 
         console.log('[Phase3] delegating to createAutoBillingTicket (ticket is source of truth, no direct invoice)');
+        // Número total de pagos configurado (string o número)
+const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
+const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
+
+if (totalPayments > 0) {
+  // ID estable: usa prefijo PYLI: si existe of_line_item_py_origen_id, si no el id numérico
+  const stableLineId = lp.of_line_item_py_origen_id
+    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
+    : lineItemId;
+
+  // Cuenta tickets canónicos existentes para esta familia
+  const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
+
+  // Si ya alcanzó o superó el límite, no se crea otro ticket
+  if (issued >= totalPayments) {
+    console.log(`⚠️ Pagos emitidos (${issued}) ≥ total pagos (${totalPayments}) para LI ${lineItemId}, se omite ticket`);
+    continue;
+  }
+}
+
         const ticketResult = await createAutoBillingTicket(deal, li, billingPeriodDate);
         console.log('[Phase3] ticketService.createAutoBillingTicket result:', ticketResult);
 
