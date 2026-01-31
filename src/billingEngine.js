@@ -443,6 +443,14 @@ export async function updateLineItemSchedule(lineItem) {
   // --------------------------------------------
   // 3) Recurrente anchor-based (sin calendario)
   // --------------------------------------------
+  // NOTE (post-migration):
+  // Esta lógica asume tickets parciales.
+  // En la migración histórica se debe recalcular:
+  // - pagos_emitidos desde tickets reales
+  // - pagos_restantes
+  // - billing_anchor_date efectivo
+  // y luego regenerar billing_next_date en batch.
+  
   const updatesRecurring = {
     billing_error: '',
   };
@@ -599,7 +607,7 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const p = lineItem?.properties || {};
 
   // 1) Respetar contadores: si ya se hicieron todos los pagos, no hay próxima fecha
-  const total = Number(p.total_de_pagos) || 0;
+const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(p.pagos_emitidos) || 0;
 
   if (total > 0 && emitidos >= total) {
@@ -639,7 +647,7 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const startDate = config?.startDate ?? null;
 
   // 5) effectiveTodayYmd: si hay last_ticketed_date, la próxima debe ser desde +1 día
-  const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
+ /* const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
   let effectiveTodayYmd = todayYmd;
 
   if (lastTicketedYmd) {
@@ -650,6 +658,20 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
       if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
     }
   }
+    */
+   // 5) effectiveTodayYmd: frontera dura — NUNCA ir antes del último ticket emitido
+const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
+
+let effectiveTodayYmd = todayYmd;
+
+if (lastTicketedYmd) {
+  const d = parseLocalDate(lastTicketedYmd);
+  if (d && !Number.isNaN(d.getTime())) {
+    d.setDate(d.getDate() + 1);
+    effectiveTodayYmd = formatDateISO(d); // ← SIN max(), SIN today
+  }
+}
+
 
   // 6) Pago único: si ya fue ticketiado -> no hay próxima. Si no, startDate si es >= effectiveToday.
   if (!interval) {
@@ -731,6 +753,7 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
  *
  * (Esto evita depender de fecha_2..48)
  */
+
 export function computeLineItemCounters(lineItem, today = new Date()) {
   const props = lineItem?.properties || {};
 
@@ -776,7 +799,7 @@ export function computeLineItemCounters(lineItem, today = new Date()) {
 export function computeBillingCountersForLineItem(lineItem, today = new Date()) {
   const p = lineItem?.properties || {};
 
-  const total = Number(p.total_de_pagos) || 0;
+const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(p.pagos_emitidos) || 0;
   const restantes = total > emitidos ? total - emitidos : 0;
 

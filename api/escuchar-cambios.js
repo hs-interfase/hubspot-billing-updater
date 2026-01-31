@@ -48,6 +48,21 @@ async function getDealIdForLineItem(lineItemId) {
 async function processRecalculation(lineItemId, propertyName) {
   console.log(`\n🔄 [Recalculation] Procesando ${propertyName} para line item ${lineItemId}...`);
   
+//0 Setear Actualizar a False.
+  if (propertyName === "actualizar") {
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { actualizar: false },
+      });
+      console.log(`🧯 Trigger "actualizar" reseteado a false (line item ${lineItemId})`);
+    } catch (e) {
+      console.warn(`⚠️ No pude resetear "actualizar" al inicio (line item ${lineItemId})`, e?.message || e);
+      // si tu prioridad #1 es cortar loops igual, NO hagas throw acá.
+      // Si querés ser más estricta: throw e;
+    }
+  }
+
+
   // 1. Obtener deal asociado
   const dealId = await getDealIdForLineItem(lineItemId);
   if (!dealId) {
