@@ -652,7 +652,7 @@ tickets.sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b));
 
   return { kept, archived: clones };
 }
-async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
+export async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
   const prefix = `${dealId}::LI:${stableLineId}::`;
 
   const res = await hubspotClient.crm.tickets.searchApi.doSearch({
