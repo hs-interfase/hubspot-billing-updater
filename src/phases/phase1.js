@@ -233,8 +233,9 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
 for (const li of lineItems) {
   try {
     // 0) SANITIZER: si el line item es clonado, limpiar fechas sucias
-    const updates = sanitizeLineItemDatesIfCloned(li);
-    if (updates && Object.keys(updates).length) {
+
+    const updates = sanitizeLineItemDatesIfCloned(li);   
+     if (updates && Object.keys(updates).length) {
       await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
       // actualizar en memoria para que schedule recalcule con datos limpios
       li.properties = { ...(li.properties || {}), ...updates };

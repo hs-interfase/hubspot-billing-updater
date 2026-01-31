@@ -488,24 +488,32 @@ export async function updateLineItemSchedule(lineItem) {
     (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
     formatDateISO(startDate);
 
+// Piso duro: no permitir next antes de startDate
+const startYmd = formatDateISO(startDate);
+let floorYmd = effectiveTodayYmd;
+if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+
+
   const nextYmd = computeNextFromInterval({
     startRaw: anchorStartRaw,
     interval,
-    todayYmd: effectiveTodayYmd,
+    todayYmd: floorYmd,
     addInterval,
     formatDateISO,
     parseLocalDate,
   });
 
   updatesRecurring.billing_next_date = nextYmd || '';
+if (process.env.DBG_PHASE1 === 'true') {
+  console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => ${nextYmd || '(null)'}`, {
+    anchorStartRaw,
+    effectiveTodayYmd,
+    startYmd,
+    floorYmd,
+    last_ticketed_date: lastTicketedYmd || null,
+  });
+}
 
-  if (process.env.DBG_PHASE1 === 'true') {
-    console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => ${nextYmd || '(null)'}`, {
-      anchorStartRaw,
-      effectiveTodayYmd,
-      last_ticketed_date: lastTicketedYmd || null,
-    });
-  }
 
   // Mantener coherencia de start date alias (sin calendario)
   const isoStart = formatDateISO(startDate);
@@ -692,14 +700,32 @@ if (lastTicketedYmd) {
 
   if (!anchorStartRaw) return null;
 
-  const nextYmd = computeNextFromInterval({
+/*  const nextYmd = computeNextFromInterval({
     startRaw: anchorStartRaw,
     interval,
-    todayYmd: effectiveTodayYmd,
+    todayYmd: effectiveTodayYmd,  
     addInterval,
     formatDateISO,
     parseLocalDate,
   });
+*/
+// Piso duro: nunca antes del startDate real
+const startYmd = startDate ? formatDateISO(startDate) : null;
+
+let floorYmd = effectiveTodayYmd;
+if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+
+const nextYmd = computeNextFromInterval({
+  startRaw: anchorStartRaw,
+  interval,
+  todayYmd: floorYmd,
+  addInterval,
+  formatDateISO,
+  parseLocalDate,
+});
+
+
+
 
   return nextYmd ? parseLocalDate(nextYmd) : null;
 
@@ -757,7 +783,7 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 export function computeLineItemCounters(lineItem, today = new Date()) {
   const props = lineItem?.properties || {};
 
-  const total = Number(props.total_de_pagos) || 0;
+  const total = Number(props.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(props.pagos_emitidos) || 0;
   const restantes = total > emitidos ? total - emitidos : 0;
 

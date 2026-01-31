@@ -117,6 +117,7 @@ const nextBillingDate = planYMD; // en Phase2 “planYMD” ES la fecha que tick
         continue;
       }
       
+      
       // Crear ticket (está dentro del lookahead)
       console.log(`      🎫 ¡DENTRO DEL LOOKAHEAD! Creando ticket...`);
       console.log(`      Fecha: ${nextBillingDate}, faltan ${daysUntilBilling} días`);
