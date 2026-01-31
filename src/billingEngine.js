@@ -676,7 +676,8 @@ if (lastTicketedYmd) {
   const d = parseLocalDate(lastTicketedYmd);
   if (d && !Number.isNaN(d.getTime())) {
     d.setDate(d.getDate() + 1);
-    effectiveTodayYmd = formatDateISO(d); // ← SIN max(), SIN today
+    const plusOne = formatDateISO(d);
+    if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne; 
   }
 }
 
