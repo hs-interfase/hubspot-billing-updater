@@ -512,10 +512,28 @@ function parseBoolLoose(v) {
 
 function isMirrorDealFromDeal(deal) {
   const p = deal?.properties || {};
-  const uyFlag = parseBoolLoose(p[PROP_UY_FLAG]) || String(p[PROP_COUNTRY] || "").toLowerCase() === "uruguay";
+
+  // 1) Regla principal (la más confiable en tu portal)
+  // Ajustá PROP_IS_MIRROR si tu property real se llama distinto.
+  const PROP_IS_MIRROR = process.env.PROP_IS_MIRROR || "es_mirror_de_py";
+  if (parseBoolLoose(p[PROP_IS_MIRROR])) return true;
+
+  // 2) Fallback por referencia al origen (también indica mirror)
+  // (En tu log real suele ser deal_py_origen_id)
   const hasOriginalRef = Boolean(String(p[PROP_ORIGINAL_ID] || "").trim());
-  return Boolean(uyFlag && hasOriginalRef);
+  if (hasOriginalRef) return true;
+
+  // 3) Fallback opcional (solo si querés mantener la heurística UY)
+  // Esto NO debe ser condición única (UY puede ser original UY).
+  const uyFlag =
+    parseBoolLoose(p[PROP_UY_FLAG]) ||
+    String(p[PROP_COUNTRY] || "").toLowerCase() === "uruguay";
+
+  // Si está marcado UY pero no tiene ref a origen y no está marcado mirror,
+  // no lo tratamos como mirror.
+  return false;
 }
+
 
 function getMirrorIdFromOriginalDeal(deal) {
   const p = deal?.properties || {};

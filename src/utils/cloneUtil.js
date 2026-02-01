@@ -12,6 +12,8 @@ export function sanitizeLineItemDatesIfCloned(lineItem) {
       billing_next_date: '',
       irregular: '',
       fecha_irregular_puntual: '',
+      billing_anchor_date: '',
+      is_clone: '',
     };
   }
   return {};
