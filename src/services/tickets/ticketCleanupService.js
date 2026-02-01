@@ -156,25 +156,48 @@ export async function cleanupClonedTicketsForDeal({ dealId, lineItems }) {
   }
 
   // ========== PASO B: Validar mismatch (lineItemId no está en lineItems) ==========
-  for (const t of tickets) {
-    // Saltar si ya fue deprecado
-    if (deprecatedIds.has(String(t.id))) continue;
-    
-    const key = t.properties?.of_ticket_key;
-    const parsed = parseTicketKey(key);
-    if (!parsed?.lineItemId) continue;
+// ========== PASO B: Validar mismatch (lineItemId no está en lineItems) ==========
+for (const t of tickets) {
+  if (deprecatedIds.has(String(t.id))) continue;
 
-    const existsInDeal = liSet.has(String(parsed.lineItemId));
-    if (!existsInDeal) {
-      mismatches++;
-      await softDeprecateTicket(
-        t.id,
-        `MISMATCH key LI:${parsed.lineItemId} no está en lineItems del deal`
-      );
-      deprecated++;
-      deprecatedIds.add(String(t.id));
+  const key = t.properties?.of_ticket_key;
+  const parsed = parseTicketKey(key);
+  if (!parsed?.lineItemId) continue;
+
+  const existsInDeal = liSet.has(String(parsed.lineItemId));
+  if (!existsInDeal) {
+    mismatches++;
+
+    // ✅ PEGAR ACÁ (ANTES de softDeprecateTicket)
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(parsed.lineItemId), {
+        properties: { is_clone: 'true' },
+      });
+
+      if (process.env.DBG_PHASE1 === 'true') {
+        console.log('[clone][mismatch] marked line item as clone', {
+          lineItemId: parsed.lineItemId,
+          ticketId: t.id,
+          of_ticket_key: key,
+        });
+      }
+    } catch (e) {
+      console.log('[clone][mismatch] could not mark line item', {
+        lineItemId: parsed.lineItemId,
+        ticketId: t.id,
+        err: e?.message,
+      });
     }
+
+    // tu lógica actual
+    await softDeprecateTicket(
+      t.id,
+      `MISMATCH key LI:${parsed.lineItemId} no está en lineItems del deal`
+    );
+    deprecated++;
+    deprecatedIds.add(String(t.id));
   }
+}
 
   // ========== PASO C: Deduplicar por of_ticket_key ==========
   const groups = new Map();

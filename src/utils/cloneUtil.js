@@ -10,10 +10,11 @@ export function sanitizeLineItemDatesIfCloned(lineItem) {
       last_ticketed_date: '',
       billing_last_billed_date: '',
       billing_next_date: '',
-      billing_anchor_date: '',
       irregular: '',
       fecha_irregular_puntual: '',
     };
   }
   return {};
 }
+
+// anchor_date : '',

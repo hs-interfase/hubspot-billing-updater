@@ -225,6 +225,9 @@ function deriveDealBillingFrequency(lineItems) {
   // si hay mezcla
   return 'mixed';
 }
+function isClonedLineItem(li) {
+  return String(li?.properties?.is_clone || '').toLowerCase() === 'true';
+}
 
 async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
@@ -232,16 +235,26 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
 // 1) calendario
 for (const li of lineItems) {
   try {
-    // 0) SANITIZER: si el line item es clonado, limpiar fechas sucias
+    // 0) SANITIZER: SOLO si es clonado
+     if (process.env.DBG_PHASE1 === 'true') console.log('[phase1] is_clone', li.id, li.properties?.is_clone);
 
-    const updates = sanitizeLineItemDatesIfCloned(li);   
-     if (updates && Object.keys(updates).length) {
-      await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
-      // actualizar en memoria para que schedule recalcule con datos limpios
-      li.properties = { ...(li.properties || {}), ...updates };
+    if (isClonedLineItem(li)) {
+      
+      const updates = sanitizeLineItemDatesIfCloned(li);
 
+      if (updates && Object.keys(updates).length) {
+        await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
+
+        // actualizar en memoria
+        li.properties = { ...(li.properties || {}), ...updates };
+
+        if (process.env.DBG_PHASE1 === 'true') {
+          console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+        }
+      }
+    } else {
       if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+        console.log('[phase1][sanitizeLineItemDatesIfCloned] skipped (not cloned)', { lineItemId: li.id });
       }
     }
 
@@ -260,6 +273,7 @@ for (const li of lineItems) {
     console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
   }
 }
+
 
 
   // 2) contadores + persistencia

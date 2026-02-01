@@ -161,6 +161,7 @@ export async function getDealWithLineItems(dealId) {
     "responsable_asignado",
     "unidad_de_negocio",
     "uy",
+    "is_clone",
   ];
 
   // fechas dinámicas fecha_2 ... fecha_24
