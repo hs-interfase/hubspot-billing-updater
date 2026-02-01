@@ -299,7 +299,7 @@ export async function resetTriggersFromLineItem(lineItemId) {
     // Intento guardar el mensaje para que "se sepa qué falló"
     try {
       await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-        properties: { of_billing_error: msg },
+        properties: { billing_error: msg },
       });
     } catch (_) {
       // si también falla, al menos queda en logs

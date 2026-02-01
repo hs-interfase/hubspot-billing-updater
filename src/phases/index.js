@@ -5,7 +5,7 @@ import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from "../hubspotClient.js";
-import { installHubSpotConsoleCollector } from "./utils/hubspotErrorCollector.js";
+import { installHubSpotConsoleCollector } from "../utils/hubspotErrorCollector.js";
 
 installHubSpotConsoleCollector();
 

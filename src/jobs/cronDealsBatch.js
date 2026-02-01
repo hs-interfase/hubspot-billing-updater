@@ -363,6 +363,41 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 // IMPORTANT: This file does NOT schedule itself. Use system cron/pm2 to call it.
 // Manual mode is for testing.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -399,11 +434,16 @@ const LOOKBACK_DAYS = Number(process.env.CRON_WEEKDAYS_LOOKBACK_DAYS || 7);
 const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
 const PROP_AUTO = process.env.PROP_AUTO || "facturacion_automatica"; // or "auto" if that's your real prop
 
-// Mirror props (adjust to your portal)
+// Mirror props (ajustado a tu portal real)
+const PROP_IS_MIRROR = process.env.PROP_IS_MIRROR || "es_mirror_de_py";
+const PROP_MIRROR_ID = process.env.PROP_MIRROR_ID || "deal_uy_mirror_id";
+const PROP_ORIGINAL_ID = process.env.PROP_ORIGINAL_ID || "deal_py_origen_id";
+
+
+// (Opcional: si querés conservar heurística UY, dejalo; pero NO lo uses para decidir mirror)
 const PROP_UY_FLAG = process.env.PROP_UY_FLAG || "uy";
 const PROP_COUNTRY = process.env.PROP_COUNTRY || "pais_operativo";
-const PROP_MIRROR_ID = process.env.PROP_MIRROR_ID || "of_mirror_deal_id";
-const PROP_ORIGINAL_ID = process.env.PROP_ORIGINAL_ID || "of_py_origen_deal_id";
+
 
 // Sorting
 const SORTS = ["-hs_lastmodifieddate"];
@@ -512,27 +552,10 @@ function parseBoolLoose(v) {
 
 function isMirrorDealFromDeal(deal) {
   const p = deal?.properties || {};
-
-  // 1) Regla principal (la más confiable en tu portal)
-  // Ajustá PROP_IS_MIRROR si tu property real se llama distinto.
-  const PROP_IS_MIRROR = process.env.PROP_IS_MIRROR || "es_mirror_de_py";
   if (parseBoolLoose(p[PROP_IS_MIRROR])) return true;
-
-  // 2) Fallback por referencia al origen (también indica mirror)
-  // (En tu log real suele ser deal_py_origen_id)
-  const hasOriginalRef = Boolean(String(p[PROP_ORIGINAL_ID] || "").trim());
-  if (hasOriginalRef) return true;
-
-  // 3) Fallback opcional (solo si querés mantener la heurística UY)
-  // Esto NO debe ser condición única (UY puede ser original UY).
-  const uyFlag =
-    parseBoolLoose(p[PROP_UY_FLAG]) ||
-    String(p[PROP_COUNTRY] || "").toLowerCase() === "uruguay";
-
-  // Si está marcado UY pero no tiene ref a origen y no está marcado mirror,
-  // no lo tratamos como mirror.
-  return false;
+  return Boolean(String(p[PROP_ORIGINAL_ID] || "").trim());
 }
+
 
 
 function getMirrorIdFromOriginalDeal(deal) {
@@ -561,34 +584,43 @@ function baseFiltersCancelled() {
   return [{ propertyName: "dealstage", operator: "NEQ", value: String(CANCELLED_STAGE_ID) }];
 }
 
+function baseFiltersNoMirrors() {
+  // Excluir mirrors desde el search
+  return [{ propertyName: PROP_IS_MIRROR, operator: "NEQ", value: "true" }];
+}
+
 function weekdayFilters_set1_todayAutoTrue(todayYMD) {
   // billing_next_date == today AND auto == true
   return [
-    ...baseFiltersCancelled(),
-    { propertyName: PROP_BILLING_NEXT_DATE, operator: "EQ", value: String(todayYMD) },
-    { propertyName: PROP_AUTO, operator: "EQ", value: "true" },
-  ];
+  ...baseFiltersCancelled(),
+  ...baseFiltersNoMirrors(),
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "EQ", value: String(todayYMD) },
+];
 }
 
 function weekdayFilters_set2_30daysAutoNotTrue(todayPlus30YMD) {
   // billing_next_date >= today+30 AND auto != true (covers false/null/empty if stored as non-true)
   // Note: HubSpot doesn't have "NOT_EQ true" for boolean in all cases, but NEQ should work for strings.
-  return [
-    ...baseFiltersCancelled(),
-    { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: String(todayPlus30YMD) },
-    { propertyName: PROP_AUTO, operator: "NEQ", value: "true" },
-  ];
+return [
+  ...baseFiltersCancelled(),
+  ...baseFiltersNoMirrors(),
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: String(todayPlus30YMD) },
+];
 }
 
 function weekdayFilters_set3_modifiedLookback(days) {
-  return [
-    ...baseFiltersCancelled(),
-    { propertyName: "hs_lastmodifieddate", operator: "GTE", value: lookbackMs(days) },
-  ];
+return [
+  ...baseFiltersCancelled(),
+  ...baseFiltersNoMirrors(),
+  { propertyName: "hs_lastmodifieddate", operator: "GTE", value: lookbackMs(days) },
+];
 }
 
 function weekendFilters_full() {
-  return [...baseFiltersCancelled()];
+return [
+  ...baseFiltersCancelled(),
+  ...baseFiltersNoMirrors(),
+];
 }
 
 function dealPropsForSearch() {
@@ -599,9 +631,9 @@ function dealPropsForSearch() {
     "hs_lastmodifieddate",
     PROP_BILLING_NEXT_DATE,
     PROP_AUTO,
-    // mirror-ish props
-    PROP_UY_FLAG,
-    PROP_COUNTRY,
+
+    // mirror props (las reales)
+    PROP_IS_MIRROR,
     PROP_MIRROR_ID,
     PROP_ORIGINAL_ID,
   ];
@@ -666,21 +698,32 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
       appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId: String(onlyDealId), mode });
 
       // Mirror immediate
-      const mirrorId = getMirrorIdFromOriginalDeal(deal);
-      if (mirrorId) {
-        try {
-          const { deal: mDeal, lineItems: mLI } = await getDealWithLineItems(String(mirrorId));
-          if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLI) && mLI.length > 0) {
-            appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: String(onlyDealId), mirrorDealId: String(mirrorId), mode });
-            if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLI });
-            appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: String(onlyDealId), mirrorDealId: String(mirrorId), mode });
-          } else {
-            appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: String(onlyDealId), mirrorDealId: String(mirrorId), mode });
-          }
-        } catch (eMirror) {
-          appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: String(onlyDealId), mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
-        }
-      }
+const mirrorId = getMirrorIdFromOriginalDeal(deal);
+
+if (!mirrorId) {
+  appendAudit({
+    at: new Date().toISOString(),
+    type: "info",
+    msg: "original_sin_mirror_id",
+    dealId,
+    dealname: name,
+    mode,
+  });
+} else {
+  try {
+    const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
+    if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
+      appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+      if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
+      appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+    } else {
+      appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+    }
+  } catch (eMirror) {
+    appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: dealId, mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
+  }
+}
+
 
       return { processed: 1, ok: 1, failed: 0 };
     }
@@ -833,21 +876,33 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
         appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
 
         // Immediately run mirror if original points to one
-        const mirrorId = getMirrorIdFromOriginalDeal(deal);
-        if (mirrorId) {
-          try {
-            const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
-            if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
-              appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-              if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
-              appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-            } else {
-              appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-            }
-          } catch (eMirror) {
-            appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: dealId, mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
-          }
-        }
+const mirrorId = getMirrorIdFromOriginalDeal(deal);
+
+if (!mirrorId) {
+  appendAudit({
+    at: new Date().toISOString(),
+    type: "info",
+    msg: "original_sin_mirror_id",
+    dealId,
+    dealname: name,
+    mode,
+  });
+} else {
+  try {
+    const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
+    if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
+      appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+      if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
+      appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+    } else {
+      appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+    }
+  } catch (eMirror) {
+    appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: dealId, mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
+  }
+}
+
+
       } catch (e1) {
         // retry once
         try {
