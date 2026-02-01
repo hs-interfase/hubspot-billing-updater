@@ -63,6 +63,37 @@ async function awaitTicketCalculatedReady(ticketId) {
   return null;
 }
 
+export async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
+  const prefix = `${dealId}::LI:${stableLineId}::`;
+
+  const res = await hubspotClient.crm.tickets.searchApi.doSearch({
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: 'of_ticket_key', operator: 'CONTAINS_TOKEN', value: prefix },
+        ],
+      },
+    ],
+    properties: ['of_ticket_key', 'of_estado'],
+    limit: 200,
+  });
+
+  const tickets = res?.results || [];
+
+  // contamos SOLO los que NO son duplicados UI
+  const real = tickets.filter((t) => {
+    const p = t.properties || {};
+    const estado = (p.of_estado || '').toString().toUpperCase();
+    if (estado === 'DUPLICADO_UI') return false;
+    if (estado === 'DEPRECATED') return false;
+    return true;
+  });
+
+  // únicos por key por seguridad
+  const uniq = new Set(real.map((t) => (t.properties?.of_ticket_key || '').toString()));
+  return uniq.size;
+}
+
 
 async function syncBillingLastBilledDateFromTicket({ ticketId, lineItemId }) {
   try {
@@ -151,6 +182,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 
   const lp = lineItem?.properties || {};
 
+  
   // 3.5) Si fue catalogado como clonado, limpiamos historial copiado por HubSpot
 /*  if (isCloned) {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
@@ -176,6 +208,37 @@ const currentLastBilledYMD  = (lp.billing_last_billed_date || '').slice(0, 10);
   let newLastTicketedYMD = currentLastTicketedYMD;
   if (!currentLastTicketedYMD || ticketDateYMD > currentLastTicketedYMD) {
     newLastTicketedYMD = ticketDateYMD;
+  }
+  // 4.b) HARD STOP por número de pagos (si ya emitimos todos, no hay "next")
+  const totalPaymentsRaw =
+    lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
+
+  const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
+
+  if (totalPayments > 0) {
+    // stableLineId: lo sacamos del ticketKey (formato: dealId::LI:<stableLineId>::YYYY-MM-DD)
+    const key = String(tp.of_ticket_key || '');
+    const stableLineId = key.includes('::LI:')
+      ? key.split('::LI:')[1].split('::')[0]
+      : String(lineItemId);
+
+    // Contar tickets canónicos existentes de esa familia
+    const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
+
+    if (issued >= totalPayments) {
+      // IMPORTANTE: dejamos last_ticketed_date actualizado, pero cortamos el motor de "next"
+      const updates = {};
+      if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
+
+      // Si ya está completo, no mostramos más próximas fechas
+      if (currentNextYMD !== '') updates.billing_next_date = '';
+
+      if (Object.keys(updates).length) {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
+        console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (issued=${issued}/${totalPayments}):`, updates);
+      }
+      return; // 👈 clave: salimos para no recalcular next
+    }
   }
 
 // 5) billing_next_date
@@ -292,6 +355,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_deal_id: dealId,
           of_line_item_ids: lineItemId,
           of_ticket_key: expectedKey,
+          observaciones_ventas: lineItem?.properties?.mensaje_para_responsable || '',
           ...snapshots,
         };
 
@@ -650,36 +714,6 @@ tickets.sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b));
     }
   }
   return { kept, archived: clones };
-}
-export async function countCanonicalTicketsForStableLine({ dealId, stableLineId }) {
-  const prefix = `${dealId}::LI:${stableLineId}::`;
-
-  const res = await hubspotClient.crm.tickets.searchApi.doSearch({
-    filterGroups: [
-      {
-        filters: [
-          { propertyName: 'of_ticket_key', operator: 'CONTAINS_TOKEN', value: prefix },
-        ],
-      },
-    ],
-    properties: ['of_ticket_key', 'of_estado'],
-    limit: 200,
-  });
-
-  const tickets = res?.results || [];
-
-  // contamos SOLO los que NO son duplicados UI
-  const real = tickets.filter((t) => {
-    const p = t.properties || {};
-    const estado = (p.of_estado || '').toString().toUpperCase();
-    if (estado === 'DUPLICADO_UI') return false;
-    if (estado === 'DEPRECATED') return false;
-    return true;
-  });
-
-  // únicos por key por seguridad
-  const uniq = new Set(real.map((t) => (t.properties?.of_ticket_key || '').toString()));
-  return uniq.size;
 }
 
 /**
