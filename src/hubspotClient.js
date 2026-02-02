@@ -125,6 +125,7 @@ export async function getDealWithLineItems(dealId) {
     "last_ticketed_date",
     "fecha_irregular_puntual",
     "billing_anchor_date",
+    'fechas_completas',
 
     // --- recurring ---
     "recurringbillingfrequency",

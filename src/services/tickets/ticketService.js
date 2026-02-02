@@ -223,22 +223,39 @@ const currentLastBilledYMD  = (lp.billing_last_billed_date || '').slice(0, 10);
       : String(lineItemId);
 
     // Contar tickets canónicos existentes de esa familia
-    const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
+// Contar tickets canónicos existentes de esa familia
+const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
 
-    if (issued >= totalPayments) {
-      // IMPORTANTE: dejamos last_ticketed_date actualizado, pero cortamos el motor de "next"
-      const updates = {};
-      if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
+if (issued >= totalPayments) {
+  const updates = {};
 
-      // Si ya está completo, no mostramos más próximas fechas
-      if (currentNextYMD !== '') updates.billing_next_date = '';
+  if (newLastTicketedYMD !== currentLastTicketedYMD) {
+    updates.last_ticketed_date = newLastTicketedYMD;
+  }
 
-      if (Object.keys(updates).length) {
-        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
-        console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (issued=${issued}/${totalPayments}):`, updates);
-      }
-      return; // 👈 clave: salimos para no recalcular next
-    }
+  // Si ya está completo, no mostramos más próximas fechas
+  if (currentNextYMD !== '') {
+    updates.billing_next_date = '';
+  }
+
+  // 🔴 NUEVO: marcar fechas completas
+  updates.fechas_completas = 'true';
+
+  if (Object.keys(updates).length) {
+    await hubspotClient.crm.lineItems.basicApi.update(
+      String(lineItemId),
+      { properties: updates }
+    );
+
+    console.log(
+      `[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (${issued}/${totalPayments})`,
+      updates
+    );
+  }
+
+  return; // 👈 clave: salimos para no recalcular next
+}
+
   }
 
 // 5) billing_next_date
@@ -250,6 +267,7 @@ if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
   if (currentNextYMD && currentNextYMD > ticketDateYMD) {
     // no tocar
   } else {
+    /*
     const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
 
     // ✅ mediodía UTC + 1 día para evitar “-1 día” por TZ
@@ -258,7 +276,19 @@ if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
 
     const fakeLineItem = { properties: { ...lp } };
     const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
-    newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
+    newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';  
+    */
+   const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
+const { toHubSpotDate, toYMDInBillingTZ } = await import('../../utils/dateUtils.js');
+
+// ✅ base = 06:00 en BILLING_TZ (Montevideo). toHubSpotDate(YMD) => 00:00 en BILLING_TZ (UTC ms)
+const base0 = Number(toHubSpotDate(ticketDateYMD));
+const base = new Date(base0 + 6 * 60 * 60 * 1000);
+
+const fakeLineItem = { properties: { ...lp } };
+const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
+newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
+
   }
 }
 

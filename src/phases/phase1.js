@@ -232,49 +232,69 @@ function isClonedLineItem(li) {
 async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
-// 1) calendario
-for (const li of lineItems) {
-  try {
-    // 0) SANITIZER: SOLO si es clonado
-     if (process.env.DBG_PHASE1 === 'true') console.log('[phase1] is_clone', li.id, li.properties?.is_clone);
+  // 1) calendario
+  for (const li of lineItems) {
+    try {
+      // 0) SANITIZER: SOLO si es clonado
+      if (process.env.DBG_PHASE1 === 'true') {
+        console.log('[phase1] is_clone', li.id, li.properties?.is_clone);
+      }
 
-    if (isClonedLineItem(li)) {
-      
-      const updates = sanitizeLineItemDatesIfCloned(li);
+      if (isClonedLineItem(li)) {
+        const updates = sanitizeLineItemDatesIfCloned(li);
 
-      if (updates && Object.keys(updates).length) {
-        await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
+        if (updates && Object.keys(updates).length) {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
 
-        // actualizar en memoria
-        li.properties = { ...(li.properties || {}), ...updates };
+          // actualizar en memoria
+          li.properties = { ...(li.properties || {}), ...updates };
 
+          if (process.env.DBG_PHASE1 === 'true') {
+            console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+          }
+        }
+      } else {
         if (process.env.DBG_PHASE1 === 'true') {
-          console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
+          console.log('[phase1][sanitizeLineItemDatesIfCloned] skipped (not cloned)', { lineItemId: li.id });
         }
       }
-    } else {
-      if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[phase1][sanitizeLineItemDatesIfCloned] skipped (not cloned)', { lineItemId: li.id });
+
+      // 0.5) HARD STOP POR PROPERTY: si fechas_completas=true, no recalcular schedule
+      const fechasCompletas =
+        String(li.properties?.fechas_completas || '').toLowerCase() === 'true';
+
+      if (fechasCompletas) {
+        // asegurar billing_next_date vacío
+        if ((li.properties?.billing_next_date ?? '') !== '') {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+            properties: { billing_next_date: '' },
+          });
+
+          // actualizar en memoria
+          li.properties = { ...(li.properties || {}), billing_next_date: '' };
+        }
+
+        if (process.env.DBG_PHASE1 === 'true') {
+          console.log('[phase1] fechas_completas=true -> skip schedule', { lineItemId: li.id });
+        }
+      } else {
+        // 1) calendario normal
+        await updateLineItemSchedule(li);
       }
-    }
 
-    // 1) calendario normal
-    await updateLineItemSchedule(li);
-
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log('[phase1][post-updateLineItemSchedule]', {
-        lineItemId: li.id,
-        billing_next_date: li.properties?.billing_next_date,
-        last_ticketed_date: li.properties?.last_ticketed_date,
-        billing_last_billed_date: li.properties?.billing_last_billed_date,
-      });
+      if (process.env.DBG_PHASE1 === 'true') {
+        console.log('[phase1][post-updateLineItemSchedule]', {
+          lineItemId: li.id,
+          billing_next_date: li.properties?.billing_next_date,
+          last_ticketed_date: li.properties?.last_ticketed_date,
+          billing_last_billed_date: li.properties?.billing_last_billed_date,
+          fechas_completas: li.properties?.fechas_completas,
+        });
+      }
+    } catch (err) {
+      console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
     }
-  } catch (err) {
-    console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
   }
-}
-
-
 
   // 2) contadores + persistencia
   // --- LÓGICA DE TOTAL DE AVISOS Y PAGOS COMENTADA TEMPORALMENTE ---
