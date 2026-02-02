@@ -276,6 +276,33 @@ export async function updateLineItemSchedule(lineItem) {
   const p = lineItem.properties || {};
   const config = getEffectiveBillingConfig(lineItem);
 
+  // =========================================================
+  // REGLA PREDOMINANTE:
+  // si fechas_completas = true => billing_next_date = '' y salir
+  // (no calcular nada más)
+  // =========================================================
+  const fechasCompletasFlag =
+    String(p.fechas_completas || '').trim().toLowerCase() === 'true';
+
+  if (fechasCompletasFlag) {
+    const updates = { billing_next_date: '', };
+
+    // opcional debug
+    if (process.env.DBG_PHASE1 === 'true') {
+      console.log('[updateLineItemSchedule] fechas_completas=true => billing_next_date=""', {
+        lineItemId: lineItem.id,
+      });
+    }
+
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
+      properties: updates,
+    });
+
+    lineItem.properties = { ...p, ...updates };
+    return lineItem;
+  }
+
+
   const isIrregular = config?.isIrregular === true;
   const interval = config?.interval ?? null;
   const startDate = config?.startDate ?? null;
@@ -488,22 +515,23 @@ export async function updateLineItemSchedule(lineItem) {
     (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
     formatDateISO(startDate);
 
-// Piso duro: no permitir next antes de startDate
+// Piso duro: no permitir next antes de startdate
 const startYmd = formatDateISO(startDate);
 let floorYmd = effectiveTodayYmd;
 if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
 
+const nextYmd = computeNextFromInterval({
+  startRaw: anchorStartRaw,
+  interval,
+  todayYmd: floorYmd,
+  addInterval,
+  formatDateISO,
+  parseLocalDate,
+});
 
-  const nextYmd = computeNextFromInterval({
-    startRaw: anchorStartRaw,
-    interval,
-    todayYmd: floorYmd,
-    addInterval,
-    formatDateISO,
-    parseLocalDate,
-  });
 
-  updatesRecurring.billing_next_date = nextYmd || '';
+updatesRecurring.billing_next_date = nextYmd || '';
+
 if (process.env.DBG_PHASE1 === 'true') {
   console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => ${nextYmd || '(null)'}`, {
     anchorStartRaw,
@@ -669,7 +697,7 @@ const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
     */
    // 5) effectiveTodayYmd: frontera dura — NUNCA ir antes del último ticket emitido
 const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
-
+/*
 let effectiveTodayYmd = todayYmd;
 
 if (lastTicketedYmd) {
@@ -680,7 +708,7 @@ if (lastTicketedYmd) {
     if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne; 
   }
 }
-
+*/
 
   // 6) Pago único: si ya fue ticketiado -> no hay próxima. Si no, startDate si es >= effectiveToday.
   if (!interval) {

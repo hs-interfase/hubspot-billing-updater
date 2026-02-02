@@ -446,7 +446,10 @@ const PROP_COUNTRY = process.env.PROP_COUNTRY || "pais_operativo";
 
 
 // Sorting
-const SORTS = ["-hs_lastmodifieddate"];
+const SORTS = [
+  { propertyName: "hs_lastmodifieddate", direction: "DESCENDING" },
+];
+
 
 // -------------------- Helpers --------------------
 function ensureDir(p) {
@@ -680,53 +683,55 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
       appendAudit({ at: new Date().toISOString(), type: "warn", msg: "CANCELLED_STAGE_ID not set" });
     }
 
-    // Manual single-deal mode (for quick iterative testing)
-    if (onlyDealId) {
-      const { deal, lineItems } = await getDealWithLineItems(String(onlyDealId));
-      if (!Array.isArray(lineItems) || lineItems.length === 0) {
-        appendAudit({ at: new Date().toISOString(), type: "skip", reason: "no_line_items", dealId: String(onlyDealId), mode });
-        return { processed: 1, ok: 0, failed: 0, skippedNoLI: 1 };
-      }
+if (onlyDealId) {
+  const dealId = String(onlyDealId); // ✅ define
+  const { deal, lineItems } = await getDealWithLineItems(dealId);
+  const name = deal?.properties?.dealname || dealId; // ✅ define
 
-      if (isMirrorDealFromDeal(deal)) {
-        appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_suelto_skip", dealId: String(onlyDealId), mode });
-        return { processed: 1, ok: 0, failed: 0, skippedMirror: 1 };
-      }
-
-      appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId: String(onlyDealId), mode });
-      if (!dry) await runPhasesForDeal({ deal, lineItems });
-      appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId: String(onlyDealId), mode });
-
-      // Mirror immediate
-const mirrorId = getMirrorIdFromOriginalDeal(deal);
-
-if (!mirrorId) {
-  appendAudit({
-    at: new Date().toISOString(),
-    type: "info",
-    msg: "original_sin_mirror_id",
-    dealId,
-    dealname: name,
-    mode,
-  });
-} else {
-  try {
-    const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
-    if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
-      appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-      if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
-      appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-    } else {
-      appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-    }
-  } catch (eMirror) {
-    appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: dealId, mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    appendAudit({ at: new Date().toISOString(), type: "skip", reason: "no_line_items", dealId, dealname: name, mode });
+    return { processed: 1, ok: 0, failed: 0, skippedNoLI: 1 };
   }
+
+  if (isMirrorDealFromDeal(deal)) {
+    appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_suelto_skip", dealId, dealname: name, mode });
+    return { processed: 1, ok: 0, failed: 0, skippedMirror: 1 };
+  }
+
+  appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
+  if (!dry) await runPhasesForDeal({ deal, lineItems });
+  appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
+
+  // Mirror immediate
+  const mirrorId = getMirrorIdFromOriginalDeal(deal);
+
+  if (!mirrorId) {
+    appendAudit({
+      at: new Date().toISOString(),
+      type: "info",
+      msg: "original_sin_mirror_id",
+      dealId,
+      dealname: name,
+      mode,
+    });
+  } else {
+    try {
+      const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
+      if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
+        appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
+        appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+      } else {
+        appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+      }
+    } catch (eMirror) {
+      appendAudit({ at: new Date().toISOString(), type: "error", where: "mirror_run", originalDealId: dealId, mirrorDealId: String(mirrorId), msg: eMirror?.message || String(eMirror), mode });
+    }
+  }
+
+  return { processed: 1, ok: 1, failed: 0 };
 }
 
-
-      return { processed: 1, ok: 1, failed: 0 };
-    }
 
     // Iterator that yields candidate deal IDs in priority order, de-duped.
     // Weekday: union of (s1,s2,s3) pages, always sorting by hs_lastmodifieddate desc.
