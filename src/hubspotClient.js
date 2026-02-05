@@ -158,11 +158,11 @@ export async function getDealWithLineItems(dealId) {
     "invoice_id",
     "invoice_key",
     "id_deal_origen",
+    "line_item_key",
     "pais_operativo",
     "responsable_asignado",
     "unidad_de_negocio",
     "uy",
-    "is_clone",
   ];
 
   // fechas dinámicas fecha_2 ... fecha_24

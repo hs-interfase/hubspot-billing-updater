@@ -12,7 +12,8 @@ import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
-import { sanitizeLineItemDatesIfCloned } from '../utils/cloneUtil.js';
+import { ensureLineItemKey } from '../utils/lineItemKey.js';
+import { sanitizeClonedLineItem } from '../services/lineItems/cloneSanitizerService.js';
 
 logDateEnvOnce();
 
@@ -225,64 +226,103 @@ function deriveDealBillingFrequency(lineItems) {
   // si hay mezcla
   return 'mixed';
 }
-function isClonedLineItem(li) {
-  return String(li?.properties?.is_clone || '').toLowerCase() === 'true';
-}
 
-async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
+async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
-  // 1) calendario
+  const debug = process.env.DBG_PHASE1 === 'true';
+
+  function parseLineItemKey(lineItemKey) {
+    if (!lineItemKey) return null;
+    const parts = String(lineItemKey).split(':');
+    if (parts.length < 2) return null;
+    return { dealId: parts[0], lineItemId: parts[1] };
+  }
+
   for (const li of lineItems) {
     try {
-      // 0) SANITIZER: SOLO si es clonado
-      if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[phase1] is_clone', li.id, li.properties?.is_clone);
+      const existingKey = String(li.properties?.line_item_key || '').trim();
+      const parsed = parseLineItemKey(existingKey);
+
+      const keyMatches =
+        !!parsed &&
+        String(parsed.dealId) === String(dealId) &&
+        String(parsed.lineItemId) === String(li.id);
+
+      if (debug) {
+        console.log('[phase1][line_item_key][pre]', {
+          lineItemId: li.id,
+          existingKey: existingKey || null,
+          parsedKey: parsed || null,
+          keyMatches,
+        });
       }
 
-      if (isClonedLineItem(li)) {
-        const updates = sanitizeLineItemDatesIfCloned(li);
-
+      // 1) Si hay key pero NO matchea => limpiar + rekey forzado
+      if (existingKey && !keyMatches) {
+        const updates = sanitizeClonedLineItem(li, dealId, { debug });
         if (updates && Object.keys(updates).length) {
           await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
-
-          // actualizar en memoria
           li.properties = { ...(li.properties || {}), ...updates };
-
-          if (process.env.DBG_PHASE1 === 'true') {
-            console.log('[phase1][sanitizeLineItemDatesIfCloned]', { lineItemId: li.id, updates });
-          }
         }
-      } else {
-        if (process.env.DBG_PHASE1 === 'true') {
-          console.log('[phase1][sanitizeLineItemDatesIfCloned] skipped (not cloned)', { lineItemId: li.id });
+
+        const { key: newKey } = ensureLineItemKey({ dealId, lineItem: li, forceNew: true });
+
+        await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+          properties: { line_item_key: newKey },
+        });
+        li.properties = { ...(li.properties || {}), line_item_key: newKey };
+
+        if (debug) {
+          console.log('[phase1][line_item_key] replaced (mismatch)', {
+            dealId,
+            lineItemId: li.id,
+            oldKey: existingKey,
+            newKey,
+          });
         }
       }
+
+      // 2) Si NO hay key => crear
+   if (!existingKey) {
+  const { key: lineItemKey } = ensureLineItemKey({ dealId, lineItem: li });
+
+  await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+    properties: { line_item_key: lineItemKey },
+  });
+
+  li.properties = { ...(li.properties || {}), line_item_key: lineItemKey };
+
+  if (debug) {
+    console.log('[phase1][line_item_key] created', {
+      dealId,
+      lineItemId: li.id,
+      line_item_key: lineItemKey,
+    });
+  }
+}
+
 
       // 0.5) HARD STOP POR PROPERTY: si fechas_completas=true, no recalcular schedule
       const fechasCompletas =
         String(li.properties?.fechas_completas || '').toLowerCase() === 'true';
 
       if (fechasCompletas) {
-        // asegurar billing_next_date vacío
         if ((li.properties?.billing_next_date ?? '') !== '') {
           await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
             properties: { billing_next_date: '' },
           });
-
-          // actualizar en memoria
           li.properties = { ...(li.properties || {}), billing_next_date: '' };
         }
 
-        if (process.env.DBG_PHASE1 === 'true') {
+        if (debug) {
           console.log('[phase1] fechas_completas=true -> skip schedule', { lineItemId: li.id });
         }
       } else {
-        // 1) calendario normal
         await updateLineItemSchedule(li);
       }
 
-      if (process.env.DBG_PHASE1 === 'true') {
+      if (debug) {
         console.log('[phase1][post-updateLineItemSchedule]', {
           lineItemId: li.id,
           billing_next_date: li.properties?.billing_next_date,
@@ -295,26 +335,6 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
       console.error('[phase1] Error en updateLineItemSchedule para line item', li.id, err);
     }
   }
-
-  // 2) contadores + persistencia
-  // --- LÓGICA DE TOTAL DE AVISOS Y PAGOS COMENTADA TEMPORALMENTE ---
-  /*
-  for (const li of lineItems) {
-    try {
-      const counters = computeBillingCountersForLineItem(li, today);
-      const updateProps = {
-        facturacion_total_avisos: String(counters.facturacion_total_avisos ?? 0),
-        avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion ?? 0),
-        avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion ?? 0),
-      };
-
-      li.properties = { ...(li.properties || {}), ...updateProps };
-      await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updateProps });
-    } catch (err) {
-      console.error('[phase1] Error guardando contadores en line item', li.id, err);
-    }
-  }
-  */
 }
 
 export async function runPhase1(dealId) {
@@ -503,7 +523,7 @@ await activateCupoIfNeeded(dealId, dealProps, lineItems);
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
-  await processLineItemsForPhase1(lineItems, today, { alsoInitCupo: true });
+  await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true });
 
 // 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
 if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
@@ -520,7 +540,7 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
     console.error('[phase1] Error activateCupoIfNeeded en espejo UY', mirrorResult.targetDealId, err);
   }
 
-    await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });
+    await processLineItemsForPhase1(mirrorDealId, mirrorLineItems, today, { alsoInitCupo: true });
 
     // actualizar cupo a nivel deal espejo usando sus props (no pisar inputs)
     try {
