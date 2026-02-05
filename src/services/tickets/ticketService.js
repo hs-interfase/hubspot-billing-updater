@@ -278,16 +278,14 @@ if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
     const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
     newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';  
     */
-   const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
-const { toHubSpotDate, toYMDInBillingTZ } = await import('../../utils/dateUtils.js');
+  const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
+  const { toYMDInBillingTZ, parseLocalDate } = await import('../../utils/dateUtils.js');
 
-// ✅ base = 06:00 en BILLING_TZ (Montevideo). toHubSpotDate(YMD) => 00:00 en BILLING_TZ (UTC ms)
-const base0 = Number(toHubSpotDate(ticketDateYMD));
-const base = new Date(base0 + 6 * 60 * 60 * 1000);
-
-const fakeLineItem = { properties: { ...lp } };
-const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
-newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
+  // Unificación: usar la fecha YMD como base, igual que phase 1
+  const base = parseLocalDate(ticketDateYMD); // 00:00 en zona local
+  const fakeLineItem = { properties: { ...lp } };
+  const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
+  newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
 
   }
 }

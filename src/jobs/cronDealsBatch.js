@@ -397,7 +397,6 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 
 
 
-
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -773,29 +772,67 @@ if (onlyDealId) {
 
       // Weekday: fetch a page from each set, merge-sort by hs_lastmodifieddate (desc), yield.
       while (Date.now() < deadline) {
-        const [r1, r2, r3] = await Promise.all([
-          searchDeals({
-            after: state.weekday.after_s1,
-            limit: PAGE_LIMIT,
-            filters: weekdayFilters_set1_todayAutoTrue(today),
-            properties: props,
-            sorts: SORTS,
-          }),
-          searchDeals({
-            after: state.weekday.after_s2,
-            limit: PAGE_LIMIT,
-            filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30),
-            properties: props,
-            sorts: SORTS,
-          }),
-          searchDeals({
-            after: state.weekday.after_s3,
-            limit: PAGE_LIMIT,
-            filters: weekdayFilters_set3_modifiedLookback(LOOKBACK_DAYS),
-            properties: props,
-            sorts: SORTS,
-          }),
-        ]);
+        let r1, r2, r3;
+
+        try {
+          [r1, r2, r3] = await Promise.all([
+            searchDeals({
+              after: state.weekday.after_s1,
+              limit: PAGE_LIMIT,
+              filters: weekdayFilters_set1_todayAutoTrue(today),
+              properties: props,
+              sorts: SORTS,
+            }),
+            searchDeals({
+              after: state.weekday.after_s2,
+              limit: PAGE_LIMIT,
+              filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30),
+              properties: props,
+              sorts: SORTS,
+            }),
+            searchDeals({
+              after: state.weekday.after_s3,
+              limit: PAGE_LIMIT,
+              filters: weekdayFilters_set3_modifiedLookback(LOOKBACK_DAYS),
+              properties: props,
+              sorts: SORTS,
+            }),
+          ]);
+        } catch (e) {
+          // 🔒 NO romper el cron por search 400/429/5xx
+          appendAudit({
+            at: new Date().toISOString(),
+            type: "error",
+            where: "candidateDealsGenerator.searchDeals",
+            msg: e?.message || String(e),
+            status: e?.code || e?.statusCode || e?.response?.status || null,
+          });
+
+          // fallback: seguimos SOLO con set3 (lookback por modifieddate)
+          r1 = { results: [], paging: {} };
+          r2 = { results: [], paging: {} };
+
+          try {
+            r3 = await searchDeals({
+              after: state.weekday.after_s3,
+              limit: PAGE_LIMIT,
+              filters: weekdayFilters_set3_modifiedLookback(LOOKBACK_DAYS),
+              properties: props,
+              sorts: SORTS,
+            });
+          } catch (e2) {
+            appendAudit({
+              at: new Date().toISOString(),
+              type: "error",
+              where: "candidateDealsGenerator.searchDeals.fallback_s3",
+              msg: e2?.message || String(e2),
+              status: e2?.code || e2?.statusCode || e2?.response?.status || null,
+            });
+
+            // si hasta s3 falla, cortamos el generator (sin explotar)
+            break;
+          }
+        }
 
         const a1 = r1?.results || [];
         const a2 = r2?.results || [];
@@ -803,7 +840,6 @@ if (onlyDealId) {
         const merged = [...a1, ...a2, ...a3];
 
         if (merged.length === 0) {
-          // reset cursors (end of all lists)
           state.weekday.after_s1 = null;
           state.weekday.after_s2 = null;
           state.weekday.after_s3 = null;
@@ -811,7 +847,6 @@ if (onlyDealId) {
           break;
         }
 
-        // sort by lastmodified desc
         merged.sort((x, y) => {
           const ax = Number(x?.properties?.hs_lastmodifieddate || 0);
           const ay = Number(y?.properties?.hs_lastmodifieddate || 0);
@@ -825,13 +860,12 @@ if (onlyDealId) {
           yield { id, summary: d };
         }
 
-        // advance cursors
+        // advance cursors (si r1/r2 fueron fallback vacíos, quedan null y no rompe)
         state.weekday.after_s1 = r1?.paging?.next?.after || null;
         state.weekday.after_s2 = r2?.paging?.next?.after || null;
         state.weekday.after_s3 = r3?.paging?.next?.after || null;
         writeJson(STATE_PATH, state);
 
-        // if all cursors ended, stop
         if (!state.weekday.after_s1 && !state.weekday.after_s2 && !state.weekday.after_s3) {
           break;
         }
@@ -988,8 +1022,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     dry,
   })
     .then(() => process.exit(0))
-    .catch((e) => {
-      console.error("[cron] fatal:", e?.message || e);
-      process.exit(1);
-    });
+ .catch((e) => {
+  console.error("[cron] fatal:", e?.message || e);
+  process.exit(0); // no romper
+});
+
 }
+
