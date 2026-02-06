@@ -78,23 +78,22 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
 
   const dp = deal?.properties || {};
   const lp = lineItem?.properties || {};
-
-  // ✅ ID estable para idempotencia (sirve tanto para PY como para espejo UY)
-  // ⚠️ IMPORTANTE: NO agregar prefijo LI: aquí, generateTicketKey() / buildTicketKey ya lo manejan
-  const stableLineId = lp.of_line_item_py_origen_id
-    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : lineItemId; // ✅ Solo el ID numérico, SIN prefijo LI:
-
-  console.log('[ticketService] 🔍 MANUAL - stableLineId:', stableLineId, '(real:', lineItemId, ')');
   console.log('[ticketService] 🔍 MANUAL - billingDate:', billingDate);
 
   // Usar la nueva función de deduplicación
+  const lineItemKey = (lp.line_item_key || '').toString().trim();
+
+  if (!lineItemKey) {
+    throw new Error(`[ticketService][MANUAL] line_item_key vacío para lineItemId=${lineItemId} (Phase1 debería setearlo)`);
+  }
+
   const result = await ensureTicketCanonical({
     dealId,
-    stableLineId,
+    lineItemKey,
     billDateYMD: billingDate,
     lineItemId,
-    buildTicketPayload: async ({ billDateYMD, expectedKey }) => {
+    buildTicketPayload: async ({ dealId, lineItemKey, billDateYMD, expectedKey }) => {
+
       // 1) Determinar fechas según reglas
       const expectedDate = billDateYMD;
 
@@ -234,6 +233,8 @@ const ticketProps = {
   of_deal_id: dealId,
   of_line_item_ids: lineItemId,
   of_ticket_key: expectedKey,
+  of_line_item_key: lineItemKey,
+
 
   // Snapshot "inmutable" (lo que ya venías copiando)
   ...snapshots,

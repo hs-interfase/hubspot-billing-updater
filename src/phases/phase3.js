@@ -1,10 +1,12 @@
 // src/phases/phase3.js
 
 import { parseBool } from '../utils/parsers.js';
-import { getTodayYMD, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
+import { getTodayYMD } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from '../services/tickets/ticketService.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
-import { countCanonicalTicketsForStableLine } from '../services/tickets/ticketService.js';
+
+// ✅ RENOMBRADO: ahora contamos por line_item_key (identidad estable)
+import { countCanonicalTicketsForLineItemKey } from '../services/tickets/ticketService.js';
 
 /**
  * PHASE 3: Emisión de facturas automáticas para line items con facturacion_automatica=true
@@ -13,12 +15,11 @@ import { countCanonicalTicketsForStableLine } from '../services/tickets/ticketSe
  * Reglas:
  * - Si deal.facturacion_activa != true: no hace nada
  * - Solo procesa line items con facturacion_automatica == true
- * - Si facturar_ahora == true: llama al camino autorizado (ticketService) y luego marca ticket como urgente
- * - Si nextBillingDate == hoy: llama al camino autorizado (ticketService)
+ * - Si facturar_ahora == true: delega a createAutoBillingTicket y luego marca ticket como urgente
+ * - Si billingPeriodDate == hoy: delega a createAutoBillingTicket
  *
- * Nota Fase 0:
- * - NO reseteamos facturar_ahora acá porque createAutoBillingTicket ya resetea triggers en su finally
- *   (via resetTriggersFromLineItem).
+ * Nota:
+ * - NO reseteamos facturar_ahora acá porque createAutoBillingTicket ya resetea triggers en su finally.
  */
 export async function runPhase3({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
@@ -34,7 +35,7 @@ export async function runPhase3({ deal, lineItems }) {
     return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
   }
 
-  let invoicesEmitted = 0; // (si querés, luego lo alimentamos desde el result del ticketService)
+  let invoicesEmitted = 0; // (por ahora no lo alimentamos acá)
   let ticketsEnsured = 0;
   const errors = [];
 
@@ -56,18 +57,13 @@ export async function runPhase3({ deal, lineItems }) {
     try {
       const facturarAhora = parseBool(lp.facturar_ahora);
 
-const billingPeriodDate = resolvePlanYMD({
-  lineItemProps: lp,
-  context: { flow: 'PHASE3', dealId, lineItemId },
-});
-
-console.log(
-  `   [Phase3] 🔑 billingPeriodDate(planYMD): ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
-);
-
+      const billingPeriodDate = resolvePlanYMD({
+        lineItemProps: lp,
+        context: { flow: 'PHASE3', dealId, lineItemId },
+      });
 
       console.log(
-        `   [Phase3] 🔑 billingPeriodDate: ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
+        `   [Phase3] 🔑 billingPeriodDate(planYMD): ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
       );
 
       if (!billingPeriodDate) {
@@ -75,33 +71,32 @@ console.log(
         continue;
       }
 
+      // ✅ Limitar por número de pagos (si aplica) usando line_item_key
+      const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
+      const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
+
+      if (totalPayments > 0) {
+        const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
+
+        if (!lineItemKey) {
+          console.log(
+            `⚠️ line_item_key vacío para LI ${lineItemId}; no se puede aplicar límite de pagos. (Phase1 debería setearlo)`
+          );
+        } else {
+          const issued = await countCanonicalTicketsForLineItemKey({ dealId, lineItemKey });
+          if (issued >= totalPayments) {
+            console.log(
+              `⚠️ Pagos emitidos (${issued}) ≥ total pagos (${totalPayments}) para LI ${lineItemId}, se omite ticket`
+            );
+            continue;
+          }
+        }
+      }
+
       // 2) FACTURAR AHORA (urgente)
       if (facturarAhora) {
         console.log(`      [Phase3] ⚡ URGENT BILLING`);
-        console.log(`         ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
-        console.log(`         invoiceKey: ${dealId}::${lineItemId}::${billingPeriodDate}`);
-        console.log(`         invoice_date: ${today} (urgent)`);
-
-        console.log('[Phase3] delegating to createAutoBillingTicket (ticket is source of truth, no direct invoice)');
-        // Número total de pagos configurado (string o número)
-const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
-const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
-
-if (totalPayments > 0) {
-  // ID estable: usa prefijo PYLI: si existe of_line_item_py_origen_id, si no el id numérico
-  const stableLineId = lp.of_line_item_py_origen_id
-    ? `PYLI:${String(lp.of_line_item_py_origen_id)}`
-    : lineItemId;
-
-  // Cuenta tickets canónicos existentes para esta familia
-  const issued = await countCanonicalTicketsForStableLine({ dealId, stableLineId });
-
-  // Si ya alcanzó o superó el límite, no se crea otro ticket
-  if (issued >= totalPayments) {
-    console.log(`⚠️ Pagos emitidos (${issued}) ≥ total pagos (${totalPayments}) para LI ${lineItemId}, se omite ticket`);
-    continue;
-  }
-}
+        console.log('[Phase3] delegating to createAutoBillingTicket');
 
         const ticketResult = await createAutoBillingTicket(deal, li, billingPeriodDate);
         console.log('[Phase3] ticketService.createAutoBillingTicket result:', ticketResult);
@@ -124,7 +119,6 @@ if (totalPayments > 0) {
           }
         }
 
-        // Importante: NO reset acá (ya lo hace createAutoBillingTicket en finally)
         continue;
       }
 
@@ -135,10 +129,8 @@ if (totalPayments > 0) {
       }
 
       console.log(`      [Phase3] 📅 SCHEDULED BILLING TODAY`);
-      console.log(`         ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
-      console.log(`         invoiceKey: ${dealId}::${lineItemId}::${billingPeriodDate}`);
+      console.log('[Phase3] delegating to createAutoBillingTicket');
 
-      console.log('[Phase3] delegating to createAutoBillingTicket (ticket is source of truth, no direct invoice)');
       const ticketResult = await createAutoBillingTicket(deal, li, billingPeriodDate);
       console.log('[Phase3] ticketService.createAutoBillingTicket result:', ticketResult);
 
@@ -155,48 +147,3 @@ if (totalPayments > 0) {
   console.log(`   [Phase3] done`, { dealId, invoicesEmitted, ticketsEnsured, errors: errors.length });
   return { invoicesEmitted, ticketsEnsured, errors };
 }
-
-/**
- * Obtiene la próxima fecha de facturación de un line item.
- * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
- * Devuelve la fecha más cercana >= hoy.
- */
-/*
-function getNextBillingDate(lineItemProps) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const allDates = [];
-
-  // 1) Verificar todas las variantes de la fecha de inicio
-  const startDate =
-    lineItemProps.hs_recurring_billing_start_date ||
-    lineItemProps.recurringbillingstartdate ||
-    lineItemProps.fecha_inicio_de_facturacion;
-
-  if (startDate) {
-    const d = parseLocalDate(startDate);
-    if (d) allDates.push(d);
-  }
-
-  // 2) Buscar en fecha_2, fecha_3, ..., fecha_24
-  for (let i = 2; i <= 24; i++) {
-    const dateKey = `fecha_${i}`;
-    const dateValue = lineItemProps[dateKey];
-    if (dateValue) {
-      const d = parseLocalDate(dateValue);
-      if (d) allDates.push(d);
-    }
-  }
-
-  if (allDates.length === 0) return null;
-
-  // 3) Filtrar solo fechas >= hoy
-  const futureDates = allDates.filter((d) => d >= today);
-  if (futureDates.length === 0) return null;
-
-  // 4) Ordenar y devolver la más cercana
-  futureDates.sort((a, b) => a.getTime() - b.getTime());
-  return formatDateISO(futureDates[0]);
-}
-*/

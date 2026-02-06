@@ -1,7 +1,7 @@
 // src/utils/invoiceValidation.js
 
 import { hubspotClient } from '../hubspotClient.js';
-import { generateInvoiceKey } from './idempotency.js';
+import { buildInvoiceKey } from './invoiceKey.js';
 
 /**
  * Valida si un invoice_id es legítimo para un line item específico.
@@ -24,7 +24,7 @@ export async function isInvoiceIdValidForLineItem({ dealId, lineItemId, invoiceI
   }
 
   // 2) Calcular expected key usando la MISMA función que usamos para crear invoices
-  const expectedInvoiceKey = generateInvoiceKey(dealId, lineItemId, billDateYMD);
+  const expectedInvoiceKey = buildInvoiceKey(dealId, lineItemId, billDateYMD);
 
   try {
     // 3) Leer invoice y obtener su of_invoice_key

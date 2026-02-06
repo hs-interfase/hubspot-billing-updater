@@ -1,7 +1,7 @@
 
 // src/services/invoiceService.js
 import { hubspotClient } from '../hubspotClient.js';
-import { generateInvoiceKey } from '../utils/idempotency.js';
+import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
@@ -358,7 +358,7 @@ console.log('Line Item ID (para invoiceKey):', lineItemId);
 console.log('Fecha plan (para invoiceKey):', fechaPlan);
 const invoiceKeyStrict =
   (dealId && lineItemId && fechaPlan)
-    ? generateInvoiceKey(dealId, lineItemId, fechaPlan)
+    ? buildInvoiceKey(dealId, lineItemId, fechaPlan)
     : null;
 
 
@@ -897,7 +897,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
   console.log(`   invoiceDate: ${actualInvoiceDate} (for hs_invoice_date)`);
   
   // ✅ CRITICAL: invoiceKey usa billingPeriodDate (NO today)
-  const invoiceKey = generateInvoiceKey(dealId, lineItemId, billingPeriodDate);
+  const invoiceKey = buildInvoiceKey(dealId, lineItemId, billingPeriodDate);
   console.log(`   invoiceKey: ${invoiceKey}`);
   
   // 2) Verificar si ya tiene factura asociada en el line item
