@@ -6,7 +6,7 @@ Este documento explica cómo preparar negocios y líneas de pedido (line items) 
 
 | Propiedad                         | Descripción                                                                      |
 |----------------------------------|----------------------------------------------------------------------------------|
-| `facturacion_activa`             | Activa/desactiva el motor de facturación para este negocio. Debe estar en `true` | Se puede lograr  a través d ela etapa de negocio: Cierre Ganado.
+| `facturacion_activa`             | Activa/desactiva el motor de facturación para este negocio. Debe estar en `true` | Se puede lograr  a través de la etapa de negocio: Cierre Ganado.
 
 ## Propiedades clave del line item
 
@@ -33,24 +33,31 @@ Este documento explica cómo preparar negocios y líneas de pedido (line items) 
 
 ### Contratos irregulares
 
-- Selecciona `frecuencia_de_facturacion = irregular`.
-- Introduce manualmente todas las fechas en `fecha_2`, `fecha_3`, etc. siguiendo el orden cronológico.
-- Ajusta `total_de_pagos`, `pagos_emitidos` y `pagos_restantes` manualmente si fuera necesario.
-- El motor usará la fecha más próxima en el futuro de entre todas las que hayas puesto.
+//////
+//////
+/////
+/////
+/////
+se modifica anchor date. eso modifca el inicio del motor, si se quiere modificar de nuevo se modifca otra vez anchor date.
+/////
+/////
+/////
+/////
 
 ### Flujos de trabajo
 
-- Cada X horas, el motor revisa negocios en “Cierre ganado” con `facturacion_activa = true`.
+- Todas las noches, corremos el cron, el motor revisa negocios en “Cierre ganado” con `facturacion_activa = true`.
 - Para cada negocio:
-  1. Actualiza los calendarios de las líneas (menos las irregulares).
-  2. Calcula la próxima fecha de facturación entre todas las líneas (`facturacion_proxima_fecha`).
-  3. Construye `facturacion_mensaje_proximo_aviso`, listando sólo las líneas que se facturan en esa fecha.
-  4. El workflow de HubSpot enviará el aviso al equipo de facturación y aumentará `pagos_emitidos`.
+  1. Actualiza fechas de las líneas.
+  //a modo de resumen desde la vista de negocio. JAMAS como fuente de verdad. 
+  2. Calcula la próxima fecha de facturación entre todas las líneas (`facturacion_proxima_fecha`). en deal
+  3. Construye `facturacion_mensaje_proximo_aviso`, listando sólo las líneas que se facturan en esa fecha. es a modo de 
+
 
 ### Consejos para el equipo comercial
 
-- No uses acentos en los valores de `frecuencia_de_facturacion` para evitar problemas al comparar.
-- Para contratos de más de cuatro años, amplía las propiedades de fechas (actualmente hay hasta `fecha_48`).
-- Si cambias manualmente alguna `fecha_n` (por ejemplo, mover de día 5 al día 15), el motor respetará la fecha editada; no recalculará esa línea automáticamente.
-- En facturaciones irregulares o bolsa de horas, debes rellenar todas las fechas y contadores a mano.
+- MANTSOFT siempre usa frecuencia.
+- Para contratos de auto renew se crean 24 tickets. y se van actualizando.
+- Si deseas cambiar una fecha cuyo ticket aun no esta en uso. cambias manualmente alguna `anchor date`. Si deseas cambiar una cuyo ticket ya esta en modo manual deberas modificar desde el ticket. 
+- En facturaciones irregulares o bolsa de horas (cupo), debes rellenar todas las fechas y contadores a mano. cada fecha en un line item
 

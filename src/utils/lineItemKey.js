@@ -1,6 +1,17 @@
 // src/utils/lineItemKey.js
 import crypto from 'crypto';
 
+
+// src/utils/lineItemKey.js
+export function getLIKFromLineItem(li) {
+  return li?.properties?.line_item_key || '';
+}
+
+export function getLIKFromTicket(t) {
+  return t?.properties?.of_line_item_key || '';
+}
+
+
 /**
  * Genera un string corto aleatorio para evitar colisiones.
  * Ej: "7f3a9c" (hex de 3 bytes)
@@ -56,3 +67,17 @@ export function ensureLineItemKey({ dealId, lineItem, forceNew = false } = {}) {
   return { key, shouldUpdate: true };
 }
 
+export async function ensureTicketLIK({ hubspotClient, ticketId, ticketProps, lik }) {
+  if (!ticketId) throw new Error('ensureTicketLIK: ticketId requerido');
+  if (!lik) return false;
+
+  const current = (ticketProps?.of_line_item_key || '').trim();
+  if (current === String(lik).trim()) return false;
+
+  await hubspotClient.crm.tickets.basicApi.update(
+    String(ticketId),
+    { properties: { of_line_item_key: lik } }
+  );
+
+  return true;
+}

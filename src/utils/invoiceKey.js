@@ -12,67 +12,89 @@ function isYMD(ymd) {
 }
 
 /**
- * canonicalLineId(raw)
- * Normaliza el lineId removiendo prefijos duplicados.
- * 
+ * canonicalizeLineItemId(raw)
+ * Normaliza IDs legacy (no LIK) removiendo prefijos repetidos "LI:".
+ *
  * Ejemplos:
- *   "123" → "123"
- *   "LI:123" → "123"
- *   "LI:LI:123" → "123"
- *   "PYLI:456" → "PYLI:456" (mantiene prefijo especial)
- * 
- * @param {string} raw - ID raw del line item
- * @returns {string} - ID normalizado sin prefijo LI: duplicado
+ *   "123"        -> "123"
+ *   "LI:123"     -> "123"
+ *   "LI:LI:123"  -> "123"
  */
-export function canonicalLineId(raw) {
+export function canonicalizeLineItemId(raw) {
   let s = toStr(raw);
   if (!s) return s;
 
-  // Si tiene prefijo PYLI:, mantenerlo tal cual (es especial)
-  if (s.startsWith('PYLI:')) {
-    return s;
+  while (s.startsWith("LI:")) {
+    s = s.substring(3).trim();
   }
-
-  // Remover TODOS los prefijos "LI:" repetidos
-  while (s.startsWith('LI:')) {
-    s = s.substring(3);
-  }
-
   return s;
 }
 
 /**
- * buildInvoiceKey(dealId, lineItemId, ymd)
- * ✅ CANONICAL FORMAT: <dealId>::LI:<lineItemId>::<YYYY-MM-DD>
- * This is the SINGLE SOURCE OF TRUTH for all keys (ticket & invoice)
- * 
- * IMPORTANTE: lineItemId se normaliza para evitar duplicar "LI:" prefix.
+ * canonicalizeLik(raw)
+ * Para LIK NO tocamos nada salvo trim.
+ * (Si querés namespace, que sea parte del valor, ej "PY:<uuid>" o "UY:<uuid>")
  */
-export function buildInvoiceKey(dealId, lineItemId, ymd) {
+export function canonicalizeLik(raw) {
+  return toStr(raw);
+}
+
+/**
+ * buildInvoiceKeyFromLIK(dealId, lik, ymd)
+ * ✅ CANONICAL FORMAT: <dealId>::LIK:<lik>::<YYYY-MM-DD>
+ */
+export function buildInvoiceKeyFromLIK(dealId, lik, ymd) {
   const d = toStr(dealId);
-  const li = canonicalLineId(lineItemId); // ✅ Normalizar antes de usar
+  const k = canonicalizeLik(lik);
   const date = toStr(ymd);
 
-  if (!d) throw new Error("buildInvoiceKey: dealId requerido");
-  if (!li) throw new Error("buildInvoiceKey: lineItemId requerido");
-  if (!date) throw new Error("buildInvoiceKey: ymd requerido");
-  if (!isYMD(date)) throw new Error(`buildInvoiceKey: ymd inválido "${date}" (esperado YYYY-MM-DD)`);
+  if (!d) throw new Error("buildInvoiceKeyFromLIK: dealId requerido");
+  if (!k) throw new Error("buildInvoiceKeyFromLIK: lik requerido");
+  if (!date) throw new Error("buildInvoiceKeyFromLIK: ymd requerido");
+  if (!isYMD(date)) {
+    throw new Error(`buildInvoiceKeyFromLIK: ymd inválido "${date}" (esperado YYYY-MM-DD)`);
+  }
 
-  // ✅ CANONICAL FORMAT with single LI: prefix
-  // Si li ya tiene prefijo especial (ej: PYLI:), lo mantiene; sino agrega LI:
-  const prefix = li.startsWith('PYLI:') ? '' : 'LI:';
-  return `${d}${SEP}${prefix}${li}${SEP}${date}`;
+  return `${d}${SEP}LIK:${k}${SEP}${date}`;
+}
+
+/**
+ * buildInvoiceKeyFromLineItemId(dealId, lineItemId, ymd)
+ * LEGACY DISABLED: always throws
+ */
+export function buildInvoiceKeyFromLineItemId() {
+  throw new Error('[legacy disabled] invoiceKey must use LIK');
+}
+
+/**
+ * buildInvoiceKey(dealId, idValue, ymd, opts?)
+ * Wrapper para no romper imports existentes.
+ *
+ * - Por defecto asume LIK (nuevo mundo).
+ * - Si pasás opts.idType = "LI" usa lineItemId legacy.
+ *
+ * Ej:
+ *  buildInvoiceKey(dealId, lik, ymd) -> LIK
+ *  buildInvoiceKey(dealId, lineItemId, ymd, { idType:"LI" }) -> legacy
+ */
+export function buildInvoiceKey(dealId, idValue, ymd, opts = {}) {
+  const idType = toStr(opts.idType).toUpperCase();
+  if (idType === "LI") throw new Error('[legacy disabled] use LIK');
+  // default: LIK
+  return buildInvoiceKeyFromLIK(dealId, idValue, ymd);
 }
 
 /**
  * parseInvoiceKey(raw)
- * Accepts: 
- *   - "deal::LI:li::YYYY-MM-DD" (canonical)
- *   - "deal::li::YYYY-MM-DD" (legacy)
- * Also accepts ":" or "|" as separators.
- * 
- * Returns:
- *  - { ok:true, dealId, lineItemId, ymd, canonical }
+ *
+ * Acepta:
+ *  - "deal::LIK:<lik>::YYYY-MM-DD"   (nuevo)
+ *  - "deal::LI:<id>::YYYY-MM-DD"     (legacy)
+ *  - "deal::id::YYYY-MM-DD"          (legacy viejo sin tipo)
+ *  - con separador "|" en vez de "::"
+ *
+ * Retorna:
+ *  - { ok:true, dealId, idType, idValue, ymd, canonical }
  *  - { ok:false, reason }
  */
 export function parseInvoiceKey(raw) {
@@ -83,54 +105,70 @@ export function parseInvoiceKey(raw) {
 
   if (s.includes(SEP)) parts = s.split(SEP);
   else if (s.includes("|")) parts = s.split("|");
-  else if (s.includes(":")) {
-    // Special handling for mixed separators (e.g., "deal::LI:li::date")
-    // First split by ::, then handle LI: prefix
-    parts = s.split(SEP);
-    if (parts.length !== 3) {
-      // Fallback to simple : split
-      parts = s.split(":");
-    }
-  }
 
   if (!parts || parts.length !== 3) return { ok: false, reason: "bad_format" };
 
   const dealId = toStr(parts[0]);
-  let lineItemId = toStr(parts[1]);
+  const middle = toStr(parts[1]);
   const ymd = toStr(parts[2]);
 
-  // ✅ Handle LI: prefix (strip it for lineItemId)
-  if (lineItemId.startsWith("LI:")) {
-    lineItemId = lineItemId.substring(3).trim();
-  }
-
   if (!dealId) return { ok: false, reason: "missing_dealId" };
-  if (!lineItemId) return { ok: false, reason: "missing_lineItemId" };
+  if (!middle) return { ok: false, reason: "missing_id" };
   if (!ymd) return { ok: false, reason: "missing_ymd" };
   if (!isYMD(ymd)) return { ok: false, reason: "bad_ymd" };
 
-  // ✅ Always return canonical format with LI: prefix
-  const canonical = `${dealId}${SEP}LI:${lineItemId}${SEP}${ymd}`;
-  return { ok: true, dealId, lineItemId, ymd, canonical };
+  // Detectar tipo
+  let idType = null;
+  let idValue = null;
+
+  if (middle.startsWith("LIK:")) {
+    idType = "LIK";
+    idValue = canonicalizeLik(middle.substring(4));
+  } else {
+    throw new Error('[legacy disabled] use LIK');
+  }
+
+  if (!idValue) return { ok: false, reason: "missing_idValue" };
+
+  const canonical = buildInvoiceKeyFromLIK(dealId, idValue, ymd);
+  return { ok: true, dealId, idType, idValue, ymd, canonical };
 }
 
 /**
- * invoiceKeyMatchesContext(raw, dealId, lineItemId)
- * Checks if raw invoice key belongs to the given dealId + lineItemId.
- * Returns:
+ * invoiceKeyMatchesContext(raw, ctx)
+ *
+ * ctx puede ser:
+ *  - { dealId, lik }        (nuevo)
+ *  - { dealId, lineItemId } (legacy)
+ *
+ * Retorna:
  *  - { ok:true, parsed }
  *  - { ok:false, reason, parsed? }
  */
-export function invoiceKeyMatchesContext(raw, dealId, lineItemId) {
+export function invoiceKeyMatchesContext(raw, ctx = {}) {
   const parsed = parseInvoiceKey(raw);
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
 
-  const d = toStr(dealId);
-  const li = toStr(lineItemId);
+  const d = toStr(ctx.dealId);
+  if (!d) return { ok: false, reason: "missing_ctx_dealId", parsed };
 
-  if (parsed.dealId !== d || parsed.lineItemId !== li) {
-    return { ok: false, reason: "mismatch_context", parsed };
+  if (parsed.dealId !== d) return { ok: false, reason: "mismatch_dealId", parsed };
+
+  // Preferir LIK si está presente en contexto
+  const lik = toStr(ctx.lik || ctx.lineItemKey || ctx.of_line_item_key);
+  if (lik) {
+    if (parsed.idType !== "LIK") return { ok: false, reason: "mismatch_idType_expected_LIK", parsed };
+    if (parsed.idValue !== canonicalizeLik(lik)) return { ok: false, reason: "mismatch_lik", parsed };
+    return { ok: true, parsed };
   }
 
-  return { ok: true, parsed };
+  // fallback legacy: lineItemId
+  const li = toStr(ctx.lineItemId || ctx.line_item_id);
+  if (li) {
+    if (parsed.idType !== "LI") return { ok: false, reason: "mismatch_idType_expected_LI", parsed };
+    if (parsed.idValue !== canonicalizeLineItemId(li)) return { ok: false, reason: "mismatch_lineItemId", parsed };
+    return { ok: true, parsed };
+  }
+
+  return { ok: false, reason: "missing_ctx_id", parsed };
 }

@@ -117,6 +117,10 @@ export async function getDealWithLineItems(dealId) {
     "motivo_de_pausa",
     "cantidad_de_facturaciones_urgentes",
     "facturado_urgente",
+    "forecast_signature",
+    "fecha_vencimiento_contrato",
+    "facturas_restantes",
+
 
     // --- fechas ---
     "fecha_inicio_de_facturacion",

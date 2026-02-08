@@ -233,6 +233,30 @@ export function parseLocalDate(raw) {
   return d;
 }
 
+export 
+/**
+ * Suma un intervalo (meses y/o días) a una fecha.
+ * Preserva el día del mes cuando sea posible.
+ */
+function addInterval(date, interval) {
+  let d = new Date(date.getTime());
+
+  if (interval.months && interval.months > 0) {
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + interval.months);
+    // Ajuste para fines de mes (31 → 30/28, etc.)
+    if (d.getDate() < day) {
+      d.setDate(0);
+    }
+  }
+
+  if (interval.days && interval.days > 0) {
+    d.setDate(d.getDate() + interval.days);
+  }
+
+  return d;
+}
+
 /**
  * Formatea un Date como YYYY-MM-DD.
  */

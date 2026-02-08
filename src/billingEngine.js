@@ -4,7 +4,7 @@ import { hubspotClient } from './hubspotClient.js';
 // LEGACY (calendar-based): se mantiene comentado para rollback.
 // import { resolveNextBillingDate } from './utils/resolveNextBillingDate.js';
 
-import { getTodayYMD, parseLocalDate, formatDateISO } from "./utils/dateUtils.js";
+import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
 
 /**
  * =============================================================================
@@ -117,28 +117,6 @@ function getIntervalFromFrequency(freqRaw) {
   }
 }
 
-/**
- * Suma un intervalo (meses y/o días) a una fecha.
- * Preserva el día del mes cuando sea posible.
- */
-function addInterval(date, interval) {
-  let d = new Date(date.getTime());
-
-  if (interval.months && interval.months > 0) {
-    const day = d.getDate();
-    d.setMonth(d.getMonth() + interval.months);
-    // Ajuste para fines de mes (31 → 30/28, etc.)
-    if (d.getDate() < day) {
-      d.setDate(0);
-    }
-  }
-
-  if (interval.days && interval.days > 0) {
-    d.setDate(d.getDate() + interval.days);
-  }
-
-  return d;
-}
 
 /**
  * Lee las propiedades del line item y devuelve la configuración efectiva de facturación.
@@ -150,7 +128,7 @@ function addInterval(date, interval) {
  * - Soporta irregular puntual vía: irregular=true + fecha_irregular_puntual (YYYY-MM-DD)
  * - Soporta urgente vía: facturar_ahora=true (solo válido para pago único sin fecha)
  */
-function getEffectiveBillingConfig(lineItem) {
+export function getEffectiveBillingConfig(lineItem) {
   const p = lineItem.properties || {};
 
   console.log('[getEffectiveBillingConfig][RAW]', {

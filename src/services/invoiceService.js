@@ -163,6 +163,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_ticket_key',
       'of_deal_id',
       'of_line_item_ids',
+      'of_line_item_key',
       'of_invoice_id',
       'of_invoice_key',
       
@@ -345,6 +346,9 @@ console.log('-------------------------------------------------------------------
 // 1) Calcular invoiceKey estricta (si hay data suficiente)
 const dealId = safeString(tp.of_deal_id);
 
+const lineItemKey = safeString(tp.of_line_item_key);
+  const lik = lineItemKey;
+
 const rawLineItemIds = safeString(tp.of_line_item_ids);
 const lineItemId = rawLineItemIds?.includes(',')
   ? rawLineItemIds.split(',')[0].trim()
@@ -354,17 +358,17 @@ const fechaPlan =
   extractBillDateFromTicketKey(tp.of_ticket_key) ||
   toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
   null;
-console.log('Line Item ID (para invoiceKey):', lineItemId);
+console.log('Line Item KEY (para invoiceKey):', lineItemKey);
 console.log('Fecha plan (para invoiceKey):', fechaPlan);
 const invoiceKeyStrict =
-  (dealId && lineItemId && fechaPlan)
-    ? buildInvoiceKey(dealId, lineItemId, fechaPlan)
-    : null;
+    (dealId && lik && fechaPlan)
+      ? buildInvoiceKeyFromLIK(dealId, lik, fechaPlan)
+      : null;
 
 
 // fallback SOLO si no hay strict (menos ideal)
 const invoiceKey = invoiceKeyStrict || safeString(tp.of_ticket_key) || `ticket::${ticketId}`;
-console.log('Invoice Key:', invoiceKey);
+  console.log('Invoice Key (LIK):', invoiceKey);
 
 // 2) Verificar si ya tiene factura (REGLA estricta)
 if (tp.of_invoice_id) {
@@ -897,7 +901,9 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
   console.log(`   invoiceDate: ${actualInvoiceDate} (for hs_invoice_date)`);
   
   // ✅ CRITICAL: invoiceKey usa billingPeriodDate (NO today)
-  const invoiceKey = buildInvoiceKey(dealId, lineItemId, billingPeriodDate);
+  // ✅ CRITICAL: invoiceKey usa LIK (line_item_key) y billingPeriodDate
+  const lik = lineItem.line_item_key;
+  const invoiceKey = buildInvoiceKeyFromLIK(dealId, lik, billingPeriodDate);
   console.log(`   invoiceKey: ${invoiceKey}`);
   
   // 2) Verificar si ya tiene factura asociada en el line item

@@ -176,12 +176,12 @@ export function extractDealSnapshots(deal) {
  */
 export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate = null) {
   const dealData = extractDealSnapshots(deal);
-  const lineItemData = extractLineItemSnapshots(lineItem, deal); // Pasar deal para cupo
+  const lineItemData = extractLineItemSnapshots(lineItem, deal);
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
   // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
-  const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
+  const motivoCancelacion = safeString(dp.closed_lost_reason) || safeString(lp.motivo_pausa);
 
   // ✅ C) Construir título del invoice
   const liShort = safeString(lp.name) || `Flota`;
@@ -197,7 +197,6 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
 
     // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
     // of_fecha_facturacion_real: (se setea después)
-
     motivo_cancelacion_ticket: motivoCancelacion,
     
     // ✅ C) Título del invoice para usar después

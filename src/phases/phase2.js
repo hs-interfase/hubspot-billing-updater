@@ -1,29 +1,134 @@
 // src/phases/phase2.js
 
+import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
-import { createManualBillingTicket } from '../services/tickets/manualTicketService.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 
-// ✅ RENOMBRADO: ahora contamos por line_item_key (identidad estable)
-import { countCanonicalTicketsForLineItemKey } from '../services/tickets/ticketService.js';
+/**
+ * PHASE 2 (MANUAL):
+ * - Requiere deal.facturacion_activa=true
+ * - Solo aplica a line items manuales (facturacion_automatica != true)
+ * - Si la próxima fecha (planYMD) está en la ventana de lookahead (ej. 30 días),
+ *   NO crea tickets: PROMUEVE el ticket forecast existente a READY (entrada al flujo real manual).
+ *
+ * Idempotencia:
+ * - El ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
+ * - Si ya fue promovido (ya no está en forecast stage), no se toca.
+ */
+
+// ====== STAGES (IDs reales) ======
+const BILLING_TICKET_STAGE_READY_ENTRY = '1234282360'; // manual: entra a flujo real (tu "READY de entrada")
+
+// Manual forecast stages por bucket de deal stage
+const BILLING_TICKET_FORECAST_25 = '1294744238';
+const BILLING_TICKET_FORECAST_50 = '1294744239';
+const BILLING_TICKET_FORECAST_75 = '1296492870';
+const BILLING_TICKET_FORECAST_95 = '1296492871';
+
+const FORECAST_MANUAL_STAGES = new Set([
+  BILLING_TICKET_FORECAST_25,
+  BILLING_TICKET_FORECAST_50,
+  BILLING_TICKET_FORECAST_75,
+  BILLING_TICKET_FORECAST_95,
+]);
+
+function buildTicketKey(dealId, lineItemKey, ymd) {
+  return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
+}
+
+function resolveDealBucket(dealstage) {
+  // dealstage: internal name (appointmentscheduled, decisionmakerboughtin, contractsent, closedwon, etc.)
+  const s = String(dealstage || '');
+  if (s === 'decisionmakerboughtin') return '50';
+  if (s === 'contractsent') return '75';
+  if (s === 'closedwon') return '95';
+  return '25'; // stages 5/10/25
+}
+
+function resolveManualForecastStageForDealStage(dealstage) {
+  const b = resolveDealBucket(dealstage);
+  if (b === '50') return BILLING_TICKET_FORECAST_50;
+  if (b === '75') return BILLING_TICKET_FORECAST_75;
+  if (b === '95') return BILLING_TICKET_FORECAST_95;
+  return BILLING_TICKET_FORECAST_25;
+}
+
+async function findTicketByTicketKey(ticketKey) {
+  const body = {
+    filterGroups: [
+      {
+        filters: [{ propertyName: 'of_ticket_key', operator: 'EQ', value: String(ticketKey) }],
+      },
+    ],
+    properties: [
+      'hs_pipeline_stage',
+      'of_ticket_key',
+      'fecha_resolucion_esperada',
+      'of_line_item_key',
+      'of_deal_id',
+    ],
+    limit: 2,
+  };
+
+  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  return (resp?.results || [])[0] || null;
+}
+
+async function moveTicketToStage(ticketId, stageId) {
+  return hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+    properties: { hs_pipeline_stage: String(stageId) },
+  });
+}
 
 /**
- * PHASE 2: Generación de tickets manuales para line items con facturacion_automatica!=true.
- *
- * Lógica:
- * - Verificar que el DEAL tenga facturacion_activa=true
- * - Filtrar line items con facturacion_automatica!=true (false, null, undefined)
- * - Para cada line item, buscar la próxima fecha de facturación
- * - Si la fecha está dentro de los próximos X días (LOOKAHEAD), crear ticket
- * - Aplicar idempotencia: no duplicar tickets existentes
- *
- * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Array} params.lineItems - Line Items del Deal
- * @returns {Object} { ticketsCreated, errors }
+ * Promueve un ticket forecast manual a READY (entrada al flujo real).
+ * - No crea tickets.
+ * - Solo mueve si el ticket está en forecast manual (cualquiera) y
+ *   preferentemente en el forecast stage esperado para el deal stage.
  */
+async function promoteManualForecastTicketToReady({
+  dealId,
+  dealStage,
+  lineItemKey,
+  nextBillingDate,
+}) {
+  if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
+
+  const ticketKey = buildTicketKey(dealId, lineItemKey, nextBillingDate);
+  const t = await findTicketByTicketKey(ticketKey);
+
+  if (!t) {
+    return { moved: false, reason: 'missing_forecast_ticket', ticketKey };
+  }
+
+  const currentStage = String(t?.properties?.hs_pipeline_stage || '');
+
+  // Si no está en forecast manual, NO tocar (puede ser real o automático)
+  if (!FORECAST_MANUAL_STAGES.has(currentStage)) {
+    return { moved: false, reason: `not_manual_forecast_stage:${currentStage}`, ticketId: t.id };
+  }
+
+  // Validación suave (log): forecast stage esperado por deal stage
+  const expectedForecastStage = resolveManualForecastStageForDealStage(dealStage);
+  if (currentStage !== expectedForecastStage) {
+    // No bloqueamos: el deal puede haber avanzado y Phase P pudo todavía no “reubicar” stage.
+    // Lo importante es que siga siendo forecast manual.
+    return {
+      moved: await (async () => {
+        await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+        return true;
+      })(),
+      ticketId: t.id,
+      reason: `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`,
+    };
+  }
+
+  await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+  return { moved: true, ticketId: t.id };
+}
+
 export async function runPhase2({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
@@ -38,7 +143,6 @@ export async function runPhase2({ deal, lineItems }) {
   );
   console.log(`   [Phase2] Total line items: ${lineItems.length}`);
 
-  // Verificar si el DEAL tiene facturacion_activa=true
   const dealFacturacionActiva = parseBool(dp.facturacion_activa);
   console.log(
     `   [Phase2] Deal facturacion_activa: ${dp.facturacion_activa} (parsed=${dealFacturacionActiva})`
@@ -49,22 +153,18 @@ export async function runPhase2({ deal, lineItems }) {
     return { ticketsCreated: 0, errors: [] };
   }
 
-  let ticketsCreated = 0;
+  let ticketsCreated = 0; // (en realidad: promoted)
   const errors = [];
 
-  // Filtrar line items elegibles para tickets manuales
-  // Condición: facturacion_automatica !== true (puede ser false, null, undefined)
+  // Line items manuales: facturacion_automatica !== true
   const manualLineItems = (lineItems || []).filter((li) => {
     const lp = li?.properties || {};
-    const facturacionAutomaticaRaw = lp.facturacion_automatica;
-
-    // Solo incluir si facturacion_automatica NO es true (ni booleano ni string)
-    const isManual = facturacionAutomaticaRaw !== true && facturacionAutomaticaRaw !== 'true';
+    const raw = lp.facturacion_automatica;
+    const isManual = raw !== true && raw !== 'true';
 
     console.log(
-      `   [Phase2] LI ${li.id}: facturacion_automatica=${facturacionAutomaticaRaw} → es manual: ${isManual}`
+      `   [Phase2] LI ${li.id}: facturacion_automatica=${raw} → es manual: ${isManual}`
     );
-
     return isManual;
   });
 
@@ -84,12 +184,9 @@ export async function runPhase2({ deal, lineItems }) {
 
     console.log(`\n   [Phase2] Analizando: ${liName} (${lineItemId})`);
     console.log(`      facturacion_automatica: ${lp.facturacion_automatica || 'undefined/null'}`);
-    console.log(`      recurringbillingstartdate: ${lp.recurringbillingstartdate || 'undefined'}`);
-    console.log(`      hs_recurring_billing_start_date: ${lp.hs_recurring_billing_start_date || 'undefined'}`);
-    console.log(`      fecha_inicio_de_facturacion: ${lp.fecha_inicio_de_facturacion || 'undefined'}`);
+    console.log(`      billing_next_date: ${lp.billing_next_date || 'undefined'}`);
 
     try {
-      // Obtener la próxima fecha de facturación (FUENTE: billing_next_date si existe)
       const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
 
       const planYMD = resolvePlanYMD({
@@ -101,16 +198,13 @@ export async function runPhase2({ deal, lineItems }) {
         `      → planYMD: ${planYMD || 'null'} (persisted billing_next_date=${persistedNext || 'null'})`
       );
 
-      const nextBillingDate = planYMD; // en Phase2 “planYMD” ES la fecha que ticketear
+      const nextBillingDate = planYMD;
 
       if (!nextBillingDate) {
         console.log(`      ⚠️  Sin próxima fecha de facturación, saltando...`);
         continue;
       }
 
-      console.log(`      Próxima fecha encontrada: ${nextBillingDate}`);
-
-      // Verificar si la fecha está dentro del lookahead
       const daysUntilBilling = diffDays(today, nextBillingDate);
 
       if (daysUntilBilling === null) {
@@ -130,41 +224,40 @@ export async function runPhase2({ deal, lineItems }) {
         continue;
       }
 
-      // Crear ticket (está dentro del lookahead)
-      console.log(`      🎫 ¡DENTRO DEL LOOKAHEAD! Creando ticket...`);
+      console.log(`      🎫 ¡DENTRO DEL LOOKAHEAD! Promoviendo ticket forecast → READY`);
       console.log(`      Fecha: ${nextBillingDate}, faltan ${daysUntilBilling} días`);
 
-      // Número total de pagos configurado (string o número)
-      const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
-      const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
-
-      if (totalPayments > 0) {
-        // ✅ NUEVO: identidad estable por line_item_key
-        const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
-
-        if (!lineItemKey) {
-          console.log(
-            `⚠️ line_item_key vacío para LI ${lineItemId}; no se puede aplicar límite de pagos. (Phase1 debería setearlo)`
-          );
-        } else {
-          const issued = await countCanonicalTicketsForLineItemKey({ dealId, lineItemKey });
-
-          if (issued >= totalPayments) {
-            console.log(
-              `⚠️ Pagos emitidos (${issued}) ≥ total pagos (${totalPayments}) para LI ${lineItemId}, se omite ticket`
-            );
-            continue;
-          }
-        }
+      const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
+      if (!lineItemKey) {
+        console.log(
+          `      ⚠️ line_item_key vacío para LI ${lineItemId}; Phase1 debería setearlo. Skip.`
+        );
+        continue;
       }
 
-      const result = await createManualBillingTicket(deal, li, nextBillingDate);
+      const promoted = await promoteManualForecastTicketToReady({
+        dealId,
+        dealStage: dp.dealstage,
+        lineItemKey,
+        nextBillingDate,
+      });
 
-      if (result.created) {
+      if (promoted.moved) {
         ticketsCreated++;
-        console.log(`      ✅ Ticket creado: ${result.ticketId}`);
+        console.log(`      ✅ Ticket movido a READY: ${promoted.ticketId}`);
+        if (promoted.reason && promoted.reason !== 'moved') {
+          console.log(`      ℹ️  Nota: ${promoted.reason}`);
+        }
       } else {
-        console.log(`      🔄 Ticket ya existía: ${result.ticketId} (idempotencia)`);
+        console.log(
+          `      🔄 No se movió: ${promoted.reason} (${promoted.ticketId || promoted.ticketKey || 'sin ticket'})`
+        );
+        if (promoted.reason === 'missing_forecast_ticket') {
+          errors.push({
+            lineItemId,
+            error: `Missing forecast ticket for ${promoted.ticketKey}`,
+          });
+        }
       }
     } catch (err) {
       console.error(`      ❌ Error procesando:`, err?.message || err);
@@ -172,7 +265,9 @@ export async function runPhase2({ deal, lineItems }) {
     }
   }
 
-  console.log(`\n   ✅ Phase 2 completada: ${ticketsCreated} tickets creados, ${errors.length} errores`);
+  console.log(
+    `\n   ✅ Phase 2 completada: ${ticketsCreated} tickets promovidos a READY, ${errors.length} errores`
+  );
 
   return { ticketsCreated, errors };
 }
@@ -185,58 +280,4 @@ function calculateLookaheadDate(today, days) {
   if (!date) return 'N/A';
   date.setDate(date.getDate() + days);
   return formatDateISO(date);
-}
-
-// LEGACY (migración): usa startDate + fecha_2..fecha_24.
-// Fuente de verdad nueva: lineItemProps.billing_next_date (priorizada arriba).
-
-/**
- * Obtiene la próxima fecha de facturación de un line item.
- * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
- * Devuelve la fecha más cercana >= hoy.
- */
-function getNextBillingDate(lineItemProps) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const allDates = [];
-
-  // 1) Verificar todas las variantes de la fecha de inicio
-  const startDate =
-    lineItemProps.hs_recurring_billing_start_date ||
-    lineItemProps.recurringbillingstartdate ||
-    lineItemProps.fecha_inicio_de_facturacion;
-
-  if (startDate) {
-    const d = parseLocalDate(startDate);
-    if (d) {
-      allDates.push(d);
-    }
-  }
-
-  // 2) Buscar en fecha_2, fecha_3, ..., fecha_24
-  for (let i = 2; i <= 24; i++) {
-    const dateKey = `fecha_${i}`;
-    const dateValue = lineItemProps[dateKey];
-    if (dateValue) {
-      const d = parseLocalDate(dateValue);
-      if (d) {
-        allDates.push(d);
-      }
-    }
-  }
-
-  if (allDates.length === 0) {
-    return null;
-  }
-
-  // 3) Filtrar solo fechas >= hoy
-  const futureDates = allDates.filter((d) => d >= today);
-
-  if (futureDates.length === 0) {
-    return null;
-  }
-
-  // 4) Ordenar y devolver la más cercana
-  futureDates.sort((a, b) => a.getTime() - b.getTime());
-  return formatDateISO(futureDates[0]);
 }

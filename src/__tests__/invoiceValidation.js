@@ -25,7 +25,8 @@ describe('isInvoiceIdValidForLineItem', () => {
   it('should return invalid when invoiceId is empty', async () => {
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      // deprecated legacy invoiceKey
+      // lineItemId: '456',
       invoiceId: '',
       billDateYMD: '2024-01-15',
     });

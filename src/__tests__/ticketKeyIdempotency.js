@@ -10,9 +10,10 @@ console.log('\n🧪 === TEST: Invoice Key Idempotency ===\n');
 // Test único: buildInvoiceKey debe generar claves correctas para facturas
 console.log('Test: buildInvoiceKey() - invoices');
 const tests = [
-  { dealId: '100', lineItemId: '123', date: '2026-01-14', expected: '100::LI:123::2026-01-14' },
-  { dealId: '100', lineItemId: 'LI:123', date: '2026-01-14', expected: '100::LI:123::2026-01-14' },
-  { dealId: '100', lineItemId: 'PYLI:456', date: '2026-01-14', expected: '100::PYLI:456::2026-01-14' },
+  // deprecated legacy invoiceKey
+  // { dealId: '100', lineItemId: '123', date: '2026-01-14', expected: '100::LI:123::2026-01-14' },
+  // { dealId: '100', lineItemId: 'LI:123', date: '2026-01-14', expected: '100::LI:123::2026-01-14' },
+  // { dealId: '100', lineItemId: 'PYLI:456', date: '2026-01-14', expected: '100::PYLI:456::2026-01-14' },
 ];
 
 let passed = 0;

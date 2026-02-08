@@ -14,6 +14,8 @@ import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { sanitizeClonedLineItem } from '../services/lineItems/cloneSanitizerService.js';
+import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaService.js';
+import { runPhaseP } from './phasep.js';
 
 logDateEnvOnce();
 
@@ -193,39 +195,6 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   return `Próxima facturación ${fmtYMD(nextDate)} · ${dealName} · ${count} line items`;
 }
 
-/**
- * Deriva frecuencia del deal:
- * - si hay al menos un monthly => monthly
- * - si hay al menos un yearly => yearly
- * - si hay mezcla => mixed
- * - si no hay recurring => one_time
- */
-function deriveDealBillingFrequency(lineItems) {
-  const freqs = new Set();
-
-  for (const li of lineItems || []) {
-    const p = li?.properties || {};
-    const f =
-      (p.hs_recurring_billing_frequency ?? p.recurringbillingfrequency ?? '')
-        .toString()
-        .toLowerCase()
-        .trim();
-
-    // HubSpot suele usar monthly, annually, yearly, etc.
-    if (f) freqs.add(f);
-    else {
-      // si tiene number_of_payments=1 y no tiene frecuencia, lo tratamos como one-time
-      const n = (p.hs_recurring_billing_number_of_payments ?? '').toString();
-      if (n === '1') freqs.add('one_time');
-    }
-  }
-
-  if (freqs.size === 0) return null;
-  if (freqs.size === 1) return [...freqs][0];
-
-  // si hay mezcla
-  return 'mixed';
-}
 
 async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
@@ -321,6 +290,8 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
       } else {
         await updateLineItemSchedule(li);
       }
+        await ensureForecastMetaOnLineItem(li);
+
 
       if (debug) {
         console.log('[phase1][post-updateLineItemSchedule]', {
@@ -619,6 +590,9 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
       skipped: true,
       reason: 'sin fechas útiles (contrato completado o mal configurado)',
     };
+  }
+    if (process.env.ENABLE_PHASE_P === 'true') {
+    await runPhaseP({ deal, lineItems });
   }
 
   return {

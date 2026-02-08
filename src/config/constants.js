@@ -12,13 +12,13 @@ export const TICKET_PIPELINE = process.env.BILLING_TICKET_PIPELINE_ID || '832539
 export const TICKET_STAGES = {
   NEW: process.env.BILLING_TICKET_STAGE_ID || '1234282360',           // Nueva orden de facturación
   READY: process.env.BILLING_TICKET_STAGE_READY || '1250133337',      // Lista para facturar (día de facturación o un día antes)
-  INVOICED: process.env.BILLING_ORDER_STAGE_ID_FACTURADO || '1234282361',  // Facturado (vendedor pidió facturar ahora)
+  INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '1234282361',  // Facturado (vendedor pidió facturar ahora)
   CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1234282363',   // Pausado/Cancelado (pausa o cierre perdido)
 };
 
 // Pipeline y stage para tickets automáticos
 export const AUTOMATED_TICKET_PIPELINE = process.env.BILLING_AUTOMATED_PIPELINE_ID || '829156883';
-export const AUTOMATED_TICKET_INITIAL_STAGE = process.env.BILLING_AUTOMATED_INITIAL_STAGE || '1228755520';
+export const AUTOMATED_TICKET_INITIAL_STAGE = process.env.BILLING_AUTOMATED_FORECAST || '1294745999';
 
 
 // Moneda por defecto
