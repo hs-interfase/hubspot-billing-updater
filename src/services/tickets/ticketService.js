@@ -494,9 +494,6 @@ async function markDuplicateTickets({ canonicalTicketId, duplicates, reason }) {
   }
 }
 
-
-
-
 function extractLineItemKeyFromTicketKey(ticketKey) {
   if (!ticketKey) return null;
   const parts = String(ticketKey).split('::');

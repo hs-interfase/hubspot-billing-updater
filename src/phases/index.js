@@ -1,6 +1,7 @@
 // src/phases/index.js
 
 import { runPhase1 } from './phase1.js';
+import { runPhaseP } from './phasep.js'; 
 import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
@@ -9,22 +10,6 @@ import { installHubSpotConsoleCollector } from "../utils/hubspotErrorCollector.j
 
 installHubSpotConsoleCollector();
 
-
-/**
- * Orquestador de las fases del proceso de facturación.
- *
- * - Phase 1: Actualizar fechas, calendario, cupo
- * - Phase 2: Generar tickets manuales para line items con facturacion_automatica=false
- * - Phase 3: Emitir facturas automáticas para line items con facturacion_automatica=true
- *
- * NOTA: La activación de facturacion_activa y cupo_activo se gestiona mediante
- * Workflow de HubSpot cuando el deal llega a "Closed Won".
- *
- * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Array} params.lineItems - Line Items del Deal
- * @returns {Object} Resumen de ejecución
- */
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
 
@@ -36,6 +21,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     dealId,
     cleanup: { scanned: 0, duplicates: 0, deprecated: 0 },
     phase1: { success: false },
+    phaseP: { success: false }, // ✅ ADD
     phase2: { ticketsCreated: 0 },
     phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
     ticketsCreated: 0,
@@ -53,7 +39,6 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   } catch (err) {
     console.error(`   ❌ Error en Cleanup PRE:`, err?.message || err);
     results.cleanup.error = err?.message || 'Error desconocido';
-    // NO frenamos el proceso por esto
   }
 
   // ========== PHASE 1: Fechas, calendario, cupo ==========
@@ -63,11 +48,10 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     results.phase1.success = true;
     console.log(`   ✅ Phase 1 completada\n`);
 
-    // ✅ Refetch post-Phase1 (para que Phase2/3 vean fecha_2.. etc actualizadas)
+    // ✅ Refetch post-Phase1
     console.log(`🔄 Refetch deal+lineItems post-Phase1...`);
     const refreshed = await getDealWithLineItems(dealId);
 
-    // Ajuste de nombres (por si el helper devuelve distinto)
     deal = refreshed.deal || refreshed?.Deal || deal;
 
     const refreshedLineItems =
@@ -85,6 +69,22 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
     results.phase1.error = err?.message || 'Error desconocido';
   }
+
+  // ========== PHASE P: Forecast/Promesa ==========
+// ========== PHASE P: Forecast/Promesa ==========
+try {
+  console.log(`🟣 PHASE P: Forecast/Promesa (tickets forecast)...`);
+  const phasePResult = await runPhaseP({ deal, lineItems });
+  results.phaseP = phasePResult;
+  results.ticketsCreated += (phasePResult?.created || 0);
+  const { created, updated, deleted, skipped } = phasePResult || {};
+  console.log(
+    `   ✅ Phase P completada: created=${created}, updated=${updated}, deleted=${deleted}, skipped=${skipped}\n`
+  );
+} catch (err) {
+  console.error(`   ❌ Error en Phase P:`, err?.message || err);
+  results.phaseP.error = err?.message || 'Error desconocido';
+}
 
   // ========== PHASE 2: Tickets manuales ==========
   try {
@@ -105,11 +105,12 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     results.phase3 = phase3Result;
     results.autoInvoicesEmitted = phase3Result.invoicesEmitted || 0;
 
-    // Sumar tickets de Phase 3 al total
     const ticketsPhase3 = phase3Result.ticketsEnsured || 0;
     results.ticketsCreated += ticketsPhase3;
 
-    console.log(`   ✅ Phase 3 completada: ${results.autoInvoicesEmitted} facturas emitidas, ${ticketsPhase3} tickets automáticos creados\n`);
+    console.log(
+      `   ✅ Phase 3 completada: ${results.autoInvoicesEmitted} facturas emitidas, ${ticketsPhase3} tickets automáticos creados\n`
+    );
   } catch (err) {
     console.error(`   ❌ Error en Phase 3:`, err?.message || err);
     results.phase3.error = err?.message || 'Error desconocido';

@@ -15,7 +15,6 @@ import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { sanitizeClonedLineItem } from '../services/lineItems/cloneSanitizerService.js';
 import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaService.js';
-import { runPhaseP } from './phasep.js';
 
 logDateEnvOnce();
 
@@ -591,9 +590,7 @@ if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
       reason: 'sin fechas útiles (contrato completado o mal configurado)',
     };
   }
-    if (process.env.ENABLE_PHASE_P === 'true') {
-    await runPhaseP({ deal, lineItems });
-  }
+
 
   return {
     dealId,

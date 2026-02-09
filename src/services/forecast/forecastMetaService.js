@@ -2,7 +2,6 @@ import crypto from 'crypto';
 import { getEffectiveBillingConfig } from '../../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../../utils/dateUtils.js';  
 import { hubspotClient } from '../../hubspotClient.js';
-
 function stableStringify(obj) {
   return JSON.stringify(obj, Object.keys(obj).sort());
 }

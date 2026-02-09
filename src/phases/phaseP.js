@@ -2,7 +2,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { getEffectiveBillingConfig } from '../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.js';
-    import { from } from '@hubspot/api-client/lib/codegen/communication_preferences/rxjsStub.js';
+import { getDealCompanies } from '../services/tickets/ticketService.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -22,6 +22,8 @@ const STAGE = {
   AUTO_FORECAST_75: '1296489840', // deal 75
   AUTO_FORECAST_95: '1296362566', // deal 95
 };
+const BILLING_TICKET_PIPELINE_ID = '832539959';
+const BILLING_AUTOMATED_PIPELINE_ID = '829156883';
 
 const FORECAST_TICKET_STAGES = new Set(Object.values(STAGE));
 
@@ -66,16 +68,24 @@ function isAutomatedBilling(lineItem) {
 
 function resolveBucketFromDealStage(dealStage) {
   const s = String(dealStage || '');
+
+  // 5/10/25
+  if (s === 'appointmentscheduled') return '25';
+  if (s === 'qualifiedtobuy') return '25';
+  if (s === 'presentationscheduled') return '25';
+
+  // 50/75/95
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
   if (s === 'closedwon') return '95';
 
-  // 5/10/25 (appointmentscheduled / qualifiedtobuy / presentationscheduled)
-  return '25';
+  return null;
 }
+
 
 function resolveForecastStage({ dealStage, automated }) {
   const bucket = resolveBucketFromDealStage(dealStage);
+  if (!bucket) return null;
 
   if (!automated) {
     if (bucket === '50') return STAGE.MANUAL_FORECAST_50;
@@ -191,20 +201,78 @@ function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
   return buildTicketKey({ dealId, lineItemKey, ymd });
 }
 
-async function createForecastTicket({ dealId, lineItemKey, ticketKey, expectedYmd, targetStage }) {
+async function resolveCompanySnapshot(dealId) {
+  try {
+    const companyIds = await getDealCompanies(String(dealId)); // ya existe en ticketService
+    const companyId = companyIds?.[0] ? String(companyIds[0]) : '';
+    if (!companyId) return { empresaId: '', empresaNombre: '' };
+
+    const c = await hubspotClient.crm.companies.basicApi.getById(companyId, ['name']);
+    const empresaNombre = c?.properties?.name || '';
+    return { empresaId: companyId, empresaNombre };
+  } catch (e) {
+    return { empresaId: '', empresaNombre: '' };
+  }
+}
+
+function resolveProductAndUEN(lineItem) {
+  const lp = lineItem?.properties || {};
+  const productoNombre = lp.name || lp.hs_name || ''; // "name" suele ser el nombre del producto del line item
+  const unidadDeNegocio =
+    lp.unidad_de_negocio || lp.of_unidad_de_negocio || lp.hs_business_unit || '';
+  return { productoNombre, unidadDeNegocio };
+}
+
+export async function createForecastTicket({
+  dealId,
+  lineItemKey,
+  ticketKey,
+  expectedYmd,
+  targetStage,
+
+  lineItemId,
+  hsPipeline,
+
+  empresaId,
+  empresaNombre,
+  productoNombre,
+  unidadDeNegocio,
+  rubro,
+}) {
+  const billDateYMD = String(expectedYmd);
+
+  const subject = `${empresaNombre || 'SIN_EMPRESA'} - ${productoNombre || 'SIN_PRODUCTO'} - ${billDateYMD}`;
+
   const properties = {
+    // pipeline + stage
+    hs_pipeline: String(hsPipeline),
+    hs_pipeline_stage: String(targetStage),
+
+    // identidad / trazabilidad
     of_deal_id: String(dealId),
     of_line_item_key: String(lineItemKey),
     of_ticket_key: String(ticketKey),
-    hs_pipeline_stage: String(targetStage),
-    fecha_resolucion_esperada: String(expectedYmd),
+    of_line_item_ids: String(lineItemId || ''),
+
+    // fechas
+    fecha_resolucion_esperada: billDateYMD,
+
+    // title
+    subject,
+
+    // snapshots para análisis
+    empresa_id: empresaId || '',
+    nombre_empresa: empresaNombre || '',
+    unidad_de_negocio: unidadDeNegocio || '',
+
+    // dropdown producto (si existe en ticket)
+    of_producto_nombres: productoNombre || '',
+
+    // rubro/servicio en property existente
+    of_rubro: rubro || '',
   };
 
   return hubspotClient.crm.tickets.basicApi.create({ properties });
-}
-
-async function updateTicket(ticketId, patch) {
-  return hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties: patch });
 }
 
 async function deleteTicket(ticketId) {
@@ -225,12 +293,24 @@ export async function runPhaseP({ deal, lineItems }) {
   const dealId = deal?.id || deal?.objectId || deal?.properties?.hs_object_id;
   const dealStage = deal?.properties?.dealstage || '';
 
+  // Contadores de métricas
+  let created = 0, updated = 0, deleted = 0, skipped = 0;
+
   if (!dealId) {
     console.log('[phaseP] missing dealId, skip');
-    return;
+    return { success: false, reason: 'missing_dealId', created: 0, updated: 0, deleted: 0, skipped: 0 };
   }
 
   console.log('[phaseP] start', { dealId, dealStage, lineItems: lineItems?.length || 0 });
+
+const companyIds = await getDealCompanies(String(dealId));
+const empresaId = companyIds?.[0] ? String(companyIds[0]) : '';
+
+let empresaNombre = '';
+if (empresaId) {
+  const c = await hubspotClient.crm.companies.basicApi.getById(empresaId, ['name']);
+  empresaNombre = c?.properties?.name || '';
+}
 
   for (const li of lineItems || []) {
     const p = li?.properties || {};
@@ -238,14 +318,47 @@ export async function runPhaseP({ deal, lineItems }) {
 
     if (!lineItemKey) {
       console.log('[phaseP] skip line item without line_item_key', { lineItemId: li.id });
+      skipped++;
       continue;
     }
 
     const automated = isAutomatedBilling(li);
     const targetStage = resolveForecastStage({ dealStage, automated });
+    const cfg = getEffectiveBillingConfig(li);
+
+    console.log('[phaseP][li]', {
+      lineItemId: li.id,
+      lik: lineItemKey,
+      dealStage,
+      automated,
+      targetStage,
+      startDate: cfg?.startDate ? formatDateISO(cfg.startDate) : null,
+      interval: cfg?.interval ?? null,
+      numberOfPayments:
+        safeInt(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null),
+      autorenew: cfg?.isAutoRenew ?? cfg?.autorenew ?? null,
+    });
+
+    if (!targetStage) {
+      console.log('[phaseP][skip][bucket]', {
+        dealStage,
+        lineItemId: li.id,
+        reason: 'dealstage_not_in_forecast_buckets',
+      });
+      skipped++;
+      continue;
+    }
 
     // 1) Fechas deseadas
     const { desiredCount, dates } = buildDesiredDates(li);
+    console.log('[phaseP][dates]', {
+      lineItemId: li.id,
+      lik: lineItemKey,
+      desiredCount,
+      count: dates.length,
+      first: dates[0] || null,
+      last: dates[dates.length - 1] || null,
+    });
 
     // 2) Traer existentes (TODOS)
     const allTickets = await findTicketsByLineItemKey(lineItemKey);
@@ -260,7 +373,10 @@ export async function runPhaseP({ deal, lineItems }) {
           lineItemKey,
           count: forecastTickets.length,
         });
-        for (const t of forecastTickets) await deleteTicket(t.id);
+        for (const t of forecastTickets) {
+          await deleteTicket(t.id);
+          deleted++;
+        }
         await updateLineItemLastGeneratedAt(li.id);
       }
       continue;
@@ -301,13 +417,29 @@ export async function runPhaseP({ deal, lineItems }) {
 
       if (!existing) {
         console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
-        await createForecastTicket({
-          dealId,
-          lineItemKey,
-          ticketKey: key,
-          expectedYmd,
-          targetStage,
-        });
+const { productoNombre, unidadDeNegocio } = resolveProductAndUEN(li);
+
+const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
+const rubro = (li?.properties?.servicio || '').toString(); // viene del line item
+
+await createForecastTicket({
+  dealId,
+  lineItemKey,
+  ticketKey: key,
+  expectedYmd,
+  targetStage,
+
+  lineItemId: li.id,
+  hsPipeline,
+
+  empresaId,
+  empresaNombre,
+  productoNombre,
+  unidadDeNegocio,
+  rubro,
+});
+
+        created++;
         changed = true;
         continue;
       }
@@ -330,6 +462,7 @@ export async function runPhaseP({ deal, lineItems }) {
       if (Object.keys(patch).length) {
         console.log('[phaseP] update forecast ticket', { ticketId: existing.id, patch });
         await updateTicket(existing.id, patch);
+        updated++;
         changed = true;
       }
     }
@@ -341,6 +474,7 @@ export async function runPhaseP({ deal, lineItems }) {
       if (!desiredKeys.has(k)) {
         console.log('[phaseP] delete extra forecast ticket', { ticketId: t.id, ticketKey: k });
         await deleteTicket(t.id);
+        deleted++;
         changed = true;
       }
     }
@@ -353,5 +487,6 @@ export async function runPhaseP({ deal, lineItems }) {
     }
   }
 
-  console.log('[phaseP] done', { dealId });
+  console.log('[phaseP] done', { dealId, created, updated, deleted, skipped });
+  return { success: true, created, updated, deleted, skipped };
 }
