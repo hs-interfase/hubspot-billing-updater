@@ -1,11 +1,13 @@
 // src/services/lineItems/syncAfterPromotion.js
 import { hubspotClient } from '../../hubspotClient.js';
-import { findNextForecastYMDForLineItemKey } from '../tickets/ticketService.js';
+import { findNextForecastYMDForLineItemKey } from '../tickets/ticketSea rchService.js';
 import {
-  BILLING_TICKET_PIPELINE_ID,
-  BILLING_TICKET_FORECAST_MANUAL_STAGE_ID,
-  BILLING_TICKET_FORECAST_AUTO_STAGE_ID,
+  TICKET_PIPELINE,
+  FORECAST_MANUAL_STAGES,
+  FORECAST_AUTO_STAGES,
+  isForecastStage
 } from '../../config/constants.js';
+
 
 export async function syncLineItemAfterPromotion({
   dealId,       // opcional: logs

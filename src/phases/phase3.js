@@ -6,6 +6,8 @@ import { getTodayYMD } from '../utils/dateUtils.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
+import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js'; 
 
 
 /**
@@ -105,12 +107,29 @@ async function promoteAutoForecastTicketToReady({
 
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
-  const ticketKey = buildTicketKey(dealId, lineItemKey, billingYMD);
-  const t = await findTicketByTicketKey(ticketKey);
+const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingYMD);
+let t = await findTicketByTicketKey(ticketKeyNew);
 
-  if (!t) {
-    return { moved: false, reason: 'missing_forecast_ticket', ticketKey };
-  }
+let ticketKeyUsed = ticketKeyNew;
+
+if (!t) {
+  const ticketKeyOld = buildTicketKey(dealId, lineItemKey, billingYMD);
+  t = await findTicketByTicketKey(ticketKeyOld);
+  ticketKeyUsed = ticketKeyOld;
+}
+
+if (!t) {
+  return {
+    moved: false,
+    reason: 'missing_forecast_ticket',
+    ticketKey: ticketKeyUsed,
+    ticketKeyNew,
+  };
+}
+
+if (ticketKeyUsed !== ticketKeyNew) {
+  console.log('[phase3][lookup] used fallback key', { ticketKeyNew, ticketKeyUsed });
+}
 
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 

@@ -7,7 +7,8 @@ import {
   TICKET_STAGES, 
   AUTOMATED_TICKET_PIPELINE,     
   AUTOMATED_TICKET_INITIAL_STAGE, 
-  isDryRun 
+  isDryRun,
+  isForecastTicketStage, 
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../../utils/dateUtils.js';
@@ -56,6 +57,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
       'of_deal_id',
       'of_line_item_ids',
       'of_ticket_key',
+      'hs_pipeline_stage', // 🔴 NUEVO
     ]);
   } catch (e) {
     console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer ticket:', e?.message);
@@ -63,6 +65,13 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
 
   const tp = ticket?.properties || {};
+
+  // 🔴 GUARD CLAUSE CLAVE
+  // Si el ticket sigue en FORECAST, NO toca fechas de line item
+  // Solo continuamos si el ticket ya fue promovido (Phase 2 / Phase 3)
+  if (isForecastTicketStage(tp.hs_pipeline_stage)) {
+    return;
+  }
 
   // ✅ Tomamos la fecha "canónica" (evita UTC -1 día)
   const ticketDateYMD = billDateYMD || toYMDInBillingTZ(tp.fecha_resolucion_esperada);
@@ -97,90 +106,82 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
 
   const lp = lineItem?.properties || {};
- const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
+  const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
-
-
 
   // 4) last_ticketed_date = max(...)
   let newLastTicketedYMD = currentLastTicketedYMD;
   if (!currentLastTicketedYMD || ticketDateYMD > currentLastTicketedYMD) {
     newLastTicketedYMD = ticketDateYMD;
   }
-  // 4.b) HARD STOP por número de pagos (si ya emitimos todos, no hay "next")
+
+  // 4.b) HARD STOP por número de pagos
   const totalPaymentsRaw =
     lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
 
   const totalPayments = totalPaymentsRaw ? Number(totalPaymentsRaw) : 0;
 
   if (totalPayments > 0) {
-const key = String(tp.of_ticket_key || '');
-const lineItemKey = extractLineItemKeyFromTicketKey(key);
+    const key = String(tp.of_ticket_key || '');
+    const lineItemKey = extractLineItemKeyFromTicketKey(key);
 
-if (!lineItemKey) {
-  // si no hay LIK, no podemos contar bien (en tests podés decidir fallback o return)
-  console.warn('[syncLineItemAfterCanonicalTicket] ticketKey sin LIK:', key);
-  return;
-}
+    if (!lineItemKey) {
+      console.warn('[syncLineItemAfterCanonicalTicket] ticketKey sin LIK:', key);
+      return;
+    }
 
-const issued = await countCanonicalTicketsForLineItemKey({ dealId, lineItemKey });
+    const issued = await countCanonicalTicketsForLineItemKey({ dealId, lineItemKey });
 
-if (issued >= totalPayments) {
-  const updates = {};
+    if (issued >= totalPayments) {
+      const updates = {};
 
-  if (newLastTicketedYMD !== currentLastTicketedYMD) {
-    updates.last_ticketed_date = newLastTicketedYMD;
+      if (newLastTicketedYMD !== currentLastTicketedYMD) {
+        updates.last_ticketed_date = newLastTicketedYMD;
+      }
+
+      if (currentNextYMD !== '') {
+        updates.billing_next_date = '';
+      }
+
+      updates.fechas_completas = 'true';
+
+      if (Object.keys(updates).length) {
+        await hubspotClient.crm.lineItems.basicApi.update(
+          String(lineItemId),
+          { properties: updates }
+        );
+
+        console.log(
+          `[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (${issued}/${totalPayments})`,
+          updates
+        );
+      }
+
+      return;
+    }
   }
 
-  // Si ya está completo, no mostramos más próximas fechas
-  if (currentNextYMD !== '') {
-    updates.billing_next_date = '';
+  // 5) billing_next_date
+  let newNextYMD = currentNextYMD;
+
+  if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
+    if (currentNextYMD && currentNextYMD > ticketDateYMD) {
+      // no tocar
+    } else {
+      const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
+      const { toYMDInBillingTZ, parseLocalDate } = await import('../../utils/dateUtils.js');
+
+      const base = parseLocalDate(ticketDateYMD);
+      const fakeLineItem = { properties: { ...lp } };
+      const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
+      newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
+    }
   }
-
-  // 🔴 NUEVO: marcar fechas completas
-  updates.fechas_completas = 'true';
-
-  if (Object.keys(updates).length) {
-    await hubspotClient.crm.lineItems.basicApi.update(
-      String(lineItemId),
-      { properties: updates }
-    );
-
-    console.log(
-      `[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (${issued}/${totalPayments})`,
-      updates
-    );
-  }
-
-  return; // 👈 clave: salimos para no recalcular next
-}
-
-  }
-
-// 5) billing_next_date
-// Recalcular si next está vacío o si next <= last_ticketed (no representa “próxima sin ticket”).
-// Si next ya está adelantado (> ticketDate), no tocar.
-let newNextYMD = currentNextYMD;
-
-if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
-  if (currentNextYMD && currentNextYMD > ticketDateYMD) {
-    // no tocar
-  } else {
-  const { getNextBillingDateForLineItem } = await import('../../billingEngine.js');
-  const { toYMDInBillingTZ, parseLocalDate } = await import('../../utils/dateUtils.js');
-
-  // Unificación: usar la fecha YMD como base, igual que phase 1
-  const base = parseLocalDate(ticketDateYMD); // 00:00 en zona local
-  const fakeLineItem = { properties: { ...lp } };
-  const nextDateObj = getNextBillingDateForLineItem(fakeLineItem, base);
-  newNextYMD = nextDateObj ? toYMDInBillingTZ(nextDateObj) : '';
-  }
-}
 
   // 6) Update solo si cambió algo
   const updates = {};
   if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
-  if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD; // '' => null
+  if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD;
 
   if (!Object.keys(updates).length) return;
 
@@ -605,6 +606,7 @@ export async function archiveClonedTicketsByKey({ expectedKey, dealId, dryRun = 
  * @param {Function} params.buildTicketPayload - Función que construye el payload del ticket
  * @returns {Promise<Object>} { ticketId, created, ticketKey, duplicatesMarked }
  */
+
 export async function ensureTicketCanonical({
   dealId,
   lineItemKey,

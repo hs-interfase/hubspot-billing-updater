@@ -6,6 +6,9 @@ import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/d
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
+import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js'; 
+
 
 /**
  * PHASE 2 (MANUAL):
@@ -20,7 +23,7 @@ import { createTicketAssociations, getDealCompanies, getDealContacts } from '../
  */
 
 // ====== STAGES (IDs reales) ======
-const BILLING_TICKET_STAGE_READY_ENTRY = '1234282360'; // manual: entra a flujo real (tu "READY de entrada")
+const BILLING_TICKET_STAGE_READY_ENTRY = process.env.BILLING_TICKET_STAGE_ID || '1234282360';
 
 // Manual forecast stages por bucket de deal stage
 const BILLING_TICKET_FORECAST_25 = '1294744238';
@@ -100,8 +103,20 @@ async function promoteManualForecastTicketToReady({
 
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
-  const ticketKey = buildTicketKey(dealId, lineItemKey, nextBillingDate);
-  const t = await findTicketByTicketKey(ticketKey);
+const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, nextBillingDate);
+let t = await findTicketByTicketKey(ticketKeyNew);
+
+let ticketKeyUsed = ticketKeyNew;
+
+if (!t) {
+  const ticketKeyOld = buildTicketKey(dealId, lineItemKey, nextBillingDate);
+  t = await findTicketByTicketKey(ticketKeyOld);
+  ticketKeyUsed = ticketKeyOld;
+}
+
+ if (ticketKeyUsed !== ticketKeyNew) {
+  console.log('[phase2][lookup] used fallback key', { ticketKeyNew, ticketKeyUsed });
+}
 
   if (!t) {
     return { moved: false, reason: 'missing_forecast_ticket', ticketKey };
