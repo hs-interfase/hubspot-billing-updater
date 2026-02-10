@@ -82,7 +82,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'billing_next_date',
       'last_ticketed_date',
-      'billing_last_billed_date',
+      'billing_last_period',
       'billing_anchor_date',
       'hs_recurring_billing_start_date',
       'recurringbillingfrequency',
@@ -565,7 +565,6 @@ async function findCanonicalAndDuplicates({
 
   return { canonical, duplicates };
 }
-
 
 function getTicketCreatedMs(t) {
   const p = t.properties || {};

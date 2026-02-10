@@ -297,7 +297,7 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
           lineItemId: li.id,
           billing_next_date: li.properties?.billing_next_date,
           last_ticketed_date: li.properties?.last_ticketed_date,
-          billing_last_billed_date: li.properties?.billing_last_billed_date,
+          billing_last_period: li.properties?.billing_last_period,
           fechas_completas: li.properties?.fechas_completas,
         });
       }

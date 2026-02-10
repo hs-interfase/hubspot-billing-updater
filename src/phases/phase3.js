@@ -5,6 +5,8 @@ import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
+import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+
 
 /**
  * PHASE 3 (AUTOMÁTICO):
@@ -93,7 +95,14 @@ async function moveTicketToStage(ticketId, stageId) {
  * - No crea ticket.
  * - Solo mueve si está en forecast auto (cualquiera), idealmente el esperado por dealstage.
  */
-async function promoteAutoForecastTicketToReady({ dealId, dealStage, lineItemKey, billingYMD }) {
+async function promoteAutoForecastTicketToReady({
+  dealId,
+  dealStage,
+  lineItemKey,
+  billingYMD,
+  lineItemId,
+}) {
+
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
   const ticketKey = buildTicketKey(dealId, lineItemKey, billingYMD);
@@ -105,29 +114,68 @@ async function promoteAutoForecastTicketToReady({ dealId, dealStage, lineItemKey
 
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
+  // Si ya está en READY, no hacer nada
+  if (currentStage === BILLING_AUTOMATED_READY) {
+    return { moved: false, reason: 'already_ready', ticketId: t.id };
+  }
+
   // Si no está en forecast auto, NO tocar (puede ser real, o manual por error)
   if (!FORECAST_AUTO_STAGES.has(currentStage)) {
     return { moved: false, reason: `not_auto_forecast_stage:${currentStage}`, ticketId: t.id };
   }
 
+
+  // cargar empresas/contactos (no bloquear si falla)
+  const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
+  const contactIds =
+    (typeof getDealContacts === 'function'
+      ? await getDealContacts(String(dealId)).catch(() => [])
+      : []);
+
   // Validación suave (log)
   const expectedForecastStage = resolveAutoForecastStageForDealStage(dealStage);
+  let moved = false;
+  let reason = '';
+
   if (currentStage !== expectedForecastStage) {
     await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
-    return {
-      moved: true,
-      ticketId: t.id,
-      reason: `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`,
-    };
+    moved = true;
+    reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
+  } else {
+    await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
+    moved = true;
+    reason = 'moved';
   }
 
-  await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
-  return { moved: true, ticketId: t.id };
+  // Asociar SOLO al pasar a READY
+  if (lineItemId) {
+    await createTicketAssociations(
+      String(t.id),
+      String(dealId),
+      String(lineItemId),
+      companyIds || [],
+      contactIds || []
+    );
+  }
+
+  // Llamar syncLineItemAfterPromotion si se promovió
+  if (moved) {
+    await syncLineItemAfterPromotion({
+      dealId,
+      lineItemId,
+      lineItemKey,
+      expectedYMD: billingYMD,
+    });
+  }
+
+  return { moved, ticketId: t.id, reason };
 }
+
 
 export async function runPhase3({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
+  const dealStage = String(dp.dealstage || '');
   const today = getTodayYMD();
 
   console.log(`   [Phase3] start`, { dealId, today, lineItems: (lineItems || []).length });
@@ -187,9 +235,10 @@ export async function runPhase3({ deal, lineItems }) {
 
         const promoted = await promoteAutoForecastTicketToReady({
           dealId,
-          dealStage: dp.dealstage,
+          dealStage,
           lineItemKey,
           billingYMD: billingPeriodDate,
+          lineItemId,
         });
 
         if (promoted.moved) {
@@ -231,9 +280,10 @@ export async function runPhase3({ deal, lineItems }) {
 
       const promoted = await promoteAutoForecastTicketToReady({
         dealId,
-        dealStage: dp.dealstage,
+        dealStage,
         lineItemKey,
         billingYMD: billingPeriodDate,
+        lineItemId,
       });
 
       if (promoted.moved) {

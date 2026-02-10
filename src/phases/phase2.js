@@ -5,6 +5,7 @@ import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
 import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
+import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 
 /**
  * PHASE 2 (MANUAL):
@@ -86,6 +87,7 @@ async function moveTicketToStage(ticketId, stageId) {
  * Promueve un ticket forecast manual a READY (entrada al flujo real).
  * - No crea tickets.
  * - Solo mueve si el ticket está en forecast manual (cualquiera) y
+ * crea asociaciones para que sean visibles desde el deal 
  *   preferentemente en el forecast stage esperado para el deal stage.
  */
 async function promoteManualForecastTicketToReady({
@@ -93,7 +95,9 @@ async function promoteManualForecastTicketToReady({
   dealStage,
   lineItemKey,
   nextBillingDate,
+  lineItemId,
 }) {
+
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
   const ticketKey = buildTicketKey(dealId, lineItemKey, nextBillingDate);
@@ -105,33 +109,69 @@ async function promoteManualForecastTicketToReady({
 
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
+  // Si ya está en READY_ENTRY (limbo previo), no hacer nada (idempotente OK)
+  if (currentStage === BILLING_TICKET_STAGE_READY_ENTRY) {
+    return { moved: false, reason: 'already_ready_entry', ticketId: t.id };
+  }
+
   // Si no está en forecast manual, NO tocar (puede ser real o automático)
   if (!FORECAST_MANUAL_STAGES.has(currentStage)) {
     return { moved: false, reason: `not_manual_forecast_stage:${currentStage}`, ticketId: t.id };
   }
 
+
+  // cargar asociaciones objetivo (no bloquear si algo falla)
+  const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
+  const contactIds =
+    (typeof getDealContacts === 'function'
+      ? await getDealContacts(String(dealId)).catch(() => [])
+      : []);
+
   // Validación suave (log): forecast stage esperado por deal stage
   const expectedForecastStage = resolveManualForecastStageForDealStage(dealStage);
+
+  let moved = false;
+  let reason = '';
+
   if (currentStage !== expectedForecastStage) {
-    // No bloqueamos: el deal puede haber avanzado y Phase P pudo todavía no “reubicar” stage.
-    // Lo importante es que siga siendo forecast manual.
-    return {
-      moved: await (async () => {
-        await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
-        return true;
-      })(),
-      ticketId: t.id,
-      reason: `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`,
-    };
+    await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+    moved = true;
+    reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
+  } else {
+    await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+    moved = true;
+    reason = 'moved';
   }
 
-  await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
-  return { moved: true, ticketId: t.id };
+  // Asociar SOLO al pasar a READY_ENTRY
+  if (lineItemId) {
+    await createTicketAssociations(
+      String(t.id),
+      String(dealId),
+      String(lineItemId),
+      companyIds || [],
+      contactIds || []
+    );
+  }
+
+  // Llamar syncLineItemAfterPromotion si se promovió
+  if (moved) {
+    await syncLineItemAfterPromotion({
+      dealId,
+      lineItemId,
+      lineItemKey,
+      expectedYMD: nextBillingDate,
+    });
+  }
+
+  return { moved, ticketId: t.id, reason };
 }
+
 
 export async function runPhase2({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
+  const dealStage = String(dp.dealstage || '');
   const today = getTodayYMD();
 
   console.log(`   [Phase2] Hoy: ${today}`);
@@ -235,12 +275,14 @@ export async function runPhase2({ deal, lineItems }) {
         continue;
       }
 
-      const promoted = await promoteManualForecastTicketToReady({
-        dealId,
-        dealStage: dp.dealstage,
-        lineItemKey,
-        nextBillingDate,
-      });
+const promoted = await promoteManualForecastTicketToReady({
+  dealId,
+  dealStage,
+  lineItemKey,
+  nextBillingDate: planYMD,
+  lineItemId,
+});
+
 
       if (promoted.moved) {
         ticketsCreated++;
