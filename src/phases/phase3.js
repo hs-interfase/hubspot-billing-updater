@@ -101,27 +101,37 @@ async function promoteAutoForecastTicketToReady({
   lineItemId,
 }) {
 
-  if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
+if (!lineItemKey) {
+  return { moved: false, reason: 'missing_line_item_key' };
+}
 
-const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingYMD);
-let t = await findTicketByTicketKey(ticketKeyNew);
+const ticketKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingYMD);
 
-let ticketKeyUsed = ticketKeyNew;
+let t = await findTicketByTicketKey(ticketKey);
+
+// Retry por indexación HubSpot
+for (const delay of [500, 1000]) {
+  if (t) break;
+  await new Promise(r => setTimeout(r, delay));
+  t = await findTicketByTicketKey(ticketKey);
+}
 
 if (!t) {
   return {
     moved: false,
     reason: 'missing_forecast_ticket',
-    ticketKey: ticketKeyUsed,
-    ticketKeyNew,
+    ticketKey,
+  };
+}
+if (!t) {
+  return {
+    moved: false,
+    reason: 'missing_forecast_ticket',
+    ticketKey,
   };
 }
 
-if (ticketKeyUsed !== ticketKeyNew) {
-  console.log('[phase3][lookup] used fallback key', { ticketKeyNew, ticketKeyUsed });
-}
-
-  const currentStage = String(t?.properties?.hs_pipeline_stage || '');
+const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
   // Si ya está en READY, no hacer nada
   if (currentStage === BILLING_AUTOMATED_READY) {

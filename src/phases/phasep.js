@@ -3,6 +3,8 @@ import { hubspotClient } from '../hubspotClient.js';
 import { getEffectiveBillingConfig } from '../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.js';
 import { getDealCompanies } from '../services/tickets/ticketService.js';
+import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
+import { updateTicket } from '../services/tickets/ticketService.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -43,10 +45,6 @@ function toYmd(value) {
 function safeInt(v) {
   const n = Number.parseInt(String(v ?? '').trim(), 10);
   return Number.isFinite(n) ? n : null;
-}
-
-function buildTicketKey({ dealId, lineItemKey, ymd }) {
-  return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
 }
 
 /**
@@ -198,7 +196,7 @@ function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
   if (k) return k;
   const ymd = toYmd(ticket?.properties?.fecha_resolucion_esperada);
   if (!ymd) return '';
-  return buildTicketKey({ dealId, lineItemKey, ymd });
+  return buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
 }
 
 async function resolveCompanySnapshot(dealId) {
@@ -387,7 +385,7 @@ if (empresaId) {
     const desiredByKey = new Map(); // key -> expectedYmd
 
     for (const ymd of dates) {
-      const key = buildTicketKey({ dealId, lineItemKey, ymd });
+      const key = buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
       desiredKeys.add(key);
       desiredByKey.set(key, ymd);
     }
