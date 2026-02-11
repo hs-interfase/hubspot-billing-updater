@@ -128,6 +128,7 @@ export async function processUrgentLineItem(lineItemId) {
       'hs_object_id',
       'name',
       'facturar_ahora',
+      'line_item_key',
       'invoice_key',
       'invoice_id',
       'cantidad_de_facturaciones_urgentes',
@@ -212,15 +213,33 @@ if (!billingPeriodDate) {
         console.error(`⚠️ Error limpiando:`, cleanErr?.message);
       }
     }
+// 6) Obtener deal completo
+const { deal, lineItems } = await getDealWithLineItems(dealId);
+const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
+if (!targetLineItem) throw new Error('Line item no encontrado en el deal');
 
-    // 6) Obtener deal completo
-    const { deal, lineItems } = await getDealWithLineItems(dealId);
-    const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
-    if (!targetLineItem) {
-      throw new Error('Line item no encontrado en el deal');
-    }
+let lik = (targetLineItem.properties?.line_item_key || '').trim();
 
-    console.log('✅ Line Item encontrado, procediendo a facturar...\n');
+if (!lik) {
+  console.warn('[urgent-lineitem] line_item_key vacío; intentando setearlo...');
+
+  const likFromDirectRead = (lineItemProps.line_item_key || '').trim(); // <-- asegurate de pedir line_item_key en getById
+  if (likFromDirectRead) {
+    lik = likFromDirectRead;
+  } else {
+    throw new Error(
+      'Urgent billing: line_item_key vacío. Ejecutar Phase1/runBilling para generar LIK o agregar ensureLineItemKey en urgentBillingService.'
+    );
+  }
+
+  targetLineItem.properties = { ...(targetLineItem.properties || {}), line_item_key: lik };
+  lineItemProps.line_item_key = lik; // opcional
+}
+
+if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
+
+console.log('[urgent-lineitem] ✅ usando line_item_key:', lik);
+console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 
     // ✅ 7.a) Crear/reutilizar ticket con billingPeriodDate (NOT today)
     const { ticketId, created } = await createAutoBillingTicket(
