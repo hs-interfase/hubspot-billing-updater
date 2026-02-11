@@ -1,7 +1,7 @@
 
 // src/services/invoiceService.js
 import { hubspotClient } from '../hubspotClient.js';
-import { buildInvoiceKey } from '../utils/invoiceKey.js';
+import { buildInvoiceKeyFromLIK } from '../utils/invoiceKey.js';
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateUtils.js';
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
@@ -900,7 +900,6 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
   console.log(`   billingPeriodDate: ${billingPeriodDate} (for invoiceKey)`);
   console.log(`   invoiceDate: ${actualInvoiceDate} (for hs_invoice_date)`);
   
-  // ✅ CRITICAL: invoiceKey usa billingPeriodDate (NO today)
   // ✅ CRITICAL: invoiceKey usa LIK (line_item_key) y billingPeriodDate
   const lik = lineItem.line_item_key;
   const invoiceKey = buildInvoiceKeyFromLIK(dealId, lik, billingPeriodDate);
