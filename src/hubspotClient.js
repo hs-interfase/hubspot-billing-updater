@@ -126,6 +126,7 @@ export async function getDealWithLineItems(dealId) {
     "fecha_inicio_de_facturacion",
     "billing_next_date",
     "billing_last_period",
+    "billing_last_billed_date",
     "last_ticketed_date",
     "fecha_irregular_puntual",
     "billing_anchor_date",

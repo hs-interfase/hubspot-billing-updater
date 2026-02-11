@@ -519,52 +519,24 @@ async function findCanonicalAndDuplicates({
   const norm = (s) => (s == null ? '' : String(s)).trim();
   const tkey = (t) => norm(t?.properties?.of_ticket_key);
 
-  // 1) PRIMARY: match exact expectedKey (LIK)
-  const byExpectedKey = tickets.filter(t => tkey(t) === expectedKey);
+    // 1) LIK-only: match exact expectedKey (of_ticket_key)
+    const byExpectedKey = tickets.filter(t => tkey(t) === expectedKey);
 
-  let canonical = null;
-  let duplicates = [];
+    let canonical = null;
+    let duplicates = [];
 
-  if (byExpectedKey.length) {
-    canonical = byExpectedKey
-      .slice()
-      .sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b))[0];
-
-    duplicates = byExpectedKey.filter(t => String(t.id) !== String(canonical.id));
-  } else {
-    // 2) FALLBACK legacy: LI:<lineItemId>::<date>
-    // OJO: esto asume que tus tickets viejos usaban este formato exacto.
-    const legacyKey = buildLegacyTicketKeyFromLineItemId(dealId, lineItemId, billDateYMD);
-    const byLegacyKey = tickets.filter(t => tkey(t) === legacyKey);
-
-    if (byLegacyKey.length) {
-      canonical = byLegacyKey
+    if (byExpectedKey.length) {
+      canonical = byExpectedKey
         .slice()
         .sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b))[0];
-
-      duplicates = byLegacyKey.filter(t => String(t.id) !== String(canonical.id));
-
-      // 🔁 Importante: si encontraste legacy canonical, NO marques como duplicates
-      // tickets de otras fechas aunque tengan mismo LIK. Mantenerlo bien conservador.
+      duplicates = byExpectedKey.filter(t => String(t.id) !== String(canonical.id));
+    } else {
+      // LIK-only: no fallback legacy, no crash
+      canonical = null;
+      duplicates = [];
     }
-  }
 
-  // 3) Debug: mismos LIK con otra key (solo log)
-  if (lineItemKey) {
-    const withSameLIK = tickets.filter(t =>
-      norm(t?.properties?.of_line_item_key) === norm(lineItemKey) &&
-      tkey(t) !== expectedKey
-    );
-
-    if (withSameLIK.length) {
-      console.log(
-        `[dedup][DEBUG] Tickets con mismo of_line_item_key pero distinta of_ticket_key:`,
-        withSameLIK.map(t => t.id)
-      );
-    }
-  }
-
-  return { canonical, duplicates };
+    return { canonical, duplicates };
 }
 
 function getTicketCreatedMs(t) {

@@ -28,16 +28,27 @@ async function syncBillingLastBilledDateFromTicket(ticketObj) {
     const tp = ticketObj?.properties || {};
     const ticketId = String(ticketObj?.id || ticketObj?.properties?.hs_object_id || '');
 
-    // SOLO fecha esperada (plan). NO usar of_fecha_de_facturacion.
-   const expectedYMD =
-  toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
-  extractBillDateFromTicketKey(tp.of_ticket_key);
 
-if (!expectedYMD) return;
+    // SOLO fecha esperada (plan). NO usar of_fecha_de_facturacion.
+    const expectedYMD =
+      toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
+      extractBillDateFromTicketKey(tp.of_ticket_key);
+
+    if (!expectedYMD) return;
 
     // asumimos 1 solo line item id numérico en of_line_item_ids
     const lineItemId = String(tp.of_line_item_ids || '').split(',')[0].trim();
     if (!lineItemId) return;
+
+    // 🔍 Log de depuración solicitado
+    console.log('[syncBillingLastBilledDateFromTicket][dbg]', {
+      ticketId,
+      of_ticket_key: tp.of_ticket_key,
+      fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
+      expectedYMD,
+      of_line_item_ids: tp.of_line_item_ids,
+      pickedLineItemId: lineItemId,
+    });
 
     const billingLastBilledMs = String(toHubSpotDateOnly(expectedYMD));
 
