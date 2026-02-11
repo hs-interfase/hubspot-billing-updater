@@ -1,11 +1,9 @@
 // src/services/urgentBillingService.js
-
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
-import { createAutoInvoiceFromLineItem, createInvoiceFromTicket } from './invoiceService.js';
+import { createInvoiceFromTicket } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
-import { determineTicketFrequency } from './snapshotService.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
 
 /**
@@ -42,43 +40,14 @@ async function getDealIdForLineItem(lineItemId) {
   return dealIds[0];
 }
 
-/**
- * ✅ NUEVA: Calcula billingPeriodDate (nextBillingDate >= today)
- * SOURCE OF TRUTH para ticket key e invoice key.
- */
 function getBillingPeriodDate(lineItemProps) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const allDates = [];
-  
-  // 1) Check all start date variants
-  const startDate = lineItemProps.hs_recurring_billing_start_date ||
-                    lineItemProps.recurringbillingstartdate || 
-                    lineItemProps.fecha_inicio_de_facturacion;
-  if (startDate) {
-    const d = parseLocalDate(startDate);
-    if (d) allDates.push(d);
-  }
-  
-  // 2) Check fecha_2, fecha_3, ..., fecha_24
-  for (let i = 2; i <= 24; i++) {
-    const dateKey = `fecha_${i}`;
-    const dateValue = lineItemProps[dateKey];
-    if (dateValue) {
-      const d = parseLocalDate(dateValue);
-      if (d) allDates.push(d);
-    }
-  }
-  
-  if (allDates.length === 0) return null;
-  
-  // 3) Filter >= today
-  const futureDates = allDates.filter(d => d >= today);
-  if (futureDates.length === 0) return null;
-  
-  // 4) Return closest
-  futureDates.sort((a, b) => a.getTime() - b.getTime());
-  return formatDateISO(futureDates[0]);
+  const next = (lineItemProps.billing_next_date || '').trim();
+  if (!next) return null;
+
+  const d = parseLocalDate(next);
+  if (!d) return null;
+
+  return formatDateISO(d); // YYYY-MM-DD
 }
 
 /**
@@ -135,12 +104,11 @@ export async function processUrgentLineItem(lineItemId) {
       // ✅ Incluir campos de fecha
       'hs_recurring_billing_start_date',
       'recurringbillingstartdate',
-      'fecha_inicio_de_facturacion',
-      'fecha_2', 'fecha_3', 'fecha_4', 'fecha_5', 'fecha_6',
-      'fecha_7', 'fecha_8', 'fecha_9', 'fecha_10', 'fecha_11',
-      'fecha_12', 'fecha_13', 'fecha_14', 'fecha_15', 'fecha_16',
-      'fecha_17', 'fecha_18', 'fecha_19', 'fecha_20', 'fecha_21',
-      'fecha_22', 'fecha_23', 'fecha_24',
+      'billing_last_period',
+      'last_ticketed_date',
+      'billing_next_date',
+      'billing_anchor_date',
+      'billing_last_billed_date',
     ]);
 
     const lineItemProps = lineItem.properties || {};
@@ -266,7 +234,12 @@ console.log('✅ Line Item encontrado, procediendo a facturar...\n');
       targetLineItem, 
       billingPeriodDate  // ✅ CRITICAL: Use period date
     );
-    
+await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+  properties: {
+    last_ticketed_date: billingPeriodDate || today,
+  },
+});
+
     console.log(`\n✅ Ticket ${created ? 'creado' : 'reutilizado'}: ${ticketId}`);
     console.log(`   ticketKey: ${dealId}::LI:${lineItemId}::${billingPeriodDate}`);
 
@@ -290,32 +263,53 @@ console.log('✅ Line Item encontrado, procediendo a facturar...\n');
           },
         });
         console.log(`✅ Ticket movido a READY`);
+        
       }
     }
+    
+let invoiceIdFinal = null;
+// ✅ 7.c) Si el ticket ya creó una factura, NO crear otra automática
+let existingTicketInvoiceId = null;
 
-// 7.c) Crear factura con billingPeriodDate para invoiceKey, today para hs_invoice_date
-const invoiceResult = await createAutoInvoiceFromLineItem(
-  deal, 
-  targetLineItem, 
-  billingPeriodDate,  // ✅ For invoiceKey
-  today  // ✅ For hs_invoice_date
-);
-    console.log(`\n✅ Factura creada: ${invoiceResult.invoiceId}`);
+if (ticketId) {
+  const ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id']);
+  existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
+}
 
-    // 7.d) Asociar factura al ticket
-    if (ticketId) {
-      await updateTicket(ticketId, { of_invoice_id: invoiceResult.invoiceId });
-      console.log('✅ Ticket actualizado con invoice ID');
-    }
+if (existingTicketInvoiceId) {
+  console.log(`\n✅ Factura ya creada desde ticket: ${existingTicketInvoiceId} (skip auto-invoice)`);
+  invoiceIdFinal = existingTicketInvoiceId;
+} else {
+  const invoiceResult = await createAutoInvoiceFromLineItem(
+    deal,
+    targetLineItem,
+    billingPeriodDate,
+    today
+  );
+  console.log(`\n✅ Factura creada: ${invoiceResult.invoiceId}`);
+  invoiceIdFinal = invoiceResult.invoiceId;
+  await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+  properties: {
+    billing_last_period: billingPeriodDate,
+  },
+});
+}
+
+
+// ✅ 7.d) Asegurar ticket actualizado (si hace falta)
+if (ticketId && invoiceIdFinal) {
+  await updateTicket(ticketId, { of_invoice_id: invoiceIdFinal });
+  console.log('✅ Ticket actualizado con invoice ID');
+}
 
     // 8) Evidencia
-    await updateUrgentBillingEvidence(lineItemId, lineItemProps);
+ await updateUrgentBillingEvidence(lineItemId, lineItemProps);
 
     console.log('\n🎉 Facturación urgente completada exitosamente');
 
     return {
       success: true,
-      invoiceId: invoiceResult.invoiceId,
+      invoiceId: invoiceIdFinal,
       lineItemId: String(lineItemId),
       dealId: String(dealId),
       ticketId: String(ticketId),
