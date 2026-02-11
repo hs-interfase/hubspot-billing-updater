@@ -6,7 +6,7 @@ import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatD
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { determineTicketFrequency } from './snapshotService.js';
-
+import { ensureLineItemKey } from '../utils/lineItemKey.js';
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
@@ -213,27 +213,42 @@ if (!billingPeriodDate) {
         console.error(`⚠️ Error limpiando:`, cleanErr?.message);
       }
     }
-// 6) Obtener deal completo
+
+    // 6) Obtener deal completo
 const { deal, lineItems } = await getDealWithLineItems(dealId);
 const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
 if (!targetLineItem) throw new Error('Line item no encontrado en el deal');
 
 let lik = (targetLineItem.properties?.line_item_key || '').trim();
 
-if (!lik) {
-  console.warn('[urgent-lineitem] line_item_key vacío; intentando setearlo...');
+// ✅ Si no vino en targetLineItem, probá del getById inicial (si lo pediste)
+if (!lik) lik = (lineItemProps.line_item_key || '').trim();
 
-  const likFromDirectRead = (lineItemProps.line_item_key || '').trim(); // <-- asegurate de pedir line_item_key en getById
-  if (likFromDirectRead) {
-    lik = likFromDirectRead;
-  } else {
-    throw new Error(
-      'Urgent billing: line_item_key vacío. Ejecutar Phase1/runBilling para generar LIK o agregar ensureLineItemKey en urgentBillingService.'
-    );
+if (!lik) {
+  console.warn('[urgent-lineitem] line_item_key vacío; generando con ensureLineItemKey...');
+
+  const { key, shouldUpdate } = ensureLineItemKey({
+    dealId: String(dealId),
+    lineItem: targetLineItem,
+  });
+
+  lik = (key || '').trim();
+
+  if (!lik) {
+    throw new Error('Urgent billing: ensureLineItemKey devolvió key vacía');
   }
 
+  if (shouldUpdate) {
+    // Persistir en HubSpot (esto es lo que te faltaba)
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { line_item_key: lik },
+    });
+    console.log('[urgent-lineitem] ✅ line_item_key seteada en HubSpot:', lik);
+  }
+
+  // Inyectar en memoria para el resto del flujo
   targetLineItem.properties = { ...(targetLineItem.properties || {}), line_item_key: lik };
-  lineItemProps.line_item_key = lik; // opcional
+  lineItemProps.line_item_key = lik; // opcional (solo para logs/consistencia local)
 }
 
 if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
