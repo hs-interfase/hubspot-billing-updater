@@ -8,7 +8,7 @@ import { updateTicket } from '../services/tickets/ticketService.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js'; 
-
+import { createInvoiceFromTicket } from '../services/invoiceService.js';  
 
 /**
  * PHASE 3 (AUTOMÁTICO):
@@ -44,10 +44,6 @@ const FORECAST_AUTO_STAGES = new Set([
   BILLING_AUTOMATED_FORECAST_75,
   BILLING_AUTOMATED_FORECAST_95,
 ]);
-
-function buildTicketKey(dealId, lineItemKey, ymd) {
-  return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
-}
 
 function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
@@ -111,12 +107,6 @@ const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingY
 let t = await findTicketByTicketKey(ticketKeyNew);
 
 let ticketKeyUsed = ticketKeyNew;
-
-if (!t) {
-  const ticketKeyOld = buildTicketKey(dealId, lineItemKey, billingYMD);
-  t = await findTicketByTicketKey(ticketKeyOld);
-  ticketKeyUsed = ticketKeyOld;
-}
 
 if (!t) {
   return {
@@ -262,6 +252,13 @@ export async function runPhase3({ deal, lineItems }) {
 
         if (promoted.moved) {
           ticketsEnsured++;
+          const ticket = await hubspotClient.crm.tickets.basicApi.getById(
+          promoted.ticketId,
+          ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+        );
+
+          await createInvoiceFromTicket(ticket);
+          invoicesEmitted++;
           console.log(`      [Phase3] ✅ Ticket promovido a READY: ${promoted.ticketId}`);
 
           // ✅ Best-effort: marcar urgente
@@ -306,9 +303,18 @@ export async function runPhase3({ deal, lineItems }) {
       });
 
       if (promoted.moved) {
-        ticketsEnsured++;
-        console.log(`      [Phase3] ✅ Ticket promovido a READY: ${promoted.ticketId}`);
-      } else {
+  ticketsEnsured++;
+
+  const ticket = await hubspotClient.crm.tickets.basicApi.getById(
+    promoted.ticketId,
+    ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+  );
+
+  await createInvoiceFromTicket(ticket);
+  invoicesEmitted++;
+
+  console.log(`      [Phase3] ✅ Ticket promovido y factura emitida: ${promoted.ticketId}`);
+} else {
         console.log(
           `      [Phase3] 🔄 No se promovió: ${promoted.reason} (${promoted.ticketId || promoted.ticketKey || 'sin ticket'})`
         );

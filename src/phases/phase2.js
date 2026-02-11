@@ -108,12 +108,6 @@ let t = await findTicketByTicketKey(ticketKeyNew);
 
 let ticketKeyUsed = ticketKeyNew;
 
-if (!t) {
-  const ticketKeyOld = buildTicketKey(dealId, lineItemKey, nextBillingDate);
-  t = await findTicketByTicketKey(ticketKeyOld);
-  ticketKeyUsed = ticketKeyOld;
-}
-
  if (ticketKeyUsed !== ticketKeyNew) {
   console.log('[phase2][lookup] used fallback key', { ticketKeyNew, ticketKeyUsed });
 }
