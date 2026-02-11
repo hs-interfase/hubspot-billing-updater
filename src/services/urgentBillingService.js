@@ -248,13 +248,17 @@ if (!lik) {
 
   // Inyectar en memoria para el resto del flujo
   targetLineItem.properties = { ...(targetLineItem.properties || {}), line_item_key: lik };
+  targetLineItem.line_item_key = lik;
   lineItemProps.line_item_key = lik; // opcional (solo para logs/consistencia local)
 }
 
 if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
 
+targetLineItem.line_item_key = lik;
+
 console.log('[urgent-lineitem] ✅ usando line_item_key:', lik);
 console.log('✅ Line Item encontrado, procediendo a facturar...\n');
+
 
     // ✅ 7.a) Crear/reutilizar ticket con billingPeriodDate (NOT today)
     const { ticketId, created } = await createAutoBillingTicket(
