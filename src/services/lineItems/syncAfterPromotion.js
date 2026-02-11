@@ -1,13 +1,77 @@
 // src/services/lineItems/syncAfterPromotion.js
 import { hubspotClient } from '../../hubspotClient.js';
-import { findNextForecastYMDForLineItemKey } from '../tickets/ticketSea rchService.js';
 import {
   TICKET_PIPELINE,
+  AUTOMATED_TICKET_PIPELINE,
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
-  isForecastStage
 } from '../../config/constants.js';
 
+/**
+ * Devuelve el YYYY-MM-DD más chico > afterYMD para tickets FORECAST
+ * del mismo lineItemKey, dentro de un pipeline específico.
+ *
+ * - Sin asociaciones
+ * - Solo Search API
+ * - Toma fecha desde fecha_resolucion_esperada o fallback parseando of_ticket_key
+ */
+async function findNextForecastYMDForLineItemKeyInPipeline({
+  lineItemKey,
+  afterYMD,
+  forecastStageIds,
+  pipelineId,
+}) {
+  if (!lineItemKey) return '';
+  if (!afterYMD) return '';
+
+  let res;
+  try {
+    res = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [
+        {
+          filters: [
+            { propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) },
+            { propertyName: 'hs_pipeline', operator: 'EQ', value: String(pipelineId) },
+            // HubSpot Search API: "IN" usa "values"
+            { propertyName: 'hs_pipeline_stage', operator: 'IN', values: forecastStageIds },
+          ],
+        },
+      ],
+      properties: ['fecha_resolucion_esperada', 'of_ticket_key', 'hs_pipeline_stage'],
+      limit: 100,
+    });
+  } catch (e) {
+    console.warn('[findNextForecastYMD] search error:', e?.message);
+    return '';
+  }
+
+  const tickets = res?.results || [];
+  if (!tickets.length) return '';
+
+  const dates = [];
+  for (const t of tickets) {
+    const p = t?.properties || {};
+
+    // 1) preferimos la fecha explícita si existe
+    let ymd = (p.fecha_resolucion_esperada || '').slice(0, 10);
+
+    // 2) fallback: parsear of_ticket_key = dealId::LIK:<lineItemKey>::YYYY-MM-DD
+    // o si tu key es dealId::LIK:xxx::YYYY-MM-DD y no trae fecha_resolucion_esperada
+    if (!ymd && p.of_ticket_key) {
+      const parts = String(p.of_ticket_key).split('::');
+      // usualmente el último es YYYY-MM-DD
+      const last = parts[parts.length - 1];
+      if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) ymd = last;
+    }
+
+    if (!ymd) continue;
+    if (ymd > afterYMD) dates.push(ymd);
+  }
+
+  if (!dates.length) return '';
+  dates.sort(); // lexicográfico sirve para YYYY-MM-DD
+  return dates[0] || '';
+}
 
 export async function syncLineItemAfterPromotion({
   dealId,       // opcional: logs
@@ -39,33 +103,56 @@ export async function syncLineItemAfterPromotion({
   let newLast = currentLast;
   if (!currentLast || expectedYMD > currentLast) newLast = expectedYMD;
 
-  // 3) nextForecastYMD (por tickets forecast del mismo LIK)
-  const forecastStages = [
-    String(BILLING_TICKET_FORECAST_MANUAL_STAGE_ID),
-    String(BILLING_TICKET_FORECAST_AUTO_STAGE_ID),
-  ];
+  // 3) stages forecast (unión de ambos sets)
+  const forecastStageIds = [
+    ...FORECAST_MANUAL_STAGES,
+    ...FORECAST_AUTO_STAGES,
+  ].map(String);
 
-  let nextForecastYMD = await findNextForecastYMDForLineItemKey({
-    lineItemKey,
-    afterYMD: expectedYMD,
-    forecastStageIds: forecastStages,
-    pipelineId: BILLING_TICKET_PIPELINE_ID,
-  });
-
-  // 4) Guardrail: next no puede ser igual a last
-  if (nextForecastYMD && nextForecastYMD === newLast) {
-    nextForecastYMD = await findNextForecastYMDForLineItemKey({
+  // 4) nextForecastYMD: buscar en manual y auto, quedarnos con la más próxima
+  const [nextManual, nextAuto] = await Promise.all([
+    findNextForecastYMDForLineItemKeyInPipeline({
       lineItemKey,
-      afterYMD: newLast,
-      forecastStageIds: forecastStages,
-      pipelineId: BILLING_TICKET_PIPELINE_ID,
-    });
+      afterYMD: expectedYMD,
+      forecastStageIds,
+      pipelineId: TICKET_PIPELINE,
+    }),
+    findNextForecastYMDForLineItemKeyInPipeline({
+      lineItemKey,
+      afterYMD: expectedYMD,
+      forecastStageIds,
+      pipelineId: AUTOMATED_TICKET_PIPELINE,
+    }),
+  ]);
+
+  let nextForecastYMD = '';
+  if (nextManual && nextAuto) nextForecastYMD = nextManual < nextAuto ? nextManual : nextAuto;
+  else nextForecastYMD = nextManual || nextAuto || '';
+
+  // 5) Guardrail: next no puede ser igual a last
+  if (nextForecastYMD && nextForecastYMD === newLast) {
+    const [m2, a2] = await Promise.all([
+      findNextForecastYMDForLineItemKeyInPipeline({
+        lineItemKey,
+        afterYMD: newLast,
+        forecastStageIds,
+        pipelineId: TICKET_PIPELINE,
+      }),
+      findNextForecastYMDForLineItemKeyInPipeline({
+        lineItemKey,
+        afterYMD: newLast,
+        forecastStageIds,
+        pipelineId: AUTOMATED_TICKET_PIPELINE,
+      }),
+    ]);
+
+    if (m2 && a2) nextForecastYMD = m2 < a2 ? m2 : a2;
+    else nextForecastYMD = m2 || a2 || '';
   }
 
   let newNext = nextForecastYMD || '';
 
-  // 5) Monotonicidad suave de next: si ya tenías un next más adelantado, no lo bajes
-  // (esto evita "retrocesos" por re-runs o por tickets forecast que todavía no se ven en search)
+  // 6) Monotonicidad suave de next: si ya tenías un next más adelantado, no lo bajes
   if (currentNext && currentNext > newLast) {
     if (!newNext || currentNext > newNext) newNext = currentNext;
   }
@@ -73,7 +160,7 @@ export async function syncLineItemAfterPromotion({
   // Regla dura final
   if (newNext && newNext === newLast) newNext = '';
 
-  // 6) Update mínimo
+  // 7) Update mínimo
   const updates = {};
   if (newLast !== currentLast) updates.last_ticketed_date = newLast;
   if (newNext !== currentNext) updates.billing_next_date = newNext;
