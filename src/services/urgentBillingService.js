@@ -252,6 +252,7 @@ console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
   properties: {
     last_ticketed_date: billingPeriodDate || today,
+    billing_last_period: billingPeriodDate,
   },
 });
 

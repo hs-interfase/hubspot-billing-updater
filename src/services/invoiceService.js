@@ -27,34 +27,57 @@ function extractBillDateFromTicketKey(ticketKey) {
 async function syncBillingLastBilledDateFromTicket(ticketObj) {
   try {
     const tp = ticketObj?.properties || {};
-    const ticketId = String(ticketObj?.id || ticketObj?.properties?.hs_object_id || '');
+    const ticketId = String(ticketObj?.id || tp?.hs_object_id || '');
 
+    console.log('[BLP][enter]', {
+      ticketId,
+      of_ticket_key: tp.of_ticket_key,
+      fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
+      of_line_item_ids: tp.of_line_item_ids,
+    });
 
     // SOLO fecha esperada (plan). NO usar of_fecha_de_facturacion.
     const expectedYMD =
       toYMDInBillingTZ(tp.fecha_resolucion_esperada) ||
       extractBillDateFromTicketKey(tp.of_ticket_key);
 
-    if (!expectedYMD) return;
+    if (!expectedYMD) {
+      console.log('[BLP][skip] no expectedYMD', { ticketId });
+      return;
+    }
 
     // asumimos 1 solo line item id numérico en of_line_item_ids
     const lineItemId = String(tp.of_line_item_ids || '').split(',')[0].trim();
-    if (!lineItemId) return;
+    if (!lineItemId) {
+      console.log('[BLP][skip] no lineItemId in of_line_item_ids', {
+        ticketId,
+        of_line_item_ids: tp.of_line_item_ids,
+      });
+      return;
+    }
 
-    // 🔍 Log de depuración solicitado
-    console.log('[syncBillingLastBilledDateFromTicket][dbg]', {
+    const billingLastPeriod = String(toHubSpotDateOnly(expectedYMD));
+
+    console.log('[BLP][write]', {
       ticketId,
-      of_ticket_key: tp.of_ticket_key,
-      fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
+      lineItemId,
       expectedYMD,
-      of_line_item_ids: tp.of_line_item_ids,
-      pickedLineItemId: lineItemId,
+      billing_last_period: billingLastPeriod,
     });
-
-    const billingLastPeriod = toHubSpotDateOnly(expectedYMD);
 
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: { billing_last_period: billingLastPeriod },
+    });
+
+    // Confirmación inmediata (debug)
+    const liAfter = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      'billing_last_period',
+    ]);
+
+    console.log('[BLP][after]', {
+      ticketId,
+      lineItemId,
+      billing_last_period: liAfter?.properties?.billing_last_period,
     });
 
     if (process.env.DBG_PHASE1 === 'true') {
@@ -65,7 +88,7 @@ async function syncBillingLastBilledDateFromTicket(ticketObj) {
         billing_last_period: billingLastPeriod,
       });
     }
-} catch (e) {
+  } catch (e) {
     console.warn('[syncBillingLastBilledDateFromTicket] error:', e?.message || e);
   }
 }
