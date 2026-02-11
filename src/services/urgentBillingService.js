@@ -104,7 +104,7 @@ export async function processUrgentLineItem(lineItemId) {
       // ✅ Incluir campos de fecha
       'hs_recurring_billing_start_date',
       'recurringbillingstartdate',
-      'billing_last_period',
+      'last_billing_period',
       'last_ticketed_date',
       'billing_next_date',
       'billing_anchor_date',
@@ -252,7 +252,7 @@ console.log('✅ Line Item encontrado, procediendo a facturar...\n');
 await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
   properties: {
     last_ticketed_date: billingPeriodDate || today,
-    billing_last_period: billingPeriodDate,
+    last_billing_period: billingPeriodDate, // ✅ Persistir billing period en line item (útil para debugging/facturación manual si algo falla)
   },
 });
 
@@ -306,7 +306,7 @@ if (existingTicketInvoiceId) {
   invoiceIdFinal = invoiceResult.invoiceId;
   await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
   properties: {
-    billing_last_period: billingPeriodDate,
+    last_billing_period: billingPeriodDate,
   },
 });
 }

@@ -125,7 +125,7 @@ export async function getDealWithLineItems(dealId) {
     // --- fechas ---
     "fecha_inicio_de_facturacion",
     "billing_next_date",
-    "billing_last_period",
+    "last_billing_period",
     "billing_last_billed_date",
     "last_ticketed_date",
     "fecha_irregular_puntual",
@@ -140,7 +140,7 @@ export async function getDealWithLineItems(dealId) {
     'billing_anchor_date',
     'fecha_irregular_puntual',
     'billing_next_date',
-    "billing_last_period",
+    "last_billing_period",
     "last_ticketed_date",
 
     // --- delays en fechas ---

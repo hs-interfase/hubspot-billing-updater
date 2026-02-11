@@ -45,7 +45,7 @@ export function sanitizeClonedLineItem(
 const OPERATIVE_PROPS_TO_RESET = [
   'billing_anchor_date',
   'billing_next_date',
-  'billing_last_period',
+  'last_billing_period',
   'last_ticketed_date',
   'billing_error',
   'billing_status',

@@ -91,7 +91,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'billing_next_date',
       'last_ticketed_date',
-      'billing_last_period',
+      'last_billing_period',
       'billing_anchor_date',
       'hs_recurring_billing_start_date',
       'recurringbillingfrequency',

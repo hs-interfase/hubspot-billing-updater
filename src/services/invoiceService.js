@@ -23,7 +23,7 @@ function extractBillDateFromTicketKey(ticketKey) {
 }  
 
 
-// Sincroniza billing_last_period en el line item a partir del ticket (fecha esperada)
+// Sincroniza last_billing_period en el line item a partir del ticket (fecha esperada)
 async function syncBillingLastBilledDateFromTicket(ticketObj) {
   try {
     const tp = ticketObj?.properties || {};
@@ -62,30 +62,30 @@ async function syncBillingLastBilledDateFromTicket(ticketObj) {
       ticketId,
       lineItemId,
       expectedYMD,
-      billing_last_period: billingLastPeriod,
+      last_billing_period: billingLastPeriod,
     });
 
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-      properties: { billing_last_period: billingLastPeriod },
+      properties: { last_billing_period: billingLastPeriod },
     });
 
     // Confirmación inmediata (debug)
     const liAfter = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
-      'billing_last_period',
+      'last_billing_period',
     ]);
 
     console.log('[BLP][after]', {
       ticketId,
       lineItemId,
-      billing_last_period: liAfter?.properties?.billing_last_period,
+      last_billing_period: liAfter?.properties?.last_billing_period,
     });
 
     if (process.env.DBG_PHASE1 === 'true') {
-      console.log('[syncBillingLastBilledDateFromTicket] set billing_last_period', {
+      console.log('[syncBillingLastBilledDateFromTicket] set last_billing_period', {
         ticketId,
         lineItemId,
         expectedYMD,
-        billing_last_period: billingLastPeriod,
+        last_billing_period: billingLastPeriod,
       });
     }
   } catch (e) {
@@ -415,11 +415,11 @@ if (tp.of_invoice_id) {
     if (lineItemId && fechaPlan) {
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
         properties: {
-          ...(fechaPlan ? { billing_last_period: toHubSpotDateOnly(fechaPlan) } : {}),
+          ...(fechaPlan ? { last_billing_period: toHubSpotDateOnly(fechaPlan) } : {}),
         },
       });
       if (process.env.DBG_PHASE1 === 'true') {
-        console.log(`[billing_last_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
+        console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
       }
     }
     // NUEVO: sincronizar siempre, por robustez
@@ -827,13 +827,13 @@ fecha_real_de_facturacion: invoiceDateYMD,
       try {
         await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
           properties: {
-            ...(fechaPlan ? { billing_last_period: toHubSpotDateOnly(fechaPlan) } : {}),
+            ...(fechaPlan ? { last_billing_period: toHubSpotDateOnly(fechaPlan) } : {}),
             ...(invoiceId ? { invoice_id: invoiceId } : {}),
             ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
           }
         });
         if (process.env.DBG_PHASE1 === 'true') {
-          console.log(`[billing_last_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
+          console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
         }
         console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
       } catch (e) {
