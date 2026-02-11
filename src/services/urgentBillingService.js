@@ -124,8 +124,21 @@ export async function processUrgentLineItem(lineItemId) {
     shouldResetFlag = true; // ✅ MUST reset in finally
 
     // ✅ 3) Calcular billingPeriodDate (NO usar today para keys)
-    const billingPeriodDate = getBillingPeriodDate(lineItemProps);
-    const today = getTodayYMD();
+ let billingPeriodDate = getBillingPeriodDate(lineItemProps);
+const today = getTodayYMD();
+
+// 🔥 Fallback para pago único urgente
+if (!billingPeriodDate) {
+  const startDate = (lineItemProps.hs_recurring_billing_start_date || '').trim();
+
+  if (startDate) {
+    billingPeriodDate = startDate;
+    console.log('⚠️ Usando start_date como período (pago único)');
+  } else {
+    billingPeriodDate = today;
+    console.log('⚠️ Sin next ni start → usando today como período');
+  }
+}
 
     console.log('\n🔑 === BILLING DATES ===');
     console.log(`   billingPeriodDate: ${billingPeriodDate || 'NULL'}`);
@@ -140,10 +153,12 @@ if (!billingPeriodDate) {
     'No se pudo facturar porque falta la fecha de facturación. ' +
     'Definir la fecha de facturación correspondiente en el ítem y volver a ejecutar “Facturar ahora”.';
 
-  await updateLineItem(lineItem.id, {
+await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+  properties: {
     of_billing_error: msg,
     facturar_ahora: 'false',
-  });
+  },
+});
 
   return { skipped: true, reason: 'no_billing_period_date' };
 }
