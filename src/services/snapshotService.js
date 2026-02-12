@@ -44,21 +44,17 @@ function detectIVA(lineItem) {
   return result;
 }
 
-
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};
 
-  // Valores base
-  const precioUnitario = parseNumber(lp.price, 0); // = valor hora para cupos
-  const cantidad = parseNumber(lp.quantity, 0); // = horas para cupos
+  const precioUnitario = parseNumber(lp.price, 0);
+  const cantidad = parseNumber(lp.quantity, 0);
   const costoUnitario = parseNumber(lp.hs_cost_of_goods_sold, 0);
-  
-  // TAX & DISCOUNT desde Line Item
-  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100; // ✅ Convertir basis points a %
-  const descuentoMonto = parseNumber(lp.discount, 0); // descuento por unidad en moneda del deal
-  const ivaValue = detectIVA(lineItem); // "true" si ID === '16912720'
 
-  // 🐛 DEBUG: Log valores fuente y destino
+  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100;
+  const descuentoMonto = parseNumber(lp.discount, 0);
+  const ivaValue = detectIVA(lineItem);
+
   console.log(`\n[DBG][SNAPSHOT] Line Item ID: ${lineItem?.id}`);
   console.log('[DBG][SNAPSHOT] Tax/Discount SOURCE:', {
     hs_discount_percentage: lp.hs_discount_percentage,
@@ -71,16 +67,11 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_iva: ivaValue,
   });
 
-  // Calcular costo total (unitario × cantidad)
   const costoTotal = costoUnitario * cantidad;
-
-  // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
 
-  // Frecuencia simplificada (fuente: Line Item)
   const frecuencia = determineTicketFrequency(lineItem);
 
-  // "repetitivo" (legacy): depende de si el Line Item tiene billing frequency (no vacío y no "unico")
   const rawFreq = (lp.recurringbillingfrequency || lp.hs_recurring_billing_frequency || '')
     .toString()
     .trim()
@@ -88,29 +79,32 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   const repetitivo = !!rawFreq && !['unico', 'único', 'one_time'].includes(rawFreq);
 
-  // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
   const baseSnapshots = {
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
-    of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
+    of_rubro: safeString(lp.servicio),
     of_subrubro: safeString(lp.subrubro),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
-    of_pais_operativo: safeString(lp.pais_operativo),
-      monto_unitario_real: precioUnitario,
-  cantidad_real: cantidad,
-  descuento_en_porcentaje: descuentoPorcentaje,
-  descuento_por_unidad_real: descuentoMonto,
-    of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
-    of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
+
+    // 🔥 UNIDAD DE NEGOCIO AHORA SALE DEL LINE ITEM
+    unidad_de_negocio: safeString(lp.unidad_de_negocio),
+
+    // ❌ ELIMINADO: of_pais_operativo (ahora viene del Deal)
+
+    monto_unitario_real: precioUnitario,
+    cantidad_real: cantidad,
+    descuento_en_porcentaje: descuentoPorcentaje,
+    descuento_por_unidad_real: descuentoMonto,
+    of_aplica_para_cupo: getCupoType(lineItem, deal),
+    of_costo: costoTotal,
     of_margen: parseNumber(lp.porcentaje_margen, 0),
-    of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
+    of_iva: ivaValue,
     reventa: parseBool(lp.reventa),
-    of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
+    of_frecuencia_de_facturacion: frecuencia,
     repetitivo,
   };
 
-  
   console.log('[SNAPSHOT][CRITICOS][AUTO]', {
     monto_unitario_real: precioUnitario,
     cantidad_real: cantidad,
@@ -118,10 +112,12 @@ export function extractLineItemSnapshots(lineItem, deal) {
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
   });
-  
+
   console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });
+
   return baseSnapshots;
 }
+
 /**
  * Convierte el tipo de cupo del line item a formato HubSpot.
  * Si parte_del_cupo es false, devuelve null (no aplica cupo).
@@ -180,41 +176,32 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
-  // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
-  const motivoCancelacion = safeString(dp.closed_lost_reason) || safeString(lp.motivo_pausa);
-
-  // ✅ C) Construir título del invoice
-  const liShort = safeString(lp.name) || `Flota`;
-  const invoiceTitle = `${safeString(dp.dealname) || 'Deal'} - ${liShort} - ${expectedDate}`;
+  const motivoCancelacion =
+    safeString(dp.closed_lost_reason) || safeString(lp.motivo_pausa);
 
   const out = {
     ...dealData,
     ...lineItemData,
 
-    // ✅ B) FECHA ESPERADA/PLANIFICADA (siempre desde billDateYMD usado en key)
-    // Convertir YYYY-MM-DD a timestamp ms (midnight UTC)
-    fecha_resolucion_esperada: expectedDate ? toHubSpotDateOnly(expectedDate) : null,
+    // Fecha en formato timestamp (luego se pisará como string)
+    fecha_resolucion_esperada: expectedDate
+      ? toHubSpotDateOnly(expectedDate)
+      : null,
 
-    // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
-    // of_fecha_facturacion_real: (se setea después)
     motivo_cancelacion_ticket: motivoCancelacion,
-    
-    // ✅ C) Título del invoice para usar después
-    subject: invoiceTitle,
   };
 
-  console.log('[SNAPSHOT][IVA][C] createTicketSnapshots() after merge ->', { of_iva: out.of_iva });
-
-  // ✅ Garantizar que of_iva siempre sea 'true' o 'false', nunca '' o null
+  // Normalizar IVA
   const ivaRaw = out.of_iva;
-  out.of_iva = String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
-  console.log('[SNAPSHOT][IVA][FIX] of_iva normalizado ->', { before: ivaRaw, after: out.of_iva });
+  out.of_iva =
+    String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
 
-  // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
-  // Convertir YYYY-MM-DD a timestamp ms
+  // Fecha ordenada a facturar (solo si aplica)
   if (orderedDate) {
-    out.of_fecha_de_facturacion = toHubSpotDateOnly(orderedDate);
+    out.of_fecha_de_facturacion =
+      toHubSpotDateOnly(orderedDate);
   }
 
   return out;
 }
+

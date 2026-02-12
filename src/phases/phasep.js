@@ -5,6 +5,8 @@ import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.j
 import { getDealCompanies } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
+import { buildTicketFullProps } from '../services/tickets/ticketService.js'; 
+import { safeCreateTicket } from '../services/tickets/ticketService.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -174,6 +176,7 @@ async function findTicketsByLineItemKey(lineItemKey) {
       'of_line_item_key',
       'of_deal_id',
       'of_ticket_key',
+        'subject',  
     ],
     limit: 100,
   };
@@ -199,28 +202,7 @@ function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
   return buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
 }
 
-async function resolveCompanySnapshot(dealId) {
-  try {
-    const companyIds = await getDealCompanies(String(dealId)); // ya existe en ticketService
-    const companyId = companyIds?.[0] ? String(companyIds[0]) : '';
-    if (!companyId) return { empresaId: '', empresaNombre: '' };
-
-    const c = await hubspotClient.crm.companies.basicApi.getById(companyId, ['name']);
-    const empresaNombre = c?.properties?.name || '';
-    return { empresaId: companyId, empresaNombre };
-  } catch (e) {
-    return { empresaId: '', empresaNombre: '' };
-  }
-}
-
-function resolveProductAndUEN(lineItem) {
-  const lp = lineItem?.properties || {};
-  const productoNombre = lp.name || lp.hs_name || ''; // "name" suele ser el nombre del producto del line item
-  const unidadDeNegocio =
-    lp.unidad_de_negocio || lp.of_unidad_de_negocio || lp.hs_business_unit || '';
-  return { productoNombre, unidadDeNegocio };
-}
-
+/*
 export async function createForecastTicket({
   dealId,
   lineItemKey,
@@ -272,6 +254,7 @@ export async function createForecastTicket({
 
   return hubspotClient.crm.tickets.basicApi.create({ properties });
 }
+*/
 
 async function deleteTicket(ticketId) {
   return hubspotClient.crm.tickets.basicApi.archive(String(ticketId));
@@ -300,7 +283,7 @@ export async function runPhaseP({ deal, lineItems }) {
   }
 
   console.log('[phaseP] start', { dealId, dealStage, lineItems: lineItems?.length || 0 });
-
+/*
 const companyIds = await getDealCompanies(String(dealId));
 const empresaId = companyIds?.[0] ? String(companyIds[0]) : '';
 
@@ -309,7 +292,7 @@ if (empresaId) {
   const c = await hubspotClient.crm.companies.basicApi.getById(empresaId, ['name']);
   empresaNombre = c?.properties?.name || '';
 }
-
+*/
   for (const li of lineItems || []) {
     const p = li?.properties || {};
     const lineItemKey = p.line_item_key || p.of_line_item_key || '';
@@ -361,7 +344,7 @@ if (empresaId) {
     // 2) Traer existentes (TODOS)
     const allTickets = await findTicketsByLineItemKey(lineItemKey);
     const forecastTickets = allTickets.filter(isForecastTicket);      // editables
-    const protectedTickets = allTickets.filter(t => !isForecastTicket(t)); // no-touch
+//    const protectedTickets = allTickets.filter(t => !isForecastTicket(t)); // no-touch
 
     // 3) Si desiredCount=0 → borrar SOLO forecast existentes
     if (desiredCount === 0) {
@@ -415,7 +398,30 @@ if (empresaId) {
 
       if (!existing) {
         console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
-const { productoNombre, unidadDeNegocio } = resolveProductAndUEN(li);
+const hsPipeline = automated
+  ? BILLING_AUTOMATED_PIPELINE_ID
+  : BILLING_TICKET_PIPELINE_ID;
+
+const fullProps = await buildTicketFullProps({
+  deal,
+  lineItem: li,
+  dealId,
+  lineItemId: li.id,
+  lineItemKey,
+  ticketKey: key,
+  expectedYMD: expectedYmd,
+  orderedYMD: null, // forecast
+});
+
+await safeCreateTicket(hubspotClient, {
+  properties: {
+    ...fullProps,
+    hs_pipeline: String(hsPipeline),
+    hs_pipeline_stage: String(targetStage),
+  },
+});
+
+        /*const { productoNombre, unidadDeNegocio } = resolveProductAndUEN(li);
 
 const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
 const rubro = (li?.properties?.servicio || '').toString(); // viene del line item
@@ -436,6 +442,7 @@ await createForecastTicket({
   unidadDeNegocio,
   rubro,
 });
+*/
 
         created++;
         changed = true;
@@ -447,12 +454,12 @@ await createForecastTicket({
         // protegido: no tocar
         continue;
       }
-
+  /*
       const currentYmd = toYmd(existing?.properties?.fecha_resolucion_esperada);
       const currentStage = String(existing?.properties?.hs_pipeline_stage || '');
       const currentKey = String(existing?.properties?.of_ticket_key || '').trim();
 
-      const patch = {};
+    const patch = {};
       if (currentYmd !== expectedYmd) patch.fecha_resolucion_esperada = expectedYmd;
       if (currentStage !== targetStage) patch.hs_pipeline_stage = targetStage;
       if (!currentKey) patch.of_ticket_key = key;
@@ -460,9 +467,52 @@ await createForecastTicket({
       if (Object.keys(patch).length) {
         console.log('[phaseP] update forecast ticket', { ticketId: existing.id, patch });
         await updateTicket(existing.id, patch);
-        updated++;
-        changed = true;
-      }
+        */
+       const fullProps = await buildTicketFullProps({
+  deal,
+  lineItem: li,
+  dealId,
+  lineItemId: li.id,
+  lineItemKey,
+  ticketKey: key,
+  expectedYMD: expectedYmd,
+  orderedYMD: null,
+});
+
+const patch = {};
+
+// stage
+if (String(existing?.properties?.hs_pipeline_stage || '') !== String(targetStage)) {
+  patch.hs_pipeline_stage = String(targetStage);
+}
+
+// fecha
+if (toYmd(existing?.properties?.fecha_resolucion_esperada) !== String(expectedYmd)) {
+  patch.fecha_resolucion_esperada = String(expectedYmd);
+}
+
+// subject (buildTicketFullProps lo construye)
+if (String(existing?.properties?.subject || '').trim() !== String(fullProps.subject || '').trim()) {
+  patch.subject = String(fullProps.subject || '');
+}
+
+// key (solo si falta)
+if (!String(existing?.properties?.of_ticket_key || '').trim()) {
+  patch.of_ticket_key = String(key);
+}
+
+// resto del payload, solo si cambia
+for (const [k, v] of Object.entries(fullProps)) {
+  const cur = String(existing?.properties?.[k] ?? '');
+  const nxt = String(v ?? '');
+  if (cur !== nxt) patch[k] = nxt;
+}
+
+if (Object.keys(patch).length) {
+  await updateTicket(existing.id, patch);
+  updated++;
+  changed = true;
+}
     }
 
     // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys

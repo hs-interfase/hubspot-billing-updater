@@ -44,7 +44,6 @@ function detectIVA(lineItem) {
   return result;
 }
 
-
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};
 
@@ -96,7 +95,8 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_subrubro: safeString(lp.subrubro),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
-    of_pais_operativo: safeString(lp.pais_operativo),
+    //FALTA UNIDAD DE NEGOCIO QUE ES PROPIEDAD DL
+    of_pais_operativo: safeString(lp.pais_operativo), //esto DEBE SACARSE DEL DEAL
       monto_unitario_real: precioUnitario,
   cantidad_real: cantidad,
   descuento_en_porcentaje: descuentoPorcentaje,
@@ -122,6 +122,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
   console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });
   return baseSnapshots;
 }
+
 /**
  * Convierte el tipo de cupo del line item a formato HubSpot.
  * Si parte_del_cupo es false, devuelve null (no aplica cupo).

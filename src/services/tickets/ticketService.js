@@ -12,7 +12,7 @@ import {
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../../utils/dateUtils.js';
-import { parseBool } from '../../utils/parsers.js';
+import { parseBool, safeString } from '../../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 
 
@@ -352,6 +352,107 @@ try {
   // ✅ Siempre resetear triggers (best-effort)
   await resetTriggersFromLineItem(lineItemId);
 }
+}
+
+export async function buildTicketFullProps({
+  deal,
+  lineItem,
+  dealId,
+  lineItemId,
+  lineItemKey,
+  ticketKey,
+  expectedYMD,      // 🔥 SIEMPRE YYYY-MM-DD
+  orderedYMD = null // null manual, igual expected en auto
+}) {
+  const dp = deal?.properties || {};
+  const lp = lineItem?.properties || {};
+
+  // ─────────────────────────────────────────────
+  // 1️⃣ Lookup empresa por asociación (como Phase P)
+  // ─────────────────────────────────────────────
+  let empresaId = '';
+  let empresaNombre = '';
+
+  try {
+    const companyIds = await getDealCompanies(String(dealId));
+    empresaId = companyIds?.[0] ? String(companyIds[0]) : '';
+
+    if (empresaId) {
+      const c = await hubspotClient.crm.companies.basicApi.getById(
+        empresaId,
+        ['name']
+      );
+      empresaNombre = c?.properties?.name || '';
+    }
+  } catch (_) {
+    empresaId = '';
+    empresaNombre = '';
+  }
+
+  // ─────────────────────────────────────────────
+  // 2️⃣ Datos base
+  // ─────────────────────────────────────────────
+  const productoNombre = safeString(lp.name);
+  const unidadDeNegocio = safeString(lp.unidad_de_negocio);
+  const servicio = safeString(lp.servicio); // rubro real
+  const paisOperativo = safeString(dp.of_pais_operativo);
+
+  // ─────────────────────────────────────────────
+  // 3️⃣ Snapshots (precio, moneda, iva, cupo, etc.)
+  // ─────────────────────────────────────────────
+  const snapshots = createTicketSnapshots(
+    deal,
+    lineItem,
+    expectedYMD,
+    orderedYMD
+  );
+
+  // ─────────────────────────────────────────────
+  // 4️⃣ Subject EXACTO forecast
+  // ─────────────────────────────────────────────
+  const subject =
+    `${empresaNombre || 'SIN_EMPRESA'} - ` +
+    `${productoNombre || 'SIN_PRODUCTO'} - ` +
+    `${expectedYMD}`;
+
+  // ─────────────────────────────────────────────
+  // 5️⃣ Construcción final
+  // ─────────────────────────────────────────────
+  const properties = {
+    // Identidad
+    of_deal_id: String(dealId),
+    of_line_item_ids: String(lineItemId || ''),
+    of_line_item_key: String(lineItemKey || ''),
+    of_ticket_key: String(ticketKey || ''),
+
+    // Empresa
+    empresa_id: empresaId,
+    nombre_empresa: empresaNombre,
+
+    // País
+    of_pais_operativo: paisOperativo,
+
+    // Producto / negocio
+    unidad_de_negocio: unidadDeNegocio,
+    of_rubro: servicio,
+
+    // Subject consistente
+    subject,
+
+    // Fecha SIEMPRE string
+    fecha_resolucion_esperada: String(expectedYMD),
+
+    // Observaciones
+    observaciones_ventas: safeString(lp.mensaje_para_responsable),
+
+    // Snapshots completos
+    ...snapshots,
+  };
+
+  // 🔥 Garantía absoluta
+  properties.fecha_resolucion_esperada = String(expectedYMD);
+
+  return properties;
 }
 
 /**
