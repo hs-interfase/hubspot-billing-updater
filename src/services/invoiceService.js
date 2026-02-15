@@ -7,6 +7,10 @@ import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateU
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
+import { recalcFacturasRestantes } from './billing/recalcFacturasRestantes.js'; 
+import { syncBillingState } from './billing/syncBillingState.js';
+import { isAutoRenew } from './billing/mode.js';
+import { ensure24FutureTickets } from './tickets/ticketService.js';
 import { buildValidatedUpdateProps } from '../utils/propertyHelpers.js';
 import axios from 'axios';
 
@@ -424,6 +428,19 @@ if (tp.of_invoice_id) {
     }
     // NUEVO: sincronizar siempre, por robustez
     await syncBillingLastBilledDateFromTicket(ticketFull);
+    // Hook: Centraliza estado billing
+    if (lineItemId && lik) {
+      await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey: lik, dealIsCanceled: false });
+          if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+            await ensure24FutureTickets({
+              hubspotClient,
+              dealId,
+              lineItemId,
+              lineItem,
+              lineItemKey: lik,
+            });
+          }
+    }
     console.log(`✓ Ticket ${ticketId} ya tiene factura ${tp.of_invoice_id} (invoice_key OK)`);
     return { invoiceId: tp.of_invoice_id, created: false };
   }
@@ -480,7 +497,8 @@ const dueDateMs = toHubSpotDateOnly(dueDateYMD);
     // 🔑 Idempotencia y tracking
     of_invoice_key: invoiceKey,
     ticket_id: String(ticketId),
-    
+    line_item_key: lik,
+
     // 🎯 Identidad del producto (del ticket)
     nombre_producto: tp.of_producto_nombres,
     descripcion: tp.of_descripcion_producto || tp.descripcion,
@@ -832,14 +850,24 @@ fecha_real_de_facturacion: invoiceDateYMD,
             ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
           }
         });
-        if (process.env.DBG_PHASE1 === 'true') {
-          console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
-        }
-        console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
-      } catch (e) {
-        console.warn('⚠️ No se pudo actualizar line item:', e.message);
-      }
+
+            if (dealId && lik) {
+      await recalcFacturasRestantesFromDealInvoices({
+        hubspotClient,
+        dealId,
+        lineItemId,
+        lineItemKey: lik,
+      });
     }
+
+    if (process.env.DBG_PHASE1 === 'true') {
+      console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
+    }
+    console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
+  } catch (e) {
+    console.warn('⚠️ No se pudo actualizar line item:', e.message);
+  }
+}
     
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
@@ -920,6 +948,19 @@ try {
 export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPeriodDate, invoiceDate = null) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const lineItemId = String(lineItem.id || lineItem.properties?.hs_object_id);
+    // Hook: Centraliza estado billing
+    if (dealId && lineItemId && lineItem.line_item_key) {
+      await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey: lineItem.line_item_key, dealIsCanceled: false });
+          if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+            await ensure24FutureTickets({
+              hubspotClient,
+              dealId,
+              lineItemId,
+              lineItem,
+              lineItemKey: lineItem.line_item_key,
+            });
+          }
+    }
   const lp = lineItem.properties || {};
   const dp = deal.properties || {};
   
@@ -1109,11 +1150,14 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
         // 8) Actualizar line item con invoice_id e invoice_key
         await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
           properties: {
-            invoice_id: invoiceId,
-            invoice_key: invoiceKey,
+            invoice_id: String(invoiceId),
+            invoice_key: String(invoiceKey),
           },
         });
-        
+
+        // Paso 2: actualizar facturas_restantes (solo si es PLAN_FIJO)
+        await recalcFacturasRestantes({ hubspotClient, lineItemId });
+
         console.log(`✓ Line Item ${lineItemId} actualizado con invoice_id: ${invoiceId}`);
         console.log('================================================\n');
         

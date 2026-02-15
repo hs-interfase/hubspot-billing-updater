@@ -1,5 +1,10 @@
 // src/phases/phase1.js
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
+import { syncBillingState } from '../services/billing/syncBillingState.js';
+import { isAutoRenew } from '../services/billing/mode.js';
+import { ensure24FutureTickets } from '../services/tickets/ticketService.js';
+import { DEAL_STAGE_LOST } from '../config/constants.js';
+const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -124,6 +129,27 @@ if (newCupoEstado === "Inconsistente") {
   console.log(`[cupo:activate] Updating deal ${dealId} with:`, Object.keys(updateProps).join(', '));
   await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties: updateProps });
   console.log(`[cupo:activate] ✅ Deal ${dealId} actualizado:`, updateProps);
+  // Hook: Centraliza estado billing si se cancela el deal
+  if (updateProps.dealstage && (
+    updateProps.dealstage === DEAL_STAGE_LOST ||
+    updateProps.dealstage === CANCELLED_STAGE_ID
+  )) {
+    try {
+      await syncBillingState({ hubspotClient, dealId, dealIsCanceled: true });
+          // Si hay lineItem y es AUTO_RENEW, enganchar ensure24FutureTickets
+          if (typeof lineItem !== 'undefined' && isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+            await ensure24FutureTickets({
+              hubspotClient,
+              dealId,
+              lineItemId: lineItem.id || lineItem.hs_object_id,
+              lineItem,
+              lineItemKey: lineItem.line_item_key,
+            });
+          }
+    } catch (e) {
+      console.warn('[activateCupoIfNeeded] syncBillingState failed:', e?.message);
+    }
+  }
 }
 
 function classifyLineItemFlow(li) {

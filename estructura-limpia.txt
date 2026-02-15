@@ -1,14 +1,6 @@
-﻿Get-ChildItem -Recurse -File -Force |
-  Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |
-  ForEach-Object { Resolve-Path -Relative $_.FullName } |
-  ForEach-Object { $_ -replace '^\.\[\\/]', '' } |
-  Set-Content -Encoding UTF8 estructura-limpia.txt
-
-
-.env
+﻿.env
 .gitignore
-.\favicon-16x16.ico
-.\favicon.png
+.\estructura-limpia.txt
 .\FIX_TICKET_IDEMPOTENCY.md
 .\IMPLEMENTATION_SUMMARY.md
 .\LICENSE
@@ -24,15 +16,17 @@
 .\data\cron-state-deals.lock
 .\data\cron_failed_deals.json
 .\data\cron_state_deals.json
-.\docs\billing-flow.md
-.\docs\FLOW_DIAGRAM.md
-.\docs\HUBSPOT_PROPERTIES_CHECKLIST.md
-.\docs\INVOICE_CREATION_PATHS.md
-.\docs\MIGRATION_GUIDE.md
-.\docs\REFACTOR_DOCUMENTATION.md
+.\docs\_archive\billing-flow.md
+.\docs\_archive\FLOW_DIAGRAM.md
+.\docs\_archive\HUBSPOT_PROPERTIES_CHECKLIST.md
+.\docs\_archive\INVOICE_CREATION_PATHS.md
+.\docs\_archive\MIGRATION_GUIDE.md
+.\docs\_archive\REFACTOR_DOCUMENTATION.md
 .\logs\app.log
 .\logs\error.log
 .\logs\warn.log
+.\public\favicon.ico
+.\public\favicon.png
 .\src\associations.js
 .\src\billingEngine.js
 .\src\cupo.js
@@ -49,28 +43,37 @@
 .\src\phases\phase1.js
 .\src\phases\phase2.js
 .\src\phases\phase3.js
+.\src\phases\phasep.js
 .\src\services\invoiceService.js
 .\src\services\mirrorLineItemsUyUpsert.js
 .\src\services\snapshotService.js
 .\src\services\urgentBillingService.js
 .\src\services\alerts\cupoAlert.js
+.\src\services\billing\mode.js
+.\src\services\billing\recalcFacturasRestantes.js
+.\src\services\billing\syncBillingState.js
 .\src\services\cupo\consumeCupo.js
 .\src\services\cupo\cupoUtils.js
 .\src\services\cupo\mirrorTicketsUyUpsert.js
+.\src\services\forecast\forecastMetaService.js
+.\src\services\lineItems\cloneSanitizerService.js
+.\src\services\lineItems\syncAfterPromotion.js
 .\src\services\tickets\manualTicketService.js
+.\src\services\tickets\snapshotService.js
 .\src\services\tickets\ticketCleanupService.js
 .\src\services\tickets\ticketService.js
 .\src\services\tickets\ticketUpdateService.js
 .\src\utils\calculateCupoEstado.js
-.\src\utils\cloneUtil.js
 .\src\utils\dateDebugs.js
 .\src\utils\dateUtils.js
-.\src\utils\idempotency.js
+.\src\utils\hubspotErrorCollector.js
 .\src\utils\invoiceKey.js
 .\src\utils\invoiceValidation.js
+.\src\utils\lineItemKey.js
 .\src\utils\parsers.js
 .\src\utils\propertyHelpers.js
 .\src\utils\resolveNextBillingDate.js
 .\src\utils\resolvePlanYMD.js
+.\src\utils\ticketKey.js
 .\src\__tests__\invoiceValidation.js
 .\src\__tests__\ticketKeyIdempotency.js

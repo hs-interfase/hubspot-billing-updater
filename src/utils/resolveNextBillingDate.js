@@ -1,9 +1,6 @@
-// src/utils/resolveNextBillingDate.js
-import { parseLocalDate, formatDateISO, getTodayYMD } from "./dateUtils.js";
-
-function upper(v) {
-  return (v ?? "").toString().trim().toUpperCase();
-}
+// src/services/billing/resolveNextBillingDate.js
+import { parseLocalDate, formatDateISO, getTodayYMD } from "../utils/dateUtils.js"; // ajustá path
+import { isAutoRenew } from "../services/billing/mode.js"; 
 
 function startOfDay(d) {
   const x = new Date(d.getTime());
@@ -45,69 +42,55 @@ function computeNextFromStart({ startRaw, interval, addInterval }) {
 }
 
 /**
- * Si es auto-renew o >24 pagos:
- * - si billing_anchor_date válida: usarla
- * - si no: calcular next infinito por start+interval
+ * Devuelve la próxima fecha de facturación (YMD) o null según reglas:
+ * - Deal cancelado => null
+ * - PLAN_FIJO:
+ *    - restantes <= 0 => null
+ *    - restantes > 0 => próxima fecha (preview, o computed)
+ * - AUTO_RENEW:
+ *    - si activo => próxima fecha (anchor si existe, si no computed)
  *
- * Si NO es special: usa preview (como hoy).
+ * Nota: No depende de hs_recurring_billing_terms. El modo sale de isAutoRenew().
  */
 export function resolveNextBillingDate({
   lineItemProps,
-  upcomingDates,
-  startRaw,
-  interval,
-  addInterval,
+  facturasRestantes,        // number | null (solo relevante en PLAN_FIJO)
+  dealIsCanceled = false,   // boolean (te lo pasa syncBillingState)
+  upcomingDates,            // array de YMD (preview)
+  startRaw,                 // YMD
+  interval,                 // {days, months, years...}
+  addInterval,              // fn(date, interval) => date
 }) {
+  if (dealIsCanceled) return null;
+
   const todayYmd = getTodayYMD();
+  const autorenew = isAutoRenew({ properties: lineItemProps });
 
-  const terms = upper(lineItemProps.hs_recurring_billing_terms);
-  const isAutoRenew = terms === "AUTOMATICALLY RENEW";
+  // PLAN_FIJO: si no quedan facturas => null
+  if (!autorenew) {
+    if (typeof facturasRestantes === "number" && facturasRestantes <= 0) return null;
+  }
 
-  const nPayments =
-    parseInt((lineItemProps.hs_recurring_billing_number_of_payments ?? "").toString(), 10) || 0;
+  // preview (primera fecha >= hoy)
+  const nextFromPreview = upcomingDates?.find((d) => d && d >= todayYmd) || null;
 
-  const isOver24 = !isAutoRenew && nPayments > 24;
-  const isSpecial = isAutoRenew || isOver24;
+  // Si es PLAN_FIJO: con preview alcanza (tu engine ya controla longitud por cuotas)
+  if (!autorenew) return nextFromPreview;
 
-  // modo normal: preview
-  const nextFromPreview =
-    upcomingDates?.find((d) => d && d >= todayYmd) || null;
-
-  if (!isSpecial) return nextFromPreview;
-
-  // modo special: anchor primero
-  const anchorRaw = (lineItemProps.billing_anchor_date ?? "").toString().trim();
+  // AUTO_RENEW: anchor primero, si no computed infinito
+  const anchorRaw = String(lineItemProps.billing_anchor_date ?? "").trim();
   const anchorDate = anchorRaw ? parseLocalDate(anchorRaw) : null;
   const anchorYmd = anchorDate ? formatDateISO(anchorDate) : null;
 
   if (anchorYmd) {
-    console.log("📌 [billing] usando billing_anchor_date como ANCHOR (motor)", {
-      anchorYmd,
-      isAutoRenew,
-      nPayments,
-    });
-
-    // ✅ Anchor = start del motor. Calcula la próxima ocurrencia >= hoy con interval
     const computedFromAnchor = computeNextFromStart({
       startRaw: anchorYmd,
       interval,
       addInterval,
     });
-
     return computedFromAnchor || nextFromPreview;
   }
 
-
-  // si falta anchor: calcular infinito
   const computed = computeNextFromStart({ startRaw, interval, addInterval });
-
-  console.log("🧠 [billing] computed next (special)", {
-    computed,
-    isAutoRenew,
-    nPayments,
-    startRaw,
-    interval,
-  });
-
   return computed || nextFromPreview;
 }

@@ -1,6 +1,7 @@
 // src/services/tickets/ticketCleanupService.js
 
 import { hubspotClient } from "../../hubspotClient.js";
+import { syncBillingState } from '../billing/syncBillingState.js';
 import { isDryRun } from "../../config/constants.js";
 
 const CANCELLED_STAGE_ID = process.env.BILLING_TICKET_STAGE_CANCELLED;
@@ -97,6 +98,20 @@ async function softDeprecateTicket(ticketId, reason) {
   }
 
   await hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties });
+  // Hook: Centraliza estado billing (cancelación)
+  try {
+    // Intentar extraer dealId y lineItemId del ticketKey si existe
+    const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_ticket_key']);
+    const key = ticket?.properties?.of_ticket_key;
+    if (key) {
+      const parsed = parseTicketKey(key);
+      if (parsed?.dealId) {
+        await syncBillingState({ hubspotClient, dealId: parsed.dealId, lineItemId: parsed.lineItemId, lineItemKey: undefined, dealIsCanceled: true });
+      }
+    }
+  } catch (e) {
+    console.warn('[softDeprecateTicket] syncBillingState failed:', e?.message);
+  }
   console.log(`[cleanup] ✅ Deprecado ticket ${ticketId}. reason=${reason}`);
 }
 

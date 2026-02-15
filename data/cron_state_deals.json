@@ -1,0 +1,11 @@
+{
+  "weekday": {
+    "after_s1": null,
+    "after_s2": null,
+    "after_s3": null
+  },
+  "weekend": {
+    "after_full": null
+  },
+  "lastRun": {}
+}

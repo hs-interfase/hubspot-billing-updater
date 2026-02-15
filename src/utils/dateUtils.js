@@ -233,12 +233,12 @@ export function parseLocalDate(raw) {
   return d;
 }
 
-export 
+
 /**
  * Suma un intervalo (meses y/o días) a una fecha.
  * Preserva el día del mes cuando sea posible.
  */
-function addInterval(date, interval) {
+export function addInterval(date, interval) {
   let d = new Date(date.getTime());
 
   if (interval.months && interval.months > 0) {

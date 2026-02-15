@@ -7,6 +7,7 @@ import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
 import { buildTicketFullProps } from '../services/tickets/ticketService.js'; 
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
+import { isEmpty } from '../services/tickets/ticketService.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -120,27 +121,43 @@ function buildDesiredDates(lineItem) {
     '';
 
   if (!startYmd) return { desiredCount: 0, dates: [] };
+// frequency/interval efectivo
+const interval = cfg?.interval ?? null;
 
-  // frequency/interval efectivo
-  const interval = cfg?.interval ?? null;
-  const hasFrequency = !!interval;
+// ✅ frecuencia real basada en props
+const hasFreqProps =
+  String(p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? '').trim() !== '';
 
-  // term finito: leerlo directo (porque cfg no retorna numberOfPayments)
+// Caso pago único
+if (!hasFreqProps) {
+  return { desiredCount: 1, dates: [startYmd] };
+}
+
+// Caso con frecuencia
+const autorenew = hasFreqProps && isEmpty(p.hs_recurring_billing_number_of_payments);
+
+let desiredCount = 24;
+if (!autorenew) {
   const termRaw =
     p.hs_recurring_billing_number_of_payments ||
     p.number_of_payments ||
     null;
-
   const term = safeInt(termRaw);
-
-  // Caso pago único
-  if (!hasFrequency) {
-    return { desiredCount: 1, dates: [startYmd] };
-  }
-
-  // Caso con frecuencia
-  let desiredCount = 24; // autorenew por default
   if (term && term > 0) desiredCount = term;
+}
+
+// ✅ si hay frecuencia pero interval no se pudo resolver → fallback conservador
+if (!interval) {
+console.log('[phaseP][dates][WARN] has frequency but interval is null -> cannot expand', {
+  lineItemId: lineItem?.id,
+  lik: p.line_item_key || p.of_line_item_key || '',
+  recurringbillingfrequency: p.recurringbillingfrequency,
+  hs_recurring_billing_frequency: p.hs_recurring_billing_frequency,
+  hs_recurring_billing_number_of_payments: p.hs_recurring_billing_number_of_payments,
+  });
+  return { desiredCount: 1, dates: [startYmd] };
+}
+
 
   // Generación
   const dates = [];

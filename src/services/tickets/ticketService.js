@@ -1,9 +1,81 @@
+import { isAutoRenew } from '../billing/mode.js';
+import { getEffectiveBillingConfig } from '../../billingEngine.js';
+import { addInterval } from '../../utils/dateUtils.js'; 
+/**
+ * Garantiza que existan 24 tickets futuros para un line item en modo AUTO_RENEW.
+ * - Solo crea los que faltan, usando lógica idempotente.
+ * - Usa addInterval y helpers existentes para calcular fechas.
+ * - NO duplica lógica de intervalos ni fechas.
+ * @param {object} opts
+ * @param {object} opts.hubspotClient
+ * @param {string} opts.dealId
+ * @param {string} opts.lineItemId
+ * @param {object} opts.lineItem
+ * @param {string} opts.lineItemKey
+ * @param {function} opts.buildTicketPayload
+ */
+export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId, lineItem, lineItemKey, buildTicketPayload }) {
+  // Leer lineItem si no viene
+  let li = lineItem;
+  if (!li) {
+    if (!lineItemId) throw new Error('ensure24FutureTickets requiere lineItemId o lineItem');
+    li = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      'billing_next_date',
+      'facturas_restantes',
+      'renovacion_automatica',
+      'recurringbillingfrequency',
+      'hs_recurring_billing_frequency',
+      'hs_recurring_billing_number_of_payments',
+      'billing_anchor_date',
+      'line_item_key',
+      'name',
+      'hs_object_id',
+    ]);
+  }
+  const properties = li.properties || {};
+  // Solo aplica a AUTO_RENEW
+  if (!isAutoRenew({ properties })) return;
+
+  // Configuración de facturación
+  const cfg = getEffectiveBillingConfig({ properties });
+  const { interval } = cfg;
+  const anchorRaw = properties.billing_next_date;
+  if (!interval || !anchorRaw) return;
+
+  // Calcular las 24 fechas futuras desde billing_next_date
+  const maxCount = 24;
+  const futureDates = [];
+  let current = new Date(anchorRaw);
+  for (let i = 0; i < maxCount && current && interval; i++) {
+    futureDates.push(new Date(current));
+    current = addInterval(current, interval);
+  }
+
+  // Listar tickets existentes del deal
+  const existingTickets = await getTicketsForDeal(dealId);
+  const existingKeys = new Set(existingTickets.map(t => t.properties.of_ticket_key));
+
+  // Para cada fecha, asegurar ticket canónico solo si falta
+  for (const dateObj of futureDates) {
+    const billDateYMD = dateObj.toISOString().slice(0, 10);
+    const key = buildTicketKeyFromLineItemKey(dealId, lineItemKey || properties.line_item_key, billDateYMD);
+    if (existingKeys.has(key)) continue;
+    await ensureTicketCanonical({
+      dealId,
+      lineItemKey: lineItemKey || properties.line_item_key,
+      billDateYMD,
+      lineItemId: lineItemId || li.id,
+      buildTicketPayload,
+      // maxPayments: opcional
+    });
+  }
+}
 // src/services/ticketService.js
 
 import { createInvoiceFromTicket } from '../invoiceService.js';
+import { syncBillingState } from '../billing/syncBillingState.js';
 import { hubspotClient } from '../../hubspotClient.js';
-import { 
-  TICKET_PIPELINE, 
+import {  
   TICKET_STAGES, 
   AUTOMATED_TICKET_PIPELINE,     
   AUTOMATED_TICKET_INITIAL_STAGE, 
@@ -226,6 +298,18 @@ export async function resetTriggersFromLineItem(lineItemId) {
   }
 }
 
+export function hasFrequency(lp) {
+  const freq =
+    (lp.recurringbillingfrequency ?? '') ||
+    (lp.hs_recurring_billing_frequency ?? '');
+  return freq.toString().trim() !== '';
+}
+
+export function isEmpty(v) {
+  return v == null || (typeof v === 'string' && v.trim() === '');
+}
+
+
 export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
   const lineItemId = String(lineItem?.id || lineItem?.properties?.hs_object_id);
@@ -367,6 +451,10 @@ export async function buildTicketFullProps({
   const dp = deal?.properties || {};
   const lp = lineItem?.properties || {};
 
+    const autorenew =
+    hasFrequency(lp) &&
+    isEmpty(lp.hs_recurring_billing_number_of_payments);
+
   // ─────────────────────────────────────────────
   // 1️⃣ Lookup empresa por asociación (como Phase P)
   // ─────────────────────────────────────────────
@@ -451,9 +539,20 @@ export async function buildTicketFullProps({
 
   // 🔥 Garantía absoluta
   properties.fecha_resolucion_esperada = String(expectedYMD);
+  properties.renovacion_automatica = autorenew ? 'true' : 'false';
+
+console.log('[buildTicketFullProps][autorenew]', {
+  lineItemId,
+  recurringbillingfrequency: lp.recurringbillingfrequency,
+  hs_recurring_billing_frequency: lp.hs_recurring_billing_frequency,
+  hs_recurring_billing_number_of_payments: lp.hs_recurring_billing_number_of_payments,
+  autorenew
+});
 
   return properties;
+  
 }
+
 
 /**
  * Servicio para crear y gestionar tickets de "orden de facturación".
@@ -481,7 +580,7 @@ export async function buildTicketFullProps({
 /**
  * Busca TODOS los tickets asociados a un Deal.
  */
-async function getTicketsForDeal(dealId) {
+async function getTicketsForDeal(hubspotClient, dealId) {
   try {
     // Associations v4: deal -> tickets
     const assoc = await hubspotClient.crm.associations.v4.basicApi.getPage(
@@ -738,6 +837,17 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
         ticketId: canonical.id,
         billDateYMD,
       });
+      // Hook: Centraliza estado billing
+      await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey, dealIsCanceled: false });
+          if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+            await ensure24FutureTickets({
+              hubspotClient,
+              dealId,
+              lineItemId,
+              lineItem,
+              lineItemKey,
+            });
+          }
     } catch (e) {
       console.warn(
         '[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (canonical) error:',
@@ -798,6 +908,8 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
       ticketId: newId,
       billDateYMD,
     });
+    // Hook: Centraliza estado billing
+    await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey, dealIsCanceled: false });
   } catch (e) {
     console.warn(
       '[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (created) error:',

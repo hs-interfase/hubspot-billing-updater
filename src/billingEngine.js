@@ -1,9 +1,5 @@
 // src/billingEngine.js
 import { hubspotClient } from './hubspotClient.js';
-
-// LEGACY (calendar-based): se mantiene comentado para rollback.
-// import { resolveNextBillingDate } from './utils/resolveNextBillingDate.js';
-
 import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
 
 /**

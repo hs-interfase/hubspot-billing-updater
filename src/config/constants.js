@@ -5,6 +5,8 @@
  * (stages/pipelines + helpers de semántica)
  */
 
+export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
+
 // Lookahead para tickets manuales (30 días)
 export const MANUAL_TICKET_LOOKAHEAD_DAYS = 30;
 
