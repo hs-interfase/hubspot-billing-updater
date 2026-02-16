@@ -857,7 +857,7 @@ if (lineItemId) {
       fechaPlan: String(fechaPlan || ''),
     });
 
-    const rr = await recalcFacturasRestantes({ hubspotClient, lineItemId: String(lineItemId) });
+    const rr = await recalcFacturasRestantes({ hubspotClient, lineItemId: String(lineItemId), dealId: String(tp.of_deal_id) });
 
     console.log('[FR][after-recalc] result', rr);
 
@@ -1172,7 +1172,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
         });
 
         // Paso 2: actualizar facturas_restantes (solo si es PLAN_FIJO)
-        await recalcFacturasRestantes({ hubspotClient, lineItemId });
+        await recalcFacturasRestantes({ hubspotClient, lineItemId, dealId });
 
         console.log(`✓ Line Item ${lineItemId} actualizado con invoice_id: ${invoiceId}`);
         console.log('================================================\n');

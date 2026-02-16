@@ -3,7 +3,7 @@ import { isAutoRenew } from "./mode.js";
 
 const INVOICE_LIK_PROP = "line_item_key"; // <- SOLO si existe en invoice. Si no, cambiá al nombre real.
 
-export async function recalcFacturasRestantes({ hubspotClient, lineItemId }) {
+export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealId }) {
   const id = String(lineItemId);
 
   console.log("[FR][enter]", { lineItemId: id });
@@ -101,12 +101,11 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId }) {
     };
   }
 
-  // Contar invoices por LIK
-  const countInvoices = await countInvoicesByLIK({
-    hubspotClient,
-    lik,
-    invoiceLikProp: INVOICE_LIK_PROP,
-  });
+const countInvoices = await countInvoicesByLIK({
+  hubspotClient,
+  lik,
+  dealId,
+});
 
   console.log("[FR][count]", {
     lineItemId: id,
@@ -154,63 +153,84 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId }) {
     invoiceLikProp: INVOICE_LIK_PROP,
   };
 }
+async function countInvoicesByLIK({ hubspotClient, lik, dealId }) {
+  const v4 = hubspotClient?.crm?.associations?.v4?.basicApi;
 
-async function countInvoicesByLIK({ hubspotClient, lik, invoiceLikProp }) {
-  const searchApi = hubspotClient?.crm?.objects?.searchApi;
-  if (!searchApi?.doSearch) {
-    throw new Error(
-      "countInvoicesByLIK: hubspotClient.crm.objects.searchApi.doSearch no disponible"
-    );
+  if (!v4?.getPage) {
+    throw new Error("countInvoicesByLIK: Associations v4 API no disponible");
+  }
+
+  if (!dealId) {
+    throw new Error("countInvoicesByLIK requiere dealId");
   }
 
   let after = undefined;
-  let total = 0;
+  let invoiceIds = [];
   let page = 0;
 
+  // =====================================================
+  // 1️⃣ Traer todas las invoices asociadas al DEAL
+  // =====================================================
   while (true) {
     page += 1;
 
-    const res = await searchApi.doSearch("invoices", {
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: invoiceLikProp,
-              operator: "EQ",
-              value: String(lik),
-            },
-          ],
-        },
-      ],
-      properties: [invoiceLikProp, "of_invoice_key", "etapa_de_la_factura"],
-      limit: 100,
-      after,
-    });
+    const res = await v4.getPage(
+      "deals",
+      String(dealId),
+      "invoices",
+      100,
+      after
+    );
 
     const results = res?.results ?? [];
+
+    invoiceIds.push(...results.map(r => r.toObjectId));
+
     const nextAfter = res?.paging?.next?.after;
 
-    console.log("[FR][invoice-search-page]", {
+    console.log("[FR][deal->invoices-page]", {
       page,
-      lik,
-      invoiceLikProp,
+      dealId,
       got: results.length,
-      after: after ?? null,
       nextAfter: nextAfter ?? null,
-      sample: results.slice(0, 3).map((r) => ({
-        id: r.id,
-        [invoiceLikProp]: r?.properties?.[invoiceLikProp],
-        of_invoice_key: r?.properties?.of_invoice_key,
-        etapa_de_la_factura: r?.properties?.etapa_de_la_factura,
-      })),
     });
-
-    total += results.length;
 
     if (!nextAfter) break;
     after = nextAfter;
   }
 
-  console.log("[FR][invoice-search-total]", { lik, invoiceLikProp, total });
-  return total;
+  if (invoiceIds.length === 0) {
+    console.log("[FR][deal->invoices-total]", { dealId, total: 0 });
+    return 0;
+  }
+
+  // =====================================================
+  // 2️⃣ Leer invoices y filtrar por LIK
+  // =====================================================
+  let count = 0;
+
+  for (const invoiceId of invoiceIds) {
+    const inv = await hubspotClient.crm.objects.basicApi.getById(
+      "invoices",
+      invoiceId,
+      ["of_invoice_key", "etapa_de_la_factura"]
+    );
+
+    const invoiceKey = inv?.properties?.of_invoice_key || "";
+
+    // of_invoice_key tiene formato:
+    // dealId::LIK:<line_item_key>::YYYY-MM-DD
+    if (invoiceKey.includes(lik)) {
+      count++;
+    }
+  }
+
+  console.log("[FR][deal->invoices-filtered]", {
+    dealId,
+    lik,
+    matched: count,
+    totalInvoicesOnDeal: invoiceIds.length,
+  });
+
+  return count;
 }

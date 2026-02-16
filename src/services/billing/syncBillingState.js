@@ -49,7 +49,7 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
   // 4. PLAN_FIJO: recalcular facturas_restantes
   let facturasRestantes = null;
   if (!autoRenew) {
-    const res = await recalcFacturasRestantes({ hubspotClient, lineItemId: id });
+    const res = await recalcFacturasRestantes({ hubspotClient, lineItemId: id, dealId });
     facturasRestantes = res?.facturas_restantes;
   }
 
