@@ -112,8 +112,8 @@ let ticketKeyUsed = ticketKeyNew;
   console.log('[phase2][lookup] used fallback key', { ticketKeyNew, ticketKeyUsed });
 }
 
-  if (!t) {
-    return { moved: false, reason: 'missing_forecast_ticket', ticketKey };
+if (!t) {
+    return { moved: false, reason: 'missing_forecast_ticket', ticketKey: ticketKeyUsed };
   }
 
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
