@@ -840,33 +840,58 @@ fecha_real_de_facturacion: invoiceDateYMD,
     }
     
 // 10) Actualizar line item con referencia a la factura (bloque sugerido)
+// 10) Actualizar line item con referencia a la factura (bloque sugerido)
 if (lineItemId) {
   try {
-    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: {
         ...(fechaPlan ? { last_billing_period: toHubSpotDateOnly(fechaPlan) } : {}),
-        ...(invoiceId ? { invoice_id: invoiceId } : {}),
-        ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
+        ...(invoiceId ? { invoice_id: String(invoiceId) } : {}),
+        ...(invoiceKey ? { invoice_key: String(invoiceKey) } : {}),
       },
     });
 
-    // ✅ Recalcular facturas_restantes (PLAN_FIJO) contando invoices del LIK
-    await recalcFacturasRestantes({ hubspotClient, lineItemId });
+    console.log('[FR][after-li-update] about to recalc', {
+      lineItemId: String(lineItemId),
+      invoiceId: String(invoiceId || ''),
+      invoiceKey: String(invoiceKey || ''),
+      fechaPlan: String(fechaPlan || ''),
+    });
 
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
-    }
+    const rr = await recalcFacturasRestantes({ hubspotClient, lineItemId: String(lineItemId) });
+
+    console.log('[FR][after-recalc] result', rr);
+
+    // Confirmación inmediata: leer LI otra vez y ver valor final
+    const liAfter = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      'facturas_restantes',
+      'hs_recurring_billing_number_of_payments',
+      'line_item_key',
+      'renovacion_automatica',
+      'recurringbillingfrequency',
+      'hs_recurring_billing_frequency',
+    ]);
+
+    console.log('[FR][li-after] props', {
+      facturas_restantes: liAfter?.properties?.facturas_restantes,
+      hs_recurring_billing_number_of_payments: liAfter?.properties?.hs_recurring_billing_number_of_payments,
+      line_item_key: liAfter?.properties?.line_item_key,
+      renovacion_automatica: liAfter?.properties?.renovacion_automatica,
+      recurringbillingfrequency: liAfter?.properties?.recurringbillingfrequency,
+      hs_recurring_billing_frequency: liAfter?.properties?.hs_recurring_billing_frequency,
+    });
+
     console.log(`✓ Line item actualizado con invoice_id=${invoiceId}`);
   } catch (e) {
     console.warn('⚠️ No se pudo actualizar line item:', e.message);
   }
 }
-
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
     console.log('Invoice Key:', invoiceKey);
     console.log('Responsable:', invoicePropsRaw.responsable_asignado || tp.hubspot_owner_id || 'no asignado');
     console.log('Modo de generación:', modoGeneracion);
+    console.log('facturas restantes:', facturasRestantes);
     console.log('================================================\n');
 
 // 12) Consumo de cupo (idempotente, no rompe facturación)
