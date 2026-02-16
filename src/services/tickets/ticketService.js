@@ -1,6 +1,21 @@
 import { isAutoRenew } from '../billing/mode.js';
 import { getEffectiveBillingConfig } from '../../billingEngine.js';
 import { addInterval } from '../../utils/dateUtils.js'; 
+import { createInvoiceFromTicket } from '../invoiceService.js';
+import { syncBillingState } from '../billing/syncBillingState.js';
+import { hubspotClient } from '../../hubspotClient.js';
+import {  
+  TICKET_STAGES, 
+  AUTOMATED_TICKET_PIPELINE,     
+  AUTOMATED_TICKET_INITIAL_STAGE, 
+  isDryRun,
+  isForecastTicketStage, 
+} from '../../config/constants.js';
+import { createTicketSnapshots } from '../snapshotService.js';
+import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
+import { parseBool, safeString } from '../../utils/parsers.js';
+import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
+
 /**
  * Garantiza que existan 24 tickets futuros para un line item en modo AUTO_RENEW.
  * - Solo crea los que faltan, usando lógica idempotente.
@@ -70,23 +85,6 @@ export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId,
     });
   }
 }
-// src/services/ticketService.js
-
-import { createInvoiceFromTicket } from '../invoiceService.js';
-import { syncBillingState } from '../billing/syncBillingState.js';
-import { hubspotClient } from '../../hubspotClient.js';
-import {  
-  TICKET_STAGES, 
-  AUTOMATED_TICKET_PIPELINE,     
-  AUTOMATED_TICKET_INITIAL_STAGE, 
-  isDryRun,
-  isForecastTicketStage, 
-} from '../../config/constants.js';
-import { createTicketSnapshots } from '../snapshotService.js';
-import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../../utils/dateUtils.js';
-import { parseBool, safeString } from '../../utils/parsers.js';
-import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
-
 
 export async function countCanonicalTicketsForLineItemKey({ dealId, lineItemKey }) {
   const prefix = `${dealId}::LIK:${lineItemKey}::`;

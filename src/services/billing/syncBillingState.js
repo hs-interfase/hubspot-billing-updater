@@ -54,7 +54,7 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
   }
 
   // 5. Calcular próxima fecha
-  const cfg = getEffectiveBillingConfig({ properties });
+/*  const cfg = getEffectiveBillingConfig({ properties });
   const { interval, startDate } = cfg;
   let maxCount = 24;
   if (!autoRenew) {
@@ -72,6 +72,25 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
   for (let i = 0; i < maxCount && current && interval; i++) {
     upcomingDates.push(formatDateISO(current));
     current = addInterval(current, interval);
+  }
+*/
+
+  // 5. Calcular próxima fecha
+  const cfg = getEffectiveBillingConfig({ properties });
+  const { interval, startDate } = cfg;
+
+  // DEFAULT: 24 (auto-renew / forecast)
+  let maxCount = 24;
+
+  // PLAN_FIJO (temporal): NO gobernar billing_next_date por facturasRestantes.
+  // Motivo: facturasRestantes (invoices) puede estar desfasado y "revive" billing_next_date
+  // aunque ya se hayan promovido todos los tickets (regla real del sistema).
+  if (!autoRenew) {
+    // Si querés respetar el término del plan fijo SIN usar facturasRestantes:
+    if (typeof cfg.maxOccurrences === 'number') {
+      maxCount = cfg.maxOccurrences;
+    }
+    // else: queda 24 (pero resolveNextBillingDate debería cortar por tickets promovidos)
   }
 
   // 6. Calcular nextYmd

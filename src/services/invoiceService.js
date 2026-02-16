@@ -26,7 +26,6 @@ function extractBillDateFromTicketKey(ticketKey) {
   return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
 }  
 
-
 // Sincroniza last_billing_period en el line item a partir del ticket (fecha esperada)
 async function syncBillingLastBilledDateFromTicket(ticketObj) {
   try {
