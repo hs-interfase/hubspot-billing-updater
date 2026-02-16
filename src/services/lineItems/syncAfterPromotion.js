@@ -74,7 +74,7 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
 }
 
 export async function syncLineItemAfterPromotion({
-  dealId,       // opcional: logs
+  dealId,       
   lineItemId,
   lineItemKey,  // LIK
   expectedYMD,  // fecha_resolucion_esperada del ticket promovido (YYYY-MM-DD)
@@ -89,6 +89,8 @@ export async function syncLineItemAfterPromotion({
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
       'billing_next_date',
       'last_ticketed_date',
+      'hs_recurring_billing_number_of_payments',
+      'pagos_restantes',
     ]);
   } catch (e) {
     console.warn('[syncLineItemAfterPromotion] No se pudo leer line item:', e?.message);
@@ -98,6 +100,26 @@ export async function syncLineItemAfterPromotion({
   const lp = lineItem?.properties || {};
   const currentLast = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNext = (lp.billing_next_date || '').slice(0, 10);
+
+// ====== PAGOS RESTANTES (promesas) ======
+  const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments;
+  const totalPayments = Number.parseInt(String(totalPaymentsRaw ?? ''), 10);
+  const hasTotalPayments = Number.isFinite(totalPayments) && totalPayments > 0;
+
+  const currentRemainingRaw = lp.pagos_restantes;
+  const currentRemaining = Number.parseInt(String(currentRemainingRaw ?? ''), 10);
+
+  // init: si pagos_restantes no está seteado, lo arrancamos en totalPayments
+  let newRemaining = currentRemaining;
+  if (!Number.isFinite(currentRemaining) || currentRemaining < 0) {
+    newRemaining = hasTotalPayments ? totalPayments : currentRemaining; // si no hay total, no inventamos
+  }
+
+  // decrement por promoción (consume 1 promesa)
+  if (Number.isFinite(newRemaining)) {
+    newRemaining = Math.max(0, newRemaining - 1);
+  }
+
 
   // 2) last_ticketed_date monotónico
   let newLast = currentLast;
@@ -164,6 +186,14 @@ export async function syncLineItemAfterPromotion({
   const updates = {};
   if (newLast !== currentLast) updates.last_ticketed_date = newLast;
   if (newNext !== currentNext) updates.billing_next_date = newNext;
+
+  // guardar pagos_restantes si es válido
+if (Number.isFinite(newRemaining)) {
+  const cur = Number.isFinite(currentRemaining) ? currentRemaining : null;
+  if (cur === null || newRemaining !== cur) {
+    updates.pagos_restantes = String(newRemaining);
+  }
+}
 
   if (!Object.keys(updates).length) {
     console.log('[syncLineItemAfterPromotion] no action', {

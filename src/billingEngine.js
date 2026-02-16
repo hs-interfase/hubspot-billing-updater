@@ -118,7 +118,6 @@ function getIntervalFromFrequency(freqRaw) {
  * Lee las propiedades del line item y devuelve la configuración efectiva de facturación.
  * - Usa primero las propiedades nativas de HubSpot.
  * - Luego hace fallback a tu frecuencia custom SOLO para el intervalo.
- * - NO usa más total_de_pagos ni termino_a para calcular cuántas cuotas generar.
  *
  * Anchor-based:
  * - Soporta irregular puntual vía: irregular=true + fecha_irregular_puntual (YYYY-MM-DD)
@@ -776,7 +775,6 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
 
 /**
  * Contadores “simples” sin calendario:
- * - totalAvisos / emitidos / restantes: usa total_de_pagos y pagos_emitidos.
  * - proximaFecha: usa getNextBillingDateForLineItem (anchor-based).
  * - ultimaFecha: usa last_ticketed_date.
  *

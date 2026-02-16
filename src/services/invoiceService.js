@@ -121,7 +121,7 @@ const ALLOWED_INVOICE_PROPS = [
   "mensual","modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
   "nombre_producto","of_invoice_key","of_monto_total_facturado","pais_operativo","pedido_por",
   "periodo_a_facturar","procede_de","responsable_asignado","reventa","servicio","ticket_id",
-  "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura"
+  "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura", "line_item_key"
 ];
 
 // Filtra un objeto dejando solo las propiedades permitidas (no null/undefined)
@@ -839,26 +839,19 @@ fecha_real_de_facturacion: invoiceDateYMD,
       console.warn('⚠️ No se pudo actualizar ticket:', e.message);
     }
     
+// 10) Actualizar line item con referencia a la factura (bloque sugerido)
+if (lineItemId) {
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+      properties: {
+        ...(fechaPlan ? { last_billing_period: toHubSpotDateOnly(fechaPlan) } : {}),
+        ...(invoiceId ? { invoice_id: invoiceId } : {}),
+        ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
+      },
+    });
 
-    // 10) Actualizar line item con referencia a la factura (bloque sugerido)
-    if (lineItemId) {
-      try {
-        await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
-          properties: {
-            ...(fechaPlan ? { last_billing_period: toHubSpotDateOnly(fechaPlan) } : {}),
-            ...(invoiceId ? { invoice_id: invoiceId } : {}),
-            ...(invoiceKey ? { invoice_key: invoiceKey } : {}),
-          }
-        });
-
-            if (dealId && lik) {
-      await recalcFacturasRestantesFromDealInvoices({
-        hubspotClient,
-        dealId,
-        lineItemId,
-        lineItemKey: lik,
-      });
-    }
+    // ✅ Recalcular facturas_restantes (PLAN_FIJO) contando invoices del LIK
+    await recalcFacturasRestantes({ hubspotClient, lineItemId });
 
     if (process.env.DBG_PHASE1 === 'true') {
       console.log(`[last_billing_period] LI ${lineItemId} => ${toHubSpotDateOnly(fechaPlan)}`);
@@ -868,7 +861,7 @@ fecha_real_de_facturacion: invoiceDateYMD,
     console.warn('⚠️ No se pudo actualizar line item:', e.message);
   }
 }
-    
+
     console.log('\n✅ FACTURA CREADA EXITOSAMENTE DESDE TICKET');
     console.log('Invoice ID:', invoiceId);
     console.log('Invoice Key:', invoiceKey);
