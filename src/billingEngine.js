@@ -488,7 +488,7 @@ export async function updateLineItemSchedule(lineItem) {
     (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
     formatDateISO(startDate);
 
-// Piso duro: no permitir next antes de startdate
+/*// Piso duro: no permitir next antes de startdate
 const startYmd = formatDateISO(startDate);
 let floorYmd = effectiveTodayYmd;
 if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
@@ -513,6 +513,101 @@ if (process.env.DBG_PHASE1 === 'true') {
     floorYmd,
     last_ticketed_date: lastTicketedYmd || null,
   });
+}
+*/
+// Piso duro: no permitir next antes de startdate
+const startYmd = formatDateISO(startDate);
+let floorYmd = effectiveTodayYmd;
+if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+
+// =====================================================
+// ✅ CAP POR PLAN FIJO (maxOccurrences)
+// - Si ya se ticketearon todas las ocurrencias => billing_next_date = ''
+// - Y aunque computeNext devuelva una fecha > lastPlanned, se capea
+// =====================================================
+// Solo aplicar CAP si NO es auto-renew
+const isAutoRenewMode =
+  String(p.renovacion_automatica || '').toLowerCase() === 'true';
+
+const maxOccurrences =
+  !isAutoRenewMode && Number.isFinite(Number(config?.maxOccurrences))
+    ? Number(config.maxOccurrences)
+    : null;
+
+
+let lastPlannedYmd = null;
+
+// Solo aplica a recurrentes (tenés interval acá) y si hay tope
+if (
+  maxOccurrences &&
+  maxOccurrences > 0 &&
+  interval &&
+  startYmd
+) {
+  // lastPlanned = start + (N-1) intervalos
+  let cur = parseLocalDate(startYmd);
+  for (let i = 1; i < maxOccurrences; i++) {
+    cur = addInterval(cur, interval);
+  }
+  lastPlannedYmd = formatDateISO(cur);
+
+  // Si el último ticket promovido ya llegó al final => next null
+  if (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) {
+    updatesRecurring.billing_next_date = '';
+
+    if (process.env.DBG_PHASE1 === 'true') {
+      console.log(`[billing_next_date][CAP_END] LI ${lineItem.id} => (null)`, {
+        startYmd,
+        maxOccurrences,
+        lastPlannedYmd,
+        last_ticketed_date: lastTicketedYmd,
+      });
+    }
+  }
+}
+
+// Si NO quedó nulo por CAP_END, calculamos next normal
+if (updatesRecurring.billing_next_date !== '') {
+  const nextYmd = computeNextFromInterval({
+    // ⚠️ Para plan fijo, usá startYmd como base (más determinista que anchor si cambia)
+    startRaw: startYmd,
+    interval,
+    todayYmd: floorYmd,
+    addInterval,
+    formatDateISO,
+    parseLocalDate,
+  });
+
+  let cappedNext = nextYmd || '';
+
+if (lastPlannedYmd) {
+  if (
+    (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) ||
+    (cappedNext && cappedNext > lastPlannedYmd)
+  ) {
+    cappedNext = '';
+  }
+}
+
+updatesRecurring.billing_next_date = cappedNext;
+// Si el cálculo se pasa del fin del plan, null
+/*  const cappedNext =
+    lastPlannedYmd && nextYmd && nextYmd > lastPlannedYmd ? '' : (nextYmd || '');
+
+  updatesRecurring.billing_next_date = cappedNext;
+*/
+  if (process.env.DBG_PHASE1 === 'true') {
+    console.log(`[billing_next_date][ANCHOR_CAP] LI ${lineItem.id} => ${cappedNext || '(null)'}`, {
+      anchorStartRaw,
+      effectiveTodayYmd,
+      startYmd,
+      floorYmd,
+      last_ticketed_date: lastTicketedYmd || null,
+      maxOccurrences: maxOccurrences || null,
+      lastPlannedYmd,
+      rawNextYmd: nextYmd || null,
+    });
+  }
 }
 
 
