@@ -891,7 +891,6 @@ if (lineItemId) {
     console.log('Invoice Key:', invoiceKey);
     console.log('Responsable:', invoicePropsRaw.responsable_asignado || tp.hubspot_owner_id || 'no asignado');
     console.log('Modo de generación:', modoGeneracion);
-    console.log('facturas restantes:', facturasRestantes);
     console.log('================================================\n');
 
 // 12) Consumo de cupo (idempotente, no rompe facturación)
