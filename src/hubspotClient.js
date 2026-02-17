@@ -152,6 +152,7 @@ export async function getDealWithLineItems(dealId) {
     "parte_del_cupo",
 
     // --- control / mensajes ---
+    'hs_lastmodifieddate',
     "mensaje_para_responsable",
     "nota",
     "servicio",

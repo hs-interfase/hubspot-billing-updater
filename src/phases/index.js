@@ -7,6 +7,7 @@ import { runPhase3 } from './phase3.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from "../hubspotClient.js";
 import { installHubSpotConsoleCollector } from "../utils/hubspotErrorCollector.js";
+import * as dateUtils from '../utils/dateUtils.js';
 
 installHubSpotConsoleCollector();
 
@@ -15,7 +16,23 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
   console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
   console.log(`   Deal ID: ${dealId}`);
+  const dealLastMod = deal.properties?.hs_lastmodifieddate || deal.hs_lastmodifieddate;
+  if (dealLastMod) {
+    const formatted = dateUtils.formatDateISO(new Date(Number(dealLastMod)));
+    console.log(`   Deal hs_lastmodifieddate: ${dealLastMod} (${formatted})`);
+  } else {
+    console.log('   Deal hs_lastmodifieddate: (no value)');
+  }
   console.log(`   Line Items: ${lineItems.length}\n`);
+  for (const li of lineItems) {
+    const liLastMod = li.properties?.hs_lastmodifieddate || li.hs_lastmodifieddate;
+    if (liLastMod) {
+      const formatted = dateUtils.formatDateISO(new Date(Number(liLastMod)));
+      console.log(`   LineItem ${li.id} hs_lastmodifieddate: ${liLastMod} (${formatted})`);
+    } else {
+      console.log(`   LineItem ${li.id} hs_lastmodifieddate: (no value)`);
+    }
+  }
 
   const results = {
     dealId,

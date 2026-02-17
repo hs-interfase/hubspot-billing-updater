@@ -2,12 +2,10 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { getEffectiveBillingConfig } from '../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.js';
-import { getDealCompanies } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
 import { buildTicketFullProps } from '../services/tickets/ticketService.js'; 
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
-import { isEmpty } from '../services/tickets/ticketService.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -48,6 +46,69 @@ function toYmd(value) {
 function safeInt(v) {
   const n = Number.parseInt(String(v ?? '').trim(), 10);
   return Number.isFinite(n) ? n : null;
+}
+
+// ==============================
+// DEAL-LEVEL CLEANUP (orphan forecast)
+// ==============================
+
+function parseLikFromTicketKey(ticketKey) {
+  const k = String(ticketKey || '').trim();
+  if (!k) return '';
+  const marker = '::LIK:';
+  const i = k.indexOf(marker);
+  if (i === -1) return '';
+  const rest = k.slice(i + marker.length);
+  const j = rest.indexOf('::');
+  if (j === -1) return '';
+  return rest.slice(0, j).trim();
+}
+
+async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
+  const body = {
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: 'of_deal_id', operator: 'EQ', value: String(dealId) },
+        ],
+      },
+    ],
+    properties: [
+      'hs_pipeline_stage',
+      'of_ticket_key',
+    ],
+    limit: 100,
+  };
+
+  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const allTickets = resp?.results || [];
+
+  const forecastTickets = allTickets.filter(isForecastTicket);
+
+  console.log('[phaseP][cleanup] forecast tickets encontrados', {
+    dealId,
+    total: forecastTickets.length,
+  });
+
+  let orphanDeleted = 0;
+
+  for (const t of forecastTickets) {
+    const ticketId = t.id;
+    const ticketKey = String(t?.properties?.of_ticket_key || '').trim();
+
+    if (!ticketKey) continue;
+
+    const lik = parseLikFromTicketKey(ticketKey);
+    if (!lik) continue;
+
+    if (!validLiks.has(lik)) {
+      await deleteTicket(ticketId);
+      orphanDeleted++;
+      console.log('[phaseP][cleanup] orphan deleted', { ticketId, ticketKey });
+    }
+  }
+
+  console.log('[phaseP][cleanup] resumen', { dealId, orphanDeleted });
 }
 
 /**
@@ -105,14 +166,17 @@ function resolveForecastStage({ dealStage, automated }) {
 /**
  * Construye fechas deseadas según contrato:
  * - start sin frequency => 1
- * - frequency + term finito => term
- * - frequency + autorenew (sin term) => 24
+ * - frequency + term finito => hasta term, pero con tope 24 y sin pasar 2 años desde start
+ * - frequency + autorenew (sin term) => hasta 2 años desde start, con tope 24
+ *
+ * Nota: horizonte 2 años = criterio principal; maxCount=24 = límite duro final.
+ * Si term existe, también limita (min(term, 24)).
  */
 function buildDesiredDates(lineItem) {
   const p = lineItem?.properties || {};
   const cfg = getEffectiveBillingConfig(lineItem);
 
-  // startDate efectivo
+  // startDate efectivo (YYYY-MM-DD)
   const startYmd =
     toYmd(p.hs_recurring_billing_start_date) ||
     (cfg?.startDate ? formatDateISO(cfg.startDate) : '') ||
@@ -121,55 +185,108 @@ function buildDesiredDates(lineItem) {
     '';
 
   if (!startYmd) return { desiredCount: 0, dates: [] };
-// frequency/interval efectivo
-const interval = cfg?.interval ?? null;
 
-// ✅ frecuencia real basada en props
-const hasFreqProps =
-  String(p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? '').trim() !== '';
+  // ✅ frecuencia real basada en props (si no hay, es "pago único")
+  const hasFreqProps =
+    String(p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? '').trim() !== '';
 
-// Caso pago único
-if (!hasFreqProps) {
-  return { desiredCount: 1, dates: [startYmd] };
-}
-
-// Caso con frecuencia
-const autorenew = hasFreqProps && isEmpty(p.hs_recurring_billing_number_of_payments);
-
-let desiredCount = 24;
-if (!autorenew) {
-  const termRaw =
-    p.hs_recurring_billing_number_of_payments ||
-    p.number_of_payments ||
-    null;
-  const term = safeInt(termRaw);
-  if (term && term > 0) desiredCount = term;
-}
-
-// ✅ si hay frecuencia pero interval no se pudo resolver → fallback conservador
-if (!interval) {
-console.log('[phaseP][dates][WARN] has frequency but interval is null -> cannot expand', {
-  lineItemId: lineItem?.id,
-  lik: p.line_item_key || p.of_line_item_key || '',
-  recurringbillingfrequency: p.recurringbillingfrequency,
-  hs_recurring_billing_frequency: p.hs_recurring_billing_frequency,
-  hs_recurring_billing_number_of_payments: p.hs_recurring_billing_number_of_payments,
-  });
-  return { desiredCount: 1, dates: [startYmd] };
-}
-
-
-  // Generación
-  const dates = [];
-  let d = parseLocalDate(startYmd);
-  if (!d) return { desiredCount: 0, dates: [] };
-
-  for (let i = 0; i < desiredCount; i++) {
-    if (i > 0) d = addInterval(d, interval);
-    dates.push(formatDateISO(d));
+  if (!hasFreqProps) {
+    return { desiredCount: 1, dates: [startYmd] };
   }
 
-  return { desiredCount, dates };
+  // frequency/interval efectivo
+  const interval = cfg?.interval ?? null;
+
+  // ✅ si hay frecuencia pero interval no se pudo resolver → fallback conservador
+  if (!interval) {
+    console.log('[phaseP][dates][WARN] has frequency but interval is null -> cannot expand', {
+      lineItemId: lineItem?.id,
+      lik: p.line_item_key || p.of_line_item_key || '',
+      recurringbillingfrequency: p.recurringbillingfrequency,
+      hs_recurring_billing_frequency: p.hs_recurring_billing_frequency,
+      hs_recurring_billing_number_of_payments: p.hs_recurring_billing_number_of_payments,
+    });
+    return { desiredCount: 1, dates: [startYmd] };
+  }
+
+  // término (si existe)
+  const termRaw = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
+  const term = safeInt(termRaw);
+
+  // Límite duro final
+  const hardMax = 24;
+  const maxCount = term && term > 0 ? Math.min(term, hardMax) : hardMax;
+
+  // startDate y horizonte 2 años desde start
+  // ==========================
+  // ✅ AUTORENEW: arrancar desde HOY / billing_next_date (no desde start histórico)
+  // ==========================
+  const todayYmd = nowMontevideoYmd();
+  const lastTicketedYmd = toYmd(p.last_ticketed_date);
+  const billingNextYmd = toYmd(p.billing_next_date);
+
+  // ojo: definí una sola regla de autorenew (acá uso cfg primero)
+  const isAutoRenew =
+    cfg?.isAutoRenew === true ||
+    cfg?.autorenew === true ||
+    String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
+    // fallback típico: sin term => autorenew
+    !(safeInt(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null) > 0);
+
+  // effectiveToday = hoy o last_ticketed + 1
+  let effectiveTodayYmd = todayYmd;
+  if (lastTicketedYmd) {
+    const d0 = parseLocalDate(lastTicketedYmd);
+    if (d0 && Number.isFinite(d0.getTime())) {
+      d0.setDate(d0.getDate() + 1);
+      const plusOne = formatDateISO(d0);
+      if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
+    }
+  }
+
+  // Piso final para autorenew:
+  // - priorizá billing_next_date si existe (está alineado con Phase1/Phase2)
+  // - si no, hoy/last_ticketed+1
+  let seriesStartYmd = startYmd;
+
+  if (isAutoRenew) {
+    seriesStartYmd = effectiveTodayYmd;
+    if (billingNextYmd && billingNextYmd > seriesStartYmd) seriesStartYmd = billingNextYmd;
+
+    // y nunca antes del start del contrato (por seguridad)
+    if (startYmd && startYmd > seriesStartYmd) seriesStartYmd = startYmd;
+  }
+
+  // startDate efectivo para generar
+  const startDate = parseLocalDate(seriesStartYmd);
+  if (!startDate) return { desiredCount: 0, dates: [] };
+
+  // horizonte 2 años desde el start efectivo de generación (no el histórico)
+  const horizonDate = new Date(startDate.getTime());
+  horizonDate.setFullYear(horizonDate.getFullYear() + 2);
+
+  const dates = [];
+  let d = new Date(startDate.getTime());
+
+  while (dates.length < maxCount) {
+    if (!d || !Number.isFinite(d.getTime())) break;
+
+    // horizonte principal: si ya pasamos los 2 años, cortamos
+    if (d.getTime() > horizonDate.getTime()) break;
+
+    dates.push(formatDateISO(d));
+
+    // avanzar al siguiente período
+    const next = addInterval(d, interval);
+    if (!next || !Number.isFinite(next.getTime())) break;
+
+    // guardrail anti-loop (por si addInterval devuelve lo mismo)
+    if (next.getTime() === d.getTime()) break;
+
+    d = next;
+  }
+
+  return { desiredCount: dates.length, dates };
 }
 
 /**
@@ -188,6 +305,7 @@ async function findTicketsByLineItemKey(lineItemKey) {
       },
     ],
     properties: [
+      'hs_pipeline',
       'hs_pipeline_stage',
       'fecha_resolucion_esperada',
       'of_line_item_key',
@@ -283,7 +401,6 @@ async function updateLineItemLastGeneratedAt(lineItemId) {
     properties: { forecast_last_generated_at: ymd },
   });
 }
-
 /**
  * Phase P (por deal)
  */
@@ -310,7 +427,21 @@ if (empresaId) {
   empresaNombre = c?.properties?.name || '';
 }
 */
+// 🔎 Construir set de LIKs válidos actuales
+const validLiks = new Set();
+
+for (const li of lineItems || []) {
+  const p = li?.properties || {};
+  const lik = p.line_item_key || p.of_line_item_key || '';
+  if (lik) validLiks.add(String(lik).trim());
+}
+
+// 🧹 Cleanup huérfanos a nivel deal
+await cleanupOrphanForecastTicketsForDeal({ dealId, validLiks });
+
   for (const li of lineItems || []) {
+    let changed = false;
+
     const p = li?.properties || {};
     const lineItemKey = p.line_item_key || p.of_line_item_key || '';
 
@@ -390,147 +521,138 @@ if (empresaId) {
       desiredByKey.set(key, ymd);
     }
 
-    // 5) Mapear existentes por key (incluye forecast + protegidos)
-    const existingByKey = new Map();
-    for (const t of allTickets) {
-      const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
-      if (!k) continue;
-      // Si hay colisiones, preferimos el NO forecast (protegido), para evitar recreación.
-      if (!existingByKey.has(k)) {
-        existingByKey.set(k, t);
-      } else {
-        const prev = existingByKey.get(k);
-        const prevIsForecast = isForecastTicket(prev);
-        const nextIsForecast = isForecastTicket(t);
-        if (prevIsForecast && !nextIsForecast) existingByKey.set(k, t);
-      }
-    }
+ // 5) Mapear existentes por key SEPARADOS (forecast vs protegidos)
+const existingForecastByKey = new Map();
+const existingProtectedByKey = new Map();
 
-    let changed = false;
+for (const t of allTickets) {
+  const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
+  if (!k) continue;
 
-    // 6) Upsert: crear faltantes; actualizar solo si es forecast editable
-    for (const key of desiredKeys) {
-      const expectedYmd = desiredByKey.get(key);
-      const existing = existingByKey.get(key);
+  if (isForecastTicket(t)) {
+    // si hay colisión, nos quedamos con el primero (da igual)
+    if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
+  } else {
+    if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
+  }
+}
 
-      if (!existing) {
-        console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
-const hsPipeline = automated
-  ? BILLING_AUTOMATED_PIPELINE_ID
-  : BILLING_TICKET_PIPELINE_ID;
+// 6) Upsert: crear faltantes; actualizar solo si es forecast editable
+for (const key of desiredKeys) {
+  const expectedYmd = desiredByKey.get(key);
 
-const fullProps = await buildTicketFullProps({
-  deal,
-  lineItem: li,
-  dealId,
-  lineItemId: li.id,
-  lineItemKey,
-  ticketKey: key,
-  expectedYMD: expectedYmd,
-  orderedYMD: null, // forecast
-});
+  const existingForecast = existingForecastByKey.get(key);
+  const existingProtected = existingProtectedByKey.get(key); // opcional para logs
 
-await safeCreateTicket(hubspotClient, {
-  properties: {
-    ...fullProps,
-    hs_pipeline: String(hsPipeline),
-    hs_pipeline_stage: String(targetStage),
-  },
-});
+  if (!existingForecast) {
+  // ✅ Si ya existe protected para esa key (promovido/ready/facturado), NO crear duplicado.
+  if (existingProtected) {
+    console.log('[phaseP] key covered by protected -> skip create', {
+      key,
+      expectedYmd,
+      protectedTicketId: existingProtected.id,
+    });
+    continue;
+  }
 
-        /*const { productoNombre, unidadDeNegocio } = resolveProductAndUEN(li);
+  console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
 
-const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
-const rubro = (li?.properties?.servicio || '').toString(); // viene del line item
+  const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
 
-await createForecastTicket({
-  dealId,
-  lineItemKey,
-  ticketKey: key,
-  expectedYmd,
-  targetStage,
+  const fullProps = await buildTicketFullProps({
+    deal,
+    lineItem: li,
+    dealId,
+    lineItemId: li.id,
+    lineItemKey,
+    ticketKey: key,
+    expectedYMD: expectedYmd,
+    orderedYMD: null, // forecast
+  });
 
-  lineItemId: li.id,
-  hsPipeline,
+  await safeCreateTicket(hubspotClient, {
+    properties: {
+      ...fullProps,
+      hs_pipeline: String(hsPipeline),
+      hs_pipeline_stage: String(targetStage),
+    },
+  });
 
-  empresaId,
-  empresaNombre,
-  productoNombre,
-  unidadDeNegocio,
-  rubro,
-});
+  created++;
+  changed = true;
+  continue;
+}
+
+ /* // Si NO hay forecast para esa key => crear SIEMPRE (aunque exista protegido/promovido/facturado)
+if (!existingForecast) {
+  // ✅ Si existe protected (promovido/ready/facturado) con la misma key, NO crear duplicado.
+  if (existingProtected) {
+    console.log('[phaseP] key already covered by protected -> skip create', {
+      key,
+      expectedYmd,
+      protectedTicketId: existingProtected.id,
+    });
+    continue;
+  }
+
+  console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
+
+  const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
+
+  const fullProps = await buildTicketFullProps({
+    deal,
+    lineItem: li,
+    dealId,
+    lineItemId: li.id,
+    lineItemKey,
+    ticketKey: key,
+    expectedYMD: expectedYmd,
+    orderedYMD: null, // forecast
+  });
+
+  await safeCreateTicket(hubspotClient, {
+    properties: {
+      ...fullProps,
+      hs_pipeline: String(hsPipeline),
+      hs_pipeline_stage: String(targetStage),
+    },
+  });
+
+  created++;
+  changed = true;
+  continue;
+}
 */
 
-        created++;
-        changed = true;
-        continue;
-      }
-
-      // existe, pero solo podemos tocar si sigue siendo forecast editable
-      if (!isForecastTicket(existing)) {
-        // protegido: no tocar
-        continue;
-      }
-  /*
-      const currentYmd = toYmd(existing?.properties?.fecha_resolucion_esperada);
-      const currentStage = String(existing?.properties?.hs_pipeline_stage || '');
-      const currentKey = String(existing?.properties?.of_ticket_key || '').trim();
-
-    const patch = {};
-      if (currentYmd !== expectedYmd) patch.fecha_resolucion_esperada = expectedYmd;
-      if (currentStage !== targetStage) patch.hs_pipeline_stage = targetStage;
-      if (!currentKey) patch.of_ticket_key = key;
-
-      if (Object.keys(patch).length) {
-        console.log('[phaseP] update forecast ticket', { ticketId: existing.id, patch });
-        await updateTicket(existing.id, patch);
-        */
-       const fullProps = await buildTicketFullProps({
-  deal,
-  lineItem: li,
-  dealId,
-  lineItemId: li.id,
-  lineItemKey,
-  ticketKey: key,
-  expectedYMD: expectedYmd,
-  orderedYMD: null,
-});
+// Existe forecast => STAGE-ONLY (no tocamos contenido)
+const existing = existingForecast;
 
 const patch = {};
 
-// stage
+// ✅ pipeline correcto según modalidad
+const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
+if (String(existing?.properties?.hs_pipeline || '') !== String(hsPipeline)) {
+  patch.hs_pipeline = String(hsPipeline);
+}
+
+// ✅ stage correcto según bucket dealstage
 if (String(existing?.properties?.hs_pipeline_stage || '') !== String(targetStage)) {
   patch.hs_pipeline_stage = String(targetStage);
 }
 
-// fecha
-if (toYmd(existing?.properties?.fecha_resolucion_esperada) !== String(expectedYmd)) {
-  patch.fecha_resolucion_esperada = String(expectedYmd);
-}
-
-// subject (buildTicketFullProps lo construye)
-if (String(existing?.properties?.subject || '').trim() !== String(fullProps.subject || '').trim()) {
-  patch.subject = String(fullProps.subject || '');
-}
-
-// key (solo si falta)
+// ✅ compat legacy: si falta of_ticket_key, lo seteamos (no cambia contenido)
 if (!String(existing?.properties?.of_ticket_key || '').trim()) {
   patch.of_ticket_key = String(key);
 }
 
-// resto del payload, solo si cambia
-for (const [k, v] of Object.entries(fullProps)) {
-  const cur = String(existing?.properties?.[k] ?? '');
-  const nxt = String(v ?? '');
-  if (cur !== nxt) patch[k] = nxt;
-}
+// 🚫 NO tocar subject, fecha_resolucion_esperada, ni fullProps.
 
 if (Object.keys(patch).length) {
   await updateTicket(existing.id, patch);
   updated++;
   changed = true;
 }
-    }
+}
 
     // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys
     for (const t of forecastTickets) {

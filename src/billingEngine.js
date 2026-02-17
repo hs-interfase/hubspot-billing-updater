@@ -212,7 +212,7 @@ export function getEffectiveBillingConfig(lineItem) {
   const maxOccurrences =
     numberOfPayments && Number.isFinite(numberOfPayments)
       ? numberOfPayments
-      : 24;
+      : null;
 
   console.log('[getEffectiveBillingConfig][SUMMARY]', {
     lineItemId: lineItem.id,
