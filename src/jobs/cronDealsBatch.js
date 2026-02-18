@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
 import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
+import crypto from "node:crypto";
+import logger from "../lib/logger.js"
+
 
 // -------------------- Paths / Config --------------------
 const STATE_PATH =
@@ -50,6 +53,15 @@ const SORTS = [
   { propertyName: "hs_lastmodifieddate", direction: "DESCENDING" },
 ];
 
+let lastCtx = {
+  where: null,
+  dealId: null,
+  mirrorId: null,
+  ticketId: null,
+  lineItemId: null,
+  lineItemKey: null,
+};
+
 
 // -------------------- Helpers --------------------
 function ensureDir(p) {
@@ -69,7 +81,11 @@ function acquireLock({ ttlMs = LOCK_TTL_MS } = {}) {
       const stat = fs.statSync(LOCK_PATH);
       const age = Date.now() - stat.mtimeMs;
       if (age > ttlMs) {
-        console.warn(`[cron] stale lock (${Math.round(age / 1000)}s) -> removing`);
+const lockAgeSec = Math.round(age / 1000);
+logger.warn(
+  { lockAgeSec, lockPath: LOCK_PATH, ttlMs },
+  "Stale lock detected -> removing"
+);
         try { fs.unlinkSync(LOCK_PATH); } catch {}
       } else {
         return false;
@@ -141,6 +157,7 @@ function lookbackMs(days) {
 function ymdToMsUTC(ymd) {
   return String(Date.parse(`${ymd}T00:00:00.000Z`));
 }
+
 function addDaysYMD(ymd, days) {
   const d = new Date(`${ymd}T00:00:00.000Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -249,11 +266,14 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
   const today = getTodayYMD();
   const mode = modeOverride || defaultModeForToday();
   const todayPlus30 = addDaysYMD(today, 30);
+  const jobRunId = crypto.randomUUID();
+  logger.info({ jobRunId }, "Cron started");
+  lastCtx = { ...lastCtx, where: "runDealsBatchCron.start", dealId: null, mirrorId: null };
 
-  if (!acquireLock()) {
-    console.warn("[cron] lock present -> skip");
-    return { skipped: true };
-  }
+if (!acquireLock()) {
+  logger.warn({ jobRunId, mode, reason: "lock_present" }, "[cronDealsBatch] Cron skipped (lock present)");
+  return { skipped: true };
+}
 
   let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
@@ -285,6 +305,7 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
 
 if (onlyDealId) {
   const dealId = String(onlyDealId); 
+lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirrorId: null };
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const name = deal?.properties?.dealname || dealId;
 
@@ -299,6 +320,7 @@ if (onlyDealId) {
   }
 
   appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
+  lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
   if (!dry) await runPhasesForDeal({ deal, lineItems });
   appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
 
@@ -316,9 +338,11 @@ if (onlyDealId) {
     });
   } else {
     try {
+      lastCtx = { ...lastCtx, where: "onlyDealId.mirror.getDealWithLineItems", dealId, mirrorId: String(mirrorId) };
       const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
       if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
         appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        lastCtx = { ...lastCtx, where: "onlyDealId.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
         if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
         appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
       } else {
@@ -480,6 +504,9 @@ if (onlyDealId) {
       const name = item.summary?.properties?.dealname || dealId;
 
       try {
+        lastCtx = { ...lastCtx, where: "processDeal.start", dealId, mirrorId: null };
+        logger.info({ dealId, jobRunId, mode }, "[cronDealsBatch] Processing deal");
+        lastCtx = { ...lastCtx, where: "batch.getDealWithLineItems", dealId };
         const { deal, lineItems } = await getDealWithLineItems(dealId);
 
         if (!Array.isArray(lineItems) || lineItems.length === 0) {
@@ -509,6 +536,7 @@ if (onlyDealId) {
 
         appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
 
+        lastCtx = { ...lastCtx, where: "batch.runPhasesForDeal", dealId };
         if (!dry) await runPhasesForDeal({ deal, lineItems });
 
         ok++;
@@ -529,9 +557,11 @@ if (!mirrorId) {
   });
 } else {
   try {
+    lastCtx = { ...lastCtx, where: "batch.mirror.getDealWithLineItems", dealId, mirrorId: String(mirrorId) };
     const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
     if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
       appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+      lastCtx = { ...lastCtx, where: "batch.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
       if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
       appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
     } else {
@@ -547,6 +577,7 @@ if (!mirrorId) {
         // retry once
         try {
           appendAudit({ at: new Date().toISOString(), type: "warn", where: "deal_run", dealId, dealname: name, msg: `retry_once: ${e1?.message || String(e1)}`, mode });
+          lastCtx = { ...lastCtx, where: "retry.getDealWithLineItems", dealId };
           const { deal, lineItems } = await getDealWithLineItems(dealId);
 
           if (!Array.isArray(lineItems) || lineItems.length === 0) {
@@ -564,6 +595,7 @@ if (!mirrorId) {
             continue;
           }
 
+lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
           if (!dry) await runPhasesForDeal({ deal, lineItems });
 
           ok++;
@@ -594,11 +626,13 @@ if (!mirrorId) {
       stateSnapshot: state,
     });
 
-    console.log("[cron] done", { mode, processed, ok, failed, skippedMirror, skippedNoLI });
+    logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "[cronDealsBatch] Finished processing all deals");
     return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
   } finally {
     releaseLock();
+    logger.info({ jobRunId }, "Cron finished")
   }
+  lastCtx = { where: ".start", dealId: null, ticketId: null, lineItemId: null, lineItemKey: null };
 }
 
 // -------------------- CLI --------------------
@@ -624,9 +658,17 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   })
     .then(() => process.exit(0))
  .catch((e) => {
-  console.error("[cron] fatal:", e?.message || e);
-  process.exit(0); // no romper
-});
+   logger.error(
+     {
+       where: "fatal",
+       lastCtx,
+       error: e?.message || String(e),
+       stack: e?.stack,
+     },
+     "[cronDealsBatch] Fatal error"
+   );
+   process.exit(0); // no romper
+ });
 
 }
 

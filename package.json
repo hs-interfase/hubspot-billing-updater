@@ -4,12 +4,12 @@
   "description": "conexión a API de hubspot para actualizar fecha y mensaje de aviso de facturación",
   "type": "module",
   "main": "index.js",
-"scripts": {
-  "dev": "vercel dev",
-  "run:billing": "node ./src/runBilling.js",
-  "run:won": "node ./src/runBilling.js --allWon",
-  "test:idempotency": "node ./src/__tests__/ticketKeyIdempotency.js"
-},
+  "scripts": {
+    "dev": "vercel dev",
+    "run:billing": "node ./src/runBilling.js",
+    "run:won": "node ./src/runBilling.js --allWon",
+    "test:idempotency": "node ./src/__tests__/ticketKeyIdempotency.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Michellefsd/hubspot-billing-updater.git"
@@ -24,6 +24,8 @@
   "dependencies": {
     "@hubspot/api-client": "^13.4.0",
     "axios": "^1.7.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3"
   }
 }
