@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "start": "node server.js",
     "dev": "vercel dev",
     "run:billing": "node ./src/runBilling.js",
     "run:won": "node ./src/runBilling.js --allWon",
@@ -21,6 +22,7 @@
     "@logtail/pino": "^0.5.7",
     "axios": "^1.7.0",
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
     "pino": "^10.3.1"
   },
   "devDependencies": {
