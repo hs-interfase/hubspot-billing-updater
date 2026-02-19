@@ -4,7 +4,7 @@ import { runPhasesForDeal } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
 import { fileURLToPath } from 'url';
 import { resolve } from 'path';
-import logger from '../lib/logger.js';
+import logger from "../lib/logger.js";
 
 /**
  * Modo de ejecución:
@@ -179,18 +179,21 @@ if (__filename === argvPath) {
 
     if (args.help) {
       printHelp();
-      process.exit(0);
+     process.exitCode = 0;
+       return; // o simplemente no hacer nada, el proceso termina solo
     }
 
-    runBilling(args).catch((err) => {
-      logger.error({ module: 'runBilling', err }, '[runBilling] Error fatal');
-      printHelp();
-      process.exit(1);
-    });
+try {
+       await runBilling(args);
+     } catch (err) {
+       logger.error({ module: 'runBilling', err }, 'cron_failed');
+       process.exitCode = 1;
+     }
   } catch (err) {
     logger.error({ module: 'runBilling', err }, '[runBilling] Error en parseArgs');
     printHelp();
-    process.exit(1);
+     process.exitCode = 1;
+
   }
 }
 

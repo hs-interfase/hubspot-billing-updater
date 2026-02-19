@@ -1,7 +1,5 @@
 // src/utils/hubspotErrorCollector.js
-import crypto from "node:crypto";
 import { hubspotClient } from "../hubspotClient.js";
-import logger from "../../lib/logger.js";
 
 // ---- Config ----
 const FLUSH_MS = Number(process.env.BILLING_ERR_FLUSH_MS || 1500);

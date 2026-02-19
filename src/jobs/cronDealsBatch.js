@@ -7,7 +7,7 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
-import logger from "../lib/logger.js"
+import logger from "../../lib/logger.js";
 
 
 // -------------------- Paths / Config --------------------
@@ -633,8 +633,7 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
       stateSnapshot: state,
     });
 
-    logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "[cronDealsBatch] Finished processing all deals");
-    return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
+   return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
 } finally {
   try {
     await flushHubSpotErrors();
@@ -647,6 +646,7 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
   }
 
   releaseLock();
+  logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
   logger.info({ jobRunId }, "Cron finished");
 }
 
@@ -668,25 +668,16 @@ function parseArgs(argv) {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { once, mode, deal, dry } = parseArgs(process.argv.slice(2));
-  runDealsBatchCron({
+  try {
+   await runDealsBatchCron({
     modeOverride: mode,
     onlyDealId: deal,
     once,
     dry,
   })
-    .then(() => process.exit(0))
- .catch((e) => {
-   logger.error(
-     {
-       where: "fatal",
-       lastCtx,
-       error: e?.message || String(e),
-       stack: e?.stack,
-     },
-     "[cronDealsBatch] Fatal error"
-   );
-   process.exit(0); // no romper
- });
-
+  } catch (e) {
+    logger.error({ where: "fatal", lastCtx, error: e?.message || String(e), stack: e?.stack }, "cron_failed");
+   process.exitCode = 1;
+ }
 }
 

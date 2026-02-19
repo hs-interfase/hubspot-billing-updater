@@ -423,6 +423,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
 
   for (const li of uyLineItems) {
+     try {
     const srcPropsLi = li.properties || {};
 
     const props = {};
@@ -492,12 +493,16 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, lineItemId: id, action, pyOrigenId: props.of_line_item_py_origen_id },
       'UY line item procesado'
     );
+      } catch (err) {
+     logger.error({ module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, lineItemId: li?.id, err }, 'unit_failed');
+   }
   }
 
   logger.info(
     { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, createdLineItems },
     'Upsert de líneas completado'
   );
+
 
   // 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
   try {

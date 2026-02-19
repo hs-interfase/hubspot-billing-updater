@@ -91,6 +91,7 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
   let orphanDeleted = 0;
 
   for (const t of forecastTickets) {
+    try {
     const ticketId = t.id;
     const ticketKey = String(t?.properties?.of_ticket_key || '').trim();
     if (!ticketKey) continue;
@@ -105,7 +106,9 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
         { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId, ticketKey },
         'Orphan forecast ticket eliminado'
       );
-    }
+    }} catch (err) {
+     logger.error({ module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t?.id, err }, 'unit_failed');
+   }
   }
 
   logger.info(
@@ -113,6 +116,7 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
     'Cleanup de orphans completado'
   );
 }
+
 
 function isAutomatedBilling(lineItem) {
   const p = lineItem?.properties || {};
@@ -393,6 +397,7 @@ if (empresaId) {
   await cleanupOrphanForecastTicketsForDeal({ dealId, validLiks });
 
   for (const li of lineItems || []) {
+    try {
     let changed = false;
 
     const p = li?.properties || {};
@@ -603,6 +608,7 @@ if (!existingForecast) {
       const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
       if (!k) continue;
       if (!desiredKeys.has(k)) {
+        try {
         logger.info(
           { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, ticketKey: k },
           'Eliminando ticket forecast sobrante'
@@ -610,12 +616,18 @@ if (!existingForecast) {
         await deleteTicket(t.id);
         deleted++;
         changed = true;
+        } catch (err) {
+       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
+     }
       }
     }
 
     if (changed) {
       await updateLineItemLastGeneratedAt(li.id);
     }
+    } catch (err) {
+     logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');
+   }
   }
 
   logger.info(

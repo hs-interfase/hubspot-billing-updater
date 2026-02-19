@@ -7,11 +7,9 @@ import { runPhase3 } from './phase3.js';
 
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from '../hubspotClient.js';
-import { installHubSpotConsoleCollector } from '../utils/hubspotErrorCollector.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 
-installHubSpotConsoleCollector();
 
 function formatHsLastModified(raw) {
   if (!raw) return '(no value)';

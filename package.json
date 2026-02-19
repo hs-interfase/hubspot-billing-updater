@@ -8,24 +8,20 @@
     "dev": "vercel dev",
     "run:billing": "node ./src/runBilling.js",
     "run:won": "node ./src/runBilling.js --allWon",
-    "test:idempotency": "node ./src/__tests__/ticketKeyIdempotency.js"
+    "test:idempotency": "node ./src/__tests__/ticketKeyIdempotency.js",
+    "cron": "node ./src/jobs/cronDealsBatch.js",
+    "cron:pretty": "node -e \"process.env.PRETTY_LOGS='true'; import('./src/jobs/cronDealsBatch.js')\""
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Michellefsd/hubspot-billing-updater.git"
+  "overrides": {
+    "strip-json-comments": "4.0.0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/Michellefsd/hubspot-billing-updater/issues"
-  },
-  "homepage": "https://github.com/Michellefsd/hubspot-billing-updater#readme",
   "dependencies": {
     "@hubspot/api-client": "^13.4.0",
     "axios": "^1.7.0",
     "dotenv": "^17.2.3",
-    "pino": "^10.3.1",
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
     "pino-pretty": "^13.1.3"
   }
 }

@@ -17,7 +17,7 @@
  */
 
 import { processUrgentLineItem, processUrgentTicket } from "../src/services/urgentBillingService.js";
-import logger from "../lib/logger.js";
+import logger from "../../lib/logger.js";
 
 /**
  * Normaliza distintos valores truthy que pueden venir en webhooks.
