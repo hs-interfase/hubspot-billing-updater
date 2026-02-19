@@ -1,6 +1,29 @@
 // src/billingEngine.js
 import { hubspotClient } from './hubspotClient.js';
 import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
+import logger from "../lib/logger.js";
+import { reportHubSpotError } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
+
+/**
+ * Reporta a HubSpot solo errores accionables (4xx excepto 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte al objeto.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    // Sin status conocido → reportar por precaución
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) {
+    // Transitorio (rate-limit o error de servidor) → no spamear HubSpot
+    return;
+  }
+  if (status >= 400 && status < 500) {
+    // Accionable: configuración inválida, objeto no existe, permisos, etc.
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
 
 /**
  * =============================================================================
@@ -126,23 +149,23 @@ function getIntervalFromFrequency(freqRaw) {
 export function getEffectiveBillingConfig(lineItem) {
   const p = lineItem.properties || {};
 
-  console.log('[getEffectiveBillingConfig][RAW]', {
+  logger.debug({
+    module: 'billingEngine',
+    fn: 'getEffectiveBillingConfig',
     lineItemId: lineItem.id,
     name: p.name,
     recurringbillingfrequency: p.recurringbillingfrequency,
     hs_recurring_billing_frequency: p.hs_recurring_billing_frequency,
     hs_recurring_billing_start_date: p.hs_recurring_billing_start_date,
     hs_recurring_billing_number_of_payments: p.hs_recurring_billing_number_of_payments,
-    hs_recurring_billing_period: p.hs_recurring_billing_period, // solo debug
+    hs_recurring_billing_period: p.hs_recurring_billing_period,
     number_of_payments: p.number_of_payments,
     frecuencia_de_facturacion: p.frecuencia_de_facturacion,
     irregular: p.irregular,
-
-    // ✅ NUEVO (anchor-world)
     fecha_irregular_puntual: p.fecha_irregular_puntual,
     facturar_ahora: p.facturar_ahora,
     billing_anchor_date: p.billing_anchor_date,
-  });
+  }, '[getEffectiveBillingConfig] RAW props');
 
   // ¿Es irregular?
   const freqCustom = (p.frecuencia_de_facturacion ?? '').toString().trim().toLowerCase();
@@ -156,7 +179,6 @@ export function getEffectiveBillingConfig(lineItem) {
     irregularFlagRaw === 'si' ||
     irregularFlagRaw === 'yes';
 
-  // ✅ NUEVO: flags/fechas útiles para decisiones en updateLineItemSchedule
   const facturarAhoraRaw = (p.facturar_ahora ?? '').toString().trim().toLowerCase();
   const isFacturarAhora =
     facturarAhoraRaw === 'true' ||
@@ -169,13 +191,12 @@ export function getEffectiveBillingConfig(lineItem) {
 
   // 🔑 Frecuencia efectiva
   const freqKey =
-    p.recurringbillingfrequency ||          // internal values: monthly, weekly...
-    p.hs_recurring_billing_frequency ||     // por si HS rellena esta
-    '';                                     // ✅ no usamos frecuencia_de_facturacion aquí
+    p.recurringbillingfrequency ||
+    p.hs_recurring_billing_frequency ||
+    '';
 
   const frequency = freqKey.toString().trim();
 
-  // ✅ Si frequency es vacío/null y NO es irregular → es pago único
   let interval = null;
   if (!frequency && !isIrregular) {
     interval = null; // pago único
@@ -187,17 +208,19 @@ export function getEffectiveBillingConfig(lineItem) {
 
   // Fecha de inicio
   const startRaw =
-    p.hs_recurring_billing_start_date ||    // ✅ PRIMERO el nombre oficial de HubSpot
+    p.hs_recurring_billing_start_date ||
     p.recurringbillingstartdate ||
     p.fecha_inicio_de_facturacion;
 
   const startDate = parseLocalDate(startRaw);
 
-  console.log('[getEffectiveBillingConfig][DATE]', {
+  logger.debug({
+    module: 'billingEngine',
+    fn: 'getEffectiveBillingConfig',
     lineItemId: lineItem.id,
     startRaw,
     parsedStartDate: startDate ? formatDateISO(startDate) : null,
-  });
+  }, '[getEffectiveBillingConfig] DATE parse');
 
   // Número de pagos
   const numRaw =
@@ -214,7 +237,9 @@ export function getEffectiveBillingConfig(lineItem) {
       ? numberOfPayments
       : null;
 
-  console.log('[getEffectiveBillingConfig][SUMMARY]', {
+  logger.debug({
+    module: 'billingEngine',
+    fn: 'getEffectiveBillingConfig',
     lineItemId: lineItem.id,
     isIrregular,
     frequency,
@@ -222,15 +247,14 @@ export function getEffectiveBillingConfig(lineItem) {
     startDate: startDate ? formatDateISO(startDate) : null,
     numberOfPayments,
     maxOccurrences,
-
     isFacturarAhora,
     fechaIrregularPuntualRaw,
-  });
+  }, '[getEffectiveBillingConfig] SUMMARY');
 
   return {
     isIrregular,
-    isFacturarAhora,          
-    fechaIrregularPuntualRaw, 
+    isFacturarAhora,
+    fechaIrregularPuntualRaw,
     frequency,
     interval,
     startDate,
@@ -242,7 +266,7 @@ export function getEffectiveBillingConfig(lineItem) {
 // MIGRACIÓN: Anchor-based. Calendario queda LEGACY comentado (no se usa / no se escribe).
 export async function updateLineItemSchedule(lineItem) {
   if (!lineItem || !lineItem.id) {
-    console.warn('[updateLineItemSchedule] lineItem inválido:', lineItem);
+    logger.warn({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItem }, 'lineItem inválido recibido');
     return lineItem;
   }
 
@@ -252,29 +276,36 @@ export async function updateLineItemSchedule(lineItem) {
   // =========================================================
   // REGLA PREDOMINANTE:
   // si fechas_completas = true => billing_next_date = '' y salir
-  // (no calcular nada más)
   // =========================================================
   const fechasCompletasFlag =
     String(p.fechas_completas || '').trim().toLowerCase() === 'true';
 
   if (fechasCompletasFlag) {
-    const updates = { billing_next_date: '', };
+    const updates = { billing_next_date: '' };
 
-    // opcional debug
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log('[updateLineItemSchedule] fechas_completas=true => billing_next_date=""', {
-        lineItemId: lineItem.id,
+    logger.debug({
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
+      lineItemId: lineItem.id,
+    }, 'fechas_completas=true => billing_next_date vacío, saliendo');
+
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
+        properties: updates,
+      });
+    } catch (err) {
+      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: fechas_completas path');
+      reportIfActionable({
+        objectType: 'line_item',
+        objectId: lineItem.id,
+        message: `line_item_update_failed (fechas_completas): ${err?.message || err}`,
+        err,
       });
     }
-
-    await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
-      properties: updates,
-    });
 
     lineItem.properties = { ...p, ...updates };
     return lineItem;
   }
-
 
   const isIrregular = config?.isIrregular === true;
   const interval = config?.interval ?? null;
@@ -292,26 +323,35 @@ export async function updateLineItemSchedule(lineItem) {
     ((p.fecha_irregular_puntual ?? '').toString().slice(0, 10) || null);
 
   // --------------------------------------------
-  // 0) Irregular (override puntual) - MANUAL NO EXISTE
+  // 0) Irregular (override puntual)
   // --------------------------------------------
-  // Regla:
-  // - irregular=true + fecha_irregular_puntual => override puntual del next date
-  // - irregular=true + SIN fecha_irregular_puntual => ESTADO INVÁLIDO -> billing_error
   if (isIrregular) {
     if (fechaIrregularPuntualRaw) {
       const updatesIrregular = {
         billing_next_date: fechaIrregularPuntualRaw,
-        billing_error: '', // limpia error si estaba
+        billing_error: '',
       };
 
-      console.log('[updateLineItemSchedule] irregular puntual → set billing_next_date', {
+      logger.info({
+        module: 'billingEngine',
+        fn: 'updateLineItemSchedule',
         lineItemId: lineItem.id,
         billing_next_date: fechaIrregularPuntualRaw,
-      });
+      }, 'irregular puntual → set billing_next_date');
 
-      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-        properties: updatesIrregular,
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+          properties: updatesIrregular,
+        });
+      } catch (err) {
+        logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: irregular puntual path');
+        reportIfActionable({
+          objectType: 'line_item',
+          objectId: lineItem.id,
+          message: `line_item_update_failed (irregular puntual): ${err?.message || err}`,
+          err,
       });
+      }
 
       lineItem.properties = { ...p, ...updatesIrregular };
       return lineItem;
@@ -320,15 +360,27 @@ export async function updateLineItemSchedule(lineItem) {
     const msg =
       'irregular=true pero falta fecha_irregular_puntual. Completar la fecha puntual o desactivar irregular.';
 
-    console.warn('[updateLineItemSchedule] ⚠️ irregular=true sin fecha puntual (manual no soportado)', {
+    logger.warn({
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
       lineItemId: lineItem.id,
-    });
+    }, 'irregular=true sin fecha puntual (manual no soportado)');
 
     const updatesError = { billing_error: msg };
 
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updatesError,
-    });
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+        properties: updatesError,
+      });
+    } catch (err) {
+      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: irregular sin fecha puntual');
+      reportIfActionable({
+        objectType: 'line_item',
+        objectId: lineItem.id,
+        message: `line_item_update_failed (irregular sin fecha_irregular_puntual): ${err?.message || err}`,
+        err,
+      });
+    }
 
     lineItem.properties = { ...p, ...updatesError };
     return lineItem;
@@ -337,9 +389,6 @@ export async function updateLineItemSchedule(lineItem) {
   // --------------------------------------------
   // 1) Validación: falta startDate
   // --------------------------------------------
-  // Regla nueva:
-  // - SOLO permitimos "usar hoy" si es pago único + facturar_ahora=true
-  // - En cualquier otro caso: WARN + billing_error (para notificar al owner)
   if (!startDate) {
     const isOneTime = !interval;
 
@@ -358,14 +407,26 @@ export async function updateLineItemSchedule(lineItem) {
         updatesUrgentOneTime.fecha_inicio_de_facturacion = iso;
       }
 
-      console.log('[updateLineItemSchedule] ✅ pago único urgente sin startDate → usando HOY', {
+      logger.info({
+        module: 'billingEngine',
+        fn: 'updateLineItemSchedule',
         lineItemId: lineItem.id,
         today: todayYmd,
-      });
+      }, 'pago único urgente sin startDate → usando HOY');
 
-      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-        properties: updatesUrgentOneTime,
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+          properties: updatesUrgentOneTime,
+        });
+      } catch (err) {
+        logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: pago único urgente');
+        reportIfActionable({
+          objectType: 'line_item',
+          objectId: lineItem.id,
+          message: `line_item_update_failed (pago único urgente): ${err?.message || err}`,
+          err,
       });
+      }
 
       lineItem.properties = { ...p, ...updatesUrgentOneTime };
       return lineItem;
@@ -374,18 +435,30 @@ export async function updateLineItemSchedule(lineItem) {
     const msg =
       'Falta fecha de inicio de facturación en el line item. Setear hs_recurring_billing_start_date (Start date) para calcular próximas fechas.';
 
-    console.warn('[updateLineItemSchedule] ⚠️ Falta startDate → no se calcula schedule', {
+    logger.warn({
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
       lineItemId: lineItem.id,
       isOneTime,
       isFacturarAhora,
       frequency: config?.frequency,
-    });
+    }, 'Falta startDate → no se calcula schedule');
 
     const updatesError = { billing_error: msg };
 
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updatesError,
-    });
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+        properties: updatesError,
+      });
+    } catch (err) {
+      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: falta startDate');
+      reportIfActionable({
+        objectType: 'line_item',
+        objectId: lineItem.id,
+        message: `line_item_update_failed (falta startDate): ${err?.message || err}`,
+        err,
+      });
+    }
 
     lineItem.properties = { ...p, ...updatesError };
     return lineItem;
@@ -418,7 +491,7 @@ export async function updateLineItemSchedule(lineItem) {
 
     const updatesOneTime = {
       recurringbillingstartdate: iso,
-      billing_next_date: nextYmd, // '' => null en HubSpot
+      billing_next_date: nextYmd,
       billing_error: '',
     };
 
@@ -426,15 +499,27 @@ export async function updateLineItemSchedule(lineItem) {
       updatesOneTime.fecha_inicio_de_facturacion = iso;
     }
 
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log(`[billing_next_date][ONE_TIME] LI ${lineItem.id} => ${nextYmd || '(null)'}`, {
-        last_ticketed_date: lastTicketedYmd || null,
+    logger.debug({
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
+      lineItemId: lineItem.id,
+      nextYmd: nextYmd || '(null)',
+      last_ticketed_date: lastTicketedYmd || null,
+    }, '[billing_next_date] ONE_TIME');
+
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+        properties: updatesOneTime,
+      });
+    } catch (err) {
+      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: pago único con startDate');
+      reportIfActionable({
+        objectType: 'line_item',
+        objectId: lineItem.id,
+        message: `line_item_update_failed (pago único): ${err?.message || err}`,
+        err,
       });
     }
-
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updatesOneTime,
-    });
 
     lineItem.properties = { ...p, ...updatesOneTime };
     return lineItem;
@@ -443,20 +528,11 @@ export async function updateLineItemSchedule(lineItem) {
   // --------------------------------------------
   // 3) Recurrente anchor-based (sin calendario)
   // --------------------------------------------
-  // NOTE (post-migration):
-  // Esta lógica asume tickets parciales.
-  // En la migración histórica se debe recalcular:
-  // - pagos_emitidos desde tickets reales
-  // - pagos_restantes
-  // - billing_anchor_date efectivo
-  // y luego regenerar billing_next_date en batch.
-  
   const updatesRecurring = {
     billing_error: '',
   };
 
   // ✅ Inicializar billing_anchor_date solo si está vacío
-  // Preferimos: startDate (ya parseado) como fallback seguro si HS no trae string.
   try {
     const currentAnchor = (p.billing_anchor_date ?? '').toString().slice(0, 10) || '';
     const startFromHS = (p.hs_recurring_billing_start_date ?? '').toString().slice(0, 10) || '';
@@ -465,18 +541,26 @@ export async function updateLineItemSchedule(lineItem) {
     if (!currentAnchor && (startFromHS || startFallback)) {
       updatesRecurring.billing_anchor_date = startFromHS || startFallback;
 
-      if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[updateLineItemSchedule] ✅ billing_anchor_date inicializada', {
-          lineItemId: lineItem.id,
-          billing_anchor_date: updatesRecurring.billing_anchor_date,
-        });
-      }
+      logger.debug({
+        module: 'billingEngine',
+        fn: 'updateLineItemSchedule',
+        lineItemId: lineItem.id,
+        billing_anchor_date: updatesRecurring.billing_anchor_date,
+      }, 'billing_anchor_date inicializada');
     }
-  } catch (e) {
-    console.warn('[updateLineItemSchedule] ⚠️ no se pudo inicializar billing_anchor_date', {
+  } catch (err) {
+    logger.warn({
+      err,
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
       lineItemId: lineItem.id,
-      error: e?.message || e,
-    });
+    }, 'no se pudo inicializar billing_anchor_date');
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: lineItem.id,
+      message: `billing_anchor_date_init_failed: ${err?.message || err}`,
+      err,
+      });
   }
 
   // Anchor efectivo para calcular next
@@ -488,116 +572,74 @@ export async function updateLineItemSchedule(lineItem) {
     (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
     formatDateISO(startDate);
 
-/*// Piso duro: no permitir next antes de startdate
-const startYmd = formatDateISO(startDate);
-let floorYmd = effectiveTodayYmd;
-if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+  // Piso duro: no permitir next antes de startdate
+  const startYmd = formatDateISO(startDate);
+  let floorYmd = effectiveTodayYmd;
+  if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
 
-const nextYmd = computeNextFromInterval({
-  startRaw: anchorStartRaw,
-  interval,
-  todayYmd: floorYmd,
-  addInterval,
-  formatDateISO,
-  parseLocalDate,
-});
+  // =====================================================
+  // ✅ CAP POR PLAN FIJO (maxOccurrences)
+  // =====================================================
+  const isAutoRenewMode =
+    String(p.renovacion_automatica || '').toLowerCase() === 'true';
 
+  const maxOccurrences =
+    !isAutoRenewMode && Number.isFinite(Number(config?.maxOccurrences))
+      ? Number(config.maxOccurrences)
+      : null;
 
-updatesRecurring.billing_next_date = nextYmd || '';
+  let lastPlannedYmd = null;
 
-if (process.env.DBG_PHASE1 === 'true') {
-  console.log(`[billing_next_date][ANCHOR] LI ${lineItem.id} => ${nextYmd || '(null)'}`, {
-    anchorStartRaw,
-    effectiveTodayYmd,
-    startYmd,
-    floorYmd,
-    last_ticketed_date: lastTicketedYmd || null,
-  });
-}
-*/
-// Piso duro: no permitir next antes de startdate
-const startYmd = formatDateISO(startDate);
-let floorYmd = effectiveTodayYmd;
-if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+  if (maxOccurrences && maxOccurrences > 0 && interval && startYmd) {
+    let cur = parseLocalDate(startYmd);
+    for (let i = 1; i < maxOccurrences; i++) {
+      cur = addInterval(cur, interval);
+    }
+    lastPlannedYmd = formatDateISO(cur);
 
-// =====================================================
-// ✅ CAP POR PLAN FIJO (maxOccurrences)
-// - Si ya se ticketearon todas las ocurrencias => billing_next_date = ''
-// - Y aunque computeNext devuelva una fecha > lastPlanned, se capea
-// =====================================================
-// Solo aplicar CAP si NO es auto-renew
-const isAutoRenewMode =
-  String(p.renovacion_automatica || '').toLowerCase() === 'true';
+    if (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) {
+      updatesRecurring.billing_next_date = '';
 
-const maxOccurrences =
-  !isAutoRenewMode && Number.isFinite(Number(config?.maxOccurrences))
-    ? Number(config.maxOccurrences)
-    : null;
-
-
-let lastPlannedYmd = null;
-
-// Solo aplica a recurrentes (tenés interval acá) y si hay tope
-if (
-  maxOccurrences &&
-  maxOccurrences > 0 &&
-  interval &&
-  startYmd
-) {
-  // lastPlanned = start + (N-1) intervalos
-  let cur = parseLocalDate(startYmd);
-  for (let i = 1; i < maxOccurrences; i++) {
-    cur = addInterval(cur, interval);
-  }
-  lastPlannedYmd = formatDateISO(cur);
-
-  // Si el último ticket promovido ya llegó al final => next null
-  if (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) {
-    updatesRecurring.billing_next_date = '';
-
-    if (process.env.DBG_PHASE1 === 'true') {
-      console.log(`[billing_next_date][CAP_END] LI ${lineItem.id} => (null)`, {
+      logger.debug({
+        module: 'billingEngine',
+        fn: 'updateLineItemSchedule',
+        lineItemId: lineItem.id,
         startYmd,
         maxOccurrences,
         lastPlannedYmd,
         last_ticketed_date: lastTicketedYmd,
-      });
+      }, '[billing_next_date] CAP_END → null');
     }
   }
-}
 
-// Si NO quedó nulo por CAP_END, calculamos next normal
-if (updatesRecurring.billing_next_date !== '') {
-  const nextYmd = computeNextFromInterval({
-    // ⚠️ Para plan fijo, usá startYmd como base (más determinista que anchor si cambia)
-    startRaw: startYmd,
-    interval,
-    todayYmd: floorYmd,
-    addInterval,
-    formatDateISO,
-    parseLocalDate,
-  });
+  // Si NO quedó nulo por CAP_END, calculamos next normal
+  if (updatesRecurring.billing_next_date !== '') {
+    const nextYmd = computeNextFromInterval({
+      startRaw: startYmd,
+      interval,
+      todayYmd: floorYmd,
+      addInterval,
+      formatDateISO,
+      parseLocalDate,
+    });
 
-  let cappedNext = nextYmd || '';
+    let cappedNext = nextYmd || '';
 
-if (lastPlannedYmd) {
-  if (
-    (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) ||
-    (cappedNext && cappedNext > lastPlannedYmd)
-  ) {
-    cappedNext = '';
-  }
-}
+    if (lastPlannedYmd) {
+      if (
+        (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) ||
+        (cappedNext && cappedNext > lastPlannedYmd)
+      ) {
+        cappedNext = '';
+      }
+    }
 
-updatesRecurring.billing_next_date = cappedNext;
-// Si el cálculo se pasa del fin del plan, null
-/*  const cappedNext =
-    lastPlannedYmd && nextYmd && nextYmd > lastPlannedYmd ? '' : (nextYmd || '');
+    updatesRecurring.billing_next_date = cappedNext;
 
-  updatesRecurring.billing_next_date = cappedNext;
-*/
-  if (process.env.DBG_PHASE1 === 'true') {
-    console.log(`[billing_next_date][ANCHOR_CAP] LI ${lineItem.id} => ${cappedNext || '(null)'}`, {
+    logger.debug({
+      module: 'billingEngine',
+      fn: 'updateLineItemSchedule',
+      lineItemId: lineItem.id,
       anchorStartRaw,
       effectiveTodayYmd,
       startYmd,
@@ -606,10 +648,9 @@ updatesRecurring.billing_next_date = cappedNext;
       maxOccurrences: maxOccurrences || null,
       lastPlannedYmd,
       rawNextYmd: nextYmd || null,
-    });
+      cappedNext: cappedNext || '(null)',
+    }, '[billing_next_date] ANCHOR_CAP');
   }
-}
-
 
   // Mantener coherencia de start date alias (sin calendario)
   const isoStart = formatDateISO(startDate);
@@ -619,15 +660,24 @@ updatesRecurring.billing_next_date = cappedNext;
     updatesRecurring.fecha_inicio_de_facturacion = isoStart;
   }
 
-  // Guard: skip if empty
   if (Object.keys(updatesRecurring).length === 0) {
-    console.log('[billingEngine] ⊘ SKIP_EMPTY_UPDATE: No recurring properties to update');
+    logger.debug({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItemId: lineItem.id }, 'SKIP_EMPTY_UPDATE: sin propiedades recurrentes a actualizar');
     return lineItem;
   }
 
-  await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-    properties: updatesRecurring,
-  });
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
+      properties: updatesRecurring,
+    });
+  } catch (err) {
+    logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: recurrente anchor-based');
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: lineItem.id,
+      message: `line_item_update_failed (recurrente anchor): ${err?.message || err}`,
+      err,
+      });
+  }
 
   lineItem.properties = { ...p, ...updatesRecurring };
   return lineItem;
@@ -635,14 +685,7 @@ updatesRecurring.billing_next_date = cappedNext;
 
 // ================================
 // Anchor-based counters & getters
-// (Calendario fecha_2..48 queda LEGACY comentado)
 // ================================
-
-// Devuelve la próxima fecha de facturación para un line item.
-// - NUEVO (anchor-based): usa billing_next_date como fuente de verdad.
-// - Si falta, calcula con billing_anchor_date + interval.
-// - Irregular: SOLO válido si hay fecha_irregular_puntual (no existe más “manual mode” sin fecha).
-// - Calendario fecha_2..48: LEGACY (no se usa / no se lee / no se escribe).
 
 function startOfDay(date) {
   const d = new Date(date);
@@ -650,9 +693,6 @@ function startOfDay(date) {
   return d;
 }
 
-// Devuelve la última fecha de facturación (la mayor < today) usando señales nuevas.
-// Antes: recorría todas las fechas del calendario.
-// Ahora: usa last_ticketed_date (máximo) como fuente de “última facturada”.
 export function computeLastBillingDateFromLineItems(lineItems, today = new Date()) {
   const todayStart = startOfDay(today);
   let maxPast = null;
@@ -673,11 +713,10 @@ export function computeLastBillingDateFromLineItems(lineItems, today = new Date(
     }
   }
 
-  return maxPast; // puede ser null si no hay last_ticketed_date
+  return maxPast;
 }
 
-// Anchor-based: colecta SOLO señales “nuevas”.
-// Dejar la función porque otras partes del archivo la llaman, pero ya no lee calendario.
+// Anchor-based: colecta SOLO señales "nuevas".
 function collectAllBillingDatesFromLineItem(lineItem) {
   const p = lineItem?.properties || {};
   const dates = [];
@@ -690,7 +729,6 @@ function collectAllBillingDatesFromLineItem(lineItem) {
     dates.push(d);
   };
 
-  // ✅ Señales actuales (anchor-based)
   add((p.last_ticketed_date || "").toString().slice(0, 10));
   add((p.billing_next_date || "").toString().slice(0, 10));
   add(p.fecha_inicio_de_facturacion || p.hs_recurring_billing_start_date);
@@ -698,9 +736,7 @@ function collectAllBillingDatesFromLineItem(lineItem) {
 
   // ---------------------------------------------------------
   // LEGACY (calendario) - NO SE USA en anchor-based
-  // for (let i = 2; i <= 48; i++) {
-  //   add(p[`fecha_${i}`]);
-  // }
+  // for (let i = 2; i <= 48; i++) { add(p[`fecha_${i}`]); }
   // ---------------------------------------------------------
 
   dates.sort((a, b) => a - b);
@@ -711,7 +747,7 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const p = lineItem?.properties || {};
 
   // 1) Respetar contadores: si ya se hicieron todos los pagos, no hay próxima fecha
-const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
+  const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(p.pagos_emitidos) || 0;
 
   if (total > 0 && emitidos >= total) {
@@ -721,7 +757,7 @@ const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   // todayYmd respetando el "today" recibido
   let todayYmd = getTodayYMD();
   if (today instanceof Date && !Number.isNaN(today.getTime())) {
-    todayYmd = formatDateISO(today); // YYYY-MM-DD
+    todayYmd = formatDateISO(today);
   }
 
   // 2) Fuente de verdad: billing_next_date (si es >= hoy, devolvemos eso)
@@ -730,7 +766,7 @@ const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
     return parseLocalDate(persisted);
   }
 
-  // 3) Irregular: SOLO si hay fecha_irregular_puntual futura (manual sin fecha ya no existe)
+  // 3) Irregular: SOLO si hay fecha_irregular_puntual futura
   const irregularRaw = (p.irregular ?? "").toString().trim().toLowerCase();
   const isIrregular =
     irregularRaw === "true" ||
@@ -750,35 +786,11 @@ const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const interval = config?.interval ?? null;
   const startDate = config?.startDate ?? null;
 
-  // 5) effectiveTodayYmd: si hay last_ticketed_date, la próxima debe ser desde +1 día
- /* const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
+  // 5) effectiveTodayYmd: frontera dura — NUNCA ir antes del último ticket emitido
+  const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
   let effectiveTodayYmd = todayYmd;
 
-  if (lastTicketedYmd) {
-    const d = parseLocalDate(lastTicketedYmd);
-    if (d && !Number.isNaN(d.getTime())) {
-      d.setDate(d.getDate() + 1);
-      const plusOne = formatDateISO(d);
-      if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
-    }
-  }
-    */
-   // 5) effectiveTodayYmd: frontera dura — NUNCA ir antes del último ticket emitido
-const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
-/*
-let effectiveTodayYmd = todayYmd;
-
-if (lastTicketedYmd) {
-  const d = parseLocalDate(lastTicketedYmd);
-  if (d && !Number.isNaN(d.getTime())) {
-    d.setDate(d.getDate() + 1);
-    const plusOne = formatDateISO(d);
-    if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne; 
-  }
-}
-*/
-
-  // 6) Pago único: si ya fue ticketiado -> no hay próxima. Si no, startDate si es >= effectiveToday.
+  // 6) Pago único
   if (!interval) {
     if (!startDate) return null;
     if (lastTicketedYmd) return null;
@@ -787,7 +799,7 @@ if (lastTicketedYmd) {
     return iso >= effectiveTodayYmd ? parseLocalDate(iso) : null;
   }
 
-  // 7) Recurrente anchor-based: computeNextFromInterval(anchorStart, interval, effectiveTodayYmd)
+  // 7) Recurrente anchor-based
   const anchorStartRaw =
     (p.billing_anchor_date || "").toString().slice(0, 10) ||
     (p.hs_recurring_billing_start_date || "").toString().slice(0, 10) ||
@@ -797,59 +809,25 @@ if (lastTicketedYmd) {
 
   if (!anchorStartRaw) return null;
 
-/*  const nextYmd = computeNextFromInterval({
+  // Piso duro: nunca antes del startDate real
+  const startYmd = startDate ? formatDateISO(startDate) : null;
+
+  let floorYmd = effectiveTodayYmd;
+  if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+
+  const nextYmd = computeNextFromInterval({
     startRaw: anchorStartRaw,
     interval,
-    todayYmd: effectiveTodayYmd,  
+    todayYmd: floorYmd,
     addInterval,
     formatDateISO,
     parseLocalDate,
   });
-*/
-// Piso duro: nunca antes del startDate real
-const startYmd = startDate ? formatDateISO(startDate) : null;
-
-let floorYmd = effectiveTodayYmd;
-if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
-
-const nextYmd = computeNextFromInterval({
-  startRaw: anchorStartRaw,
-  interval,
-  todayYmd: floorYmd,
-  addInterval,
-  formatDateISO,
-  parseLocalDate,
-});
-
-
-
 
   return nextYmd ? parseLocalDate(nextYmd) : null;
 
   // ---------------------------------------------------------
   // LEGACY (calendario + resolveNextBillingDate) - NO SE USA
-  //
-  // const allDates = collectAllBillingDatesFromLineItem(lineItem);
-  // const upcomingDates = (allDates || [])
-  //   .filter((d) => d instanceof Date && !Number.isNaN(d.getTime()))
-  //   .filter((d) => formatDateISO(d) >= todayYmd)
-  //   .map((d) => formatDateISO(d));
-  //
-  // const startRaw =
-  //   p.hs_recurring_billing_start_date ||
-  //   p.recurringbillingstartdate ||
-  //   p.fecha_inicio_de_facturacion ||
-  //   null;
-  //
-  // const nextLegacy = resolveNextBillingDate({
-  //   lineItemProps: p,
-  //   upcomingDates,
-  //   startRaw,
-  //   interval: config.interval,
-  //   addInterval,
-  // });
-  //
-  // return nextLegacy ? parseLocalDate(nextLegacy) : null;
   // ---------------------------------------------------------
 }
 
@@ -865,17 +843,14 @@ export function computeNextBillingDateFromLineItems(lineItems, today = new Date(
     }
   }
 
-  return minDate; // puede ser null si no hay ninguna fecha futura
+  return minDate;
 }
 
 /**
- * Contadores “simples” sin calendario:
+ * Contadores simples sin calendario:
  * - proximaFecha: usa getNextBillingDateForLineItem (anchor-based).
  * - ultimaFecha: usa last_ticketed_date.
- *
- * (Esto evita depender de fecha_2..48)
  */
-
 export function computeLineItemCounters(lineItem, today = new Date()) {
   const props = lineItem?.properties || {};
 
@@ -904,10 +879,6 @@ export function computeLineItemCounters(lineItem, today = new Date()) {
 
   // ---------------------------------------------------------
   // LEGACY (calendario) - NO SE USA
-  //
-  // const fechas = [];
-  // if (props.fecha_inicio_de_facturacion) { ... }
-  // for (let i = 2; i <= 48; i++) { ... }
   // ---------------------------------------------------------
 }
 
@@ -915,13 +886,11 @@ export function computeLineItemCounters(lineItem, today = new Date()) {
  * Variante con nombres de propiedades usados en tu CRM:
  * - facturacion_total_avisos, avisos_emitidos_facturacion, avisos_restantes_facturacion
  * - proximaFecha, ultimaFecha
- *
- * Sin calendario.
  */
 export function computeBillingCountersForLineItem(lineItem, today = new Date()) {
   const p = lineItem?.properties || {};
 
-const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
+  const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(p.pagos_emitidos) || 0;
   const restantes = total > emitidos ? total - emitidos : 0;
 
@@ -947,9 +916,5 @@ const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
 
   // ---------------------------------------------------------
   // LEGACY (calendario) - NO SE USA
-  //
-  // const dates = collectAllBillingDatesFromLineItem(lineItem);
-  // for (const d of dates) { ... }
   // ---------------------------------------------------------
 }
-

@@ -1,13 +1,10 @@
 // src/runBilling.js
-console.log('🔥 ARCHIVO runBilling.js CARGÁNDOSE...');
-
 import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
 import { runPhasesForDeal } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
 import { fileURLToPath } from 'url';
 import { resolve } from 'path';
-
-console.log('✅ Imports completados');
+import logger from '../lib/logger.js';
 
 /**
  * Modo de ejecución:
@@ -18,7 +15,6 @@ console.log('✅ Imports completados');
  */
 
 function parseArgs(argv) {
-  console.log('🔍 parseArgs llamado con:', argv);
   const args = {
     dealId: null,
     allDeals: false,
@@ -47,11 +43,12 @@ function parseArgs(argv) {
     }
   }
 
-  console.log('✅ Args parseados:', args);
   return args;
 }
 
 function printHelp() {
+  // printHelp va a stdout plano intencionalmente (es UI de CLI, no log operativo)
+  // eslint-disable-next-line no-console
   console.log(`
 Uso:
   node ./src/runBilling.js --deal <DEAL_ID>
@@ -71,12 +68,11 @@ async function getAllDealIds() {
   const out = [];
   let after;
 
-  // Trae TODOS los deals del portal (paginado)
   do {
     const resp = await hubspotClient.crm.deals.basicApi.getPage(
       100,
       after,
-      ["dealname"], // props mínimas (solo para log)
+      ["dealname"],
       undefined,
       false
     );
@@ -89,10 +85,6 @@ async function getAllDealIds() {
 }
 
 export async function runBilling({ dealId, allDeals } = {}) {
-  console.log('🎯 runBilling() EJECUTÁNDOSE!');
-  console.log('   dealId:', dealId);
-  console.log('   allDeals:', allDeals);
-  
   if (!dealId && !allDeals) {
     throw new Error("Debes usar --deal <ID> o --allDeals");
   }
@@ -100,15 +92,18 @@ export async function runBilling({ dealId, allDeals } = {}) {
     throw new Error("Usa solo uno: --deal o --allDeals (no ambos)");
   }
 
-  console.log("\n" + "=".repeat(80));
-  console.log("🚀 HUBSPOT BILLING UPDATER v2.0 - INICIO");
-  console.log("=".repeat(80));
-  console.log("[runBilling] Modo:", dealId ? `Deal específico: ${dealId}` : 'TODOS los deals');
-  console.log("[runBilling] Fecha:", new Date().toISOString());
-  console.log("=".repeat(80) + "\n");
+  const modo = dealId ? `deal específico: ${dealId}` : 'todos los deals';
+  logger.info({
+    module: 'runBilling',
+    fn: 'runBilling',
+    modo,
+    dealId: dealId || null,
+    allDeals: !!allDeals,
+    fecha: new Date().toISOString(),
+  }, `[runBilling] INICIO — ${modo}`);
 
   const ids = dealId ? [String(dealId)] : await getAllDealIds();
-  console.log(`[runBilling] 📊 Total deals a procesar: ${ids.length}\n`);
+  logger.info({ module: 'runBilling', fn: 'runBilling', total: ids.length }, `[runBilling] Total deals a procesar: ${ids.length}`);
 
   let totalDeals = 0;
   let totalTickets = 0;
@@ -116,41 +111,38 @@ export async function runBilling({ dealId, allDeals } = {}) {
 
   for (const id of ids) {
     try {
-      console.log(`\n${"-".repeat(80)}`);
-      console.log(`📋 PROCESANDO DEAL: ${id}`);
-      console.log("-".repeat(80));
-      
-      console.log(`🔄 Llamando a getDealWithLineItems(${id})...`);
       const { deal, lineItems } = await getDealWithLineItems(id);
       const dealName = deal?.properties?.dealname || 'Sin nombre';
-      
-      console.log(`[Deal] Nombre: ${dealName}`);
-      console.log(`[Deal] Line Items encontrados: ${lineItems.length}`);
-      
+
       if (lineItems.length === 0) {
-        console.log(`⚠️  Deal sin line items, saltando...\n`);
+        logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, dealName }, '[runBilling] Deal sin line items, saltando');
         continue;
       }
-      
+
       totalDeals++;
 
-      console.log(`🔄 Llamando a runPhasesForDeal()...`);
-      // Ejecuta fases (Phase1 cupo + Phase2 tickets manuales + Phase3 auto invoices)
       const res = await runPhasesForDeal({ deal, lineItems });
-
-      console.log(`✅ runPhasesForDeal() completado. Resultado:`, res);
 
       totalTickets += res.ticketsCreated || 0;
       totalInvoicesAuto += res.autoInvoicesEmitted || 0;
 
-      console.log(`\n✅ Deal ${id} completado:`);
-      console.log(`   - Tickets creados: ${res.ticketsCreated || 0}`);
-      console.log(`   - Facturas emitidas: ${res.autoInvoicesEmitted || 0}`);
+      logger.info({
+        module: 'runBilling',
+        fn: 'runBilling',
+        dealId: id,
+        dealName,
+        ticketsCreated: res.ticketsCreated || 0,
+        autoInvoicesEmitted: res.autoInvoicesEmitted || 0,
+      }, `[runBilling] Deal ${id} completado`);
+
     } catch (err) {
-      console.error(`❌ [runBilling] Error procesando negocio ${id}:`);
-      console.error('   Error completo:', err);
-      console.error('   Stack:', err?.stack);
-      console.error('   Response body:', err?.response?.body);
+      logger.error({
+        module: 'runBilling',
+        fn: 'runBilling',
+        dealId: id,
+        err,
+        responseBody: err?.response?.body,
+      }, `[runBilling] Error procesando negocio ${id}`);
     }
   }
 
@@ -159,42 +151,29 @@ export async function runBilling({ dealId, allDeals } = {}) {
   if (emitReady) {
     try {
       const { processed } = await emitInvoicesForReadyTickets();
-      console.log("[runBilling] Facturas emitidas por READY:", processed);
-    } catch (e) {
-      console.error(
-        "[runBilling] Error emitiendo facturas de tickets READY",
-        e?.response?.body || e?.message || e
-      );
+      logger.info({ module: 'runBilling', fn: 'runBilling', processed }, '[runBilling] Facturas emitidas por READY');
+    } catch (err) {
+      logger.error({ module: 'runBilling', fn: 'runBilling', err }, '[runBilling] Error emitiendo facturas de tickets READY');
     }
   }
 
-  console.log("\n" + "=".repeat(80));
-  console.log("📊 RESUMEN FINAL");
-  console.log("=".repeat(80));
-  console.log(`✅ Deals procesados: ${totalDeals}`);
-  console.log(`🎫 Tickets creados: ${totalTickets}`);
-  console.log(`💰 Facturas emitidas: ${totalInvoicesAuto}`);
-  if (emitReady) {
-    console.log(`🔄 Modo EMIT_READY_TICKETS: activo`);
-  }
-  console.log("=".repeat(80) + "\n");
+  logger.info({
+    module: 'runBilling',
+    fn: 'runBilling',
+    totalDeals,
+    totalTickets,
+    totalInvoicesAuto,
+    emitReadyActivo: emitReady,
+  }, '[runBilling] RESUMEN FINAL');
 
   return { totalDeals, totalTickets, totalInvoicesAuto };
 }
 
 // Entry point ESM - FIX para Windows
-console.log('🔍 Verificando entry point...');
-
 const __filename = fileURLToPath(import.meta.url);
 const argvPath = resolve(process.argv[1]);
 
-console.log('   __filename:', __filename);
-console.log('   argvPath:', argvPath);
-console.log('   Son iguales?', __filename === argvPath);
-
 if (__filename === argvPath) {
-  console.log('✅ Entry point detectado, ejecutando...');
-  
   try {
     const args = parseArgs(process.argv);
 
@@ -203,21 +182,35 @@ if (__filename === argvPath) {
       process.exit(0);
     }
 
-    console.log('🚀 Llamando a runBilling()...');
     runBilling(args).catch((err) => {
-      console.error("❌ [runBilling] Error fatal:");
-      console.error('   Mensaje:', err?.message);
-      console.error('   Stack:', err?.stack);
+      logger.error({ module: 'runBilling', err }, '[runBilling] Error fatal');
       printHelp();
       process.exit(1);
     });
   } catch (err) {
-    console.error("❌ [runBilling] Error en parseArgs:");
-    console.error('   Mensaje:', err?.message);
-    console.error('   Stack:', err?.stack);
+    logger.error({ module: 'runBilling', err }, '[runBilling] Error en parseArgs');
     printHelp();
     process.exit(1);
   }
-} else {
-  console.log('⚠️  Entry point NO detectado (módulo importado)');
 }
+
+/*
+ * ─────────────────────────────────────────────────────────────
+ * CATCHES con reportHubSpotError agregados: NINGUNO
+ *
+ * Este archivo es el orquestador/entry point. No hace updates
+ * directos a tickets ni line items — delega en runPhasesForDeal
+ * y emitInvoicesForReadyTickets, que tienen sus propios reportes.
+ *
+ * Logs eliminados (~30 console.log):
+ * - Startup banners (🔥 cargándose, ✅ imports, 🔍 entry point,
+ *   __filename, argvPath) — ruido de desarrollo
+ * - Banners ASCII (=.repeat(80)) — reemplazados por logger.info estructurado
+ * - Logs paso a paso del loop (🔄 Llamando a..., ✅ completado)
+ *   — colapsados en un único log pre/post por deal con datos relevantes
+ * - Resumen final multi-línea — un único logger.info con objeto
+ *
+ * printHelp() conserva console.log intencionalmente:
+ * — es output de CLI para el usuario, no log operativo.
+ * ─────────────────────────────────────────────────────────────
+ */

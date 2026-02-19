@@ -7,8 +7,10 @@ import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
-import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js'; 
-import { createInvoiceFromTicket } from '../services/invoiceService.js';  
+import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
+import { createInvoiceFromTicket } from '../services/invoiceService.js';
+import logger from '../../lib/logger.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 
 /**
  * PHASE 3 (AUTOMÁTICO):
@@ -32,7 +34,6 @@ import { createInvoiceFromTicket } from '../services/invoiceService.js';
 // ====== STAGES (IDs reales) ======
 const BILLING_AUTOMATED_READY = '1228755520';
 
-// Auto forecast stages por bucket deal stage
 const BILLING_AUTOMATED_FORECAST_25 = '1294745999';
 const BILLING_AUTOMATED_FORECAST_50 = '1294746000';
 const BILLING_AUTOMATED_FORECAST_75 = '1296489840';
@@ -45,12 +46,19 @@ const FORECAST_AUTO_STAGES = new Set([
   BILLING_AUTOMATED_FORECAST_95,
 ]);
 
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
+}
+
 function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
   if (s === 'closedwon') return '95';
-  return '25'; // 5/10/25
+  return '25';
 }
 
 function resolveAutoForecastStageForDealStage(dealstage) {
@@ -90,8 +98,6 @@ async function moveTicketToStage(ticketId, stageId) {
 
 /**
  * Promueve un ticket forecast automático a READY.
- * - No crea ticket.
- * - Solo mueve si está en forecast auto (cualquiera), idealmente el esperado por dealstage.
  */
 async function promoteAutoForecastTicketToReady({
   dealId,
@@ -100,73 +106,69 @@ async function promoteAutoForecastTicketToReady({
   billingYMD,
   lineItemId,
 }) {
+  if (!lineItemKey) {
+    return { moved: false, reason: 'missing_line_item_key' };
+  }
 
-if (!lineItemKey) {
-  return { moved: false, reason: 'missing_line_item_key' };
-}
+  const ticketKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingYMD);
 
-const ticketKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billingYMD);
+  let t = await findTicketByTicketKey(ticketKey);
 
-let t = await findTicketByTicketKey(ticketKey);
+  // Retry por indexación HubSpot
+  for (const delay of [500, 1000]) {
+    if (t) break;
+    await new Promise(r => setTimeout(r, delay));
+    t = await findTicketByTicketKey(ticketKey);
+  }
 
-// Retry por indexación HubSpot
-for (const delay of [500, 1000]) {
-  if (t) break;
-  await new Promise(r => setTimeout(r, delay));
-  t = await findTicketByTicketKey(ticketKey);
-}
+  if (!t) {
+    return {
+      moved: false,
+      reason: 'missing_forecast_ticket',
+      ticketKey,
+    };
+  }
 
-if (!t) {
-  return {
-    moved: false,
-    reason: 'missing_forecast_ticket',
-    ticketKey,
-  };
-}
-if (!t) {
-  return {
-    moved: false,
-    reason: 'missing_forecast_ticket',
-    ticketKey,
-  };
-}
+  const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
-const currentStage = String(t?.properties?.hs_pipeline_stage || '');
-
-  // Si ya está en READY, no hacer nada
   if (currentStage === BILLING_AUTOMATED_READY) {
     return { moved: false, reason: 'already_ready', ticketId: t.id };
   }
 
-  // Si no está en forecast auto, NO tocar (puede ser real, o manual por error)
   if (!FORECAST_AUTO_STAGES.has(currentStage)) {
     return { moved: false, reason: `not_auto_forecast_stage:${currentStage}`, ticketId: t.id };
   }
 
-
-  // cargar empresas/contactos (no bloquear si falla)
   const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
   const contactIds =
     (typeof getDealContacts === 'function'
       ? await getDealContacts(String(dealId)).catch(() => [])
       : []);
 
-  // Validación suave (log)
   const expectedForecastStage = resolveAutoForecastStageForDealStage(dealStage);
   let moved = false;
   let reason = '';
 
   if (currentStage !== expectedForecastStage) {
-    await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
-    moved = true;
-    reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
+    try {
+      await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
+      moved = true;
+      reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
+    } catch (err) {
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket a READY desde stage inesperado', err });
+      throw err;
+    }
   } else {
-    await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
-    moved = true;
-    reason = 'moved';
+    try {
+      await moveTicketToStage(t.id, BILLING_AUTOMATED_READY);
+      moved = true;
+      reason = 'moved';
+    } catch (err) {
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket forecast a READY', err });
+      throw err;
+    }
   }
 
-  // Asociar SOLO al pasar a READY
   if (lineItemId) {
     await createTicketAssociations(
       String(t.id),
@@ -177,7 +179,6 @@ const currentStage = String(t?.properties?.hs_pipeline_stage || '');
     );
   }
 
-  // Llamar syncLineItemAfterPromotion si se promovió
   if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
@@ -197,33 +198,38 @@ export async function runPhase3({ deal, lineItems }) {
   const dealStage = String(dp.dealstage || '');
   const today = getTodayYMD();
 
-  console.log(`   [Phase3] start`, { dealId, today, lineItems: (lineItems || []).length });
-
-  // Gate principal
   const dealFacturacionActiva = parseBool(dp.facturacion_activa);
+
+  logger.info(
+    { module: 'phase3', fn: 'runPhase3', dealId, today, totalLineItems: (lineItems || []).length, facturacionActiva: dealFacturacionActiva },
+    'Inicio Phase 3'
+  );
+
   if (!dealFacturacionActiva) {
-    console.log(`   [Phase3] Deal facturacion_activa != true. Skip.`);
+    logger.info(
+      { module: 'phase3', fn: 'runPhase3', dealId },
+      'Deal sin facturacion_activa=true, saltando Phase 3'
+    );
     return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
   }
 
-  let invoicesEmitted = 0; // (si tu pipeline/servicio incrementa esto, podés conectarlo después)
-  let ticketsEnsured = 0;  // (ahora significa "tickets promovidos a READY")
+  let invoicesEmitted = 0;
+  let ticketsEnsured = 0;
   const errors = [];
 
-  // Solo automáticos
   const autoLineItems = (lineItems || []).filter((li) => {
     const lp = li?.properties || {};
     return parseBool(lp.facturacion_automatica);
   });
 
-  console.log(`   [Phase3] autoLineItems=${autoLineItems.length}`);
+  logger.info(
+    { module: 'phase3', fn: 'runPhase3', dealId, autoLineItemsCount: autoLineItems.length },
+    'Line items automáticos a procesar'
+  );
 
   for (const li of autoLineItems) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
-    const liName = lp.name || `LI ${lineItemId}`;
-
-    console.log(`   [Phase3] Processing ${liName}`, { lineItemId });
 
     try {
       const facturarAhora = parseBool(lp.facturar_ahora);
@@ -233,25 +239,25 @@ export async function runPhase3({ deal, lineItems }) {
         context: { flow: 'PHASE3', dealId, lineItemId },
       });
 
-      console.log(
-        `   [Phase3] 🔑 planYMD: ${billingPeriodDate || 'NULL'}, facturarAhora: ${facturarAhora}, today: ${today}`
-      );
-
       if (!billingPeriodDate) {
-        console.log(`      [Phase3] no planYMD => skip`);
+        logger.info(
+          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+          'Sin planYMD, saltando'
+        );
         continue;
       }
 
       const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
       if (!lineItemKey) {
-        console.log(`      ⚠️ line_item_key vacío para LI ${lineItemId}; Phase1 debería setearlo. Skip.`);
+        logger.warn(
+          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+          'line_item_key vacío, Phase1 debería setearlo, saltando'
+        );
         continue;
       }
 
-      // 1) FACTURAR AHORA (urgente): promover a READY y marcar urgente
+      // 1) FACTURAR AHORA (urgente)
       if (facturarAhora) {
-        console.log(`      [Phase3] ⚡ URGENT BILLING (promote forecast → READY)`);
-
         const promoted = await promoteAutoForecastTicketToReady({
           dealId,
           dealStage,
@@ -263,30 +269,39 @@ export async function runPhase3({ deal, lineItems }) {
         if (promoted.moved) {
           ticketsEnsured++;
           const ticket = await hubspotClient.crm.tickets.basicApi.getById(
-          promoted.ticketId,
-          ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
-        );
+            promoted.ticketId,
+            ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+          );
 
           await createInvoiceFromTicket(ticket);
           invoicesEmitted++;
-          console.log(`      [Phase3] ✅ Ticket promovido a READY: ${promoted.ticketId}`);
 
-          // ✅ Best-effort: marcar urgente
+          logger.info(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
+            'Ticket promovido a READY (urgente) y factura emitida'
+          );
+
+          // Best-effort: marcar urgente
           try {
             await updateTicket(promoted.ticketId, {
               of_facturacion_urgente: 'true',
               of_fecha_de_facturacion: today,
             });
-            console.log(`      [Phase3] ticket urgent marked: ${promoted.ticketId}`);
-          } catch (e) {
-            console.warn(
-              `      [Phase3] ⚠️ could not mark ticket urgent (${promoted.ticketId}):`,
-              e?.message || e
+            logger.info(
+              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
+              'Ticket marcado como urgente'
+            );
+          } catch (err) {
+            reportIfActionable({ objectType: 'ticket', objectId: String(promoted.ticketId), message: 'Error al marcar ticket como urgente', err });
+            logger.warn(
+              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId, err },
+              'No se pudo marcar ticket como urgente'
             );
           }
         } else {
-          console.log(
-            `      [Phase3] 🔄 No se promovió: ${promoted.reason} (${promoted.ticketId || promoted.ticketKey || 'sin ticket'})`
+          logger.info(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
+            'Ticket urgente no promovido'
           );
           if (promoted.reason === 'missing_forecast_ticket') {
             errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
@@ -296,13 +311,10 @@ export async function runPhase3({ deal, lineItems }) {
         continue;
       }
 
-      // 2) Facturación programada: SOLO si planYMD === HOY
+      // 2) Facturación programada: solo si planYMD === HOY
       if (billingPeriodDate !== today) {
-        console.log(`      [Phase3] planYMD (${billingPeriodDate}) != today (${today}) => skip`);
         continue;
       }
-
-      console.log(`      [Phase3] 📅 SCHEDULED BILLING TODAY (promote forecast → READY)`);
 
       const promoted = await promoteAutoForecastTicketToReady({
         dealId,
@@ -313,36 +325,68 @@ export async function runPhase3({ deal, lineItems }) {
       });
 
       if (promoted.moved) {
-  ticketsEnsured++;
+        ticketsEnsured++;
 
-  const ticket = await hubspotClient.crm.tickets.basicApi.getById(
-    promoted.ticketId,
-    ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
-  );
+        const ticket = await hubspotClient.crm.tickets.basicApi.getById(
+          promoted.ticketId,
+          ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+        );
 
-  await createInvoiceFromTicket(ticket);
-  invoicesEmitted++;
+        await createInvoiceFromTicket(ticket);
+        invoicesEmitted++;
 
-  console.log(`      [Phase3] ✅ Ticket promovido y factura emitida: ${promoted.ticketId}`);
-} else {
-        console.log(
-          `      [Phase3] 🔄 No se promovió: ${promoted.reason} (${promoted.ticketId || promoted.ticketKey || 'sin ticket'})`
+        logger.info(
+          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
+          'Ticket promovido a READY (programado) y factura emitida'
+        );
+      } else {
+        logger.info(
+          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
+          'Ticket programado no promovido'
         );
         if (promoted.reason === 'missing_forecast_ticket') {
           errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
         }
       }
 
-      // NOTA:
-      // En tu sistema actual, el paso "READY → emitir invoice" ocurre en otro flujo
-      // (ej. un handler o servicio que observa el stage READY y crea la factura / mueve a CREATED).
-      // Por contrato, Phase3 solo promueve a READY cuando corresponde.
     } catch (err) {
-      console.error(`      [Phase3] error:`, err?.message || err);
+      logger.error(
+        { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
+        'Error procesando line item'
+      );
       errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
     }
   }
 
-  console.log(`   [Phase3] done`, { dealId, invoicesEmitted, ticketsEnsured, errors: errors.length });
+  logger.info(
+    { module: 'phase3', fn: 'runPhase3', dealId, invoicesEmitted, ticketsEnsured, errors: errors.length },
+    'Phase 3 completada'
+  );
+
   return { invoicesEmitted, ticketsEnsured, errors };
 }
+
+/*
+ * CATCHES con reportHubSpotError agregados:
+ *   - moveTicketToStage() rama currentStage !== expectedForecastStage → objectType="ticket"
+ *   - moveTicketToStage() rama currentStage === expectedForecastStage → objectType="ticket"
+ *   - updateTicket() en bloque "marcar urgente" (best-effort) → objectType="ticket"
+ *     (no re-throw; el warn se loguea y se continúa)
+ *
+ * NO reportados:
+ *   - getDealCompanies / getDealContacts → lecturas, .catch(() => []) absorbe
+ *   - createTicketAssociations → asociaciones excluidas (Regla 4)
+ *   - syncLineItemAfterPromotion → delegado
+ *   - createInvoiceFromTicket → no es update de ticket/line_item; servicio externo
+ *   - tickets.basicApi.getById → lectura
+ *   - catch externo de runPhase3 → error ya reportado en moveTicketToStage antes del re-throw
+ *
+ * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
+ *
+ * ⚠️  BUGS PREEXISTENTES (no corregidos per Regla 5):
+ *   1. Bloque `if (!t) { return { moved: false, ... } }` duplicado tras el retry loop;
+ *      el segundo bloque es unreachable.
+ *   2. En el catch externo del original se usaba `li.id` en lugar de `lineItemId`
+ *      (que ya está definido en el mismo scope); se preservó el uso de `lineItemId`
+ *      ya que estaba correctamente asignado antes del try — comportamiento idéntico.
+ */

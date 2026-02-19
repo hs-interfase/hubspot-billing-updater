@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
+import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
 import logger from "../lib/logger.js"
 
@@ -113,9 +114,10 @@ async function withRetry(fn, { maxRetries = 5 } = {}) {
       const retryable = status === 429 || (status >= 500 && status <= 599);
       if (!retryable || attempt > maxRetries) throw e;
       const backoffMs = Math.min(30000, 1000 * 2 ** (attempt - 1));
-      console.warn(
-        `[cron] retryable error (status=${status}) attempt=${attempt}/${maxRetries}: ${msg} -> wait ${backoffMs}ms`
-      );
+      logger.warn(
+              { status, attempt, maxRetries, backoffMs },
+              `[cron] retryable error (status=${status}) attempt=${attempt}/${maxRetries}: ${msg} -> wait ${backoffMs}ms`
+            );
       await sleep(backoffMs);
     }
   }
@@ -128,7 +130,11 @@ function appendAudit(event) {
     const file = path.join(LOG_DIR, `cron_deals_${ymd}.log.jsonl`);
     fs.appendFileSync(file, JSON.stringify(event) + "\n", "utf8");
   } catch (e) {
-    console.warn("[cron] audit log append failed:", e?.message || e);
+    const errMsg = e?.message || e;
+    logger.warn(
+      { errMsg },
+      "[cron] audit log append failed:"
+    );
   }
 }
 
@@ -299,8 +305,9 @@ if (!acquireLock()) {
 
   try {
     if (!CANCELLED_STAGE_ID) {
-      console.warn("[cron] CANCELLED_STAGE_ID not set -> NO excluirá cancelados");
-      appendAudit({ at: new Date().toISOString(), type: "warn", msg: "CANCELLED_STAGE_ID not set" });
+    logger.warn(
+            "[cron] CANCELLED_STAGE_ID not set -> NO excluirá cancelados"
+          );      appendAudit({ at: new Date().toISOString(), type: "warn", msg: "CANCELLED_STAGE_ID not set" });
     }
 
 if (onlyDealId) {
@@ -628,10 +635,21 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
 
     logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "[cronDealsBatch] Finished processing all deals");
     return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
-  } finally {
-    releaseLock();
-    logger.info({ jobRunId }, "Cron finished")
+} finally {
+  try {
+    await flushHubSpotErrors();
+  } catch (e) {
+    // No romper el cron por fallas al flushear a HubSpot
+    logger.warn(
+      { jobRunId, where: "flushHubSpotErrors", error: e?.message || String(e) },
+      "[cronDealsBatch] flushHubSpotErrors failed"
+    );
   }
+
+  releaseLock();
+  logger.info({ jobRunId }, "Cron finished");
+}
+
   lastCtx = { where: ".start", dealId: null, ticketId: null, lineItemId: null, lineItemKey: null };
 }
 

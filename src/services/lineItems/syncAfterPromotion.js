@@ -6,6 +6,24 @@ import {
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
 } from '../../config/constants.js';
+import logger from '../../../lib/logger.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+
+/**
+ * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) {
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
 
 /**
  * Devuelve el YYYY-MM-DD más chico > afterYMD para tickets FORECAST
@@ -32,7 +50,6 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
           filters: [
             { propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) },
             { propertyName: 'hs_pipeline', operator: 'EQ', value: String(pipelineId) },
-            // HubSpot Search API: "IN" usa "values"
             { propertyName: 'hs_pipeline_stage', operator: 'IN', values: forecastStageIds },
           ],
         },
@@ -40,8 +57,8 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
       properties: ['fecha_resolucion_esperada', 'of_ticket_key', 'hs_pipeline_stage'],
       limit: 100,
     });
-  } catch (e) {
-    console.warn('[findNextForecastYMD] search error:', e?.message);
+  } catch (err) {
+    logger.warn({ module: 'syncAfterPromotion', fn: 'findNextForecastYMDForLineItemKeyInPipeline', lineItemKey, afterYMD, pipelineId, err }, '[findNextForecastYMD] search error');
     return '';
   }
 
@@ -56,10 +73,8 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
     let ymd = (p.fecha_resolucion_esperada || '').slice(0, 10);
 
     // 2) fallback: parsear of_ticket_key = dealId::LIK:<lineItemKey>::YYYY-MM-DD
-    // o si tu key es dealId::LIK:xxx::YYYY-MM-DD y no trae fecha_resolucion_esperada
     if (!ymd && p.of_ticket_key) {
       const parts = String(p.of_ticket_key).split('::');
-      // usualmente el último es YYYY-MM-DD
       const last = parts[parts.length - 1];
       if (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) ymd = last;
     }
@@ -74,7 +89,7 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
 }
 
 export async function syncLineItemAfterPromotion({
-  dealId,       
+  dealId,
   lineItemId,
   lineItemKey,  // LIK
   expectedYMD,  // fecha_resolucion_esperada del ticket promovido (YYYY-MM-DD)
@@ -92,8 +107,8 @@ export async function syncLineItemAfterPromotion({
       'hs_recurring_billing_number_of_payments',
       'pagos_restantes',
     ]);
-  } catch (e) {
-    console.warn('[syncLineItemAfterPromotion] No se pudo leer line item:', e?.message);
+  } catch (err) {
+    logger.warn({ module: 'syncAfterPromotion', fn: 'syncLineItemAfterPromotion', lineItemId, err }, '[syncLineItemAfterPromotion] No se pudo leer line item');
     return;
   }
 
@@ -101,7 +116,7 @@ export async function syncLineItemAfterPromotion({
   const currentLast = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNext = (lp.billing_next_date || '').slice(0, 10);
 
-// ====== PAGOS RESTANTES (promesas) ======
+  // ====== PAGOS RESTANTES (promesas) ======
   const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments;
   const totalPayments = Number.parseInt(String(totalPaymentsRaw ?? ''), 10);
   const hasTotalPayments = Number.isFinite(totalPayments) && totalPayments > 0;
@@ -119,7 +134,6 @@ export async function syncLineItemAfterPromotion({
   if (Number.isFinite(newRemaining)) {
     newRemaining = Math.max(0, newRemaining - 1);
   }
-
 
   // 2) last_ticketed_date monotónico
   let newLast = currentLast;
@@ -188,35 +202,65 @@ export async function syncLineItemAfterPromotion({
   if (newNext !== currentNext) updates.billing_next_date = newNext;
 
   // guardar pagos_restantes si es válido
-if (Number.isFinite(newRemaining)) {
-  const cur = Number.isFinite(currentRemaining) ? currentRemaining : null;
-  if (cur === null || newRemaining !== cur) {
-    updates.pagos_restantes = String(newRemaining);
+  if (Number.isFinite(newRemaining)) {
+    const cur = Number.isFinite(currentRemaining) ? currentRemaining : null;
+    if (cur === null || newRemaining !== cur) {
+      updates.pagos_restantes = String(newRemaining);
+    }
   }
-}
 
   if (!Object.keys(updates).length) {
-    console.log('[syncLineItemAfterPromotion] no action', {
+    logger.info({
+      module: 'syncAfterPromotion',
+      fn: 'syncLineItemAfterPromotion',
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD,
       currentLast,
       currentNext,
-    });
+    }, '[syncLineItemAfterPromotion] no action');
     return;
   }
 
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
-    console.log('[syncLineItemAfterPromotion] LineItem actualizado:', {
+    logger.info({
+      module: 'syncAfterPromotion',
+      fn: 'syncLineItemAfterPromotion',
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD,
       updates,
+    }, '[syncLineItemAfterPromotion] LineItem actualizado');
+  } catch (err) {
+    logger.error({ module: 'syncAfterPromotion', fn: 'syncLineItemAfterPromotion', lineItemId, err }, '[syncLineItemAfterPromotion] No se pudo actualizar line item');
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: lineItemId,
+      message: `line_item_update_failed (syncLineItemAfterPromotion): ${err?.message || err}`,
+      err,
     });
-  } catch (e) {
-    console.warn('[syncLineItemAfterPromotion] No se pudo actualizar line item:', e?.message);
   }
 }
+
+/*
+ * ─────────────────────────────────────────────────────────────
+ * CATCHES con reportHubSpotError agregados:
+ *
+ * 1. syncLineItemAfterPromotion() — hubspotClient.crm.lineItems.basicApi.update()
+ *    update final de last_ticketed_date / billing_next_date / pagos_restantes
+ *    → objectType: "line_item", objectId: lineItemId
+ *    → NO lleva continue (no está dentro de un loop)
+ *
+ * NO reportados (fuera de criterio o no accionables):
+ * - findNextForecastYMDForLineItemKeyInPipeline() catch de searchApi
+ *   → es una búsqueda, no un update de objeto; solo logger.warn
+ * - syncLineItemAfterPromotion() catch de getById (lectura inicial)
+ *   → es una lectura, no un update accionable; solo logger.warn
+ *
+ * Confirmación: "No se reportan warns a HubSpot;
+ *                solo errores 4xx (≠429)" — implementado en reportIfActionable().
+ * ─────────────────────────────────────────────────────────────
+ */

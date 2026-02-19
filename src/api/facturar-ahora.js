@@ -17,6 +17,7 @@
  */
 
 import { processUrgentLineItem, processUrgentTicket } from "../src/services/urgentBillingService.js";
+import logger from "../lib/logger.js";
 
 /**
  * Normaliza distintos valores truthy que pueden venir en webhooks.
@@ -31,6 +32,8 @@ function isTruthy(v) {
  * Handler principal del webhook.
  */
 export default async function handler(req, res) {
+  const log = logger.child({ module: "api/facturar-ahora" });
+
   // Solo acepta POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -41,19 +44,17 @@ export default async function handler(req, res) {
     const payload = Array.isArray(req.body) ? req.body[0] : req.body;
 
     // Log extendido para debug (útil para ver si estás recibiendo sample events)
-    console.log("[facturar-ahora] raw body:", JSON.stringify(req.body, null, 2));
+    log.debug({ rawBody: req.body }, "[facturar-ahora] raw body");
 
     const objectId = payload?.objectId;
     const propertyName = payload?.propertyName;
     const propertyValue = payload?.propertyValue;
     const subscriptionType = payload?.subscriptionType; // "line_item.propertyChange" o "ticket.propertyChange"
 
-    console.log("[facturar-ahora] Webhook recibido:", {
-      objectId,
-      propertyName,
-      propertyValue,
-      subscriptionType,
-    });
+    const ctx = { objectId, propertyName, propertyValue, subscriptionType };
+    const reqLog = log.child(ctx);
+
+    reqLog.info("[facturar-ahora] Webhook recibido");
 
     // Validaciones básicas
     if (!objectId) {
@@ -72,7 +73,7 @@ export default async function handler(req, res) {
 
     // Solo procesamos cuando se activa (true)
     if (!isTruthy(propertyValue)) {
-      console.log("⚠️ facturar_ahora is not true, ignoring", { propertyValue });
+      reqLog.info({ propertyValue }, "facturar_ahora_not_true_ignoring");
       return res.status(200).json({ skipped: true, reason: "facturar_ahora_false" });
     }
 
@@ -80,20 +81,20 @@ export default async function handler(req, res) {
     let result;
 
     if (subscriptionType?.includes("line_item")) {
-      console.log("📦 Procesando Line Item urgente:", objectId);
+      reqLog.info({ objectId }, "procesando_line_item_urgente");
       result = await processUrgentLineItem(objectId);
     } else if (subscriptionType?.includes("ticket")) {
-      console.log("🎫 Procesando Ticket urgente:", objectId);
+      reqLog.info({ objectId }, "procesando_ticket_urgente");
       result = await processUrgentTicket(objectId);
     } else {
-      console.error("❌ Tipo de objeto desconocido:", subscriptionType);
+      reqLog.error({ subscriptionType }, "unknown_subscription_type");
       // Mejor 200 para evitar reintentos del webhook
       return res.status(200).json({ skipped: true, reason: "unknown_subscription_type" });
     }
 
     // Verificar si fue omitido (skip)
     if (result?.skipped) {
-      console.log(`⚠️ Proceso omitido: ${result.reason}`);
+      reqLog.info({ reason: result.reason, invoiceId: result.invoiceId || null }, "proceso_omitido");
       return res.status(200).json({
         skipped: true,
         reason: result.reason,
@@ -102,16 +103,14 @@ export default async function handler(req, res) {
     }
 
     // Éxito
-    console.log("✅ Facturación urgente completada");
+    reqLog.info({ invoiceId: result?.invoiceId || null }, "facturacion_urgente_completada");
     return res.status(200).json({
       success: true,
       invoiceId: result?.invoiceId || null,
       objectId: result?.lineItemId || result?.ticketId || objectId,
     });
   } catch (err) {
-    console.error("[facturar-ahora] Error procesando webhook:", err?.message || err);
-    console.error(err?.stack);
-
+    log.error({ err }, "[facturar-ahora] Error procesando webhook");
     return res.status(500).json({
       error: "Internal server error",
       message: err?.message || "Unknown error",

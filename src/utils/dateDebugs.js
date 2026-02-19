@@ -1,7 +1,9 @@
 // src/utils/dateDebug.js
+import logger from '../../lib/logger.js';
+
 export function logDateEnvOnce() {
   const tz = process.env.BILLING_TZ || "America/Montevideo";
-  console.log("[dates] BILLING_TZ:", tz);
-  console.log("[dates] server now ISO:", new Date().toISOString());
-  console.log("[dates] server tz offset (min):", new Date().getTimezoneOffset());
+  logger.info({ tz }, "[dates] BILLING_TZ");
+  logger.info({ nowISO: new Date().toISOString() }, "[dates] server now ISO");
+  logger.info({ tzOffsetMin: new Date().getTimezoneOffset() }, "[dates] server tz offset (min)");
 }

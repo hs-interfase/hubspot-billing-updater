@@ -1,5 +1,6 @@
 // src/services/tickets/ticketUpdateService.js
 import { hubspotClient } from "../../hubspotClient.js";
+import logger from "../../../lib/logger.js";
 
 /**
  * Actualizar Ticket (SOLO LOG)
@@ -8,23 +9,25 @@ import { hubspotClient } from "../../hubspotClient.js";
  * - NO modifica nada en HubSpot
  */
 export async function processTicketUpdate(ticketId) {
-  console.log("\n" + "=".repeat(80));
-  console.log(`[ticket:update] 🎫 Ticket ID: ${ticketId}`);
-  console.log("=".repeat(80));
+  const log = logger.child({ module: "ticketUpdateService", ticketId });
+
+  log.info("\n" + "=".repeat(80));
+  log.info(`[ticket:update] 🎫 Ticket ID: ${ticketId}`);
+  log.info("=".repeat(80));
 
   const ticket = await hubspotClient.crm.tickets.basicApi.getById(
     String(ticketId),
     [] // ← vacío = todas las propiedades
   );
 
-  const props = ticket.properties || {};
+  const props = ticket?.properties || {};
 
-  console.log("[ticket:update] 📋 PROPIEDADES DEL TICKET:");
+  log.info("[ticket:update] 📋 PROPIEDADES DEL TICKET:");
   Object.entries(props).forEach(([key, value]) => {
-    console.log(`  ${key}: ${value}`);
+    log.info({ key, value }, "ticket_property");
   });
 
-  console.log("=".repeat(80) + "\n");
+  log.info("=".repeat(80) + "\n");
 
   return {
     ticketId,

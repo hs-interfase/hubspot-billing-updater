@@ -3,172 +3,155 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
+import logger from '../../../lib/logger.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
-
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
+}
 
 /**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
- * 
+ *
  * REGLAS
- * 1) Ticket es la fuente de verdad: ticket. == invoiceId → ya consumió
+ * 1) Ticket es la fuente de verdad: ticket.cupo_consumo_invoice_id == invoiceId → ya consumió
  * 2) Solo consume si lineItem.parte_del_cupo == true
  * 3) Solo consume si deal.cupo_activo == true
-+ * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
+ * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
  * TIPO DE CONSUMO:
- * - "Por Horas": ticket.total_de_horas_consumidas 
+ * - "Por Horas": ticket.total_de_horas_consumidas
  * - "Por Monto": ticket.total_real_a_facturar (neto sin IVA)
- * 
+ *
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
- * + * - Ticket: of_cupo_consumido, of_cupo_consumo_valor, 
-
- * 
- * @param {Object} params
- * @param {string} params.dealId - ID del Deal
- * @param {string} params.ticketId - ID del Ticket
- * @param {string} params.lineItemId - ID del Line Item (puede ser null)
- * @param {string} params.invoiceId - ID de la Invoice recién creada
- * @returns {Object} { consumed, reason, consumo, cupoRestanteNuevo }
+ * - Ticket: of_cupo_consumido, of_cupo_consumo_valor
  */
-
 export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, invoiceId }) {
-  console.log(`\n[consumeCupo] 💳 Iniciando validación de consumo de cupo`);
-  console.log(`   Deal: ${dealId}`);
-  console.log(`   Ticket: ${ticketId}`);
-  console.log(`   Line Item: ${lineItemId || 'N/A'}`);
-  console.log(`   Invoice: ${invoiceId}`);
+  logger.info(
+    { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, lineItemId: lineItemId || null, invoiceId },
+    'Iniciando validación de consumo de cupo'
+  );
 
   // ========== VALIDACIÓN 0: Invoice ID válido ==========
   if (!invoiceId || invoiceId === 'undefined' || invoiceId === 'null') {
     const reason = 'invoiceId inválido o vacío';
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', invoiceId, reason }, 'SKIP consumo de cupo');
     return { consumed: false, reason };
   }
- 
-// ========== RE-LEER DATOS NECESARIOS ==========
+
+  // ========== RE-LEER DATOS NECESARIOS ==========
   let deal, ticket, lineItem;
 
   try {
-    // Re-leer Deal
     deal = await hubspotClient.crm.deals.basicApi.getById(dealId, [
-      'cupo_activo', 
-      'tipo_de_cupo', 
-      'cupo_consumido', 
+      'cupo_activo',
+      'tipo_de_cupo',
+      'cupo_consumido',
       'cupo_restante',
-      'cupo_total', 
+      'cupo_total',
       'cupo_total_monto',
-      'cupo_umbral', 
-      'cupo_estado'
+      'cupo_umbral',
+      'cupo_estado',
     ]);
 
-    // Re-leer Ticket
     ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
       'total_de_horas_consumidas',
-      'cantidad_real', 
+      'cantidad_real',
       'total_real_a_facturar',
-      'cupo_consumo_invoice_id',  
-      'of_cupo_consumido',         
+      'cupo_consumo_invoice_id',
+      'of_cupo_consumido',
       'of_invoice_id',
     ]);
 
-    // Re-leer Line Item si existe
     if (lineItemId && lineItemId !== 'undefined' && lineItemId !== 'null') {
       lineItem = await hubspotClient.crm.lineItems.basicApi.getById(lineItemId, ['parte_del_cupo']);
     }
   } catch (err) {
-    console.error(`[consumeCupo] ❌ Error re-leyendo datos:`, err?.message);
+    logger.error(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, lineItemId, err },
+      'Error re-leyendo datos de HubSpot'
+    );
     return { consumed: false, reason: 'error al leer datos de HubSpot' };
   }
- 
-const dp = deal?.properties || {};
+
+  const dp = deal?.properties || {};
   const tp = ticket?.properties || {};
   const lp = lineItem?.properties || {};
- 
-// ========== VALIDACIÓN 1: Idempotencia REAL por Cupo ==========
-const cupoInvoiceIdEnTicket = safeString(tp.cupo_consumo_invoice_id || tp.of_cupo_consumo_invoice_id);
 
-if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
-  const reason = 'ticket ya consumió cupo con esta invoice (idempotencia cupo_consumo_invoice_id)';
-  console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-  return { consumed: false, reason };
-}
+  // ========== VALIDACIÓN 1: Idempotencia por cupo ==========
+  const cupoInvoiceIdEnTicket = safeString(tp.cupo_consumo_invoice_id || tp.of_cupo_consumo_invoice_id);
 
+  if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
+    const reason = 'ticket ya consumió cupo con esta invoice (idempotencia cupo_consumo_invoice_id)';
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, invoiceId, reason }, 'SKIP consumo de cupo');
+    return { consumed: false, reason };
+  }
 
   // ========== VALIDACIÓN 2: Line Item identificable ==========
   if (!lineItemId || lineItemId === 'undefined' || lineItemId === 'null') {
     const reason = 'lineItemId no identificable';
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', reason }, 'SKIP consumo de cupo');
     return { consumed: false, reason };
   }
-  
 
   // ========== VALIDACIÓN 3: parte_del_cupo ==========
   const parteDelCupo = parseBool(lp.parte_del_cupo);
   if (!parteDelCupo) {
     const reason = 'line item NO es parte_del_cupo';
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   parte_del_cupo: ${lp.parte_del_cupo}`);
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', lineItemId, parteDelCupo: lp.parte_del_cupo, reason }, 'SKIP consumo de cupo');
     return { consumed: false, reason };
   }
 
-  
   // ========== VALIDACIÓN 4: cupo_activo ==========
   const cupoActivo = parseBool(dp.cupo_activo);
   if (!cupoActivo) {
     const reason = 'deal.cupo_activo != true';
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   cupo_activo: ${dp.cupo_activo} (parsed: ${cupoActivo})`);
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, cupoActivo: dp.cupo_activo, reason }, 'SKIP consumo de cupo');
     return { consumed: false, reason };
   }
 
   // ========== LEER ESTADO ACTUAL DEL CUPO ==========
   const tipoCupo = safeString(dp.tipo_de_cupo);
-  
-  // ⚠️ Warning si cupo_activo=true pero tipo_de_cupo vacío
+
   if (!tipoCupo) {
-    console.warn(`[consumeCupo] ⚠️ Deal ${dealId} cupo_activo=true pero tipo_de_cupo vacío`);
-    const reason = 'tipo_de_cupo vacío';
-    return { consumed: false, reason };
+    logger.warn(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId },
+      'cupo_activo=true pero tipo_de_cupo vacío'
+    );
+    return { consumed: false, reason: 'tipo_de_cupo vacío' };
   }
-  
+
   const cupoConsumidoActual = parseNumber(dp.cupo_consumido, 0);
-  const cupoTotal = tipoCupo === "Por Horas" 
+  const cupoTotal = tipoCupo === 'Por Horas'
     ? parseNumber(dp.cupo_total, 0)
     : parseNumber(dp.cupo_total_monto ?? dp.cupo_total, 0);
-
-  console.log(`[consumeCupo] 📊 Estado ANTES del consumo:`);
-  console.log(`   tipo_de_cupo: ${tipoCupo}`);
-  console.log(`   cupo_total: ${cupoTotal}`);
-  console.log(`   cupo_consumido: ${cupoConsumidoActual}`);
 
   // ========== CALCULAR CONSUMO SEGÚN TIPO ==========
   let consumo = 0;
 
-  if (tipoCupo === "Por Horas") {
+  if (tipoCupo === 'Por Horas') {
     consumo = parseNumber(tp.total_de_horas_consumidas, 0);
     if (consumo === 0) {
       consumo = parseNumber(tp.cantidad_real, 0);
-      console.log(`[consumeCupo] 💰 Tipo: Por Horas | Consumo: ${consumo} hrs (desde ticket.cantidad_real)`);
-    } else {
-      console.log(`[consumeCupo] 💰 Tipo: Por Horas | Consumo: ${consumo} hrs (desde ticket.total_de_horas_consumidas)`);
     }
-  } else if (tipoCupo === "Por Monto") {
-    // Monto neto sin IVA
+  } else if (tipoCupo === 'Por Monto') {
     consumo = parseNumber(tp.total_real_a_facturar, 0);
-    console.log(`[consumeCupo] 💰 Tipo: Por Monto | Consumo: ${consumo} (desde ticket.total_real_a_facturar)`);
   } else {
     const reason = `tipo_de_cupo desconocido: "${tipoCupo}"`;
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
+    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, reason }, 'SKIP consumo de cupo');
     return { consumed: false, reason };
   }
 
   // ========== VALIDACIÓN 5: Consumo válido ==========
   if (consumo <= 0 || isNaN(consumo)) {
     const reason = `consumo inválido: ${consumo} (NaN o <=0)`;
-    console.log(`[consumeCupo] ⊘ SKIP: ${reason}`);
-    console.log(`   cantidad_real: ${tp.cantidad_real}`);
-    console.log(`   total_de_horas_consumidas: ${tp.total_de_horas_consumidas}`);
-    console.log(`   total_real_a_facturar: ${tp.total_real_a_facturar}`);
+    logger.info(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, tipoCupo, consumo, cantidad_real: tp.cantidad_real, total_de_horas_consumidas: tp.total_de_horas_consumidas, total_real_a_facturar: tp.total_real_a_facturar, reason },
+      'SKIP consumo de cupo'
+    );
     return { consumed: false, reason };
   }
 
@@ -176,10 +159,10 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
   const cupoConsumidoNuevo = cupoConsumidoActual + consumo;
   const cupoRestanteNuevo = cupoTotal - cupoConsumidoNuevo;
 
-  console.log(`[consumeCupo] 📉 Nuevo estado del cupo:`);
-  console.log(`   Consumo a aplicar: ${consumo}`);
-  console.log(`   Cupo consumido: ${cupoConsumidoActual} → ${cupoConsumidoNuevo}`);
-  console.log(`   Cupo restante: ${cupoTotal - cupoConsumidoActual} → ${cupoRestanteNuevo}`);
+  logger.debug(
+    { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, cupoTotal, cupoConsumidoActual, cupoConsumidoNuevo, cupoRestanteNuevo, consumo },
+    'Estado del cupo antes y después del consumo'
+  );
 
   // ========== PREPARAR PROPIEDADES DEL DEAL ==========
   const dealUpdateProps = {
@@ -191,7 +174,10 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
   // ========== DESACTIVAR SI SE AGOTA ==========
   let cupoDeactivated = false;
   if (cupoRestanteNuevo <= 0) {
-    console.log(`[consumeCupo] 🔴 CUPO AGOTADO - Desactivando cupo (cupo_restante=${cupoRestanteNuevo})`);
+    logger.info(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, cupoRestanteNuevo },
+      'Cupo agotado, desactivando'
+    );
     dealUpdateProps.cupo_activo = 'false';
     cupoDeactivated = true;
   }
@@ -220,70 +206,94 @@ if (cupoInvoiceIdEnTicket && cupoInvoiceIdEnTicket === String(invoiceId)) {
   }
 */
 
-// ✅ A) Actualizar cupo_estado según reglas
-const { calculateCupoEstado } = await import('../../utils/propertyHelpers.js');
+  // ✅ A) Actualizar cupo_estado según reglas
+  const { calculateCupoEstado } = await import('../../utils/propertyHelpers.js');
 
-const merged = { ...dp, ...dealUpdateProps };
+  const merged = { ...dp, ...dealUpdateProps };
 
-const newCupoEstado = calculateCupoEstado({
-  cupo_activo: merged.cupo_activo,
-  tipo_de_cupo: merged.tipo_de_cupo,
-  cupo_total: merged.cupo_total,
-  cupo_total_monto: merged.cupo_total_monto,
-  cupo_consumido: merged.cupo_consumido,
-  cupo_restante: merged.cupo_restante,
-  cupo_umbral: merged.cupo_umbral,
-});
+  const newCupoEstado = calculateCupoEstado({
+    cupo_activo: merged.cupo_activo,
+    tipo_de_cupo: merged.tipo_de_cupo,
+    cupo_total: merged.cupo_total,
+    cupo_total_monto: merged.cupo_total_monto,
+    cupo_consumido: merged.cupo_consumido,
+    cupo_restante: merged.cupo_restante,
+    cupo_umbral: merged.cupo_umbral,
+  });
 
-// ✅ SIEMPRE setear (incluye "")
-dealUpdateProps.cupo_estado = newCupoEstado;
-// ========== ACTUALIZAR DEAL ==========
-try {
-  await hubspotClient.crm.deals.basicApi.update(dealId, { properties: dealUpdateProps });
-  console.log(`[consumeCupo] ✅ Deal ${dealId} actualizado`);
-  console.log(`[consumeCupo] 📝 Props:`, dealUpdateProps);
-} catch (err) {
-  console.error(`[consumeCupo] ❌ Error! actualizando deal ${dealId}:`, err?.message);
-  throw err;
-}
+  dealUpdateProps.cupo_estado = newCupoEstado;
 
-console.log(`[consumeCupo] 📊 cupo_estado → ${newCupoEstado || '(vacío)'}`);
+  // ========== ACTUALIZAR DEAL ==========
+  try {
+    await hubspotClient.crm.deals.basicApi.update(dealId, { properties: dealUpdateProps });
+    logger.info(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, cupoEstado: newCupoEstado || '(vacío)', dealUpdateProps },
+      'Deal actualizado con nuevo estado de cupo'
+    );
+  } catch (err) {
+    logger.error(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, err },
+      'Error actualizando deal'
+    );
+    throw err;
+  }
 
-
-// ========== ACTUALIZAR TICKET (IDEMPOTENCIA + TRAZABILIDAD + VALOR) ==========
+  // ========== ACTUALIZAR TICKET (IDEMPOTENCIA + TRAZABILIDAD + VALOR) ==========
   const ticketUpdateProps = {
     of_cupo_consumido: 'true',
     of_cupo_consumo_valor: String(consumo),
     cupo_consumo_invoice_id: String(invoiceId),
     of_cupo_consumido_fecha: getTodayYMD(),
   };
+
   try {
     const cleanProps = Object.fromEntries(
       Object.entries(ticketUpdateProps).filter(([_, v]) => v !== undefined)
     );
 
     if (Object.keys(cleanProps).length === 0) {
-      console.log('[consumeCupo] ⊘ SKIP: no hay props para actualizar ticket');
+      logger.debug(
+        { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId },
+        'SKIP: sin props para actualizar ticket'
+      );
     } else {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: cleanProps });
-      console.log(`[consumeCupo] ✅ Ticket ${ticketId} marcado con consumo`);
+      logger.info(
+        { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId },
+        'Ticket marcado con consumo de cupo'
+      );
     }
   } catch (err) {
-    console.error(`[consumeCupo] ⚠️ Error actualizando ticket ${ticketId}:`, err?.message);
+    reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error actualizando ticket con consumo de cupo', err });
+    logger.warn(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, err },
+      'Error actualizando ticket con consumo de cupo (no interrumpe facturación)'
+    );
     // No lanzar error: trazabilidad no debe romper facturación
   }
 
   // ========== RESUMEN ==========
-  console.log(`\n[consumeCupo] 📊 RESUMEN:`);
-  console.log(`   Consumo aplicado: ${consumo} ${tipoCupo === "Por Horas" ? "hrs" : "$"}`);
-  console.log(`   Cupo restante: ${cupoRestanteNuevo}`);
-  console.log(`   Cupo desactivado: ${cupoDeactivated ? "SÍ" : "NO"}`);
-  console.log(`[consumeCupo] ✅ Consumo completado\n`);
+  logger.info(
+    { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, tipoCupo, consumo, cupoRestanteNuevo, cupoDeactivated },
+    'Consumo de cupo completado'
+  );
 
-  return { 
-    consumed: true, 
-    consumo, 
-    cupoRestanteNuevo,
+  return {
+    consumed: true,
+    consumo,
+poRestanteNuevo,
     cupoDeactivated,
   };
 }
+
+/*
+ * CATCHES con reportHubSpotError agregados:
+ *   - tickets.basicApi.update() en bloque de trazabilidad → objectType="ticket"
+ *     (NO re-throw preservado: "trazabilidad no debe romper facturación")
+ *
+ * NO reportados:
+ *   - deals.basicApi.update() → deals excluidos de reporte (Regla 4)
+ *   - deals/tickets/lineItems.basicApi.getById → lecturas
+ *
+ * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
+ */

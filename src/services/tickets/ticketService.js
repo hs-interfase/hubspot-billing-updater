@@ -1,36 +1,36 @@
+// src/services/tickets/ticketService.js
+
 import { isAutoRenew } from '../billing/mode.js';
 import { getEffectiveBillingConfig } from '../../billingEngine.js';
-import { addInterval } from '../../utils/dateUtils.js'; 
+import { addInterval } from '../../utils/dateUtils.js';
 import { createInvoiceFromTicket } from '../invoiceService.js';
 import { syncBillingState } from '../billing/syncBillingState.js';
 import { hubspotClient } from '../../hubspotClient.js';
-import {  
-  TICKET_STAGES, 
-  AUTOMATED_TICKET_PIPELINE,     
-  AUTOMATED_TICKET_INITIAL_STAGE, 
+import {
+  TICKET_STAGES,
+  AUTOMATED_TICKET_PIPELINE,
+  AUTOMATED_TICKET_INITIAL_STAGE,
   isDryRun,
-  isForecastTicketStage, 
+  isForecastTicketStage,
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
 import { parseBool, safeString } from '../../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
+import logger from '../../../lib/logger.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
+}
 
 /**
  * Garantiza que existan 24 tickets futuros para un line item en modo AUTO_RENEW.
- * - Solo crea los que faltan, usando lógica idempotente.
- * - Usa addInterval y helpers existentes para calcular fechas.
- * - NO duplica lógica de intervalos ni fechas.
- * @param {object} opts
- * @param {object} opts.hubspotClient
- * @param {string} opts.dealId
- * @param {string} opts.lineItemId
- * @param {object} opts.lineItem
- * @param {string} opts.lineItemKey
- * @param {function} opts.buildTicketPayload
  */
 export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId, lineItem, lineItemKey, buildTicketPayload }) {
-  // Leer lineItem si no viene
   let li = lineItem;
   if (!li) {
     if (!lineItemId) throw new Error('ensure24FutureTickets requiere lineItemId o lineItem');
@@ -48,16 +48,13 @@ export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId,
     ]);
   }
   const properties = li.properties || {};
-  // Solo aplica a AUTO_RENEW
   if (!isAutoRenew({ properties })) return;
 
-  // Configuración de facturación
   const cfg = getEffectiveBillingConfig({ properties });
   const { interval } = cfg;
   const anchorRaw = properties.billing_next_date;
   if (!interval || !anchorRaw) return;
 
-  // Calcular las 24 fechas futuras desde billing_next_date
   const maxCount = 24;
   const futureDates = [];
   let current = new Date(anchorRaw);
@@ -66,11 +63,9 @@ export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId,
     current = addInterval(current, interval);
   }
 
-  // Listar tickets existentes del deal
   const existingTickets = await getTicketsForDeal(dealId);
   const existingKeys = new Set(existingTickets.map(t => t.properties.of_ticket_key));
 
-  // Para cada fecha, asegurar ticket canónico solo si falta
   for (const dateObj of futureDates) {
     const billDateYMD = dateObj.toISOString().slice(0, 10);
     const key = buildTicketKeyFromLineItemKey(dealId, lineItemKey || properties.line_item_key, billDateYMD);
@@ -81,7 +76,6 @@ export async function ensure24FutureTickets({ hubspotClient, dealId, lineItemId,
       billDateYMD,
       lineItemId: lineItemId || li.id,
       buildTicketPayload,
-      // maxPayments: opcional
     });
   }
 }
@@ -103,7 +97,6 @@ export async function countCanonicalTicketsForLineItemKey({ dealId, lineItemKey 
 
   const tickets = res?.results || [];
 
-  // contamos SOLO los que NO son duplicados UI
   const real = tickets.filter((t) => {
     const p = t.properties || {};
     const estado = (p.of_estado || '').toString().toUpperCase();
@@ -112,14 +105,12 @@ export async function countCanonicalTicketsForLineItemKey({ dealId, lineItemKey 
     return true;
   });
 
-  // únicos por key por seguridad
   const uniq = new Set(real.map((t) => (t.properties?.of_ticket_key || '').toString()));
   return uniq.size;
 }
 
 // --- Helper para sincronizar line item tras ticket canónico ---
 async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, billDateYMD }) {
-  // 1) Leer ticket (props mínimos)
   let ticket;
   try {
     ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
@@ -127,27 +118,27 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
       'of_deal_id',
       'of_line_item_ids',
       'of_ticket_key',
-      'hs_pipeline_stage', // 🔴 NUEVO
+      'hs_pipeline_stage',
     ]);
-  } catch (e) {
-    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer ticket:', e?.message);
+  } catch (err) {
+    logger.warn(
+      { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', ticketId, err },
+      'No se pudo leer ticket'
+    );
     return;
   }
 
   const tp = ticket?.properties || {};
 
-  // 🔴 GUARD CLAUSE CLAVE
-  // Si el ticket sigue en FORECAST, NO toca fechas de line item
-  // Solo continuamos si el ticket ya fue promovido (Phase 2 / Phase 3)
+  // Si el ticket sigue en FORECAST, no tocar fechas de line item
   if (isForecastTicketStage(tp.hs_pipeline_stage)) {
     return;
   }
 
-  // ✅ Tomamos la fecha "canónica" (evita UTC -1 día)
   const ticketDateYMD = billDateYMD || toYMDInBillingTZ(tp.fecha_resolucion_esperada);
   if (!ticketDateYMD) return;
 
-  // 2) Anti-clon (soft)
+  // Anti-clon (soft)
   if (tp.of_deal_id && String(tp.of_deal_id) !== String(dealId)) return;
   if (tp.of_line_item_ids) {
     const ids = String(tp.of_line_item_ids).split(',').map(x => x.trim()).filter(Boolean);
@@ -155,7 +146,6 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
   if (!tp.of_ticket_key) return;
 
-  // 3) Leer line item (solo lo necesario)
   let lineItem;
   try {
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
@@ -170,8 +160,11 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
       'number_of_payments',
       'fecha_inicio_de_facturacion',
     ]);
-  } catch (e) {
-    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo leer line item:', e?.message);
+  } catch (err) {
+    logger.warn(
+      { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', lineItemId, err },
+      'No se pudo leer line item'
+    );
     return;
   }
 
@@ -179,13 +172,11 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
 
-  // 4) last_ticketed_date = max(...)
   let newLastTicketedYMD = currentLastTicketedYMD;
   if (!currentLastTicketedYMD || ticketDateYMD > currentLastTicketedYMD) {
     newLastTicketedYMD = ticketDateYMD;
   }
 
-  // 4.b) HARD STOP por número de pagos
   const totalPaymentsRaw =
     lp.hs_recurring_billing_number_of_payments ?? lp.number_of_payments;
 
@@ -196,7 +187,10 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     const lineItemKey = extractLineItemKeyFromTicketKey(key);
 
     if (!lineItemKey) {
-      console.warn('[syncLineItemAfterCanonicalTicket] ticketKey sin LIK:', key);
+      logger.warn(
+        { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', ticketKey: key },
+        'ticketKey sin LIK'
+      );
       return;
     }
 
@@ -216,22 +210,25 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
       updates.fechas_completas = 'true';
 
       if (Object.keys(updates).length) {
-        await hubspotClient.crm.lineItems.basicApi.update(
-          String(lineItemId),
-          { properties: updates }
-        );
-
-        console.log(
-          `[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} COMPLETADO (${issued}/${totalPayments})`,
-          updates
-        );
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(
+            String(lineItemId),
+            { properties: updates }
+          );
+          logger.info(
+            { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', lineItemId, issued, totalPayments, updates },
+            'LineItem marcado como completado (pagos agotados)'
+          );
+        } catch (err) {
+          reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error al marcar line item como completado', err });
+          throw err;
+        }
       }
 
       return;
     }
   }
 
-  // 5) billing_next_date
   let newNextYMD = currentNextYMD;
 
   if (!currentNextYMD || currentNextYMD <= newLastTicketedYMD) {
@@ -248,7 +245,6 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     }
   }
 
-  // 6) Update solo si cambió algo
   const updates = {};
   if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
   if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD;
@@ -257,9 +253,16 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
-    console.log(`[syncLineItemAfterCanonicalTicket] LineItem ${lineItemId} actualizado:`, updates);
-  } catch (e) {
-    console.warn('[syncLineItemAfterCanonicalTicket] No se pudo actualizar line item:', e?.message);
+    logger.info(
+      { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', lineItemId, updates },
+      'LineItem actualizado tras ticket canónico'
+    );
+  } catch (err) {
+    reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error al actualizar billing dates en line item', err });
+    logger.warn(
+      { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', lineItemId, err },
+      'No se pudo actualizar line item'
+    );
   }
 }
 
@@ -267,19 +270,21 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 export async function resetTriggersFromLineItem(lineItemId) {
   const propsToReset = {
     facturar_ahora: 'false',
-    actualizar: 'false', // <- agregamos esto
+    actualizar: 'false',
   };
 
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
       properties: propsToReset,
     });
-
-    console.log(
-      `[TRIGGERS] ✓ reseteados en LineItem ${lineItemId}: ${Object.keys(propsToReset).join(', ')}`
+    logger.info(
+      { module: 'ticketService', fn: 'resetTriggersFromLineItem', lineItemId },
+      'Triggers reseteados en LineItem'
     );
   } catch (err) {
-    const msg = `[TRIGGERS] ❌ NO se pudo resetear triggers en LineItem ${lineItemId}. ` +
+    reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'No se pudo resetear triggers en LineItem', err });
+
+    const msg = `[TRIGGERS] NO se pudo resetear triggers en LineItem ${lineItemId}. ` +
       `Queda riesgo de loop. Error: ${err?.message || err}`;
 
     // Intento guardar el mensaje para que "se sepa qué falló"
@@ -291,7 +296,6 @@ export async function resetTriggersFromLineItem(lineItemId) {
       // si también falla, al menos queda en logs
     }
 
-    // Cortar ejecución (no seguir como si nada)
     throw new Error(msg);
   }
 }
@@ -314,126 +318,132 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
   const dp = deal?.properties || {};
   const lp = lineItem?.properties || {};
 
-const lineItemKey = lp.line_item_key || null;
-console.log('[ticketService][AUTO] 🔍 lineItemKey:', lineItemKey, '(real lineItemId:', lineItemId, ')');
-  console.log('[ticketService][AUTO] 🔍 billingDate:', billingDate);
+  const lineItemKey = lp.line_item_key || null;
+
+  logger.debug(
+    { module: 'ticketService', fn: 'createAutoBillingTicket', dealId, lineItemId, lineItemKey, billingDate },
+    'Inicio createAutoBillingTicket'
+  );
 
   let ticketId = null;
   let created = false;
   let duplicatesMarked = 0;
 
-try {
-  const result = await ensureTicketCanonical({
-    dealId,
-    lineItemKey: lineItem?.properties?.line_item_key, 
-    billDateYMD: billingDate,
-    lineItemId,
-
-    buildTicketPayload: async ({ dealId, lineItemKey, billDateYMD, expectedKey }) => {
-      const expectedDate = billDateYMD;
-      const orderedDate = billDateYMD;
-      const snapshots = await createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
-
-      const dealName = deal?.properties?.dealname || 'Deal';
-      const productName = lineItem?.properties?.name || 'Producto';
-      const rubro = snapshots.of_rubro || null;
-
-      const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
-
-      const ticketProps = {
-        subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
-        hs_pipeline: AUTOMATED_TICKET_PIPELINE,
-        hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
-        of_deal_id: dealId,
-        of_line_item_ids: lineItemId, 
-        of_line_item_key: lineItemKey, 
-        of_ticket_key: expectedKey, 
-        observaciones_ventas: lineItem?.properties?.mensaje_para_responsable || '',
-        ...snapshots,
-      };
-
-      console.log('[ticketPayload]', {
-        expectedKey,
-        billDateYMD,
-        expectedDate,
-      });
-
-      if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
-
-      return { properties: ticketProps };
-    },
-  });
-
-  ticketId = result.ticketId;
-  created = result.created;
-  duplicatesMarked = result.duplicatesMarked;
-
-  if (!ticketId) {
-    console.warn('[ticketService][AUTO] ⚠️ No ticketId devuelto. Se omite facturación.');
-    return { ticketId, created, duplicatesMarked };
-  }
-
-  if (created) {
-    const [companyIds, contactIds] = await Promise.all([
-      getDealCompanies(dealId),
-      getDealContacts(dealId),
-    ]);
-    await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
-    console.log(`[ticketService][AUTO] ✓ Ticket creado: ${ticketId}`);
-    console.log(`[ticketService][AUTO] Vendedor (deal hubspot_owner_id): ${dp.hubspot_owner_id || 'N/A'}`);
-  }
-
-  // === Lógica mínima de emisión de factura ===
-  // Solo emitir si: (a) el ticket es nuevo, o (b) ya existe, está en pipeline automático y no tiene factura
-  let ticketObj = null;
   try {
-    ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
-      'of_invoice_id',
-      'of_invoice_key',
-      'hs_pipeline',
-      'of_ticket_key',
-      'fecha_resolucion_esperada',
-    ]);
-  } catch (e) {
-    console.warn('[ticketService][AUTO] ⚠️ No se pudo obtener ticket para chequeo de factura:', e?.message);
-  }
+    const result = await ensureTicketCanonical({
+      dealId,
+      lineItemKey: lineItem?.properties?.line_item_key,
+      billDateYMD: billingDate,
+      lineItemId,
 
-  const hasInvoice = ticketObj?.properties?.of_invoice_id;
-  const isAutoPipeline = ticketObj?.properties?.hs_pipeline === AUTOMATED_TICKET_PIPELINE;
+      buildTicketPayload: async ({ dealId, lineItemKey, billDateYMD, expectedKey }) => {
+        const expectedDate = billDateYMD;
+        const orderedDate = billDateYMD;
+        const snapshots = await createTicketSnapshots(deal, lineItem, expectedDate, orderedDate);
 
-  if (created) {
-    // Nuevo ticket: emitir siempre
-    await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
-    console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket NUEVO ${ticketId}`);
-  } else if (isAutoPipeline && !hasInvoice) {
-    // Ticket existente, pipeline correcto y sin factura
-    await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
-    console.log(`[ticketService][AUTO] ✓ Factura emitida desde ticket EXISTENTE (sin factura previa) ${ticketId}`);
-  } else {
-    // No emitir
-    if (!isAutoPipeline) {
-      console.log(
-        `[ticketService][AUTO] ⊘ Ticket ya existía pero NO está en pipeline automático, no se emite factura: ${ticketId}`
+        const dealName = deal?.properties?.dealname || 'Deal';
+        const productName = lineItem?.properties?.name || 'Producto';
+        const rubro = snapshots.of_rubro || null;
+
+        const vendedorId = dp.hubspot_owner_id ? String(dp.hubspot_owner_id) : null;
+
+        const ticketProps = {
+          subject: `${dealName} | ${productName} | ${rubro} | ${billDateYMD}`,
+          hs_pipeline: AUTOMATED_TICKET_PIPELINE,
+          hs_pipeline_stage: AUTOMATED_TICKET_INITIAL_STAGE,
+          of_deal_id: dealId,
+          of_line_item_ids: lineItemId,
+          of_line_item_key: lineItemKey,
+          of_ticket_key: expectedKey,
+          observaciones_ventas: lineItem?.properties?.mensaje_para_responsable || '',
+          ...snapshots,
+        };
+
+        if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
+
+        return { properties: ticketProps };
+      },
+    });
+
+    ticketId = result.ticketId;
+    created = result.created;
+    duplicatesMarked = result.duplicatesMarked;
+
+    if (!ticketId) {
+      logger.warn(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', dealId, lineItemId },
+        'No ticketId devuelto, omitiendo facturación'
       );
-    } else if (hasInvoice) {
-      console.log(`[ticketService][AUTO] ⊘ Ticket ya existía y YA tiene factura, no se emite factura: ${ticketId}`);
-    } else {
-      console.log(`[ticketService][AUTO] ⊘ Ticket ya existía, no se emite factura: ${ticketId}`);
+      return { ticketId, created, duplicatesMarked };
     }
-  }
 
-  if (duplicatesMarked > 0) {
-    console.log(`[ticketService][AUTO] 🧹 ${duplicatesMarked} duplicado(s) marcados`);
-  }
+    if (created) {
+      const [companyIds, contactIds] = await Promise.all([
+        getDealCompanies(dealId),
+        getDealContacts(dealId),
+      ]);
+      await createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds);
+      logger.info(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', dealId, lineItemId, ticketId, vendedorId: dp.hubspot_owner_id || null },
+        'Ticket creado y asociado'
+      );
+    }
 
-  return { ticketId, created, duplicatesMarked };
-} catch (err) {
-  console.error('[ticketService][AUTO] ❌ Error en createAutoBillingTicket:', err?.message);
-  throw err;
-} finally {
-  // ✅ Siempre resetear triggers (best-effort)
-  await resetTriggersFromLineItem(lineItemId);
-}
+    let ticketObj = null;
+    try {
+      ticketObj = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+        'of_invoice_id',
+        'of_invoice_key',
+        'hs_pipeline',
+        'of_ticket_key',
+        'fecha_resolucion_esperada',
+      ]);
+    } catch (err) {
+      logger.warn(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', ticketId, err },
+        'No se pudo obtener ticket para chequeo de factura'
+      );
+    }
+
+    const hasInvoice = ticketObj?.properties?.of_invoice_id;
+    const isAutoPipeline = ticketObj?.properties?.hs_pipeline === AUTOMATED_TICKET_PIPELINE;
+
+    if (created) {
+      await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
+      logger.info(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', ticketId },
+        'Factura emitida desde ticket nuevo'
+      );
+    } else if (isAutoPipeline && !hasInvoice) {
+      await createInvoiceFromTicket(ticketObj, 'AUTO_LINEITEM');
+      logger.info(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', ticketId },
+        'Factura emitida desde ticket existente sin factura previa'
+      );
+    } else {
+      logger.debug(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', ticketId, isAutoPipeline, hasInvoice: !!hasInvoice },
+        'Ticket existente, no se emite factura'
+      );
+    }
+
+    if (duplicatesMarked > 0) {
+      logger.info(
+        { module: 'ticketService', fn: 'createAutoBillingTicket', ticketId, duplicatesMarked },
+        'Duplicados marcados'
+      );
+    }
+
+    return { ticketId, created, duplicatesMarked };
+  } catch (err) {
+    logger.error(
+      { module: 'ticketService', fn: 'createAutoBillingTicket', dealId, lineItemId, err },
+      'Error en createAutoBillingTicket'
+    );
+    throw err;
+  } finally {
+    await resetTriggersFromLineItem(lineItemId);
+  }
 }
 
 export async function buildTicketFullProps({
@@ -443,19 +453,16 @@ export async function buildTicketFullProps({
   lineItemId,
   lineItemKey,
   ticketKey,
-  expectedYMD,      // 🔥 SIEMPRE YYYY-MM-DD
-  orderedYMD = null // null manual, igual expected en auto
+  expectedYMD,
+  orderedYMD = null
 }) {
   const dp = deal?.properties || {};
   const lp = lineItem?.properties || {};
 
-    const autorenew =
+  const autorenew =
     hasFrequency(lp) &&
     isEmpty(lp.hs_recurring_billing_number_of_payments);
 
-  // ─────────────────────────────────────────────
-  // 1️⃣ Lookup empresa por asociación (como Phase P)
-  // ─────────────────────────────────────────────
   let empresaId = '';
   let empresaNombre = '';
 
@@ -475,17 +482,11 @@ export async function buildTicketFullProps({
     empresaNombre = '';
   }
 
-  // ─────────────────────────────────────────────
-  // 2️⃣ Datos base
-  // ─────────────────────────────────────────────
   const productoNombre = safeString(lp.name);
   const unidadDeNegocio = safeString(lp.unidad_de_negocio);
-  const servicio = safeString(lp.servicio); // rubro real
+  const servicio = safeString(lp.servicio);
   const paisOperativo = safeString(dp.of_pais_operativo);
 
-  // ─────────────────────────────────────────────
-  // 3️⃣ Snapshots (precio, moneda, iva, cupo, etc.)
-  // ─────────────────────────────────────────────
   const snapshots = createTicketSnapshots(
     deal,
     lineItem,
@@ -493,62 +494,36 @@ export async function buildTicketFullProps({
     orderedYMD
   );
 
-  // ─────────────────────────────────────────────
-  // 4️⃣ Subject EXACTO forecast
-  // ─────────────────────────────────────────────
   const subject =
     `${empresaNombre || 'SIN_EMPRESA'} - ` +
     `${productoNombre || 'SIN_PRODUCTO'} - ` +
     `${expectedYMD}`;
 
-  // ─────────────────────────────────────────────
-  // 5️⃣ Construcción final
-  // ─────────────────────────────────────────────
   const properties = {
-    // Identidad
     of_deal_id: String(dealId),
     of_line_item_ids: String(lineItemId || ''),
     of_line_item_key: String(lineItemKey || ''),
     of_ticket_key: String(ticketKey || ''),
-
-    // Empresa
     empresa_id: empresaId,
     nombre_empresa: empresaNombre,
-
-    // País
     of_pais_operativo: paisOperativo,
-
-    // Producto / negocio
     unidad_de_negocio: unidadDeNegocio,
     of_rubro: servicio,
-
-    // Subject consistente
     subject,
-
-    // Fecha SIEMPRE string
     fecha_resolucion_esperada: String(expectedYMD),
-
-    // Observaciones
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
-
-    // Snapshots completos
     ...snapshots,
   };
 
-  // 🔥 Garantía absoluta
   properties.fecha_resolucion_esperada = String(expectedYMD);
   properties.renovacion_automatica = autorenew ? 'true' : 'false';
 
-console.log('[buildTicketFullProps][autorenew]', {
-  lineItemId,
-  recurringbillingfrequency: lp.recurringbillingfrequency,
-  hs_recurring_billing_frequency: lp.hs_recurring_billing_frequency,
-  hs_recurring_billing_number_of_payments: lp.hs_recurring_billing_number_of_payments,
-  autorenew
-});
+  logger.debug(
+    { module: 'ticketService', fn: 'buildTicketFullProps', lineItemId, autorenew },
+    'buildTicketFullProps completado'
+  );
 
   return properties;
-  
 }
 
 
@@ -556,23 +531,13 @@ console.log('[buildTicketFullProps][autorenew]', {
  * Servicio para crear y gestionar tickets de "orden de facturación".
  * Implementa idempotencia mediante of_ticket_key.
  * Incluye deduplicación automática de tickets clonados por UI.
- */
-
-/**
- * ╔══════════════════════════════════════════════════════════════════╗
- * ║  DEDUPLICACIÓN DE TICKETS CLONADOS POR UI                       ║
- * ╚══════════════════════════════════════════════════════════════════╝
- * 
- * Problema: HubSpot permite clonar line items desde la UI, y cuando un 
- * line item tiene tickets asociados, también clona los tickets.
- * 
+ *
+ * DEDUPLICACIÓN DE TICKETS CLONADOS POR UI:
+ * Problema: HubSpot permite clonar line items desde la UI; cuando un line item
+ * tiene tickets asociados, también clona los tickets.
  * Solución: Identificar el ticket canónico (el que tiene ticketKey exacta)
- * y marcar los demás como DUPLICADO_UI para evitar confusiones.
- * 
- * Propiedades usadas:
- * - of_ticket_key: Clave única canónica (dealId::stableLineId::YYYY-MM-DD)
- * - of_estado: Estado del ticket (DUPLICADO_UI para tickets clonados)
- * - of_es_duplicado_clon: Flag booleano adicional para identificar clones
+ * y marcar los demás como DUPLICADO_UI.
+ * Propiedades: of_ticket_key, of_estado, of_es_duplicado_clon.
  */
 
 /**
@@ -580,7 +545,6 @@ console.log('[buildTicketFullProps][autorenew]', {
  */
 async function getTicketsForDeal(hubspotClient, dealId) {
   try {
-    // Associations v4: deal -> tickets
     const assoc = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
       String(dealId),
@@ -591,7 +555,6 @@ async function getTicketsForDeal(hubspotClient, dealId) {
     const ticketIds = (assoc.results || []).map(r => String(r.toObjectId));
     if (!ticketIds.length) return [];
 
-    // Batch read tickets
     const resp = await hubspotClient.crm.tickets.batchApi.read({
       inputs: ticketIds.map(id => ({ id })),
       properties: [
@@ -613,10 +576,13 @@ async function getTicketsForDeal(hubspotClient, dealId) {
     return (resp.results || []).map(t => ({
       id: String(t.id),
       properties: t.properties || {},
-       createdate: t.properties?.createdate || null,
+      createdate: t.properties?.createdate || null,
     }));
   } catch (err) {
-    console.warn('[ticketService] Error obteniendo tickets del deal:', err?.message);
+    logger.warn(
+      { module: 'ticketService', fn: 'getTicketsForDeal', dealId, err },
+      'Error obteniendo tickets del deal'
+    );
     return [];
   }
 }
@@ -627,13 +593,16 @@ export async function safeCreateTicket(hubspotClient, payload) {
   for (let i = 0; i < 5; i++) {
     try {
       return await hubspotClient.crm.tickets.basicApi.create(current);
-    } catch (e) {
-      const missing = getMissingPropertyNameFromHubSpotError(e);
-      if (!missing) throw e;
+    } catch (err) {
+      const missing = getMissingPropertyNameFromHubSpotError(err);
+      if (!missing) throw err;
 
-      if (current?.properties?.[missing] === undefined) throw e;
+      if (current?.properties?.[missing] === undefined) throw err;
 
-      console.warn(`[ticketService] Missing property "${missing}". Retrying without it...`);
+      logger.warn(
+        { module: 'ticketService', fn: 'safeCreateTicket', missingProperty: missing },
+        'Propiedad faltante en HubSpot, reintentando sin ella'
+      );
       delete current.properties[missing];
     }
   }
@@ -646,13 +615,16 @@ export async function safeUpdateTicket(hubspotClient, ticketId, payload) {
   for (let i = 0; i < 5; i++) {
     try {
       return await hubspotClient.crm.tickets.basicApi.update(ticketId, current);
-    } catch (e) {
-      const missing = getMissingPropertyNameFromHubSpotError(e);
-      if (!missing) throw e;
+    } catch (err) {
+      const missing = getMissingPropertyNameFromHubSpotError(err);
+      if (!missing) throw err;
 
-      if (current?.properties?.[missing] === undefined) throw e;
+      if (current?.properties?.[missing] === undefined) throw err;
 
-      console.warn(`[ticketService] Missing property "${missing}". Retrying update without it...`);
+      logger.warn(
+        { module: 'ticketService', fn: 'safeUpdateTicket', ticketId, missingProperty: missing },
+        'Propiedad faltante en HubSpot, reintentando update sin ella'
+      );
       delete current.properties[missing];
     }
   }
@@ -660,15 +632,16 @@ export async function safeUpdateTicket(hubspotClient, ticketId, payload) {
 }
 
 /**
- * Marca tickets duplicados "clonados por UI" para que no molesten.
- * - Mantiene el canónico
- * - Marca el resto como DUPLICADO_UI
+ * Marca tickets duplicados "clonados por UI".
  */
 async function markDuplicateTickets({ canonicalTicketId, duplicates, reason }) {
   if (!duplicates || duplicates.length === 0) return;
-  
-  console.log(`[ticketService] 🧹 Marcando ${duplicates.length} ticket(s) como DUPLICADO_UI`);
-  
+
+  logger.info(
+    { module: 'ticketService', fn: 'markDuplicateTickets', canonicalTicketId, duplicatesCount: duplicates.length },
+    'Marcando tickets como DUPLICADO_UI'
+  );
+
   for (const t of duplicates) {
     const id = t.id;
     if (id === canonicalTicketId) continue;
@@ -676,7 +649,7 @@ async function markDuplicateTickets({ canonicalTicketId, duplicates, reason }) {
     try {
       const currentNote = t.properties?.nota || '';
       const newNote = `${currentNote}\n[auto ${getTodayYMD()}] Marcado DUPLICADO_UI: ${reason}`.trim();
-      
+
       const patch = {
         properties: {
           of_estado: 'DUPLICADO_UI',
@@ -686,9 +659,15 @@ async function markDuplicateTickets({ canonicalTicketId, duplicates, reason }) {
       };
 
       await safeUpdateTicket(hubspotClient, String(id), patch);
-      console.log(`   ✓ Ticket ${id} marcado como DUPLICADO_UI`);
+      logger.debug(
+        { module: 'ticketService', fn: 'markDuplicateTickets', ticketId: id },
+        'Ticket marcado como DUPLICADO_UI'
+      );
     } catch (err) {
-      console.warn(`   ⚠️ No se pudo marcar ticket ${id} como duplicado:`, err?.message);
+      logger.warn(
+        { module: 'ticketService', fn: 'markDuplicateTickets', ticketId: id, err },
+        'No se pudo marcar ticket como duplicado'
+      );
     }
   }
 }
@@ -698,7 +677,7 @@ function extractLineItemKeyFromTicketKey(ticketKey) {
   const parts = String(ticketKey).split('::');
   if (parts.length !== 3) return null;
 
-  const mid = parts[1]; // "LIK:<lineItemKey>"
+  const mid = parts[1];
   if (!mid.startsWith('LIK:')) return null;
 
   const lik = mid.slice(4);
@@ -717,24 +696,22 @@ async function findCanonicalAndDuplicates({
   const norm = (s) => (s == null ? '' : String(s)).trim();
   const tkey = (t) => norm(t?.properties?.of_ticket_key);
 
-    // 1) LIK-only: match exact expectedKey (of_ticket_key)
-    const byExpectedKey = tickets.filter(t => tkey(t) === expectedKey);
+  const byExpectedKey = tickets.filter(t => tkey(t) === expectedKey);
 
-    let canonical = null;
-    let duplicates = [];
+  let canonical = null;
+  let duplicates = [];
 
-    if (byExpectedKey.length) {
-      canonical = byExpectedKey
-        .slice()
-        .sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b))[0];
-      duplicates = byExpectedKey.filter(t => String(t.id) !== String(canonical.id));
-    } else {
-      // LIK-only: no fallback legacy, no crash
-      canonical = null;
-      duplicates = [];
-    }
+  if (byExpectedKey.length) {
+    canonical = byExpectedKey
+      .slice()
+      .sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b))[0];
+    duplicates = byExpectedKey.filter(t => String(t.id) !== String(canonical.id));
+  } else {
+    canonical = null;
+    duplicates = [];
+  }
 
-    return { canonical, duplicates };
+  return { canonical, duplicates };
 }
 
 function getTicketCreatedMs(t) {
@@ -745,13 +722,11 @@ function getTicketCreatedMs(t) {
 }
 
 export async function archiveClonedTicketsByKey({ expectedKey, dealId, dryRun = false }) {
-  // Buscar todos los tickets del deal y filtrar por of_ticket_key exacto
   const tickets = await getTicketsForDeal(dealId);
   const byKey = tickets.filter(t => (t.properties?.of_ticket_key || '').trim() === expectedKey);
 
   if (byKey.length <= 1) return { kept: byKey[0]?.id || null, archived: [] };
 
-  // Ordenar por createdate asc y archivar todos menos el primero
   byKey.sort((a, b) => getTicketCreatedMs(a) - getTicketCreatedMs(b));
 
   const kept = String(byKey[0].id);
@@ -767,23 +742,14 @@ export async function archiveClonedTicketsByKey({ expectedKey, dealId, dryRun = 
 
 /**
  * Asegura que existe un ticket canónico y marca los duplicados.
- * Esta es la función principal que reemplaza la lógica de creación simple.
- * 
- * @param {Object} params
- * @param {string} params.dealId - ID del deal
- * @param {string} params.stableLineId - ID estable del line item (ej: "LI:123" o "PYLI:456")
- * @param {string} params.billDateYMD - Fecha de facturación (YYYY-MM-DD)
- * @param {Function} params.buildTicketPayload - Función que construye el payload del ticket
- * @returns {Promise<Object>} { ticketId, created, ticketKey, duplicatesMarked }
  */
-
 export async function ensureTicketCanonical({
   dealId,
   lineItemKey,
   billDateYMD,
   lineItemId,
   buildTicketPayload,
-  maxPayments, // (si no se usa todavía, ok dejarlo)
+  maxPayments,
 }) {
   if (!lineItemId) {
     throw new Error('ensureTicketCanonical: lineItemId es requerido (asociaciones/updates)');
@@ -792,35 +758,30 @@ export async function ensureTicketCanonical({
     throw new Error('ensureTicketCanonical: lineItemKey es requerido (identidad estable)');
   }
 
-const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateYMD);
+  const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateYMD);
 
-  if (process.env.DBG_TICKET_KEY === 'true') {
-    console.log('[DBG_TICKET_KEY][ticketService] build', {
-      dealId,
-      lineItemKey,
-      lineItemId,
-      billDateYMD,
-      expectedKey,
-    });
-  }
+  logger.debug(
+    { module: 'ticketService', fn: 'ensureTicketCanonical', dealId, lineItemKey, lineItemId, billDateYMD, expectedKey },
+    'ensureTicketCanonical: buscando ticket canónico'
+  );
 
   await archiveClonedTicketsByKey({ expectedKey, dealId, dryRun: isDryRun() });
 
-  // 1) Buscar canonical + duplicates
   const { canonical, duplicates } = await findCanonicalAndDuplicates({
     dealId,
     expectedKey,
     billDateYMD,
     lineItemId,
-    lineItemKey, // (aunque hoy no lo use, pasalo para que puedas migrar el finder)
+    lineItemKey,
   });
 
-  // 2) Si existe canonical, marcar duplicados y devolver canonical
   if (canonical) {
-    console.log(`   ✓ Ticket canónico existente: ${canonical.id}`);
+    logger.info(
+      { module: 'ticketService', fn: 'ensureTicketCanonical', ticketId: canonical.id, expectedKey, duplicatesCount: duplicates.length },
+      'Ticket canónico existente'
+    );
 
     if (duplicates.length) {
-      console.log(`   🧹 Encontrados ${duplicates.length} duplicado(s), marcando...`);
       await markDuplicateTickets({
         canonicalTicketId: canonical.id,
         duplicates,
@@ -835,21 +796,20 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
         ticketId: canonical.id,
         billDateYMD,
       });
-      // Hook: Centraliza estado billing
       await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey, dealIsCanceled: false });
-          if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
-            await ensure24FutureTickets({
-              hubspotClient,
-              dealId,
-              lineItemId,
-              lineItem,
-              lineItemKey,
-            });
-          }
-    } catch (e) {
-      console.warn(
-        '[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (canonical) error:',
-        e?.message
+      if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+        await ensure24FutureTickets({
+          hubspotClient,
+          dealId,
+          lineItemId,
+          lineItem,
+          lineItemKey,
+        });
+      }
+    } catch (err) {
+      logger.warn(
+        { module: 'ticketService', fn: 'ensureTicketCanonical', ticketId: canonical.id, err },
+        'syncLineItemAfterCanonicalTicket (canonical) error'
       );
     }
 
@@ -861,11 +821,17 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
     };
   }
 
-  // 3) Si no existe, crear ticket canónico
-  console.log(`   🆕 Creando ticket canónico...`);
+  // No existe: crear ticket canónico
+  logger.info(
+    { module: 'ticketService', fn: 'ensureTicketCanonical', dealId, lineItemId, expectedKey },
+    'Creando ticket canónico'
+  );
 
   if (isDryRun()) {
-    console.log(`   DRY_RUN: no se crea ticket ${expectedKey}`);
+    logger.info(
+      { module: 'ticketService', fn: 'ensureTicketCanonical', expectedKey },
+      'DRY_RUN: ticket no creado'
+    );
     return { ticketId: null, created: false, ticketKey: expectedKey, duplicatesMarked: 0 };
   }
 
@@ -879,9 +845,11 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
   const created = await safeCreateTicket(hubspotClient, payload);
   const newId = String(created.id || created.result?.id);
 
-  console.log(`   ✓ Ticket canónico creado: ${newId}`);
+  logger.info(
+    { module: 'ticketService', fn: 'ensureTicketCanonical', ticketId: newId, expectedKey },
+    'Ticket canónico creado'
+  );
 
-  // 4) Luego de crear, volver a buscar y marcar duplicados UI
   const post = await findCanonicalAndDuplicates({
     dealId,
     expectedKey,
@@ -891,7 +859,6 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
   });
 
   if (post.duplicates.length) {
-    console.log(`   🧹 Después de crear, encontrados ${post.duplicates.length} duplicado(s) UI, marcando...`);
     await markDuplicateTickets({
       canonicalTicketId: newId,
       duplicates: post.duplicates,
@@ -906,12 +873,11 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
       ticketId: newId,
       billDateYMD,
     });
-    // Hook: Centraliza estado billing
     await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey, dealIsCanceled: false });
-  } catch (e) {
-    console.warn(
-      '[ensureTicketCanonical] syncLineItemAfterCanonicalTicket (created) error:',
-      e?.message
+  } catch (err) {
+    logger.warn(
+      { module: 'ticketService', fn: 'ensureTicketCanonical', ticketId: newId, err },
+      'syncLineItemAfterCanonicalTicket (created) error'
     );
   }
 
@@ -922,11 +888,6 @@ const expectedKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, billDateY
     duplicatesMarked: post.duplicates.length,
   };
 }
-
-/**
- * Helpers para crear/actualizar tickets de forma robusta.
- * Detecta propiedades faltantes en HubSpot y reintenta sin ellas.
- */
 
 export function getMissingPropertyNameFromHubSpotError(e) {
   const body = e?.body || e?.response?.body;
@@ -940,7 +901,6 @@ export function getMissingPropertyNameFromHubSpotError(e) {
 
 /**
  * Busca un ticket existente por clave única (of_ticket_key).
- * Devuelve el ticket si existe, null si no.
  */
 export async function findTicketByKey(ticketKey) {
   try {
@@ -962,34 +922,31 @@ export async function findTicketByKey(ticketKey) {
 
     return searchResp.results?.[0] || null;
   } catch (err) {
-    console.warn('[ticketService] Error buscando ticket por key:', ticketKey, err?.message);
+    logger.warn(
+      { module: 'ticketService', fn: 'findTicketByKey', ticketKey, err },
+      'Error buscando ticket por key'
+    );
     return null;
   }
 }
 
 /**
  * Determina el stage correcto del ticket según la fecha de facturación y flag "facturar ahora".
- * - Si lineItem.facturar_ahora === true: READY (urgente)
- * - Si es HOY o MAÑANA: READY
- * - Si es después: NEW
  */
 export function getTicketStage(billingDate, lineItem) {
   const lp = lineItem?.properties || {};
-  
-  // Prioridad 1: Si el vendedor pidió facturar ahora → INVOICED
+
   if (parseBool(lp.facturar_ahora)) {
     return TICKET_STAGES.READY;
   }
-  
-  // Prioridad 2: Si es hoy o mañana → READY
+
   const today = getTodayYMD();
-  const tomorrowStr = getTomorrowYMD(); // helper
-  
+  const tomorrowStr = getTomorrowYMD();
+
   if (billingDate === today || billingDate === tomorrowStr) {
     return TICKET_STAGES.READY;
   }
-  
-  // Por defecto: NEW
+
   return TICKET_STAGES.NEW;
 }
 
@@ -1006,7 +963,10 @@ export async function getDealCompanies(dealId) {
     );
     return (resp.results || []).map(r => String(r.toObjectId));
   } catch (err) {
-    console.warn('[ticketService] Error obteniendo companies del deal:', err?.message);
+    logger.warn(
+      { module: 'ticketService', fn: 'getDealCompanies', dealId, err },
+      'Error obteniendo companies del deal'
+    );
     return [];
   }
 }
@@ -1024,7 +984,10 @@ export async function getDealContacts(dealId) {
     );
     return (resp.results || []).map(r => String(r.toObjectId));
   } catch (err) {
-    console.warn('[ticketService] Error obteniendo contacts del deal:', err?.message);
+    logger.warn(
+      { module: 'ticketService', fn: 'getDealContacts', dealId, err },
+      'Error obteniendo contacts del deal'
+    );
     return [];
   }
 }
@@ -1034,35 +997,31 @@ export async function getDealContacts(dealId) {
  */
 export async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds) {
   const associations = [];
-  
-  // Deal
+
   associations.push(
     hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, [])
-      .catch(err => console.warn('[ticketService] Error asociando deal:', err?.message))
+      .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, dealId, err }, 'Error asociando deal'))
   );
-  
-  // Line Item
+
   associations.push(
     hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'line_items', lineItemId, [])
-      .catch(err => console.warn('[ticketService] Error asociando line item:', err?.message))
+      .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, lineItemId, err }, 'Error asociando line item'))
   );
-  
-  // Companies
+
   for (const companyId of companyIds) {
     associations.push(
       hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, [])
-        .catch(err => console.warn('[ticketService] Error asociando company:', err?.message))
+        .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, companyId, err }, 'Error asociando company'))
     );
   }
-  
-  // Contacts
+
   for (const contactId of contactIds) {
     associations.push(
       hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'contacts', contactId, [])
-        .catch(err => console.warn('[ticketService] Error asociando contact:', err?.message))
+        .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, contactId, err }, 'Error asociando contact'))
     );
   }
-  
+
   await Promise.all(associations);
 }
 
@@ -1070,19 +1029,61 @@ export async function createTicketAssociations(ticketId, dealId, lineItemId, com
  * Actualiza un ticket existente con datos adicionales.
  */
 export async function updateTicket(ticketId, properties) {
-  // Guard: skip if empty
   if (!properties || Object.keys(properties).length === 0) {
-    console.log(`[ticketService] ⊘ SKIP_EMPTY_UPDATE: No properties to update for ticket ${ticketId}`);
+    logger.debug(
+      { module: 'ticketService', fn: 'updateTicket', ticketId },
+      'SKIP_EMPTY_UPDATE: sin propiedades para actualizar'
+    );
     return;
   }
 
   try {
-    await safeUpdateTicket(hubspotClient, ticketId, {
-      properties,
-    });
-    console.log(`[ticketService] Ticket ${ticketId} actualizado`);
+    await safeUpdateTicket(hubspotClient, ticketId, { properties });
+    logger.info(
+      { module: 'ticketService', fn: 'updateTicket', ticketId },
+      'Ticket actualizado'
+    );
   } catch (err) {
-    console.error('[ticketService] Error actualizando ticket:', err?.response?.body || err?.message);
+    reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error actualizando ticket', err });
+    logger.error(
+      { module: 'ticketService', fn: 'updateTicket', ticketId, err },
+      'Error actualizando ticket'
+    );
     throw err;
   }
 }
+
+/*
+ * CATCHES con reportHubSpotError agregados:
+ *   - syncLineItemAfterCanonicalTicket: lineItems.basicApi.update() rama "completado" → objectType="line_item"
+ *   - syncLineItemAfterCanonicalTicket: lineItems.basicApi.update() rama "billing dates" → objectType="line_item"
+ *     (este catch NO re-throws; warn + continúa, consistent con el original)
+ *   - resetTriggersFromLineItem: lineItems.basicApi.update() → objectType="line_item", antes del throw
+ *     (el segundo update interno —billing_error— es best-effort dentro del catch, no se reporta para evitar
+ *     recursión y porque es solo un intento de diagnóstico)
+ *   - updateTicket: safeUpdateTicket() → objectType="ticket", antes del re-throw
+ *
+ * NO reportados:
+ *   - markDuplicateTickets: safeUpdateTicket() → es marcado de estado interno (DUPLICADO_UI),
+ *     no accionable desde perspectiva del cliente; error absorbido con warn
+ *   - safeCreateTicket / safeUpdateTicket internos (retry loop) → el error se re-throws
+ *     al caller que sí reporta
+ *   - getDealCompanies / getDealContacts / createTicketAssociations → lecturas y asociaciones excluidas
+ *   - archiveClonedTicketsByKey → archivado, no update accionable
+ *   - syncBillingState → delegado a otro servicio
+ *   - createInvoiceFromTicket → no es ticket/line_item update directo
+ *   - ensure24FutureTickets → delegado
+ *   - findTicketByKey → lectura
+ *   - getTicketsForDeal → lectura
+ *
+ * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
+ *
+ * ⚠️  BUGS PREEXISTENTES (no corregidos per Regla 5):
+ *   1. getTicketsForDeal() tiene firma (hubspotClient, dealId) pero en los call sites
+ *      internos (findCanonicalAndDuplicates, archiveClonedTicketsByKey, ensure24FutureTickets)
+ *      se llama solo con (dealId), por lo que hubspotClient queda undefined dentro de la función
+ *      y todas las calls a hubspotClient.crm.* fallarán en runtime.
+ *   2. En ensureTicketCanonical, `lineItem` se referencia en el bloque
+ *      `isAutoRenew({ properties: lineItem?.properties || lineItem })` pero no es
+ *      un parámetro de la función (no está en la destructuración); siempre será undefined.
+ */

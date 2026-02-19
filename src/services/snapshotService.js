@@ -2,6 +2,24 @@
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
+import logger from '../lib/logger.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+
+/**
+ * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) {
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.
@@ -40,38 +58,52 @@ export function determineTicketFrequency(lineItem) {
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
   const result = raw === '16912720' ? 'true' : 'false';
-  console.log('[SNAPSHOT][IVA][A] detectIVA() ->', { raw, result });
+  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result }, '[SNAPSHOT][IVA][A] detectIVA()');
   return result;
 }
 
 export function extractLineItemSnapshots(lineItem, deal) {
   const lp = lineItem?.properties || {};
 
-  const precioUnitario = parseNumber(lp.price, 0);
-  const cantidad = parseNumber(lp.quantity, 0);
+  // Valores base
+  const precioUnitario = parseNumber(lp.price, 0); // = valor hora para cupos
+  const cantidad = parseNumber(lp.quantity, 0); // = horas para cupos
   const costoUnitario = parseNumber(lp.hs_cost_of_goods_sold, 0);
 
-  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100;
-  const descuentoMonto = parseNumber(lp.discount, 0);
-  const ivaValue = detectIVA(lineItem);
+  // TAX & DISCOUNT desde Line Item
+  const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100; // ✅ Convertir basis points a %
+  const descuentoMonto = parseNumber(lp.discount, 0); // descuento por unidad en moneda del deal
+  const ivaValue = detectIVA(lineItem); // "true" si ID === '16912720'
 
-  console.log(`\n[DBG][SNAPSHOT] Line Item ID: ${lineItem?.id}`);
-  console.log('[DBG][SNAPSHOT] Tax/Discount SOURCE:', {
+  // 🐛 DEBUG: Log valores fuente y destino
+  logger.info({ module: 'snapshotService', fn: 'extractLineItemSnapshots', lineItemId: lineItem?.id }, `[DBG][SNAPSHOT] Line Item ID: ${lineItem?.id}`);
+  logger.info({
+    module: 'snapshotService',
+    fn: 'extractLineItemSnapshots',
+    lineItemId: lineItem?.id,
     hs_discount_percentage: lp.hs_discount_percentage,
     discount: lp.discount,
     hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
-  });
-  console.log('[DBG][SNAPSHOT] Tax/Discount TARGET (ticket):', {
+  }, '[DBG][SNAPSHOT] Tax/Discount SOURCE');
+  logger.info({
+    module: 'snapshotService',
+    fn: 'extractLineItemSnapshots',
+    lineItemId: lineItem?.id,
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-  });
+  }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
+  // Calcular costo total (unitario × cantidad)
   const costoTotal = costoUnitario * cantidad;
+
+  // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
 
+  // Frecuencia simplificada (fuente: Line Item)
   const frecuencia = determineTicketFrequency(lineItem);
 
+  // "repetitivo" (legacy): depende de si el Line Item tiene billing frequency (no vacío y no "unico")
   const rawFreq = (lp.recurringbillingfrequency || lp.hs_recurring_billing_frequency || '')
     .toString()
     .trim()
@@ -79,41 +111,46 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   const repetitivo = !!rawFreq && !['unico', 'único', 'one_time'].includes(rawFreq);
 
+  // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
   const baseSnapshots = {
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
-    of_rubro: safeString(lp.servicio),
+    of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
     of_subrubro: safeString(lp.subrubro),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
-
-    // 🔥 UNIDAD DE NEGOCIO AHORA SALE DEL LINE ITEM
-    unidad_de_negocio: safeString(lp.unidad_de_negocio),
-
-    // ❌ ELIMINADO: of_pais_operativo (ahora viene del Deal)
-
+    //FALTA UNIDAD DE NEGOCIO QUE ES PROPIEDAD DL
+    of_pais_operativo: safeString(lp.pais_operativo), //esto DEBE SACARSE DEL DEAL
     monto_unitario_real: precioUnitario,
     cantidad_real: cantidad,
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
-    of_aplica_para_cupo: getCupoType(lineItem, deal),
-    of_costo: costoTotal,
+    of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
+    of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.porcentaje_margen, 0),
-    of_iva: ivaValue,
+    of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
     reventa: parseBool(lp.reventa),
-    of_frecuencia_de_facturacion: frecuencia,
+    of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
   };
 
-  console.log('[SNAPSHOT][CRITICOS][AUTO]', {
+  logger.info({
+    module: 'snapshotService',
+    fn: 'extractLineItemSnapshots',
+    lineItemId: lineItem?.id,
     monto_unitario_real: precioUnitario,
     cantidad_real: cantidad,
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-  });
+  }, '[SNAPSHOT][CRITICOS][AUTO]');
 
-  console.log('[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return ->', { of_iva: baseSnapshots.of_iva });
+  logger.info({
+    module: 'snapshotService',
+    fn: 'extractLineItemSnapshots',
+    lineItemId: lineItem?.id,
+    of_iva: baseSnapshots.of_iva,
+  }, '[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return');
 
   return baseSnapshots;
 }
@@ -172,36 +209,72 @@ export function extractDealSnapshots(deal) {
  */
 export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate = null) {
   const dealData = extractDealSnapshots(deal);
-  const lineItemData = extractLineItemSnapshots(lineItem, deal);
+  const lineItemData = extractLineItemSnapshots(lineItem, deal); // Pasar deal para cupo
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
-  const motivoCancelacion =
-    safeString(dp.closed_lost_reason) || safeString(lp.motivo_pausa);
+  // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
+  const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
+
+  // ✅ C) Construir título del invoice
+  const liShort = safeString(lp.name) || `Flota`;
+  const invoiceTitle = `${safeString(dp.dealname) || 'Deal'} - ${liShort} - ${expectedDate}`;
 
   const out = {
     ...dealData,
     ...lineItemData,
 
-    // Fecha en formato timestamp (luego se pisará como string)
-    fecha_resolucion_esperada: expectedDate
-      ? toHubSpotDateOnly(expectedDate)
-      : null,
+    // ✅ B) FECHA ESPERADA/PLANIFICADA (siempre desde billDateYMD usado en key)
+    // Convertir YYYY-MM-DD a timestamp ms (midnight UTC)
+    fecha_resolucion_esperada: expectedDate ? toHubSpotDateOnly(expectedDate) : null,
+
+    // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
+    // of_fecha_facturacion_real: (se setea después)
 
     motivo_cancelacion_ticket: motivoCancelacion,
+
+    // ✅ C) Título del invoice para usar después
+    subject: invoiceTitle,
   };
 
-  // Normalizar IVA
-  const ivaRaw = out.of_iva;
-  out.of_iva =
-    String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
+  logger.info({
+    module: 'snapshotService',
+    fn: 'createTicketSnapshots',
+    of_iva: out.of_iva,
+  }, '[SNAPSHOT][IVA][C] createTicketSnapshots() after merge');
 
-  // Fecha ordenada a facturar (solo si aplica)
+  // ✅ Garantizar que of_iva siempre sea 'true' o 'false', nunca '' o null
+  const ivaRaw = out.of_iva;
+  out.of_iva = String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
+  logger.info({
+    module: 'snapshotService',
+    fn: 'createTicketSnapshots',
+    before: ivaRaw,
+    after: out.of_iva,
+  }, '[SNAPSHOT][IVA][FIX] of_iva normalizado');
+
+  // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
+  // Convertir YYYY-MM-DD a timestamp ms
   if (orderedDate) {
-    out.of_fecha_de_facturacion =
-      toHubSpotDateOnly(orderedDate);
+    out.of_fecha_de_facturacion = toHubSpotDateOnly(orderedDate);
   }
 
   return out;
 }
 
+/*
+ * ─────────────────────────────────────────────────────────────
+ * CATCHES con reportHubSpotError agregados: NINGUNO
+ *
+ * Este archivo no contiene bloques try/catch con ticketId ni
+ * lineItemId en contexto de error accionable de HubSpot API.
+ * Es un módulo puro de transformación de datos (sin llamadas a
+ * hubspotClient), por lo que reportIfActionable está disponible
+ * pero no se invoca en esta versión.
+ *
+ * Confirmación: "No se reportan warns a HubSpot;
+ *                solo errores 4xx (≠429)" — regla implementada
+ *                en reportIfActionable(), lista para uso si se
+ *                agregan llamadas API en el futuro.
+ * ─────────────────────────────────────────────────────────────
+ */

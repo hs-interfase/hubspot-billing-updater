@@ -1,3 +1,4 @@
+// src/services/lineItems/cloneSanitizerService.js
 /**
  * cloneSanitizerService
  *
@@ -10,11 +11,13 @@
  * - Devuelve `updates` (NO hace writes)
  */
 
+import logger from "../../../lib/logger.js";
+
 function parseLineItemKey(lineItemKey) {
   if (!lineItemKey) return null;
 
   // formato esperado: <dealId>:<lineItemId>:<rand>
-  const parts = String(lineItemKey).split(':');
+  const parts = String(lineItemKey).split(":");
   if (parts.length < 2) return null;
 
   return {
@@ -23,11 +26,7 @@ function parseLineItemKey(lineItemKey) {
   };
 }
 
-export function sanitizeClonedLineItem(
-  lineItem,
-  dealId,
-  { debug = false } = {}
-) {
+export function sanitizeClonedLineItem(lineItem, dealId, { debug = false } = {}) {
   if (!lineItem?.properties) return null;
 
   const key = lineItem.properties.line_item_key;
@@ -42,41 +41,48 @@ export function sanitizeClonedLineItem(
 
   if (!keyMismatch) return null;
 
-const OPERATIVE_PROPS_TO_RESET = [
-  'billing_anchor_date',
-  'billing_next_date',
-  'last_billing_period',
-  'last_ticketed_date',
-  'billing_error',
-  'billing_status',
-  'cantidad_de_facturaciones_urgentes',
-  'invoice_id',
-  'invoice_key',
-  'of_invoice_id',
-  'of_invoice_key',
-  'of_ticket_id',
-  'of_ticket_key',
+  const OPERATIVE_PROPS_TO_RESET = [
+    "billing_anchor_date",
+    "billing_next_date",
+    "last_billing_period",
+    "last_ticketed_date",
+    "billing_error",
+    "billing_status",
+    "cantidad_de_facturaciones_urgentes",
+    "invoice_id",
+    "invoice_key",
+    "of_invoice_id",
+    "of_invoice_key",
+    "of_ticket_id",
+    "of_ticket_key",
   ];
 
   const updates = {};
 
   for (const prop of OPERATIVE_PROPS_TO_RESET) {
     if (lineItem.properties[prop]) {
-      updates[prop] = '';
+      updates[prop] = "";
     }
   }
 
   if (Object.keys(updates).length === 0) return null;
 
   if (debug) {
-    console.log('[cloneSanitizerService]', {
-      lineItemId: lineItem.id,
+    const log = logger.child({
+      module: "cloneSanitizerService",
       dealId,
-      line_item_key: key,
-      parsedKey: parsed,
-      reason: 'LINE_ITEM_KEY_MISMATCH',
-      resetProps: Object.keys(updates),
+      lineItemId: lineItem.id,
     });
+
+    log.debug(
+      {
+        line_item_key: key,
+        parsedKey: parsed,
+        reason: "LINE_ITEM_KEY_MISMATCH",
+        resetProps: Object.keys(updates),
+      },
+      "[cloneSanitizerService]"
+    );
   }
 
   return updates;

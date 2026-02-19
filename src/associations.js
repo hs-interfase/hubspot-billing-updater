@@ -1,5 +1,6 @@
 // src/associations.js
 import { hubspotClient } from "./hubspotClient.js";
+import logger from "../lib/logger.js";
 
 const _assocTypeCache = new Map();
 
@@ -96,12 +97,24 @@ export async function associateV4(fromType, fromId, toType, toId) {
  * Útil para que emisión de facturas no falle por una asociación.
  */
 export async function safeAssociateV4(fromType, fromId, toType, toId) {
+  const log = logger.child({
+    module: "associations",
+    fromType,
+    fromId,
+    toType,
+    toId,
+  });
+
   try {
     return await associateV4(fromType, fromId, toType, toId);
   } catch (err) {
-    console.warn(
-      `[associations] WARN no se pudo asociar ${fromType}:${fromId} -> ${toType}:${toId}`,
-      err?.response?.body || err?.message || err
+    log.warn(
+      {
+        err,
+        hubspotBody: err?.response?.body || null,
+        hubspotStatus: err?.response?.status || null,
+      },
+      "safeAssociateV4_failed"
     );
     return null;
   }

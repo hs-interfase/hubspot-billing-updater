@@ -3,8 +3,26 @@
 import { hubspotClient } from "../../hubspotClient.js";
 import { syncBillingState } from '../billing/syncBillingState.js';
 import { isDryRun } from "../../config/constants.js";
+import logger from "../../../lib/logger.js";
+import { reportHubSpotError } from "../../utils/hubspotErrorCollector.js";
 
 const CANCELLED_STAGE_ID = process.env.BILLING_TICKET_STAGE_CANCELLED;
+
+/**
+ * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) {
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
 
 // Props que leemos (INCLUIR source_type para detectar CLONE_OBJECTS)
 const READ_PROPS = [
@@ -61,7 +79,7 @@ async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
  */
 async function readTickets(ticketIds) {
   if (!ticketIds || ticketIds.length === 0) return [];
-  
+
   const resp = await hubspotClient.crm.tickets.batchApi.read({
     inputs: ticketIds.map((id) => ({ id })),
     properties: READ_PROPS,
@@ -93,14 +111,25 @@ async function softDeprecateTicket(ticketId, reason) {
   };
 
   if (isDryRun()) {
-    console.log(`[cleanup] (dry-run) Deprecando ticket ${ticketId}. reason=${reason}`);
+    logger.info({ module: 'ticketCleanupService', fn: 'softDeprecateTicket', ticketId, reason }, `[cleanup] (dry-run) Deprecando ticket ${ticketId}. reason=${reason}`);
     return;
   }
 
-  await hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties });
+  try {
+    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), { properties });
+  } catch (err) {
+    logger.error({ module: 'ticketCleanupService', fn: 'softDeprecateTicket', ticketId, reason, err }, 'ticket_update_failed: softDeprecateTicket');
+    reportIfActionable({
+      objectType: 'ticket',
+      objectId: ticketId,
+      message: `ticket_update_failed (softDeprecateTicket): ${err?.message || err}`,
+      err,
+    });
+    return;
+  }
+
   // Hook: Centraliza estado billing (cancelación)
   try {
-    // Intentar extraer dealId y lineItemId del ticketKey si existe
     const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_ticket_key']);
     const key = ticket?.properties?.of_ticket_key;
     if (key) {
@@ -109,42 +138,43 @@ async function softDeprecateTicket(ticketId, reason) {
         await syncBillingState({ hubspotClient, dealId: parsed.dealId, lineItemId: parsed.lineItemId, lineItemKey: undefined, dealIsCanceled: true });
       }
     }
-  } catch (e) {
-    console.warn('[softDeprecateTicket] syncBillingState failed:', e?.message);
+  } catch (err) {
+    logger.warn({ module: 'ticketCleanupService', fn: 'softDeprecateTicket', ticketId, err }, '[softDeprecateTicket] syncBillingState failed');
   }
-  console.log(`[cleanup] ✅ Deprecado ticket ${ticketId}. reason=${reason}`);
+
+  logger.info({ module: 'ticketCleanupService', fn: 'softDeprecateTicket', ticketId, reason }, `[cleanup] ✅ Deprecado ticket ${ticketId}. reason=${reason}`);
 }
 
 /**
  * Limpia tickets clonados y duplicados para un deal.
- * 
+ *
  * Pasos:
  * A) Deprecar tickets con source_type="CLONE_OBJECTS"
  * B) Validar mismatch (si lineItemId de la key no está en lineItems del deal)
  * C) Deduplicar por of_ticket_key (mantener el más viejo)
- * 
+ *
  * @param {Object} params
  * @param {string} params.dealId - ID del deal
  * @param {Array} params.lineItems - Line items del deal
  * @returns {Object} { scanned, clones, duplicates, deprecated, mismatches }
  */
 export async function cleanupClonedTicketsForDeal({ dealId, lineItems }) {
-  console.log(`[cleanup] dealId=${dealId}`);
-  
+  logger.info({ module: 'ticketCleanupService', fn: 'cleanupClonedTicketsForDeal', dealId }, '[cleanup] iniciando');
+
   // Set de line item IDs para validación de mismatch
   const liSet = new Set((lineItems || []).map(li => String(li.id || li.properties?.hs_object_id)));
 
   // Obtener tickets asociados al deal
   const ticketIds = await getAssocIdsV4("deals", dealId, "tickets");
-  console.log(`[cleanup] Encontrados ${ticketIds.length} tickets asociados al deal`);
-  
+  logger.info({ module: 'ticketCleanupService', fn: 'cleanupClonedTicketsForDeal', dealId, count: ticketIds.length }, `[cleanup] Encontrados ${ticketIds.length} tickets asociados al deal`);
+
   if (ticketIds.length === 0) {
     return { scanned: 0, clones: 0, duplicates: 0, deprecated: 0, mismatches: 0 };
   }
 
   // Leer tickets
   const tickets = await readTickets(ticketIds);
-  console.log(`[cleanup] Leídos ${tickets.length} tickets`);
+  logger.info({ module: 'ticketCleanupService', fn: 'cleanupClonedTicketsForDeal', dealId, count: tickets.length }, `[cleanup] Leídos ${tickets.length} tickets`);
 
   let clones = 0;
   let duplicates = 0;
@@ -156,7 +186,16 @@ export async function cleanupClonedTicketsForDeal({ dealId, lineItems }) {
 
   // ========== PASO A: Deprecar tickets clonados por UI ==========
   for (const t of tickets) {
-    console.log(`[cleanup][SRC] id=${t.id} createdate=${t.properties?.createdate} source_type=${t.properties?.source_type} hs_object_source=${t.properties?.hs_object_source} hs_object_source_label=${t.properties?.hs_object_source_label}`);
+    logger.info({
+      module: 'ticketCleanupService',
+      fn: 'cleanupClonedTicketsForDeal',
+      ticketId: t.id,
+      createdate: t.properties?.createdate,
+      source_type: t.properties?.source_type,
+      hs_object_source: t.properties?.hs_object_source,
+      hs_object_source_label: t.properties?.hs_object_source_label,
+    }, '[cleanup][SRC]');
+
     const sourceType = t.properties?.source_type;
     if (sourceType === "CLONE_OBJECTS") {
       clones++;
@@ -171,70 +210,82 @@ export async function cleanupClonedTicketsForDeal({ dealId, lineItems }) {
   }
 
   // ========== PASO B: Validar mismatch (lineItemId no está en lineItems) ==========
-// ========== PASO B: Validar mismatch (lineItemId no está en lineItems) ==========
-for (const t of tickets) {
-  if (deprecatedIds.has(String(t.id))) continue;
+  for (const t of tickets) {
+    if (deprecatedIds.has(String(t.id))) continue;
 
-  const key = t.properties?.of_ticket_key;
-  const parsed = parseTicketKey(key);
-  if (!parsed?.lineItemId) continue;
+    const key = t.properties?.of_ticket_key;
+    const parsed = parseTicketKey(key);
+    if (!parsed?.lineItemId) continue;
 
-  const existsInDeal = liSet.has(String(parsed.lineItemId));
-  if (!existsInDeal) {
-    mismatches++;
+    const existsInDeal = liSet.has(String(parsed.lineItemId));
+    if (!existsInDeal) {
+      mismatches++;
 
-    // ✅ PEGAR ACÁ (ANTES de softDeprecateTicket)
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(parsed.lineItemId), {
-        properties: { is_clone: 'true' },
-      });
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(parsed.lineItemId), {
+          properties: { is_clone: 'true' },
+        });
 
-      if (process.env.DBG_PHASE1 === 'true') {
-        console.log('[clone][mismatch] marked line item as clone', {
+        logger.debug({
+          module: 'ticketCleanupService',
+          fn: 'cleanupClonedTicketsForDeal',
           lineItemId: parsed.lineItemId,
           ticketId: t.id,
           of_ticket_key: key,
+        }, '[clone][mismatch] marked line item as clone');
+      } catch (err) {
+        logger.info({
+          module: 'ticketCleanupService',
+          fn: 'cleanupClonedTicketsForDeal',
+          lineItemId: parsed.lineItemId,
+          ticketId: t.id,
+          err: err?.message,
+        }, '[clone][mismatch] could not mark line item');
+        reportIfActionable({
+          objectType: 'line_item',
+          objectId: parsed.lineItemId,
+          message: `line_item_update_failed (mismatch mark is_clone): ${err?.message || err}`,
+          err,
         });
+        continue;
       }
-    } catch (e) {
-      console.log('[clone][mismatch] could not mark line item', {
-        lineItemId: parsed.lineItemId,
-        ticketId: t.id,
-        err: e?.message,
-      });
-    }
 
-    // tu lógica actual
-    await softDeprecateTicket(
-      t.id,
-      `MISMATCH key LI:${parsed.lineItemId} no está en lineItems del deal`
-    );
-    deprecated++;
-    deprecatedIds.add(String(t.id));
+      await softDeprecateTicket(
+        t.id,
+        `MISMATCH key LI:${parsed.lineItemId} no está en lineItems del deal`
+      );
+      deprecated++;
+      deprecatedIds.add(String(t.id));
+    }
   }
-}
 
   // ========== PASO C: Deduplicar por of_ticket_key ==========
   const groups = new Map();
   for (const t of tickets) {
     // Saltar si ya fue deprecado
     if (deprecatedIds.has(String(t.id))) continue;
-    
+
     const k = (t.properties?.of_ticket_key || "").trim();
     if (!k) continue; // Ignorar tickets sin key
-    
+
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
 
   for (const [k, list] of groups.entries()) {
     if (list.length <= 1) continue; // No hay duplicados
-    
+
     duplicates++;
     const canonical = pickOldest(list);
     const losers = list.filter((x) => String(x.id) !== String(canonical.id));
 
-    console.log(`[cleanup] DUP "${k}" canonical=${canonical.id} losers=${losers.map(l=>l.id).join(", ")}`);
+    logger.info({
+      module: 'ticketCleanupService',
+      fn: 'cleanupClonedTicketsForDeal',
+      key: k,
+      canonicalId: canonical.id,
+      loserIds: losers.map(l => l.id),
+    }, `[cleanup] DUP canonical=${canonical.id} losers=${losers.map(l => l.id).join(", ")}`);
 
     for (const l of losers) {
       await softDeprecateTicket(
@@ -247,13 +298,22 @@ for (const t of tickets) {
   }
 
   // Resumen final
-  console.log(`[cleanup] ✅ Resumen: scanned=${tickets.length}, clones=${clones}, duplicates=${duplicates}, deprecated=${deprecated}, mismatches=${mismatches}`);
+  logger.info({
+    module: 'ticketCleanupService',
+    fn: 'cleanupClonedTicketsForDeal',
+    dealId,
+    scanned: tickets.length,
+    clones,
+    duplicates,
+    deprecated,
+    mismatches,
+  }, `[cleanup] ✅ Resumen: scanned=${tickets.length}, clones=${clones}, duplicates=${duplicates}, deprecated=${deprecated}, mismatches=${mismatches}`);
 
-  return { 
-    scanned: tickets.length, 
-    clones, 
-    duplicates, 
-    deprecated, 
-    mismatches 
+  return {
+    scanned: tickets.length,
+    clones,
+    duplicates,
+    deprecated,
+    mismatches,
   };
 }

@@ -9,6 +9,7 @@ import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupSe
 import { getDealWithLineItems } from '../hubspotClient.js';
 import { installHubSpotConsoleCollector } from '../utils/hubspotErrorCollector.js';
 import * as dateUtils from '../utils/dateUtils.js';
+import logger from '../../lib/logger.js';
 
 installHubSpotConsoleCollector();
 
@@ -21,28 +22,25 @@ function formatHsLastModified(raw) {
 }
 
 export async function runPhasesForDeal({ deal, lineItems }) {
-  // Nota: reasignamos deal/lineItems después del refetch, por eso usamos let
   let currentDeal = deal;
   let currentLineItems = Array.isArray(lineItems) ? lineItems : [];
 
   const dealId = String(currentDeal?.id || currentDeal?.properties?.hs_object_id);
 
-  console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
-  console.log(`   Deal ID: ${dealId}`);
-
   const dealLastMod =
     currentDeal?.properties?.hs_lastmodifieddate ??
     currentDeal?.hs_lastmodifieddate;
 
-  console.log(`   Deal hs_lastmodifieddate: ${formatHsLastModified(dealLastMod)}`);
-
-  console.log(`   Line Items: ${currentLineItems.length}\n`);
-  for (const li of currentLineItems) {
-    const liLastMod = li?.properties?.hs_lastmodifieddate ?? li?.hs_lastmodifieddate;
-    console.log(
-      `   LineItem ${li?.id} hs_lastmodifieddate: ${formatHsLastModified(liLastMod)}`
-    );
-  }
+  logger.info(
+    {
+      module: 'phases/index',
+      fn: 'runPhasesForDeal',
+      dealId,
+      dealLastModified: formatHsLastModified(dealLastMod),
+      lineItemsCount: currentLineItems.length,
+    },
+    'Inicio procesamiento de fases'
+  );
 
   const results = {
     dealId,
@@ -57,29 +55,33 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
   // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
   try {
-    console.log(`🧹 PRE: Limpieza de tickets clonados/duplicados (por of_ticket_key/of_invoice_key)...`);
     const cleanupResult = await cleanupClonedTicketsForDeal({
       dealId,
       lineItems: currentLineItems,
     });
     results.cleanup = cleanupResult || results.cleanup;
-    console.log(
-      `   ✅ Cleanup completado: scanned=${results.cleanup.scanned}, duplicates=${results.cleanup.duplicates}, deprecated=${results.cleanup.deprecated}\n`
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.cleanup },
+      'Cleanup PRE completado'
     );
   } catch (err) {
-    console.error(`   ❌ Error en Cleanup PRE:`, err?.message || err);
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en Cleanup PRE'
+    );
     results.cleanup.error = err?.message || 'Error desconocido';
   }
 
   // ========== PHASE 1: Fechas, calendario, cupo ==========
   try {
-    console.log(`📅 PHASE 1: Actualizando fechas, calendario y cupo...`);
     await runPhase1(dealId);
     results.phase1.success = true;
-    console.log(`   ✅ Phase 1 completada\n`);
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+      'Phase 1 completada'
+    );
 
-    // ✅ Refetch post-Phase1
-    console.log(`🔄 Refetch deal+lineItems post-Phase1...`);
+    // Refetch post-Phase1
     const refreshed = await getDealWithLineItems(dealId);
 
     currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
@@ -94,46 +96,57 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       currentLineItems = refreshedLineItems;
     }
 
-    console.log(`   ✅ Refetch completado: lineItems=${currentLineItems.length}\n`);
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemsCount: currentLineItems.length },
+      'Refetch post-Phase1 completado'
+    );
   } catch (err) {
-    console.error(`   ❌ Error en Phase 1:`, err?.message || err);
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en Phase 1'
+    );
     results.phase1.error = err?.message || 'Error desconocido';
   }
 
   // ========== PHASE P: Forecast/Promesa ==========
   try {
-    console.log(`🟣 PHASE P: Forecast/Promesa (tickets forecast)...`);
     const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: currentLineItems });
     results.phaseP = phasePResult;
     results.ticketsCreated += phasePResult?.created || 0;
 
     const { created, updated, deleted, skipped } = phasePResult || {};
-    console.log(
-      `   ✅ Phase P completada: created=${created}, updated=${updated}, deleted=${deleted}, skipped=${skipped}\n`
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, created, updated, deleted, skipped },
+      'Phase P completada'
     );
   } catch (err) {
-    console.error(`   ❌ Error en Phase P:`, err?.message || err);
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en Phase P'
+    );
     results.phaseP.error = err?.message || 'Error desconocido';
   }
 
   // ========== PHASE 2: Tickets manuales ==========
   try {
-    console.log(`🎫 PHASE 2: Generando tickets manuales (facturacion_automatica=false)...`);
     const phase2Result = await runPhase2({ deal: currentDeal, lineItems: currentLineItems });
     results.phase2 = phase2Result;
-
-    // Mantengo tu intención original: acá Phase2 “define” ticketsCreated manuales.
     results.ticketsCreated = phase2Result?.ticketsCreated || 0;
 
-    console.log(`   ✅ Phase 2 completada: ${results.ticketsCreated} tickets manuales creados\n`);
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated },
+      'Phase 2 completada'
+    );
   } catch (err) {
-    console.error(`   ❌ Error en Phase 2:`, err?.message || err);
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en Phase 2'
+    );
     results.phase2.error = err?.message || 'Error desconocido';
   }
 
   // ========== PHASE 3: Facturas automáticas ==========
   try {
-    console.log(`💰 PHASE 3: Emitiendo facturas automáticas (facturacion_automatica=true)...`);
     const phase3Result = await runPhase3({ deal: currentDeal, lineItems: currentLineItems });
     results.phase3 = phase3Result;
     results.autoInvoicesEmitted = phase3Result?.invoicesEmitted || 0;
@@ -141,17 +154,31 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     const ticketsPhase3 = phase3Result?.ticketsEnsured || 0;
     results.ticketsCreated += ticketsPhase3;
 
-    console.log(
-      `   ✅ Phase 3 completada: ${results.autoInvoicesEmitted} facturas emitidas, ${ticketsPhase3} tickets automáticos creados\n`
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, autoInvoicesEmitted: results.autoInvoicesEmitted, ticketsPhase3 },
+      'Phase 3 completada'
     );
   } catch (err) {
-    console.error(`   ❌ Error en Phase 3:`, err?.message || err);
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en Phase 3'
+    );
     results.phase3.error = err?.message || 'Error desconocido';
   }
 
-  console.log(`🏁 Deal ${dealId} completado:`);
-  console.log(`   - Tickets totales: ${results.ticketsCreated}`);
-  console.log(`   - Facturas: ${results.autoInvoicesEmitted}`);
+  logger.info(
+    { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
+    'Deal completado'
+  );
 
   return results;
 }
+
+/*
+ * CATCHES con reportHubSpotError agregados: ninguno
+ * NO reportados:
+ *   - cleanupClonedTicketsForDeal → delegado; ese servicio gestiona su reporte
+ *   - runPhase1/runPhaseP/runPhase2/runPhase3 → cada phase gestiona su propio reporte
+ *   - getDealWithLineItems → lectura
+ * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
+ */
