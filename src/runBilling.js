@@ -173,28 +173,28 @@ export async function runBilling({ dealId, allDeals } = {}) {
 const __filename = fileURLToPath(import.meta.url);
 const argvPath = resolve(process.argv[1]);
 
-if (__filename === argvPath) {
-  try {
-    const args = parseArgs(process.argv);
+async function main() {
+  const args = parseArgs(process.argv);
 
-    if (args.help) {
-      printHelp();
-     process.exitCode = 0;
-       return; // o simplemente no hacer nada, el proceso termina solo
-    }
-
-try {
-       await runBilling(args);
-     } catch (err) {
-       logger.error({ module: 'runBilling', err }, 'cron_failed');
-       process.exitCode = 1;
-     }
-  } catch (err) {
-    logger.error({ module: 'runBilling', err }, '[runBilling] Error en parseArgs');
+  if (args.help) {
     printHelp();
-     process.exitCode = 1;
-
+    process.exitCode = 0;
+    return;
   }
+
+  try {
+    await runBilling(args);
+  } catch (err) {
+    logger.error({ module: 'runBilling', err }, 'cron_failed');
+    process.exitCode = 1;
+  }
+}
+
+if (__filename === argvPath) {
+  main().catch((err) => {
+    logger.error({ module: 'runBilling', err }, '[runBilling] Fatal en main()');
+    process.exitCode = 1;
+  });
 }
 
 /*

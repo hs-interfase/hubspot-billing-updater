@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
 import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
@@ -665,19 +664,27 @@ function parseArgs(argv) {
   }
   return args;
 }
+const argv1 = process.argv?.[1];
+const isDirectRun =
+  typeof argv1 === "string" &&
+  argv1.length > 0 &&
+  import.meta.url === pathToFileURL(argv1).href;
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectRun) {
   const { once, mode, deal, dry } = parseArgs(process.argv.slice(2));
   try {
-   await runDealsBatchCron({
-    modeOverride: mode,
-    onlyDealId: deal,
-    once,
-    dry,
-  })
+    await runDealsBatchCron({
+      modeOverride: mode,
+      onlyDealId: deal,
+      once,
+      dry,
+    });
   } catch (e) {
-    logger.error({ where: "fatal", lastCtx, error: e?.message || String(e), stack: e?.stack }, "cron_failed");
-   process.exitCode = 1;
- }
+    logger.error(
+      { where: "fatal", lastCtx, error: e?.message || String(e), stack: e?.stack },
+      "cron_failed"
+    );
+    process.exitCode = 1;
+  }
 }
 
