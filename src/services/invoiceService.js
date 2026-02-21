@@ -309,8 +309,14 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   const hasIVA        = hasIVAResolved;
 
   // 6) Propiedades de la factura — mapeo Ticket → Invoice
-  const invoicePropsRaw = {
-    hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
+  const empresaTitle  = safeString(tp.of_cliente) || '';
+const productoTitle = safeString(tp.of_producto_nombres) || '';
+const montoTitle    = totalFinalResolved != null ? String(totalFinalResolved) : '';
+const hs_title      = [empresaTitle, productoTitle, montoTitle].filter(Boolean).join(' | ');
+
+const invoicePropsRaw = {
+  ...(hs_title ? { hs_title } : {}),
+  hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     hs_invoice_date: invoiceDateMs,
     hs_due_date: dueDateMs,
     hs_invoice_billable: false,

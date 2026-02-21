@@ -1,19 +1,4 @@
-// api/actualizar.js
-//
-// Este endpoint expone un webhook para HubSpot. Cuando se activan
-// las propiedades personalizadas ``actualizar`` o ``hs_billing_start_delay_type``
-// en un line item, resuelve el negocio asociado y ejecuta el
-// cálculo completo de facturación mediante la función ``runBilling``.
-//
-// El objetivo es evitar ejecutar runBilling de manera programada para
-// todos los negocios. En su lugar, solo se procesa el deal cuyo
-// line item fue modificado a propósito. Para ``actualizar`` se
-// considera el valor truthy de la propiedad; una vez procesado se
-// resetea a ``false`` para evitar re‑procesamientos. Para
-// ``hs_billing_start_delay_type`` simplemente se recalcula la fase 1
-// (a través de runBilling) que normaliza los retrasos en días/meses a
-// una fecha concreta mediante ``normalizeBillingStartDelay``.
-
+// api/actualizar-webhook.js
 import logger from '../lib/logger.js';
 import { reportHubSpotError } from '../src/utils/hubspotErrorCollector.js';
 import { hubspotClient, getDealWithLineItems } from "../src/hubspotClient.js";
@@ -28,28 +13,11 @@ function reportIfActionable({ objectType, objectId, message, err }) {
   if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
 }
 
-/**
- * Conversión básica de valores tipo HubSpot a booleanos. HubSpot puede
- * enviar strings como "true", "1", "yes", "si" o "sí" para
- * indicar verdadero. Cualquier otro valor se considera falso.
- *
- * @param {*} value Valor a interpretar.
- * @returns {boolean}
- */
 function parseBool(value) {
   const s = String(value ?? "").trim().toLowerCase();
   return s === "true" || s === "1" || s === "yes" || s === "si" || s === "sí";
 }
 
-/**
- * Obtiene el ``dealId`` asociado a un line item. Utiliza la API de
- * asociaciones v4 de HubSpot. Si hay múltiples deals asociados al
- * mismo line item, se devuelve el primero y se ignoran los demás.
- *
- * @param {string|number} lineItemId Identificador del line item.
- * @returns {Promise<string|null>} ID del deal asociado o null si no
- *   existen asociaciones.
- */
 async function getDealIdForLineItem(lineItemId) {
   const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
     "line_items",
@@ -64,27 +32,6 @@ async function getDealIdForLineItem(lineItemId) {
   return dealIds[0];
 }
 
-/**
- * Handler para el webhook. Espera llamadas POST desde HubSpot con un
- * cuerpo similar a:
- *
- * ```
- * {
- *   "objectId": "1234",
- *   "subscriptionType": "line_item.propertyChange",
- *   "propertyName": "actualizar",
- *   "propertyValue": "true"
- * }
- * ```
- *
- * El handler valida el payload, resuelve el deal asociado al line item,
- * verifica que la facturación esté activa en el negocio y ejecuta
- * runBilling sólo para ese deal. Para la propiedad ``actualizar``
- * restablece el valor a ``false`` después de procesar.
- *
- * @param {import('next').NextApiRequest} req
- * @param {import('next').NextApiResponse} res
- */
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -143,16 +90,11 @@ export default async function handler(req, res) {
     let billingResult = null;
     if (active) {
       try {
-let billingResult = null;
-try {
-  const dealWithLineItems = await getDealWithLineItems(dealId);
-  billingResult = await runPhasesForDeal(dealWithLineItems);
-} catch (err) {
-  logger.error({ module: MODULE, fn: 'processRecalculation', dealId, err }, 'Error ejecutando fases de facturación');
-}
+        const dealWithLineItems = await getDealWithLineItems(dealId);
+        billingResult = await runPhasesForDeal(dealWithLineItems);
       } catch (err) {
-        logger.error({ module: MODULE, fn: 'handler', dealId, err }, 'Error executing runBilling');
-        // no aborta, se continúa a resetear flags
+        logger.error({ module: MODULE, fn: 'handler', dealId, err }, 'Error ejecutando fases de facturación');
+        // no aborta, continúa a resetear flags
       }
     }
 
@@ -175,6 +117,7 @@ try {
       ranBilling: active,
       billingResult,
     });
+
   } catch (err) {
     logger.error({ module: MODULE, fn: 'handler', err }, 'Unexpected error processing webhook');
     return res.status(500).json({
@@ -183,16 +126,3 @@ try {
     });
   }
 }
-
-/*
- * CATCHES con reportHubSpotError agregados:
- *   - Reset de flag 'actualizar' en lineItems.basicApi.update() → objectType: 'line_item'
- *
- * NO reportados:
- *   - getDealIdForLineItem: es una lectura (associations.getPage), no un update accionable
- *   - deals.basicApi.getById: lectura, no aplica
- *   - runPhasesForDeal: lógica interna, el reporte corresponde a las capas inferiores
- *   - catch externo (Unexpected error): no hay update HubSpot en juego
- *
- * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- */
