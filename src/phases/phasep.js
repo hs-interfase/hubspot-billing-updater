@@ -3,6 +3,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { getEffectiveBillingConfig } from '../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.js';
+import { parseBool } from '../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { updateTicket } from '../services/tickets/ticketService.js';
 import { buildTicketFullProps } from '../services/tickets/ticketService.js';
@@ -536,6 +537,7 @@ if (empresaId) {
             ...fullProps,
             hs_pipeline: String(hsPipeline),
             hs_pipeline_stage: String(targetStage),
+            of_motivo_pausa: p.pausa === 'true' || p.pausa === true ? (p.motivo_de_pausa || '') : '',
           },
         });
 
@@ -544,42 +546,7 @@ if (empresaId) {
         continue;
       }
 
- /* // Si NO hay forecast para esa key => crear SIEMPRE (aunque exista protegido/promovido/facturado)
-if (!existingForecast) {
-  if (existingProtected) {
-    console.log('[phaseP] key already covered by protected -> skip create', {
-      key,
-      expectedYmd,
-      protectedTicketId: existingProtected.id,
-    });
-    continue;
-  }
-  console.log('[phaseP] create forecast ticket', { dealId, lineItemKey, expectedYmd, targetStage });
-  const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
-  const fullProps = await buildTicketFullProps({
-    deal,
-    lineItem: li,
-    dealId,
-    lineItemId: li.id,
-    lineItemKey,
-    ticketKey: key,
-    expectedYMD: expectedYmd,
-    orderedYMD: null,
-  });
-  await safeCreateTicket(hubspotClient, {
-    properties: {
-      ...fullProps,
-      hs_pipeline: String(hsPipeline),
-      hs_pipeline_stage: String(targetStage),
-    },
-  });
-  created++;
-  changed = true;
-  continue;
-}
-*/
-
-      // Existe forecast => STAGE-ONLY
+// Existe forecast => STAGE-ONLY
       const existing = existingForecast;
       const patch = {};
 
@@ -594,6 +561,12 @@ if (!existingForecast) {
 
       if (!String(existing?.properties?.of_ticket_key || '').trim()) {
         patch.of_ticket_key = String(key);
+      }
+
+      // Sincronizar motivo de pausa
+      const motivoPausa = parseBool(p.pausa) ? (p.motivo_de_pausa || '') : '';
+      if (String(existing?.properties?.of_motivo_pausa || '') !== motivoPausa) {
+        patch.of_motivo_pausa = motivoPausa;
       }
 
       if (Object.keys(patch).length) {

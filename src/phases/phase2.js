@@ -228,6 +228,15 @@ export async function runPhase2({ deal, lineItems }) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
 
+    // PAUSA: si el line item está en pausa, skip
+    const isPaused = parseBool(lp.pausa);
+    if (isPaused) {
+      logger.info(
+        { module: 'phase2', fn: 'runPhase2', dealId, lineItemId },
+        'Line item en pausa, saltando Phase 2'
+      );
+      continue;
+    }
     try {
       const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
 

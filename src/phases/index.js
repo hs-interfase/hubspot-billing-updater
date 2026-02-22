@@ -7,9 +7,17 @@ import { runPhase3 } from './phase3.js';
 
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from '../hubspotClient.js';
+import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 
+const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
+const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || '';
+
+function isDealCancelled(dealProps) {
+  const stage = String(dealProps?.dealstage || '');
+  return stage === DEAL_STAGE_LOST || (CANCELLED_STAGE_ID && stage === CANCELLED_STAGE_ID);
+}
 
 function formatHsLastModified(raw) {
   if (!raw) return '(no value)';
@@ -106,6 +114,36 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     results.phase1.error = err?.message || 'Error desconocido';
   }
 
+  // ========== CANCELACIÓN: si el deal está perdido/cancelado ==========
+  if (isDealCancelled(currentDeal?.properties)) {
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, dealStage: currentDeal?.properties?.dealstage },
+      'Deal cancelado — propagando cancelación y saltando Phase P/2/3'
+    );
+
+    try {
+      await propagateDealCancellation({
+        dealId,
+        dealProps: currentDeal?.properties,
+        lineItems: currentLineItems,
+      });
+      results.cancellation = { propagated: true };
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en propagateDealCancellation'
+      );
+      results.cancellation = { propagated: false, error: err?.message };
+    }
+
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+      'Deal completado (cancelado)'
+    );
+
+    return results;
+  }
+
   // ========== PHASE P: Forecast/Promesa ==========
   try {
     const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: currentLineItems });
@@ -177,6 +215,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
  * NO reportados:
  *   - cleanupClonedTicketsForDeal → delegado; ese servicio gestiona su reporte
  *   - runPhase1/runPhaseP/runPhase2/runPhase3 → cada phase gestiona su propio reporte
+ *   - propagateDealCancellation → cada módulo interno gestiona su reporte
  *   - getDealWithLineItems → lectura
  * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
  */

@@ -231,7 +231,7 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     // 📅 FECHA REAL (solo desde Invoice cuando Nodum = EMITIDA)
     // of_fecha_facturacion_real: (se setea después)
 
-    motivo_cancelacion_ticket: motivoCancelacion,
+    motivo_cancelacion_del_ticket: motivoCancelacion,
 
     // ✅ C) Título del invoice para usar después
     subject: invoiceTitle,
