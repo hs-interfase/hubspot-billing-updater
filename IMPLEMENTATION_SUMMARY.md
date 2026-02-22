@@ -1,5 +1,5 @@
 # Resumen de Implementación - Property Fixes & Robustness
-
+22/02/2026 -- Tiene algunas cosas que no fueron actualizadas. como line item key. fuente nueva de idempotencialidad que se integra en tickets y facturas
 ## Cambios Implementados
 
 ### A) Deal: cupo_estado actualizado automáticamente

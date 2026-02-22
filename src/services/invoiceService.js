@@ -394,39 +394,60 @@ const invoicePropsRaw = {
       logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, err }, '[invoice] No se pudo re-leer invoice post-create');
     }
 
-    // 8) Asociaciones
-    // ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
-    const assocCalls = [];
+// 8) Asociaciones
+// ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
+const assocCalls = [];
 
-    if (tp.of_deal_id) {
+if (tp.of_deal_id) {
+  assocCalls.push(
+    associateV4('invoices', invoiceId, 'deals', tp.of_deal_id)
+      .catch(err => logger.warn({ module: 'invoiceService', invoiceId, dealId: tp.of_deal_id, err }, '[invoice] Error asociación invoice→deal'))
+  );
+}
+
+assocCalls.push(
+  associateV4('invoices', invoiceId, 'tickets', ticketId)
+    .catch(err => logger.warn({ module: 'invoiceService', invoiceId, ticketId, err }, '[invoice] Error asociación invoice→ticket'))
+);
+
+if (tp.of_deal_id) {
+  try {
+    const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'contacts', 10);
+    const contactId = contacts.results?.[0]?.toObjectId || null;
+    if (contactId) {
       assocCalls.push(
-        associateV4('invoices', invoiceId, 'deals', tp.of_deal_id)
-          .catch(err => logger.warn({ module: 'invoiceService', invoiceId, dealId: tp.of_deal_id, err }, '[invoice] Error asociación invoice→deal'))
+        associateV4('invoices', invoiceId, 'contacts', contactId)
+          .catch(err => logger.warn({ module: 'invoiceService', invoiceId, contactId, err }, '[invoice] Error asociación invoice→contact'))
       );
     }
+  } catch (err) {
+    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener contacto del deal');
+  }
+}
 
-    assocCalls.push(
-      associateV4('invoices', invoiceId, 'tickets', ticketId)
-        .catch(err => logger.warn({ module: 'invoiceService', invoiceId, ticketId, err }, '[invoice] Error asociación invoice→ticket'))
-    );
-
-    if (tp.of_deal_id) {
-      try {
-        const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'contacts', 10);
-        const contactId = contacts.results?.[0]?.toObjectId || null;
-        if (contactId) {
-          assocCalls.push(
-            associateV4('invoices', invoiceId, 'contacts', contactId)
-              .catch(err => logger.warn({ module: 'invoiceService', invoiceId, contactId, err }, '[invoice] Error asociación invoice→contact'))
-          );
+// Obtener company del deal para nombre_empresa informativo
+if (tp.of_deal_id) {
+  try {
+    const companies = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'companies', 10);
+    const companyId = companies.results?.[0]?.toObjectId || null;
+    if (companyId) {
+      const company = await hubspotClient.crm.companies.basicApi.getById(String(companyId), ['name']);
+      const companyName = company?.properties?.name || null;
+      if (companyName) {
+        try {
+          await updateInvoiceDirect(invoiceId, { nombre_empresa: companyName });
+          logger.debug({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, companyName }, '[invoice] nombre_empresa actualizado desde company del deal');
+        } catch (err) {
+          logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, err }, '[invoice] No se pudo actualizar nombre_empresa desde company');
         }
-      } catch (err) {
-        logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener contacto del deal');
       }
     }
+  } catch (err) {
+    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener company del deal');
+  }
+}
 
-    await Promise.all(assocCalls);
-
+await Promise.all(assocCalls);
     // 9) Actualizar ticket con fecha real y referencia a factura
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
