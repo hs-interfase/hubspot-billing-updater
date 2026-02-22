@@ -483,21 +483,30 @@ if (empresaId) {
     }
 
     // 5) Mapear existentes por key (forecast vs protegidos)
-    const existingForecastByKey = new Map();
-    const existingProtectedByKey = new Map();
+const existingForecastByKey = new Map();
+const existingProtectedByKey = new Map();
+// FIX: mapa secundario por of_ticket_key explícito para detectar tickets
+// con of_line_item_key desincronizado (ej: deals mirror, clones)
+const existingByTicketKey = new Map();
 
-    for (const t of allTickets) {
-      const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
-      if (!k) continue;
+for (const t of allTickets) {
+  const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
+  if (!k) continue;
 
-      if (isForecastTicket(t)) {
-        if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
-      } else {
-        if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
-      }
-    }
+  if (isForecastTicket(t)) {
+    if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
+  } else {
+    if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
+  }
 
-    // 6) Upsert: crear faltantes; actualizar solo si es forecast editable
+  // Indexar por of_ticket_key explícito independientemente del LIK
+  const explicitKey = String(t?.properties?.of_ticket_key || '').trim();
+  if (explicitKey && !existingByTicketKey.has(explicitKey)) {
+    existingByTicketKey.set(explicitKey, t);
+  }
+}
+
+// 6) Upsert: crear faltantes; actualizar solo si es forecast editable
     for (const key of desiredKeys) {
       const expectedYmd = desiredByKey.get(key);
 
@@ -505,10 +514,31 @@ if (empresaId) {
       const existingProtected = existingProtectedByKey.get(key);
 
       if (!existingForecast) {
-        // Si ya existe protected para esa key, NO crear duplicado
-        if (existingProtected) {
+        // FIX: buscar también por of_ticket_key directo como fallback,
+        // cubre casos donde of_line_item_key está desincronizado (mirrors, clones)
+        const existingByKey = existingByTicketKey.get(key);
+        const foundProtected = existingProtected ||
+          (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+
+        if (foundProtected) {
+          // Reparar of_line_item_key si está desincronizado
+          const storedLik = String(foundProtected?.properties?.of_line_item_key || '').trim();
+          if (storedLik !== lineItemKey) {
+            logger.info(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, storedLik, currentLik: lineItemKey },
+              'Reparando of_line_item_key desincronizado en ticket protegido'
+            );
+            try {
+              await updateTicket(foundProtected.id, { of_line_item_key: lineItemKey });
+            } catch (err) {
+              logger.warn(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, err },
+                'No se pudo reparar of_line_item_key en ticket protegido'
+              );
+            }
+          }
           logger.debug(
-            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, expectedYmd, protectedTicketId: existingProtected.id },
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, expectedYmd, protectedTicketId: foundProtected.id },
             'Key cubierta por ticket protegido, saltando creación'
           );
           continue;
@@ -575,7 +605,7 @@ if (empresaId) {
         changed = true;
       }
     }
-
+    
     // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys
     for (const t of forecastTickets) {
       const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
