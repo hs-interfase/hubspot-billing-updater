@@ -439,6 +439,8 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       'tax',
       'hs_tax_amount',
       'of_line_item_py_origen_id',
+      'line_item_key',
+      'parte_del_cupo',
     ]);
 
     for (const key of Object.keys(srcPropsLi)) {

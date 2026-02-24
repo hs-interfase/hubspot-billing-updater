@@ -24,6 +24,12 @@ function reportIfActionable({ objectType, objectId, message, err }) {
   }
 }
 
+// Genera un LIK estable y determinístico para un line item UY mirror.
+// No usa random: mismos inputs → mismo LIK siempre.
+function buildMirrorLik(mirrorDealId, pyLineItemId) {
+  return `mirror::${mirrorDealId}::py::${pyLineItemId}`;
+}
+
 /**
  * Upsert de un line item UY en el deal espejo.
  * Usa of_line_item_py_origen_id como clave estable.
@@ -65,8 +71,11 @@ export async function upsertUyLineItem(mirrorDealId, pyLineItem, buildUyProps) {
   const uyLineItemIds = (assocResp.results || []).map((r) => String(r.toObjectId));
 
   if (uyLineItemIds.length === 0) {
-    // No hay line items en el espejo, crear uno nuevo
+ // No hay line items asociados al deal espejo: es el primer sync.
     const props = buildUyProps(pyLineItem, pyId);
+if (!props.line_item_key) {
+  props.line_item_key = buildMirrorLik(mirrorDealId, pyId);
+}
 
     try {
       const createResp = await hubspotClient.crm.lineItems.basicApi.create({
@@ -122,6 +131,8 @@ export async function upsertUyLineItem(mirrorDealId, pyLineItem, buildUyProps) {
     return origen === pyId;
   });
 
+
+
   if (existing) {
     // 3a) Ya existe: UPDATE
     const existingId = String(existing.id);
@@ -151,7 +162,9 @@ export async function upsertUyLineItem(mirrorDealId, pyLineItem, buildUyProps) {
   } else {
     // 3b) No existe: CREATE y asociar
     const props = buildUyProps(pyLineItem, pyId);
-
+    if (!props.line_item_key) {
+      props.line_item_key = buildMirrorLik(mirrorDealId, pyId);
+    }
     let newId;
     try {
       const createResp = await hubspotClient.crm.lineItems.basicApi.create({
