@@ -11,6 +11,14 @@ import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromo
 import { createInvoiceFromTicket } from '../services/invoiceService.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import {
+  BILLING_AUTOMATED_READY,
+  BILLING_AUTOMATED_FORECAST,
+  BILLING_AUTOMATED_FORECAST_50,
+  BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_95,
+  FORECAST_AUTO_STAGES,
+} from '../config/constants.js';
 
 /**
  * PHASE 3 (AUTOMÁTICO):
@@ -30,21 +38,6 @@ import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
  * - Ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
  * - Si no existe el ticket forecast, se loggea error (Phase P debería haberlo creado).
  */
-
-// ====== STAGES (IDs reales) ======
-const BILLING_AUTOMATED_READY = '1228755520';
-
-const BILLING_AUTOMATED_FORECAST = '1294745999';
-const BILLING_AUTOMATED_FORECAST_50 = '1294746000';
-const BILLING_AUTOMATED_FORECAST_75 = '1296489840';
-const BILLING_AUTOMATED_FORECAST_95 = '1296362566';
-
-const FORECAST_AUTO_STAGES = new Set([
-  BILLING_AUTOMATED_FORECAST,
-  BILLING_AUTOMATED_FORECAST_50,
-  BILLING_AUTOMATED_FORECAST_75,
-  BILLING_AUTOMATED_FORECAST_95,
-]);
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
