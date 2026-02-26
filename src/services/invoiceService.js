@@ -289,7 +289,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   }
 
   // 4) Responsable
-  const responsableAsignadoRaw = process.env.USER_BILLING || '83169424';
+  const responsableAsignadoRaw = process.env.USER_BILLING || '65820526';
   const responsableAsignado = toNumericOwnerOrNull(responsableAsignadoRaw);
 
   // 5) Fechas
@@ -618,7 +618,7 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     hs_invoice_date: toHubSpotDateOnly(actualInvoiceDate),
     hs_due_date: toHubSpotDateOnly(dueDateYMD),
     hs_invoice_billable: false,
-    hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '85894063',
+    hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '65820526',
     of_invoice_key: invoiceKey,
     etapa_de_la_factura: 'Pendiente',
     ...(lp.name ? { nombre_producto: lp.name } : {}),
