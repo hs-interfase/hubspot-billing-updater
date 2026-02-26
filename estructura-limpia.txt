@@ -1,12 +1,19 @@
-﻿.env
+﻿Get-ChildItem -Recurse -File -Force |
+>>   Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |
+>>   ForEach-Object { Resolve-Path -Relative $_.FullName } |
+>>   ForEach-Object { $_ -replace '^\.\[\\/]', '' } |
+>>   Set-Content -Encoding UTF8 estructura-limpia.txt
+
+
+.env
 .gitignore
-.\estructura-limpia.txt
 .\FIX_TICKET_IDEMPOTENCY.md
 .\IMPLEMENTATION_SUMMARY.md
 .\LICENSE
 .\package-lock.json
 .\package.json
 .\README.md
+.\server.js
 .vercel\project.json
 .vercel\README.txt
 .\api\actualizar-webhook.js
@@ -16,15 +23,28 @@
 .\data\cron-state-deals.lock
 .\data\cron_failed_deals.json
 .\data\cron_state_deals.json
+.\data\logs\cron_deals_2026-02-19.log.jsonl
+.\data\logs\cron_deals_2026-02-20.log.jsonl
+.\data\logs\cron_deals_2026-02-22.log.jsonl
 .\docs\_archive\billing-flow.md
 .\docs\_archive\FLOW_DIAGRAM.md
 .\docs\_archive\HUBSPOT_PROPERTIES_CHECKLIST.md
 .\docs\_archive\INVOICE_CREATION_PATHS.md
 .\docs\_archive\MIGRATION_GUIDE.md
 .\docs\_archive\REFACTOR_DOCUMENTATION.md
+.\lib\logger.js
 .\logs\app.log
 .\logs\error.log
 .\logs\warn.log
+.\migrate\.env.example
+.\migrate\config.js
+.\migrate\httpClient.js
+.\migrate\index.js
+.\migrate\package.json
+.\migrate\pipelines.js
+.\migrate\properties.js
+.\migrate\README.md
+.\migrate\workflows.js
 .\public\favicon.ico
 .\public\favicon.png
 .\src\associations.js
@@ -44,6 +64,8 @@
 .\src\phases\phase2.js
 .\src\phases\phase3.js
 .\src\phases\phasep.js
+.\src\propagacion\deals\cancelDeal.js
+.\src\propagacion\tickets\cancelForecastTickets.js
 .\src\services\invoiceService.js
 .\src\services\mirrorLineItemsUyUpsert.js
 .\src\services\snapshotService.js

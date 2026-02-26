@@ -230,9 +230,6 @@ export async function runPhase3({ deal, lineItems }) {
   for (const li of autoLineItems) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
-    for (const li of autoLineItems) {
-    const lineItemId = String(li.id || li.properties?.hs_object_id);
-    const lp = li.properties || {};
 
     // PAUSA: si el line item está en pausa, skip
     const isPaused = parseBool(lp.pausa);
@@ -243,133 +240,6 @@ export async function runPhase3({ deal, lineItems }) {
       );
       continue;
     }
-
-    try {
-      const facturarAhora = parseBool(lp.facturar_ahora);
-
-      const billingPeriodDate = resolvePlanYMD({
-        lineItemProps: lp,
-        context: { flow: 'PHASE3', dealId, lineItemId },
-      });
-
-      if (!billingPeriodDate) {
-        logger.info(
-          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
-          'Sin planYMD, saltando'
-        );
-        continue;
-      }
-
-      const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
-      if (!lineItemKey) {
-        logger.warn(
-          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
-          'line_item_key vacío, Phase1 debería setearlo, saltando'
-        );
-        continue;
-      }
-
-      // 1) FACTURAR AHORA (urgente)
-      if (facturarAhora) {
-        const promoted = await promoteAutoForecastTicketToReady({
-          dealId,
-          dealStage,
-          lineItemKey,
-          billingYMD: billingPeriodDate,
-          lineItemId,
-        });
-
-        if (promoted.moved) {
-          ticketsEnsured++;
-          const ticket = await hubspotClient.crm.tickets.basicApi.getById(
-            promoted.ticketId,
-            ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
-          );
-
-          await createInvoiceFromTicket(ticket);
-          invoicesEmitted++;
-
-          logger.info(
-            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
-            'Ticket promovido a READY (urgente) y factura emitida'
-          );
-
-          // Best-effort: marcar urgente
-          try {
-            await updateTicket(promoted.ticketId, {
-              of_facturacion_urgente: 'true',
-              of_fecha_de_facturacion: today,
-            });
-            logger.info(
-              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
-              'Ticket marcado como urgente'
-            );
-          } catch (err) {
-            reportIfActionable({ objectType: 'ticket', objectId: String(promoted.ticketId), message: 'Error al marcar ticket como urgente', err });
-            logger.warn(
-              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId, err },
-              'No se pudo marcar ticket como urgente'
-            );
-          }
-        } else {
-          logger.info(
-            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
-            'Ticket urgente no promovido'
-          );
-          if (promoted.reason === 'missing_forecast_ticket') {
-            errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
-          }
-        }
-
-        continue;
-      }
-
-      // 2) Facturación programada: solo si planYMD === HOY
-      if (billingPeriodDate !== today) {
-        continue;
-      }
-
-      const promoted = await promoteAutoForecastTicketToReady({
-        dealId,
-        dealStage,
-        lineItemKey,
-        billingYMD: billingPeriodDate,
-        lineItemId,
-      });
-
-      if (promoted.moved) {
-        ticketsEnsured++;
-
-        const ticket = await hubspotClient.crm.tickets.basicApi.getById(
-          promoted.ticketId,
-          ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
-        );
-
-        await createInvoiceFromTicket(ticket);
-        invoicesEmitted++;
-
-        logger.info(
-          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
-          'Ticket promovido a READY (programado) y factura emitida'
-        );
-      } else {
-        logger.info(
-          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
-          'Ticket programado no promovido'
-        );
-        if (promoted.reason === 'missing_forecast_ticket') {
-          errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
-        }
-      }
-
-    } catch (err) {
-      logger.error(
-        { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
-        'Error procesando line item'
-      );
-      errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
-    }
-  }
 
     try {
       const facturarAhora = parseBool(lp.facturar_ahora);
@@ -522,11 +392,4 @@ export async function runPhase3({ deal, lineItems }) {
  *   - catch externo de runPhase3 → error ya reportado en moveTicketToStage antes del re-throw
  *
  * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- *
- * ⚠️  BUGS PREEXISTENTES (no corregidos per Regla 5):
- *   1. Bloque `if (!t) { return { moved: false, ... } }` duplicado tras el retry loop;
- *      el segundo bloque es unreachable.
- *   2. En el catch externo del original se usaba `li.id` en lugar de `lineItemId`
- *      (que ya está definido en el mismo scope); se preservó el uso de `lineItemId`
- *      ya que estaba correctamente asignado antes del try — comportamiento idéntico.
  */
