@@ -14,23 +14,27 @@ export const MANUAL_TICKET_LOOKAHEAD_DAYS = 30;
 // Tickets MANUALES (pipeline + stages)
 // ===============================
 export const TICKET_PIPELINE =
-  process.env.BILLING_TICKET_PIPELINE_ID || '832539959';
+  process.env.BILLING_TICKET_PIPELINE_ID || '875213463';
 
 export const TICKET_STAGES = {
-  NEW: process.env.BILLING_TICKET_STAGE_ID || '1234282360', // Nueva orden de facturación
-  READY: process.env.BILLING_TICKET_STAGE_READY || '1250133337', // Lista para facturar (promoción manual)
-  INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '1234282361', // Facturado
-  CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1234282363', // Pausado/Cancelado
+  NEW: process.env.BILLING_TICKET_STAGE_ID || '1311451807', // Nueva orden de facturación
+  READY: process.env.BILLING_TICKET_STAGE_READY || '1311451808', // Lista para facturar (promoción manual)
+  INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '1311451809', // Facturado
+  CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1311451813', // Pausado/Cancelado
 };
 
-// Manual forecast stages por bucket de deal stage (IDs reales)
-export const BILLING_TICKET_FORECAST_25 = '1294744238';
-export const BILLING_TICKET_FORECAST_50 = '1294744239';
-export const BILLING_TICKET_FORECAST_75 = '1296492870';
-export const BILLING_TICKET_FORECAST_95 = '1296492871';
+// Manual forecast stages por bucket de deal stage
+export const BILLING_TICKET_FORECAST =
+  process.env.BILLING_TICKET_FORECAST || '1311451803';
+export const BILLING_TICKET_FORECAST_50 =
+  process.env.BILLING_TICKET_FORECAST_50 || '1311451804';
+export const BILLING_TICKET_FORECAST_75 =
+  process.env.BILLING_TICKET_FORECAST_75 || '1311451805';
+export const BILLING_TICKET_FORECAST_95 =
+  process.env.BILLING_TICKET_FORECAST_95 || '1311451806';
 
 export const FORECAST_MANUAL_STAGES = new Set([
-  BILLING_TICKET_FORECAST_25,
+  BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
   BILLING_TICKET_FORECAST_75,
   BILLING_TICKET_FORECAST_95,
@@ -40,28 +44,32 @@ export const FORECAST_MANUAL_STAGES = new Set([
 // Tickets AUTOMÁTICOS (pipeline + stages)
 // ===============================
 export const AUTOMATED_TICKET_PIPELINE =
-  process.env.BILLING_AUTOMATED_PIPELINE_ID || '829156883';
+  process.env.BILLING_AUTOMATED_PIPELINE_ID || '875177783';
 
-// READY automático (promoción automática) — ID real
+// READY automático (promoción automática)
 export const BILLING_AUTOMATED_READY =
-  process.env.BILLING_AUTOMATED_READY || '1228755520';
+  process.env.BILLING_AUTOMATED_READY || '1311404151';
 
-// Auto forecast stages por bucket deal stage (IDs reales)
-export const BILLING_AUTOMATED_FORECAST_25 = '1294745999';
-export const BILLING_AUTOMATED_FORECAST_50 = '1294746000';
-export const BILLING_AUTOMATED_FORECAST_75 = '1296489840';
-export const BILLING_AUTOMATED_FORECAST_95 = '1296362566';
+// Auto forecast stages por bucket de deal stage
+export const BILLING_AUTOMATED_FORECAST =
+  process.env.BILLING_AUTOMATED_FORECAST || '1311404147';
+export const BILLING_AUTOMATED_FORECAST_50 =
+  process.env.BILLING_AUTOMATED_FORECAST_50 || '1311404148';
+export const BILLING_AUTOMATED_FORECAST_75 =
+  process.env.BILLING_AUTOMATED_FORECAST_75 || '1311404149';
+export const BILLING_AUTOMATED_FORECAST_95 =
+  process.env.BILLING_AUTOMATED_FORECAST_95 || '1311404150';
 
 export const FORECAST_AUTO_STAGES = new Set([
-  BILLING_AUTOMATED_FORECAST_25,
+  BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
   BILLING_AUTOMATED_FORECAST_75,
   BILLING_AUTOMATED_FORECAST_95,
 ]);
 
-// Si tu código previo usaba este nombre, lo mantenemos como alias del "forecast inicial" automático.
+// Alias por compatibilidad
 export const AUTOMATED_TICKET_INITIAL_STAGE =
-  process.env.BILLING_AUTOMATED_FORECAST || BILLING_AUTOMATED_FORECAST_25;
+  process.env.BILLING_AUTOMATED_FORECAST || BILLING_AUTOMATED_FORECAST;
 
 // ===============================
 // Helpers semánticos
@@ -79,7 +87,6 @@ export function isForecastStage(stageId) {
 
 /**
  * Alias por compatibilidad con lo que veníamos hablando.
- * (Si ya lo importaste en algún lado, no se rompe.)
  */
 export function isForecastTicketStage(stageId) {
   return isForecastStage(stageId);

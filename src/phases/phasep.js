@@ -10,26 +10,40 @@ import { buildTicketFullProps } from '../services/tickets/ticketService.js';
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import {
+  TICKET_PIPELINE,
+  AUTOMATED_TICKET_PIPELINE,
+  BILLING_TICKET_FORECAST,
+  BILLING_TICKET_FORECAST_50,
+  BILLING_TICKET_FORECAST_75,
+  BILLING_TICKET_FORECAST_95,
+  BILLING_AUTOMATED_FORECAST,
+  BILLING_AUTOMATED_FORECAST_50,
+  BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_95,
+  FORECAST_MANUAL_STAGES,
+  FORECAST_AUTO_STAGES,
+  isForecastStage,
+} from '../config/constants.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
 // ==============================
-// Forecast stages (EDITABLES) — reales
+// Forecast stages — leídos desde constants.js (vía process.env)
 // ==============================
 const STAGE = {
-  MANUAL_FORECAST_25: '1294744238',
-  MANUAL_FORECAST_50: '1294744239',
-  MANUAL_FORECAST_75: '1296492870',
-  MANUAL_FORECAST_95: '1296492871',
-  AUTO_FORECAST_25: '1294745999',
-  AUTO_FORECAST_50: '1294746000',
-  AUTO_FORECAST_75: '1296489840',
-  AUTO_FORECAST_95: '1296362566',
+  MANUAL_FORECAST_25: BILLING_TICKET_FORECAST,
+  MANUAL_FORECAST_50: BILLING_TICKET_FORECAST_50,
+  MANUAL_FORECAST_75: BILLING_TICKET_FORECAST_75,
+  MANUAL_FORECAST_95: BILLING_TICKET_FORECAST_95,
+  AUTO_FORECAST_25:   BILLING_AUTOMATED_FORECAST,
+  AUTO_FORECAST_50:   BILLING_AUTOMATED_FORECAST_50,
+  AUTO_FORECAST_75:   BILLING_AUTOMATED_FORECAST_75,
+  AUTO_FORECAST_95:   BILLING_AUTOMATED_FORECAST_95,
 };
-const BILLING_TICKET_PIPELINE_ID = '832539959';
-const BILLING_AUTOMATED_PIPELINE_ID = '829156883';
 
-const FORECAST_TICKET_STAGES = new Set(Object.values(STAGE));
+// Unión de stages forecast manuales + automáticos
+const FORECAST_TICKET_STAGES = new Set([...FORECAST_MANUAL_STAGES, ...FORECAST_AUTO_STAGES]);
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -93,23 +107,24 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
 
   for (const t of forecastTickets) {
     try {
-    const ticketId = t.id;
-    const ticketKey = String(t?.properties?.of_ticket_key || '').trim();
-    if (!ticketKey) continue;
+      const ticketId = t.id;
+      const ticketKey = String(t?.properties?.of_ticket_key || '').trim();
+      if (!ticketKey) continue;
 
-    const lik = parseLikFromTicketKey(ticketKey);
-    if (!lik) continue;
+      const lik = parseLikFromTicketKey(ticketKey);
+      if (!lik) continue;
 
-    if (!validLiks.has(lik)) {
-      await deleteTicket(ticketId);
-      orphanDeleted++;
-      logger.info(
-        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId, ticketKey },
-        'Orphan forecast ticket eliminado'
-      );
-    }} catch (err) {
-     logger.error({ module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t?.id, err }, 'unit_failed');
-   }
+      if (!validLiks.has(lik)) {
+        await deleteTicket(ticketId);
+        orphanDeleted++;
+        logger.info(
+          { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId, ticketKey },
+          'Orphan forecast ticket eliminado'
+        );
+      }
+    } catch (err) {
+      logger.error({ module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t?.id, err }, 'unit_failed');
+    }
   }
 
   logger.info(
@@ -292,7 +307,7 @@ async function findTicketsByLineItemKey(lineItemKey) {
 
 function isForecastTicket(ticket) {
   const stage = String(ticket?.properties?.hs_pipeline_stage || '');
-  return FORECAST_TICKET_STAGES.has(stage);
+  return isForecastStage(stage);
 }
 
 function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
@@ -302,42 +317,6 @@ function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
   if (!ymd) return '';
   return buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
 }
-
-/*
-export async function createForecastTicket({
-  dealId,
-  lineItemKey,
-  ticketKey,
-  expectedYmd,
-  targetStage,
-  lineItemId,
-  hsPipeline,
-  empresaId,
-  empresaNombre,
-  productoNombre,
-  unidadDeNegocio,
-  rubro,
-}) {
-  const billDateYMD = String(expectedYmd);
-  const subject = `${empresaNombre || 'SIN_EMPRESA'} - ${productoNombre || 'SIN_PRODUCTO'} - ${billDateYMD}`;
-  const properties = {
-    hs_pipeline: String(hsPipeline),
-    hs_pipeline_stage: String(targetStage),
-    of_deal_id: String(dealId),
-    of_line_item_key: String(lineItemKey),
-    of_ticket_key: String(ticketKey),
-    of_line_item_ids: String(lineItemId || ''),
-    fecha_resolucion_esperada: billDateYMD,
-    subject,
-    empresa_id: empresaId || '',
-    nombre_empresa: empresaNombre || '',
-    unidad_de_negocio: unidadDeNegocio || '',
-    of_producto_nombres: productoNombre || '',
-    of_rubro: rubro || '',
-  };
-  return hubspotClient.crm.tickets.basicApi.create({ properties });
-}
-*/
 
 async function deleteTicket(ticketId) {
   return hubspotClient.crm.tickets.basicApi.archive(String(ticketId));
@@ -377,16 +356,6 @@ export async function runPhaseP({ deal, lineItems }) {
     'Inicio Phase P'
   );
 
-/*
-const companyIds = await getDealCompanies(String(dealId));
-const empresaId = companyIds?.[0] ? String(companyIds[0]) : '';
-let empresaNombre = '';
-if (empresaId) {
-  const c = await hubspotClient.crm.companies.basicApi.getById(empresaId, ['name']);
-  empresaNombre = c?.properties?.name || '';
-}
-*/
-
   // Construir set de LIKs válidos actuales
   const validLiks = new Set();
   for (const li of lineItems || []) {
@@ -399,238 +368,238 @@ if (empresaId) {
 
   for (const li of lineItems || []) {
     try {
-    let changed = false;
+      let changed = false;
 
-    const p = li?.properties || {};
-    const lineItemKey = p.line_item_key || p.of_line_item_key || '';
+      const p = li?.properties || {};
+      const lineItemKey = p.line_item_key || p.of_line_item_key || '';
 
-    if (!lineItemKey) {
-      logger.debug(
-        { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id },
-        'Line item sin line_item_key, saltando'
-      );
-      skipped++;
-      continue;
-    }
-
-    const automated = isAutomatedBilling(li);
-    const targetStage = resolveForecastStage({ dealStage, automated });
-    const cfg = getEffectiveBillingConfig(li);
-
-    logger.debug(
-      {
-        module: 'phaseP',
-        fn: 'runPhaseP',
-        dealId,
-        lineItemId: li.id,
-        lik: lineItemKey,
-        dealStage,
-        automated,
-        targetStage,
-        startDate: cfg?.startDate ? formatDateISO(cfg.startDate) : null,
-        interval: cfg?.interval ?? null,
-        numberOfPayments: safeInt(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null),
-        autorenew: cfg?.isAutoRenew ?? cfg?.autorenew ?? null,
-      },
-      'Line item config'
-    );
-
-    if (!targetStage) {
-      logger.debug(
-        { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, dealStage, reason: 'dealstage_not_in_forecast_buckets' },
-        'Line item saltado: dealstage fuera de buckets de forecast'
-      );
-      skipped++;
-      continue;
-    }
-
-    // 1) Fechas deseadas
-    const { desiredCount, dates } = buildDesiredDates(li);
-
-    logger.debug(
-      { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lik: lineItemKey, desiredCount, count: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null },
-      'Fechas deseadas para line item'
-    );
-
-    // 2) Traer existentes
-    const allTickets = await findTicketsByLineItemKey(lineItemKey);
-    const forecastTickets = allTickets.filter(isForecastTicket);
-
-    // 3) Si desiredCount=0 → borrar SOLO forecast existentes
-    if (desiredCount === 0) {
-      if (forecastTickets.length) {
-        logger.info(
-          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, count: forecastTickets.length },
-          'Sin start_date: eliminando tickets forecast existentes'
+      if (!lineItemKey) {
+        logger.debug(
+          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id },
+          'Line item sin line_item_key, saltando'
         );
-        for (const t of forecastTickets) {
-          await deleteTicket(t.id);
-          deleted++;
-        }
-        await updateLineItemLastGeneratedAt(li.id);
-      }
-      continue;
-    }
-
-    // 4) Armar set de keys deseadas
-    const desiredKeys = new Set();
-    const desiredByKey = new Map();
-
-    for (const ymd of dates) {
-      const key = buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
-      desiredKeys.add(key);
-      desiredByKey.set(key, ymd);
-    }
-
-    // 5) Mapear existentes por key (forecast vs protegidos)
-const existingForecastByKey = new Map();
-const existingProtectedByKey = new Map();
-// FIX: mapa secundario por of_ticket_key explícito para detectar tickets
-// con of_line_item_key desincronizado (ej: deals mirror, clones)
-const existingByTicketKey = new Map();
-
-for (const t of allTickets) {
-  const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
-  if (!k) continue;
-
-  if (isForecastTicket(t)) {
-    if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
-  } else {
-    if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
-  }
-
-  // Indexar por of_ticket_key explícito independientemente del LIK
-  const explicitKey = String(t?.properties?.of_ticket_key || '').trim();
-  if (explicitKey && !existingByTicketKey.has(explicitKey)) {
-    existingByTicketKey.set(explicitKey, t);
-  }
-}
-
-// 6) Upsert: crear faltantes; actualizar solo si es forecast editable
-    for (const key of desiredKeys) {
-      const expectedYmd = desiredByKey.get(key);
-
-      const existingForecast = existingForecastByKey.get(key);
-      const existingProtected = existingProtectedByKey.get(key);
-
-      if (!existingForecast) {
-        // FIX: buscar también por of_ticket_key directo como fallback,
-        // cubre casos donde of_line_item_key está desincronizado (mirrors, clones)
-        const existingByKey = existingByTicketKey.get(key);
-        const foundProtected = existingProtected ||
-          (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
-
-        if (foundProtected) {
-          // Reparar of_line_item_key si está desincronizado
-          const storedLik = String(foundProtected?.properties?.of_line_item_key || '').trim();
-          if (storedLik !== lineItemKey) {
-            logger.info(
-              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, storedLik, currentLik: lineItemKey },
-              'Reparando of_line_item_key desincronizado en ticket protegido'
-            );
-            try {
-              await updateTicket(foundProtected.id, { of_line_item_key: lineItemKey });
-            } catch (err) {
-              logger.warn(
-                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, err },
-                'No se pudo reparar of_line_item_key en ticket protegido'
-              );
-            }
-          }
-          logger.debug(
-            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, expectedYmd, protectedTicketId: foundProtected.id },
-            'Key cubierta por ticket protegido, saltando creación'
-          );
-          continue;
-        }
-
-        logger.info(
-          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, expectedYmd, targetStage },
-          'Creando ticket forecast'
-        );
-
-        const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
-
-        const fullProps = await buildTicketFullProps({
-          deal,
-          lineItem: li,
-          dealId,
-          lineItemId: li.id,
-          lineItemKey,
-          ticketKey: key,
-          expectedYMD: expectedYmd,
-          orderedYMD: null,
-        });
-
-        await safeCreateTicket(hubspotClient, {
-          properties: {
-            ...fullProps,
-            hs_pipeline: String(hsPipeline),
-            hs_pipeline_stage: String(targetStage),
-            of_motivo_pausa: p.pausa === 'true' || p.pausa === true ? (p.motivo_de_pausa || '') : '',
-          },
-        });
-
-        created++;
-        changed = true;
+        skipped++;
         continue;
       }
 
-// Existe forecast => STAGE-ONLY
-      const existing = existingForecast;
-      const patch = {};
+      const automated = isAutomatedBilling(li);
+      const targetStage = resolveForecastStage({ dealStage, automated });
+      const cfg = getEffectiveBillingConfig(li);
 
-      const hsPipeline = automated ? BILLING_AUTOMATED_PIPELINE_ID : BILLING_TICKET_PIPELINE_ID;
-      if (String(existing?.properties?.hs_pipeline || '') !== String(hsPipeline)) {
-        patch.hs_pipeline = String(hsPipeline);
-      }
+      logger.debug(
+        {
+          module: 'phaseP',
+          fn: 'runPhaseP',
+          dealId,
+          lineItemId: li.id,
+          lik: lineItemKey,
+          dealStage,
+          automated,
+          targetStage,
+          startDate: cfg?.startDate ? formatDateISO(cfg.startDate) : null,
+          interval: cfg?.interval ?? null,
+          numberOfPayments: safeInt(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null),
+          autorenew: cfg?.isAutoRenew ?? cfg?.autorenew ?? null,
+        },
+        'Line item config'
+      );
 
-      if (String(existing?.properties?.hs_pipeline_stage || '') !== String(targetStage)) {
-        patch.hs_pipeline_stage = String(targetStage);
-      }
-
-      if (!String(existing?.properties?.of_ticket_key || '').trim()) {
-        patch.of_ticket_key = String(key);
-      }
-
-      // Sincronizar motivo de pausa
-      const motivoPausa = parseBool(p.pausa) ? (p.motivo_de_pausa || '') : '';
-      if (String(existing?.properties?.of_motivo_pausa || '') !== motivoPausa) {
-        patch.of_motivo_pausa = motivoPausa;
-      }
-
-      if (Object.keys(patch).length) {
-        await updateTicket(existing.id, patch);
-        updated++;
-        changed = true;
-      }
-    }
-    
-    // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys
-    for (const t of forecastTickets) {
-      const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
-      if (!k) continue;
-      if (!desiredKeys.has(k)) {
-        try {
-        logger.info(
-          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, ticketKey: k },
-          'Eliminando ticket forecast sobrante'
+      if (!targetStage) {
+        logger.debug(
+          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, dealStage, reason: 'dealstage_not_in_forecast_buckets' },
+          'Line item saltado: dealstage fuera de buckets de forecast'
         );
-        await deleteTicket(t.id);
-        deleted++;
-        changed = true;
-        } catch (err) {
-       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
-     }
+        skipped++;
+        continue;
       }
-    }
 
-    if (changed) {
-      await updateLineItemLastGeneratedAt(li.id);
-    }
+      // 1) Fechas deseadas
+      const { desiredCount, dates } = buildDesiredDates(li);
+
+      logger.debug(
+        { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lik: lineItemKey, desiredCount, count: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null },
+        'Fechas deseadas para line item'
+      );
+
+      // 2) Traer existentes
+      const allTickets = await findTicketsByLineItemKey(lineItemKey);
+      const forecastTickets = allTickets.filter(isForecastTicket);
+
+      // 3) Si desiredCount=0 → borrar SOLO forecast existentes
+      if (desiredCount === 0) {
+        if (forecastTickets.length) {
+          logger.info(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, count: forecastTickets.length },
+            'Sin start_date: eliminando tickets forecast existentes'
+          );
+          for (const t of forecastTickets) {
+            await deleteTicket(t.id);
+            deleted++;
+          }
+          await updateLineItemLastGeneratedAt(li.id);
+        }
+        continue;
+      }
+
+      // 4) Armar set de keys deseadas
+      const desiredKeys = new Set();
+      const desiredByKey = new Map();
+
+      for (const ymd of dates) {
+        const key = buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
+        desiredKeys.add(key);
+        desiredByKey.set(key, ymd);
+      }
+
+      // 5) Mapear existentes por key (forecast vs protegidos)
+      const existingForecastByKey = new Map();
+      const existingProtectedByKey = new Map();
+      // FIX: mapa secundario por of_ticket_key explícito para detectar tickets
+      // con of_line_item_key desincronizado (ej: deals mirror, clones)
+      const existingByTicketKey = new Map();
+
+      for (const t of allTickets) {
+        const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
+        if (!k) continue;
+
+        if (isForecastTicket(t)) {
+          if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
+        } else {
+          if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
+        }
+
+        // Indexar por of_ticket_key explícito independientemente del LIK
+        const explicitKey = String(t?.properties?.of_ticket_key || '').trim();
+        if (explicitKey && !existingByTicketKey.has(explicitKey)) {
+          existingByTicketKey.set(explicitKey, t);
+        }
+      }
+
+      // 6) Upsert: crear faltantes; actualizar solo si es forecast editable
+      for (const key of desiredKeys) {
+        const expectedYmd = desiredByKey.get(key);
+
+        const existingForecast = existingForecastByKey.get(key);
+        const existingProtected = existingProtectedByKey.get(key);
+
+        if (!existingForecast) {
+          // FIX: buscar también por of_ticket_key directo como fallback,
+          // cubre casos donde of_line_item_key está desincronizado (mirrors, clones)
+          const existingByKey = existingByTicketKey.get(key);
+          const foundProtected = existingProtected ||
+            (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+
+          if (foundProtected) {
+            // Reparar of_line_item_key si está desincronizado
+            const storedLik = String(foundProtected?.properties?.of_line_item_key || '').trim();
+            if (storedLik !== lineItemKey) {
+              logger.info(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, storedLik, currentLik: lineItemKey },
+                'Reparando of_line_item_key desincronizado en ticket protegido'
+              );
+              try {
+                await updateTicket(foundProtected.id, { of_line_item_key: lineItemKey });
+              } catch (err) {
+                logger.warn(
+                  { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, ticketId: foundProtected.id, err },
+                  'No se pudo reparar of_line_item_key en ticket protegido'
+                );
+              }
+            }
+            logger.debug(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, expectedYmd, protectedTicketId: foundProtected.id },
+              'Key cubierta por ticket protegido, saltando creación'
+            );
+            continue;
+          }
+
+          logger.info(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, expectedYmd, targetStage },
+            'Creando ticket forecast'
+          );
+
+          const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;
+
+          const fullProps = await buildTicketFullProps({
+            deal,
+            lineItem: li,
+            dealId,
+            lineItemId: li.id,
+            lineItemKey,
+            ticketKey: key,
+            expectedYMD: expectedYmd,
+            orderedYMD: null,
+          });
+
+          await safeCreateTicket(hubspotClient, {
+            properties: {
+              ...fullProps,
+              hs_pipeline: String(hsPipeline),
+              hs_pipeline_stage: String(targetStage),
+              of_motivo_pausa: p.pausa === 'true' || p.pausa === true ? (p.motivo_de_pausa || '') : '',
+            },
+          });
+
+          created++;
+          changed = true;
+          continue;
+        }
+
+        // Existe forecast => STAGE-ONLY
+        const existing = existingForecast;
+        const patch = {};
+
+        const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;
+        if (String(existing?.properties?.hs_pipeline || '') !== String(hsPipeline)) {
+          patch.hs_pipeline = String(hsPipeline);
+        }
+
+        if (String(existing?.properties?.hs_pipeline_stage || '') !== String(targetStage)) {
+          patch.hs_pipeline_stage = String(targetStage);
+        }
+
+        if (!String(existing?.properties?.of_ticket_key || '').trim()) {
+          patch.of_ticket_key = String(key);
+        }
+
+        // Sincronizar motivo de pausa
+        const motivoPausa = parseBool(p.pausa) ? (p.motivo_de_pausa || '') : '';
+        if (String(existing?.properties?.of_motivo_pausa || '') !== motivoPausa) {
+          patch.of_motivo_pausa = motivoPausa;
+        }
+
+        if (Object.keys(patch).length) {
+          await updateTicket(existing.id, patch);
+          updated++;
+          changed = true;
+        }
+      }
+
+      // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys
+      for (const t of forecastTickets) {
+        const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
+        if (!k) continue;
+        if (!desiredKeys.has(k)) {
+          try {
+            logger.info(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, ticketKey: k },
+              'Eliminando ticket forecast sobrante'
+            );
+            await deleteTicket(t.id);
+            deleted++;
+            changed = true;
+          } catch (err) {
+            logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
+          }
+        }
+      }
+
+      if (changed) {
+        await updateLineItemLastGeneratedAt(li.id);
+      }
     } catch (err) {
-     logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');
-   }
+      logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');
+    }
   }
 
   logger.info(
