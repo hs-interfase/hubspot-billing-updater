@@ -195,93 +195,96 @@ export async function processUrgentLineItem(lineItemId) {
       'Deal asociado encontrado'
     );
 
-    // 5) Idempotencia
-    const existingInvoiceId = lineItemProps.invoice_id;
-    if (existingInvoiceId) {
-      const validation = await isInvoiceIdValidForLineItem({
-        dealId,
-        lineItemId,
-        invoiceId: existingInvoiceId,
-        billDateYMD: billingPeriodDate,
-      });
+// 5) Guardar invoice existente para validar después de tener el lik
+const existingInvoiceId = lineItemProps.invoice_id;
 
-      if (validation.valid) {
-        logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
-          'Line Item ya tiene factura válida, saltando'
-        );
-        return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
-      }
+// 6) Obtener deal completo
+const { deal, lineItems } = await getDealWithLineItems(dealId);
+const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
+if (!targetLineItem) throw new Error('Line item no encontrado en el deal');
 
-      logger.warn(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
-        'invoice_id inválido, limpiando'
-      );
-      try {
-        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-          properties: { invoice_id: '', of_invoice_id: '', invoice_key: '' },
-        });
-        logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
-          'Line Item limpiado de invoice_id inválido'
-        );
-      } catch (err) {
-        reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error limpiando invoice_id inválido en line item', err });
-        logger.warn(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
-          'Error limpiando invoice_id inválido'
-        );
-      }
-    }
+let lik = (targetLineItem.properties?.line_item_key || '').trim();
+if (!lik) lik = (lineItemProps.line_item_key || '').trim();
 
-    // 6) Obtener deal completo
-    const { deal, lineItems } = await getDealWithLineItems(dealId);
-    const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
-    if (!targetLineItem) throw new Error('Line item no encontrado en el deal');
+  if (!lik) {
+  logger.warn(
+    { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+    'line_item_key vacío, generando con ensureLineItemKey'
+  );
 
-    let lik = (targetLineItem.properties?.line_item_key || '').trim();
-    if (!lik) lik = (lineItemProps.line_item_key || '').trim();
+  const { key, shouldUpdate } = ensureLineItemKey({
+    dealId: String(dealId),
+    lineItem: targetLineItem,
+  });
 
-    if (!lik) {
-      logger.warn(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
-        'line_item_key vacío, generando con ensureLineItemKey'
-      );
+  lik = (key || '').trim();
 
-      const { key, shouldUpdate } = ensureLineItemKey({
-        dealId: String(dealId),
-        lineItem: targetLineItem,
-      });
+  if (!lik) {
+    throw new Error('Urgent billing: ensureLineItemKey devolvió key vacía');
+  }
 
-      lik = (key || '').trim();
-
-      if (!lik) {
-        throw new Error('Urgent billing: ensureLineItemKey devolvió key vacía');
-      }
-
-      if (shouldUpdate) {
-        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-          properties: { line_item_key: lik },
-        });
-        logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, lik },
-          'line_item_key seteada en HubSpot'
-        );
-      }
-
-      targetLineItem.properties = { ...(targetLineItem.properties || {}), line_item_key: lik };
-      targetLineItem.line_item_key = lik;
-      lineItemProps.line_item_key = lik;
-    }
-
-    if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
-
-    targetLineItem.line_item_key = lik;
-
+  if (shouldUpdate) {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { line_item_key: lik },
+    });
     logger.info(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, lik },
-      'Procediendo a facturar'
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, lik },
+      'line_item_key seteada en HubSpot'
     );
+  }
+
+  targetLineItem.properties = { ...(targetLineItem.properties || {}), line_item_key: lik };
+  targetLineItem.line_item_key = lik;
+  lineItemProps.line_item_key = lik;
+}
+
+
+if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
+
+targetLineItem.line_item_key = lik;
+
+// 6b) Idempotencia — ahora que tenemos lik, podemos validar correctamente
+if (existingInvoiceId) {
+  const validation = await isInvoiceIdValidForLineItem({
+    dealId,
+    lik,                 // ← correcto
+    invoiceId: existingInvoiceId,
+    billDateYMD: billingPeriodDate,
+  });
+
+  if (validation.valid) {
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
+      'Line Item ya tiene factura válida, saltando'
+    );
+    return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
+  }
+
+  logger.warn(
+    { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
+    'invoice_id inválido, limpiando'
+  );
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { invoice_id: '', invoice_key: '' },
+    });
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+      'Line Item limpiado de invoice_id inválido'
+    );
+  } catch (err) {
+    reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error limpiando invoice_id inválido en line item', err });
+    logger.warn(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
+      'Error limpiando invoice_id inválido'
+    );
+  }
+}
+
+logger.info(
+  { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, lik },
+  'Procediendo a facturar'
+);
 
     // 7.a) Crear/reutilizar ticket con billingPeriodDate
     const { ticketId, created } = await createAutoBillingTicket(

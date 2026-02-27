@@ -1,10 +1,10 @@
-// src/utils/__tests__/invoiceValidation.test.js
+// src/__tests__/invoiceValidation.test.js
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isInvoiceIdValidForLineItem } from '../invoiceValidation.js';
-import { hubspotClient } from '../../hubspotClient.js';
+import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
+import { hubspotClient } from '../hubspotClient.js';
 
-vi.mock('../../hubspotClient.js', () => ({
+vi.mock('../hubspotClient.js', () => ({
   hubspotClient: {
     crm: {
       objects: {

@@ -3,7 +3,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
-import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
+import { MANUAL_TICKET_LOOKAHEAD_DAYS, TICKET_STAGES, BILLING_TICKET_FORECAST, BILLING_TICKET_FORECAST_50, BILLING_TICKET_FORECAST_75, BILLING_TICKET_FORECAST_95, FORECAST_MANUAL_STAGES } from '../config/constants.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
@@ -23,20 +23,8 @@ import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
  * - Si ya fue promovido (ya no está en forecast stage), no se toca.
  */
 
-// ====== STAGES (IDs reales) ======
-const BILLING_TICKET_STAGE_READY_ENTRY = process.env.BILLING_TICKET_STAGE_ID || '1311451807';
-
-const BILLING_TICKET_FORECAST = '1311451803';
-const BILLING_TICKET_FORECAST_50 = '1311451804';
-const BILLING_TICKET_FORECAST_75 = '1311451805';
-const BILLING_TICKET_FORECAST_95 = '1311451806';
-
-const FORECAST_MANUAL_STAGES = new Set([
-  BILLING_TICKET_FORECAST,
-  BILLING_TICKET_FORECAST_50,
-  BILLING_TICKET_FORECAST_75,
-  BILLING_TICKET_FORECAST_95,
-]);
+// BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW (primera entrada al flujo real manual)
+const BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW;
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
