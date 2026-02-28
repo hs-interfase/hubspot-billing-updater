@@ -184,6 +184,19 @@ Ediciones en Line Item con ticket existente solo afectan fechas futuras
 
 El consumo de cupo ocurre solo al emitir factura
 
+
+la regla de facturacion en phase 3 es asi.
+
+facturar_ahora / phase3
+       ↓
+  [GUARD] countActivePlanInvoices >= totalPayments → skip   ← lo que agregamos
+       ↓
+  createInvoiceFromTicket
+       ↓
+  [IDEMPOTENCIA] of_invoice_id + invoice_key match → return early   ← ya existía
+       ↓
+  createInvoiceDirect   ← solo llega si pasó ambos filtros
+
 📄 Licencia
 
 ISC
