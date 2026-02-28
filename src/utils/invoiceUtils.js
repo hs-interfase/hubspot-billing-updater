@@ -1,4 +1,4 @@
-async function countActivePlanInvoices(lik) {
+export async function countActivePlanInvoices(lik) {
   try {
     const resp = await hubspotClient.crm.objects.searchApi.doSearch('invoices', {
       filterGroups: [{
