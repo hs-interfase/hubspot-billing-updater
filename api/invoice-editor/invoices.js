@@ -1,13 +1,21 @@
 // api/invoice-editor/invoices.js
 import { Router } from 'express'
-import { createReadStream } from 'fs'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { hubspotClient } from '../../src/hubspotClient.js'
+import axios from 'axios'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
+
+// ── HubSpot HTTP client (usa el mismo token que el resto del proyecto) ──
+function hs() {
+  return axios.create({
+    baseURL: 'https://api.hubapi.com',
+    headers: { Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_TOKEN}` },
+    timeout: 10000,
+  })
+}
 
 // Cargar config de campos
 const configPath = path.join(__dirname, 'invoiceFields.config.json')
@@ -18,6 +26,7 @@ const WRITABLE_FIELD_NAMES = fieldsConfig.filter(f => !f.readOnly).map(f => f.in
 
 // ── Audit logger (reutiliza la carpeta logs/ del proyecto) ──
 const LOGS_DIR = path.join(__dirname, '../../logs')
+fs.mkdirSync(LOGS_DIR, { recursive: true }) // crear si no existe (Railway)
 function writeAuditLog(entry) {
   try {
     const logFile = path.join(LOGS_DIR, 'invoice-editor-audit.json')
@@ -52,18 +61,9 @@ router.get('/:id', async (req, res) => {
   }
 
   try {
-    // Usamos el SDK de HubSpot que ya tiene el proyecto
-    const response = await hubspotClient.apiRequest({
-      method: 'GET',
-      path: `/crm/v3/objects/invoices/${id}`,
-      qs: { properties: ALL_FIELD_NAMES.join(',') },
+    const { data } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
+      params: { properties: ALL_FIELD_NAMES.join(',') },
     })
-
-    const data = await response.json()
-
-    if (response.status === 404) {
-      return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
-    }
 
     return res.json({
       id: data.id,
@@ -72,14 +72,13 @@ router.get('/:id', async (req, res) => {
     })
 
   } catch (err) {
-    const status = err.statusCode || err.response?.status
-    if (status === 404) {
+    if (err.response?.status === 404) {
       return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
     }
-    console.error('[InvoiceEditor][GET]', err.message)
+    console.error('[InvoiceEditor][GET]', err.response?.data || err.message)
     return res.status(500).json({
       error: 'Error al comunicarse con HubSpot.',
-      detail: err.message,
+      detail: err.response?.data?.message || err.message,
     })
   }
 })
@@ -120,15 +119,9 @@ router.patch('/:id', async (req, res) => {
   }
 
   try {
-    const response = await hubspotClient.apiRequest({
-      method: 'PATCH',
-      path: `/crm/v3/objects/invoices/${id}`,
-      body: { properties: filteredProperties },
+    await hs().patch(`/crm/v3/objects/invoices/${id}`, {
+      properties: filteredProperties,
     })
-
-    if (response.status === 404) {
-      return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
-    }
 
     writeAuditLog({
       timestamp: new Date().toISOString(),
@@ -146,14 +139,13 @@ router.patch('/:id', async (req, res) => {
     })
 
   } catch (err) {
-    const status = err.statusCode || err.response?.status
-    if (status === 404) {
+    if (err.response?.status === 404) {
       return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
     }
-    console.error('[InvoiceEditor][PATCH]', err.message)
+    console.error('[InvoiceEditor][PATCH]', err.response?.data || err.message)
     return res.status(500).json({
       error: 'Error al actualizar la factura en HubSpot.',
-      detail: err.message,
+      detail: err.response?.data?.message || err.message,
     })
   }
 })
