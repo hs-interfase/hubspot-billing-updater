@@ -19,3 +19,4 @@ export async function countActivePlanInvoices(lik) {
     return null; // fail open: no bloqueamos si no podemos contar
   }
 }
+

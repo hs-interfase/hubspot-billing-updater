@@ -344,11 +344,12 @@ export async function processUrgentLineItem(lineItemId) {
     let existingTicketInvoiceId = null;
 
     if (ticketId) {
-      const ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id']);
+      const ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
       existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
     }
 
-    if (existingTicketInvoiceId) {
+    const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
+if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
       logger.info(
         { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, invoiceId: existingTicketInvoiceId },
         'Factura ya creada desde ticket, omitiendo auto-invoice'
@@ -469,14 +470,14 @@ export async function processUrgentTicket(ticketId) {
 
     shouldResetFlag = true;
 
-    if (ticketProps.of_invoice_id) {
-      logger.info(
-        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
-        'Ticket ya tiene factura, saltando'
-      );
-      return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
-    }
-
+    if (ticketProps.of_invoice_id && ticketProps.of_invoice_status !== 'Cancelada') {
+  logger.info(
+    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
+    'Ticket ya facturado, saltando'
+  );
+  return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
+}
+ 
     // ← NUEVO: GUARD plan completo
     const lik = (ticketProps.of_line_item_key || '').trim();
 

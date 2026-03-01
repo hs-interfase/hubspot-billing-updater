@@ -4,6 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
+import audirRouter from './api/invoice-editor/audit.js'
 
 // ── Invoice Editor ──────────────────────────────
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
@@ -30,3 +31,8 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
 
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))
+
+app.use('/invoice-editor/api/audit', invoiceEditorAuth, auditRouter)
+app.get('/invoice-editor/audit', invoiceEditorAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'invoice-editor-audit.html'))
+})

@@ -170,7 +170,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
       'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
       'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
-      'descripcion', 'comments', 'createdate', 'motivo_pausa', 'id_factura_nodum', 'etapa_factura',
+      'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
       'facturar_ahora', 'repetitivo',
     ]);
   } catch (err) {
@@ -308,6 +308,14 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   const totalFinal    = totalFinalResolved;    // source of truth
   const hasIVA        = hasIVAResolved;
 
+  // Derivar frecuencia de facturación desde repetitivo
+  // true → 'Frecuente' | false → 'Único' | null/undefined → null
+  const frecuenciaDerivada = tp.repetitivo === 'true' || tp.repetitivo === true
+    ? 'Frecuente'
+    : tp.repetitivo === 'false' || tp.repetitivo === false
+      ? 'Único'
+      : null;
+
   // 6) Propiedades de la factura — mapeo Ticket → Invoice
   const invoicePropsRaw = {
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
@@ -335,12 +343,12 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    periodo_a_facturar: tp.of_periodo_a_facturar,
-    mensual: tp.of_periodo_de_facturacion,
-    hs_comments: tp.comments,
-    motivo_de_pausa: tp.motivo_pausa,
-    id_factura_nodum: tp.id_factura_nodum,
-    etapa_de_la_factura: tp.etapa_factura || 'Pendiente',
+    periodo_a_facturar: tp.fecha_resolucion_esperada,
+    mensual: frecuenciaDerivada,                            // 'Frecuente' | 'Único' | null
+    hs_comments: tp.content,                                // era: tp.comments
+    motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
+    id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
+    etapa_de_la_factura: tp.of_invoice_status || 'Pendiente', // era: tp.etapa_factura
     modo_de_generacion_de_factura: modoGeneracion,
   };
 
@@ -734,5 +742,14 @@ export async function getInvoice(invoiceId) {
  *
  * Confirmación: "No se reportan warns a HubSpot;
  *                solo errores 4xx (≠429)" — implementado en reportIfActionable().
+ *
+ * MAPEO CORREGIDO (ticket → factura):
+ * - tp.content        → hs_comments          (era: tp.comments — no existe)
+ * - tp.of_motivo_pausa → motivo_de_pausa     (era: tp.motivo_pausa — faltaba prefijo of_)
+ * - tp.numero_de_factura → id_factura_nodum  (era: tp.id_factura_nodum — nombre incorrecto)
+ * - tp.of_invoice_status → etapa_de_la_factura (era: tp.etapa_factura — no existe)
+ * - frecuenciaDerivada → mensual             (era: tp.of_periodo_de_facturacion — no existe;
+ *                                             derivado de tp.repetitivo: true→'Frecuente', false→'Único')
+ * - periodo_a_facturar → undefined (TODO: pendiente definir formato con el equipo)
  * ─────────────────────────────────────────────────────────────
  */
