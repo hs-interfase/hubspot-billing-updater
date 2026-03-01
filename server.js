@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
 import auditRouter from './api/invoice-editor/audit.js'          // ← aquí arriba ✅
+import { initDB } from './api/invoice-editor/Db.js'
 
 // ── Invoice Editor ──────────────────────────────
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
@@ -33,5 +34,6 @@ app.get('/invoice-editor', invoiceEditorAuth, (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')))
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
 
+await initDB()
 const PORT = process.env.PORT || 8080
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))  // ← siempre al final ✅
+app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))

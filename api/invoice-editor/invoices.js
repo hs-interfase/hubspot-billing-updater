@@ -4,6 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
+import pool from './Db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
@@ -25,22 +26,16 @@ const ALL_FIELD_NAMES    = fieldsConfig.map(f => f.internalName)
 const WRITABLE_FIELD_NAMES = fieldsConfig.filter(f => !f.readOnly).map(f => f.internalName)
 
 // ── Audit logger (reutiliza la carpeta logs/ del proyecto) ──
-const LOGS_DIR = path.join(__dirname, '../../logs')
-fs.mkdirSync(LOGS_DIR, { recursive: true }) // crear si no existe (Railway)
-function writeAuditLog(entry) {
+async function writeAuditLog(entry) {
   try {
-    const logFile = path.join(LOGS_DIR, 'invoice-editor-audit.json')
-    let logs = []
-    if (fs.existsSync(logFile)) {
-      try { logs = JSON.parse(fs.readFileSync(logFile, 'utf-8')) } catch { logs = [] }
-    }
-    logs.unshift(entry)
-    if (logs.length > 1000) logs = logs.slice(0, 1000)
-    fs.writeFileSync(logFile, JSON.stringify(logs, null, 2), 'utf-8')
+    await pool.query(
+      `INSERT INTO invoice_audit_logs (timestamp, invoice_id, "user", changes)
+       VALUES ($1, $2, $3, $4)`,
+      [entry.timestamp, entry.invoiceId, entry.user, JSON.stringify(entry.changes)]
+    )
   } catch (err) {
-    console.error('[InvoiceEditor][Audit] Error escribiendo log:', err.message)
+    console.error('[InvoiceEditor][Audit] Error escribiendo log en DB:', err.message)
   }
-}
 
 // ─────────────────────────────────────────────
 // GET /invoice-editor/api/config
