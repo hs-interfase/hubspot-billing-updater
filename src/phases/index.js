@@ -7,6 +7,7 @@ import { runPhase3 } from './phase3.js';
 
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from '../hubspotClient.js';
+import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
@@ -142,6 +143,20 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     );
 
     return results;
+  }
+    try {
+    const propagationResult = await propagateCancelledInvoicesForDeal(currentLineItems);
+    results.invoicePropagation = propagationResult;
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...propagationResult },
+      'Propagación de facturas canceladas completada'
+    );
+  } catch (err) {
+    // fail open: no bloqueamos las fases si falla la propagación
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en propagación de facturas canceladas, continuando'
+    );
   }
 
   // ========== PHASE P: Forecast/Promesa ==========

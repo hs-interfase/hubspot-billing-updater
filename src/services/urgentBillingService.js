@@ -456,7 +456,8 @@ export async function processUrgentTicket(ticketId) {
       'subject',
       'facturar_ahora',
       'of_invoice_id',
-      'of_line_item_key', // ← NUEVO
+      'of_invoice_status',
+      'of_line_item_key',
     ]);
 
     const ticketProps = ticket.properties || {};
