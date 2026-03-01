@@ -343,12 +343,13 @@ export async function processUrgentLineItem(lineItemId) {
     let invoiceIdFinal = null;
     let existingTicketInvoiceId = null;
 
-    if (ticketId) {
-      const ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
-      existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
-    }
+let ticketReload = null;
+if (ticketId) {
+  ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
+  existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
+}
+const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
 
-    const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
 if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
       logger.info(
         { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, invoiceId: existingTicketInvoiceId },
