@@ -60,6 +60,9 @@ export const BILLING_AUTOMATED_FORECAST_75 =
 export const BILLING_AUTOMATED_FORECAST_95 =
   process.env.BILLING_AUTOMATED_FORECAST_95 || '1311404150';
 
+export const BILLING_AUTOMATED_CANCELLED =
+  process.env.BILLING_AUTOMATED_CANCELLED || '1311404155';
+
 export const FORECAST_AUTO_STAGES = new Set([
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
@@ -70,6 +73,12 @@ export const FORECAST_AUTO_STAGES = new Set([
 // Alias por compatibilidad
 export const AUTOMATED_TICKET_INITIAL_STAGE =
   process.env.BILLING_AUTOMATED_FORECAST || BILLING_AUTOMATED_FORECAST;
+
+// Map de pipeline → stage de cancelación (usado en cancelForecastTickets)
+export const CANCELLED_STAGE_BY_PIPELINE = {
+  [TICKET_PIPELINE]: TICKET_STAGES.CANCELLED,
+  [AUTOMATED_TICKET_PIPELINE]: BILLING_AUTOMATED_CANCELLED,
+};
 
 // ===============================
 // Helpers semánticos

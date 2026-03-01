@@ -1,11 +1,11 @@
 ﻿Get-ChildItem -Recurse -File -Force |
->>   Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |
->>   ForEach-Object { Resolve-Path -Relative $_.FullName } |
->>   ForEach-Object { $_ -replace '^\.\[\\/]', '' } |
->>   Set-Content -Encoding UTF8 estructura-limpia.txt
-
+Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |     
+ForEach-Object { Resolve-Path -Relative $_.FullName } |     
+ForEach-Object { $_ -replace '^\.\[\\/]', '' } |     
+Set-Content -Encoding UTF8 estructura-limpia.txt     
 
 .env
+.env.real
 .gitignore
 .\FIX_TICKET_IDEMPOTENCY.md
 .\IMPLEMENTATION_SUMMARY.md
@@ -19,6 +19,10 @@
 .\api\actualizar-webhook.js
 .\api\escuchar-cambios.js
 .\api\update-billing.js
+.\api\invoice-editor\auth.js
+.\api\invoice-editor\INTEGRACION.md
+.\api\invoice-editor\invoiceFields.config.json
+.\api\invoice-editor\invoices.js
 .\data\cron-state-deals.json
 .\data\cron-state-deals.lock
 .\data\cron_failed_deals.json
@@ -26,6 +30,7 @@
 .\data\logs\cron_deals_2026-02-19.log.jsonl
 .\data\logs\cron_deals_2026-02-20.log.jsonl
 .\data\logs\cron_deals_2026-02-22.log.jsonl
+.\data\logs\cron_deals_2026-02-26.log.jsonl
 .\docs\_archive\billing-flow.md
 .\docs\_archive\FLOW_DIAGRAM.md
 .\docs\_archive\HUBSPOT_PROPERTIES_CHECKLIST.md
@@ -36,17 +41,9 @@
 .\logs\app.log
 .\logs\error.log
 .\logs\warn.log
-.\migrate\.env.example
-.\migrate\config.js
-.\migrate\httpClient.js
-.\migrate\index.js
-.\migrate\package.json
-.\migrate\pipelines.js
-.\migrate\properties.js
-.\migrate\README.md
-.\migrate\workflows.js
 .\public\favicon.ico
 .\public\favicon.png
+.\public\invoice-editor.html
 .\src\associations.js
 .\src\billingEngine.js
 .\src\cupo.js
@@ -90,6 +87,7 @@
 .\src\utils\dateUtils.js
 .\src\utils\hubspotErrorCollector.js
 .\src\utils\invoiceKey.js
+.\src\utils\invoiceUtils.js
 .\src\utils\invoiceValidation.js
 .\src\utils\lineItemKey.js
 .\src\utils\parsers.js
@@ -98,4 +96,5 @@
 .\src\utils\resolvePlanYMD.js
 .\src\utils\ticketKey.js
 .\src\__tests__\invoiceValidation.js
+.\src\__tests__\invoiceValidation.test.js
 .\src\__tests__\ticketKeyIdempotency.js

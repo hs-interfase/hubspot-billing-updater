@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Editor de Facturas · HubSpot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e334d;
+      --accent: #ff7a59;
+      --accent-dim: rgba(255,122,89,0.15);
+      --green: #00bda5;
+      --green-dim: rgba(0,189,165,0.15);
+      --red: #f2545b;
+      --red-dim: rgba(242,84,91,0.12);
+      --yellow: #f5c518;
+      --text: #e8eaf6;
+      --muted: #7b82a8;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    .app-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .app-header .logo {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700; color: #fff; flex-shrink: 0;
+    }
+
+    .app-header h1 {
+      font-size: 16px; font-weight: 600; color: var(--text);
+    }
+
+    .app-header .subtitle {
+      font-size: 12px; color: var(--muted); margin-top: 1px;
+    }
+
+    main {
+      max-width: 860px;
+      margin: 32px auto;
+      padding: 0 20px 80px;
+    }
+
+    /* ── Busqueda ── */
+    .search-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+    }
+
+    .search-card h2 {
+      font-size: 15px; font-weight: 600; margin-bottom: 18px; color: var(--text);
+    }
+
+    .search-row {
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+
+    .search-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 15px;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-row input:focus { border-color: var(--accent); }
+    .search-row input::placeholder { color: var(--muted); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 11px 20px;
+      border-radius: 8px;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer; border: none; transition: all 0.18s; white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--accent); color: #fff;
+    }
+    .btn-primary:hover { background: #e86a4a; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-ghost {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    .btn-success {
+      background: var(--green); color: #fff;
+    }
+    .btn-success:hover { background: #009e8c; }
+    .btn-success:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* ── Mensajes ── */
+    .message {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-top: 14px;
+      font-size: 13px;
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+    .message.error { background: var(--red-dim); border: 1px solid var(--red); color: var(--red); }
+    .message.success { background: var(--green-dim); border: 1px solid var(--green); color: var(--green); }
+    .message.info { background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); }
+
+    /* ── Invoice Card ── */
+    .invoice-header {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-top: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .invoice-header .meta { display: flex; flex-direction: column; gap: 4px; }
+    .invoice-header .meta .id-row {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .invoice-header .meta .invoice-id {
+      font-size: 20px; font-weight: 700; color: var(--text);
+    }
+    .invoice-header .meta .badge {
+      background: var(--accent-dim); color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 20px;
+      padding: 2px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+    }
+    .invoice-header .meta .updated {
+      font-size: 12px; color: var(--muted);
+    }
+
+    .invoice-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ── Form ── */
+    .form-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      margin-top: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .form-card h3 {
+      font-size: 14px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.8px;
+      margin-bottom: 22px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .fields-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .field-group { display: flex; flex-direction: column; gap: 6px; }
+    .field-group.full { grid-column: 1 / -1; }
+
+    .field-group label {
+      font-size: 12px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      display: flex; align-items: center; gap: 6px;
+    }
+
+    .field-group label .readonly-badge {
+      background: var(--surface2); color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 6px; font-size: 10px;
+      font-weight: 500; letter-spacing: 0;
+    }
+
+    .field-group input,
+    .field-group select,
+    .field-group textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+      padding: 10px 12px;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+      width: 100%;
+    }
+
+    .field-group input:focus,
+    .field-group select:focus,
+    .field-group textarea:focus { border-color: var(--accent); }
+
+    .field-group input[readonly],
+    .field-group select[disabled],
+    .field-group textarea[readonly] {
+      opacity: 0.45; cursor: not-allowed;
+    }
+
+    .field-group textarea { resize: vertical; min-height: 80px; }
+
+    .field-group select option { background: var(--surface2); }
+
+    .field-group .help-text {
+      font-size: 11px; color: var(--muted);
+    }
+
+    .field-group .changed-indicator {
+      height: 3px; border-radius: 2px;
+      background: var(--accent);
+      transition: opacity 0.2s;
+      opacity: 0;
+    }
+    .field-group.changed .changed-indicator { opacity: 1; }
+    .field-group.changed input,
+    .field-group.changed select,
+    .field-group.changed textarea {
+      border-color: var(--accent);
+    }
+
+    /* ── Switch (boolean) ── */
+    .switch-wrapper {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0;
+    }
+
+    .switch {
+      position: relative; width: 42px; height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--border); border-radius: 24px;
+      cursor: pointer; transition: 0.25s;
+    }
+
+    .slider::before {
+      content: '';
+      position: absolute; height: 18px; width: 18px;
+      left: 3px; bottom: 3px;
+      background: #fff; border-radius: 50%; transition: 0.25s;
+    }
+
+    input:checked + .slider { background: var(--green); }
+    input:checked + .slider::before { transform: translateX(18px); }
+
+    /* ── Diff modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 999; padding: 20px;
+    }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      max-width: 560px; width: 100%;
+      box-shadow: 0 8px 48px rgba(0,0,0,0.7);
+      max-height: 80vh; overflow-y: auto;
+    }
+
+    .modal h3 {
+      font-size: 16px; font-weight: 700; margin-bottom: 6px;
+    }
+
+    .modal .modal-sub {
+      font-size: 13px; color: var(--muted); margin-bottom: 20px;
+    }
+
+    .diff-list { display: flex; flex-direction: column; gap: 12px; }
+
+    .diff-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+
+    .diff-item .diff-field {
+      font-size: 11px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+    }
+
+    .diff-row { display: flex; gap: 8px; align-items: center; }
+
+    .diff-before, .diff-after {
+      flex: 1; border-radius: 6px; padding: 6px 10px;
+      font-size: 13px; font-family: 'Courier New', monospace;
+    }
+
+    .diff-before {
+      background: var(--red-dim); color: var(--red);
+      text-decoration: line-through; opacity: 0.85;
+    }
+
+    .diff-after {
+      background: var(--green-dim); color: var(--green);
+    }
+
+    .diff-arrow { color: var(--muted); font-size: 16px; }
+
+    .modal-actions {
+      display: flex; justify-content: flex-end; gap: 10px;
+      margin-top: 22px;
+    }
+
+    /* ── Form footer ── */
+    .form-footer {
+      display: flex; justify-content: flex-end; gap: 10px;
+      margin-top: 24px; padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Loading spinner ── */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Utils ── */
+    .hidden { display: none !important; }
+
+    @media (max-width: 600px) {
+      .fields-grid { grid-template-columns: 1fr; }
+      .invoice-header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="logo">F</div>
+  <div>
+    <h1>Editor de Facturas</h1>
+    <div class="subtitle">HubSpot CRM · Uso interno</div>
+  </div>
+</header>
+
+<main>
+  <!-- Búsqueda -->
+  <div class="search-card">
+    <h2>Buscar Factura</h2>
+    <div class="search-row">
+      <input
+        type="text"
+        id="invoiceIdInput"
+        placeholder="Ingresá el Invoice ID (ej: 535627410303)"
+        inputmode="numeric"
+        autocomplete="off"
+      />
+      <button class="btn btn-primary" id="searchBtn" onclick="searchInvoice()">
+        <span id="searchBtnText">Buscar</span>
+        <span id="searchSpinner" class="spinner hidden"></span>
+      </button>
+    </div>
+    <div id="searchMessage" class="hidden"></div>
+  </div>
+
+  <!-- Sección de factura (oculta hasta cargar) -->
+  <div id="invoiceSection" class="hidden">
+
+    <!-- Header con datos básicos -->
+    <div class="invoice-header">
+      <div class="meta">
+        <div class="id-row">
+          <span class="invoice-id" id="displayInvoiceId">—</span>
+          <span class="badge" id="displayStage">—</span>
+        </div>
+        <div class="updated" id="displayUpdated">—</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost btn-sm" onclick="copyInvoiceId()" title="Copiar ID al portapapeles">
+          📋 Copiar ID
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="resetApp()">
+          🔄 Buscar otro
+        </button>
+      </div>
+    </div>
+
+    <!-- Formulario dinámico -->
+    <div class="form-card">
+      <h3>Propiedades Editables</h3>
+      <div class="fields-grid" id="fieldsGrid">
+        <!-- Se genera por JS -->
+      </div>
+      <div id="formMessage" class="hidden"></div>
+      <div class="form-footer">
+        <button class="btn btn-ghost" onclick="resetForm()">Descartar cambios</button>
+        <button class="btn btn-success" id="saveBtn" onclick="prepareSave()" disabled>
+          <span id="saveBtnText">Guardar cambios</span>
+          <span id="saveSpinner" class="spinner hidden"></span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<!-- Modal de confirmación de cambios -->
+<div class="modal-overlay hidden" id="confirmModal">
+  <div class="modal">
+    <h3>✅ Confirmar cambios</h3>
+    <div class="modal-sub" id="confirmModalSub">Revisá los cambios antes de guardar</div>
+    <div class="diff-list" id="diffList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-success" id="confirmSaveBtn" onclick="confirmSave()">
+        <span id="confirmSaveBtnText">Confirmar y guardar</span>
+        <span id="confirmSaveSpinner" class="spinner hidden"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config (se inyecta desde el servidor en producción, o se carga por fetch) ──
+let FIELDS_CONFIG = [];
+let currentInvoiceId = null;
+let originalValues = {};
+let pendingChanges = {};
+
+// ── Init ──
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadConfig();
+  document.getElementById('invoiceIdInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') searchInvoice();
+  });
+});
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/invoice-editor/api/config');
+    if (res.ok) {
+      FIELDS_CONFIG = await res.json();
+    }
+  } catch {
+    // La config se carga inline en este caso
+  }
+}
+
+// ── Helpers de UI ──
+function showMessage(containerId, type, text) {
+  const el = document.getElementById(containerId);
+  el.className = `message ${type}`;
+  el.innerHTML = `<span>${type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️'}</span><span>${text}</span>`;
+  el.classList.remove('hidden');
+}
+
+function hideMessage(containerId) {
+  document.getElementById(containerId).classList.add('hidden');
+}
+
+function setLoading(btnId, spinnerId, textId, loading, text) {
+  document.getElementById(btnId).disabled = loading;
+  document.getElementById(spinnerId).classList.toggle('hidden', !loading);
+  if (text) document.getElementById(textId).textContent = text;
+}
+
+// ── Búsqueda ──
+async function searchInvoice() {
+  const id = document.getElementById('invoiceIdInput').value.trim();
+  if (!id) {
+    showMessage('searchMessage', 'error', 'Ingresá un Invoice ID.');
+    return;
+  }
+  if (!/^\d+$/.test(id)) {
+    showMessage('searchMessage', 'error', 'El Invoice ID debe ser numérico.');
+    return;
+  }
+
+  hideMessage('searchMessage');
+  setLoading('searchBtn', 'searchSpinner', 'searchBtnText', true, 'Buscando...');
+  document.getElementById('invoiceSection').classList.add('hidden');
+
+  try {
+    const res = await fetch(`/invoice-editor/api/${id}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      showMessage('searchMessage', 'error', data.error || 'Error al buscar la factura.');
+      return;
+    }
+
+    currentInvoiceId = id;
+    renderInvoice(data);
+
+  } catch (err) {
+    showMessage('searchMessage', 'error', 'Error de conexión. Intentá de nuevo.');
+    console.error(err);
+  } finally {
+    setLoading('searchBtn', 'searchSpinner', 'searchBtnText', false, 'Buscar');
+  }
+}
+
+// ── Render ──
+function renderInvoice(data) {
+  // Header
+  document.getElementById('displayInvoiceId').textContent = data.id;
+  const stage = data.properties?.etapa_de_la_factura || '—';
+  document.getElementById('displayStage').textContent = stage;
+  document.getElementById('displayUpdated').textContent =
+    data.updatedAt ? `Última modificación: ${new Date(data.updatedAt).toLocaleString('es-UY')}` : '';
+
+  // Guardar valores originales
+  originalValues = {};
+  for (const field of FIELDS_CONFIG) {
+    originalValues[field.internalName] = data.properties?.[field.internalName] ?? '';
+  }
+
+  renderForm(data.properties || {});
+  document.getElementById('invoiceSection').classList.remove('hidden');
+  document.getElementById('invoiceSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderForm(properties) {
+  const grid = document.getElementById('fieldsGrid');
+  grid.innerHTML = '';
+
+  for (const field of FIELDS_CONFIG) {
+    const value = properties[field.internalName] ?? '';
+    const group = document.createElement('div');
+    group.className = `field-group${field.type === 'textarea' ? ' full' : ''}`;
+    group.id = `fg_${field.internalName}`;
+
+    const label = document.createElement('label');
+    label.setAttribute('for', `field_${field.internalName}`);
+    label.textContent = field.label;
+
+    if (field.readOnly) {
+      const badge = document.createElement('span');
+      badge.className = 'readonly-badge';
+      badge.textContent = 'Solo lectura';
+      label.appendChild(badge);
+    }
+
+    group.appendChild(label);
+
+    let input;
+
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      input.disabled = field.readOnly;
+
+      // Opción vacía
+      const emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = '— Sin seleccionar —';
+      input.appendChild(emptyOpt);
+
+      for (const opt of (field.options || [])) {
+        const o = document.createElement('option');
+        o.value = opt.value;
+        o.textContent = opt.label;
+        if (String(value) === String(opt.value)) o.selected = true;
+        input.appendChild(o);
+      }
+
+    } else if (field.type === 'boolean') {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'switch-wrapper';
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = `field_${field.internalName}`;
+      input.checked = value === true || value === 'true' || value === '1';
+      input.disabled = field.readOnly;
+
+      const switchLabel = document.createElement('label');
+      switchLabel.className = 'switch';
+      const slider = document.createElement('span');
+      slider.className = 'slider';
+      switchLabel.appendChild(input);
+      switchLabel.appendChild(slider);
+
+      wrapper.appendChild(switchLabel);
+      group.appendChild(wrapper);
+      if (field.helpText) {
+        const help = document.createElement('div');
+        help.className = 'help-text';
+        help.textContent = field.helpText;
+        group.appendChild(help);
+      }
+
+      if (!field.readOnly) input.addEventListener('change', () => trackChange(field, input));
+
+      grid.appendChild(group);
+      continue;
+
+    } else if (field.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.value = value;
+      input.readOnly = field.readOnly;
+
+    } else if (field.type === 'number') {
+      input = document.createElement('input');
+      input.type = 'number';
+      input.value = value;
+      input.readOnly = field.readOnly;
+      input.step = 'any';
+
+    } else if (field.type === 'date') {
+      input = document.createElement('input');
+      input.type = 'date';
+      // HubSpot devuelve timestamps en ms para fechas, convertir
+      if (value) {
+        const ts = Number(value);
+        if (!isNaN(ts) && ts > 1000000000) {
+          input.value = new Date(ts).toISOString().split('T')[0];
+        } else if (typeof value === 'string' && value.includes('-')) {
+          input.value = value.split('T')[0];
+        }
+      }
+      input.readOnly = field.readOnly;
+
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = value ?? '';
+      input.readOnly = field.readOnly;
+    }
+
+    input.id = `field_${field.internalName}`;
+
+    if (!field.readOnly) {
+      input.addEventListener('input', () => trackChange(field, input));
+      input.addEventListener('change', () => trackChange(field, input));
+    }
+
+    const indicator = document.createElement('div');
+    indicator.className = 'changed-indicator';
+
+    group.appendChild(input);
+    group.appendChild(indicator);
+
+    if (field.helpText) {
+      const help = document.createElement('div');
+      help.className = 'help-text';
+      help.textContent = field.helpText;
+      group.appendChild(help);
+    }
+
+    grid.appendChild(group);
+  }
+}
+
+// ── Tracking de cambios ──
+function trackChange(field, input) {
+  const newVal = field.type === 'boolean'
+    ? (input.checked ? 'true' : 'false')
+    : input.value;
+
+  const originalStr = String(originalValues[field.internalName] ?? '');
+  const newStr = String(newVal ?? '');
+  const group = document.getElementById(`fg_${field.internalName}`);
+
+  if (newStr !== originalStr) {
+    pendingChanges[field.internalName] = {
+      before: originalValues[field.internalName],
+      after: newVal,
+      label: field.label,
+    };
+    group?.classList.add('changed');
+  } else {
+    delete pendingChanges[field.internalName];
+    group?.classList.remove('changed');
+  }
+
+  document.getElementById('saveBtn').disabled = Object.keys(pendingChanges).length === 0;
+}
+
+// ── Prepare save: mostrar modal de diff ──
+function prepareSave() {
+  if (Object.keys(pendingChanges).length === 0) return;
+
+  const diffList = document.getElementById('diffList');
+  diffList.innerHTML = '';
+
+  for (const [key, change] of Object.entries(pendingChanges)) {
+    const item = document.createElement('div');
+    item.className = 'diff-item';
+
+    const fieldConf = FIELDS_CONFIG.find(f => f.internalName === key);
+    const labelFor = opt => {
+      if (fieldConf?.options) {
+        const found = fieldConf.options.find(o => String(o.value) === String(opt));
+        return found ? found.label : (opt || '(vacío)');
+      }
+      return opt !== '' && opt !== null && opt !== undefined ? String(opt) : '(vacío)';
+    };
+
+    item.innerHTML = `
+      <div class="diff-field">${change.label}</div>
+      <div class="diff-row">
+        <div class="diff-before">${labelFor(change.before)}</div>
+        <span class="diff-arrow">→</span>
+        <div class="diff-after">${labelFor(change.after)}</div>
+      </div>
+    `;
+    diffList.appendChild(item);
+  }
+
+  const n = Object.keys(pendingChanges).length;
+  document.getElementById('confirmModalSub').textContent =
+    `Se van a actualizar ${n} campo${n !== 1 ? 's' : ''} en la factura ${currentInvoiceId}`;
+
+  document.getElementById('confirmModal').classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('confirmModal').classList.add('hidden');
+}
+
+// ── Guardar ──
+async function confirmSave() {
+  const properties = {};
+  const changes = {};
+
+  for (const [key, change] of Object.entries(pendingChanges)) {
+    const field = FIELDS_CONFIG.find(f => f.internalName === key);
+    let val = change.after;
+
+    // Convertir fechas a timestamp ms para HubSpot
+    if (field?.type === 'date' && val) {
+      val = String(new Date(val).getTime());
+    }
+
+    properties[key] = val;
+    changes[key] = { before: change.before, after: change.after, label: change.label };
+  }
+
+  setLoading('confirmSaveBtn', 'confirmSaveSpinner', 'confirmSaveBtnText', true, 'Guardando...');
+
+  try {
+    const res = await fetch(`/invoice-editor/api/${currentInvoiceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties, changes }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      closeModal();
+      showMessage('formMessage', 'error', data.error || 'Error al guardar los cambios.');
+      return;
+    }
+
+    // Éxito: actualizar originales y limpiar estado
+    for (const [key, change] of Object.entries(pendingChanges)) {
+      originalValues[key] = change.after;
+      document.getElementById(`fg_${key}`)?.classList.remove('changed');
+    }
+    pendingChanges = {};
+    document.getElementById('saveBtn').disabled = true;
+
+    // Actualizar badge de etapa si cambió
+    if (properties.etapa_de_la_factura) {
+      document.getElementById('displayStage').textContent = properties.etapa_de_la_factura;
+    }
+
+    closeModal();
+    showMessage('formMessage', 'success', `✅ Factura actualizada correctamente. ${Object.keys(properties).length} campo(s) modificado(s).`);
+
+    // Auto-ocultar mensaje de éxito
+    setTimeout(() => hideMessage('formMessage'), 5000);
+
+  } catch (err) {
+    closeModal();
+    showMessage('formMessage', 'error', 'Error de conexión. Intentá de nuevo.');
+    console.error(err);
+  } finally {
+    setLoading('confirmSaveBtn', 'confirmSaveSpinner', 'confirmSaveBtnText', false, 'Confirmar y guardar');
+  }
+}
+
+// ── Utilidades ──
+function copyInvoiceId() {
+  if (!currentInvoiceId) return;
+  navigator.clipboard.writeText(currentInvoiceId)
+    .then(() => showMessage('formMessage', 'info', `ID ${currentInvoiceId} copiado al portapapeles.`))
+    .catch(() => {});
+  setTimeout(() => hideMessage('formMessage'), 3000);
+}
+
+function resetForm() {
+  if (Object.keys(pendingChanges).length === 0) return;
+  pendingChanges = {};
+  // Re-renderizar con valores originales
+  const originalProps = {};
+  for (const field of FIELDS_CONFIG) {
+    originalProps[field.internalName] = originalValues[field.internalName];
+  }
+  renderForm(originalProps);
+  document.getElementById('saveBtn').disabled = true;
+  hideMessage('formMessage');
+}
+
+function resetApp() {
+  currentInvoiceId = null;
+  originalValues = {};
+  pendingChanges = {};
+  document.getElementById('invoiceIdInput').value = '';
+  document.getElementById('invoiceSection').classList.add('hidden');
+  hideMessage('searchMessage');
+  hideMessage('formMessage');
+  document.getElementById('invoiceIdInput').focus();
+}
+
+// Cerrar modal con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+</script>
+
+</body>
+</html>

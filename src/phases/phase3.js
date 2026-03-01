@@ -9,6 +9,7 @@ import { createTicketAssociations, getDealCompanies, getDealContacts } from '../
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import { createInvoiceFromTicket } from '../services/invoiceService.js';
+import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import {
@@ -276,6 +277,18 @@ export async function runPhase3({ deal, lineItems }) {
             ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
           );
 
+          const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
+const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+if (!isAutoRenew) {
+  const activeCount = await countActivePlanInvoices(lineItemKey);
+  if (activeCount !== null && activeCount >= totalPayments) {
+    logger.info(
+      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+      'Plan completado, no se emite factura'
+    );
+    continue;
+  }
+}
           await createInvoiceFromTicket(ticket);
           invoicesEmitted++;
 
@@ -334,6 +347,19 @@ export async function runPhase3({ deal, lineItems }) {
           promoted.ticketId,
           ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
         );
+
+        const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
+const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+if (!isAutoRenew) {
+  const activeCount = await countActivePlanInvoices(lineItemKey);
+  if (activeCount !== null && activeCount >= totalPayments) {
+    logger.info(
+      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+      'Plan completado, no se emite factura'
+    );
+    continue;
+  }
+}
 
         await createInvoiceFromTicket(ticket);
         invoicesEmitted++;

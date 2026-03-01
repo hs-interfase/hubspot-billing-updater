@@ -1,29 +1,20 @@
+// src/propagacion/tickets/cancelForecastTickets.js
+
 import { hubspotClient } from '../../hubspotClient.js';
 import logger from '../../../lib/logger.js';
+import {
+  FORECAST_MANUAL_STAGES,
+  FORECAST_AUTO_STAGES,
+  CANCELLED_STAGE_BY_PIPELINE,
+  isForecastStage,
+} from '../../config/constants.js';
 
-// Stages FORECAST — todos los stages de promesa de ambos pipelines
-const FORECAST_STAGES = new Set([
-  // Manual pipeline (832539959)
-  '1294744238', // BILLING_TICKET_FORECAST    (25)
-  '1294744239', // BILLING_TICKET_FORECAST_50 (50)
-  '1296492870', // BILLING_TICKET_FORECAST_75 (75)
-  '1296492871', // BILLING_TICKET_FORECAST_95 (95)
-  // Auto pipeline (829156883)
-  '1294745999', // BILLING_AUTOMATED_FORECAST    (25)
-  '1294746000', // BILLING_AUTOMATED_FORECAST_50 (50)
-  '1296489840', // BILLING_AUTOMATED_FORECAST_75 (75)
-  '1296362566', // BILLING_AUTOMATED_FORECAST_95 (95)
-]);
-
-// Stages CANCELLED por pipeline
-const CANCELLED_BY_PIPELINE = {
-  '832539959': '1234282363', // BILLING_TICKET_PIPELINE_ID → BILLING_TICKET_STAGE_CANCELLED
-  '829156883': '1265903396', // BILLING_AUTOMATED_PIPELINE_ID → BILLING_AUTOMATED_CANCELLED
-};
+// Unión de todos los stages forecast (manuales + automáticos)
+const FORECAST_STAGES = new Set([...FORECAST_MANUAL_STAGES, ...FORECAST_AUTO_STAGES]);
 
 function isForecastTicket(ticket) {
   const stage = String(ticket?.properties?.hs_pipeline_stage || '');
-  return FORECAST_STAGES.has(stage);
+  return isForecastStage(stage);
 }
 
 async function findTicketsByLineItemKey(lineItemKey) {
@@ -115,7 +106,7 @@ export async function cancelForecastTickets({ lineItems, closedLostReason }) {
     for (const ticket of forecastTickets) {
       const ticketId = ticket.id;
       const pipeline = String(ticket?.properties?.hs_pipeline || '');
-      const cancelledStage = CANCELLED_BY_PIPELINE[pipeline];
+      const cancelledStage = CANCELLED_STAGE_BY_PIPELINE[pipeline];
 
       if (!cancelledStage) {
         logger.warn(

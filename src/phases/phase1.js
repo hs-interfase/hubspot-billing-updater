@@ -1,15 +1,12 @@
 // src/phases/phase1.js
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { syncBillingState } from '../services/billing/syncBillingState.js';
-import { isAutoRenew } from '../services/billing/mode.js';
-import { ensure24FutureTickets } from '../services/tickets/ticketService.js';
 import { DEAL_STAGE_LOST } from '../config/constants.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
   computeLastBillingDateFromLineItems,
-  computeBillingCountersForLineItem,
 } from '../billingEngine.js';
 import { updateDealCupo } from '../utils/propertyHelpers.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
@@ -120,21 +117,6 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
   )) {
     try {
       await syncBillingState({ hubspotClient, dealId, dealIsCanceled: true });
-     /* if (typeof lineItem !== 'undefined' && isAutoRenew({ properties: lineItem?.properties || lineItem })) {
-        await ensure24FutureTickets({
-          hubspotClient,
-          dealId,
-          lineItemId: lineItem.id || lineItem.hs_object_id,
-          lineItem,
-          lineItemKey: lineItem.line_item_key,
-        });
-      } */
-   //  TODO: lineItem no está declarado en este scope (activateCupoIfNeeded no lo recibe como parámetro).
- // El typeof previene el crash pero este bloque nunca ejecuta.
- // Antes de activar, definir: ¿qué lineItem debe usarse aquí y cuándo debe llamarse ensure24FutureTickets?
- // if (typeof lineItem !== 'undefined' && isAutoRenew({ properties: lineItem?.properties || lineItem })) {
- //   await ensure24FutureTickets({ hubspotClient, dealId, lineItemId: lineItem.id || lineItem.hs_object_id, lineItem, lineItemKey: lineItem.line_item_key });
- // }
     } catch (err) {
       logger.warn({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, err }, '[activateCupoIfNeeded] syncBillingState failed');
     }

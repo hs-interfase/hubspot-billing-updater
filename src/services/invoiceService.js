@@ -170,7 +170,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
       'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
       'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
-      'descripcion', 'comments', 'createdate', 'motivo_pausa', 'id_factura_nodum', 'etapa_factura',
+      'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
       'facturar_ahora', 'repetitivo',
     ]);
   } catch (err) {
@@ -308,15 +308,17 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   const totalFinal    = totalFinalResolved;    // source of truth
   const hasIVA        = hasIVAResolved;
 
-  // 6) Propiedades de la factura — mapeo Ticket → Invoice
-  const empresaTitle  = safeString(tp.of_cliente) || '';
-const productoTitle = safeString(tp.of_producto_nombres) || '';
-const montoTitle    = totalFinalResolved != null ? String(totalFinalResolved) : '';
-const hs_title      = [empresaTitle, productoTitle, montoTitle].filter(Boolean).join(' | ');
+  // Derivar frecuencia de facturación desde repetitivo
+  // true → 'Frecuente' | false → 'Único' | null/undefined → null
+  const frecuenciaDerivada = tp.repetitivo === 'true' || tp.repetitivo === true
+    ? 'Frecuente'
+    : tp.repetitivo === 'false' || tp.repetitivo === false
+      ? 'Único'
+      : null;
 
-const invoicePropsRaw = {
-  ...(hs_title ? { hs_title } : {}),
-  hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
+  // 6) Propiedades de la factura — mapeo Ticket → Invoice
+  const invoicePropsRaw = {
+    hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
     hs_invoice_date: invoiceDateMs,
     hs_due_date: dueDateMs,
     hs_invoice_billable: false,
@@ -341,12 +343,12 @@ const invoicePropsRaw = {
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    periodo_a_facturar: tp.of_periodo_a_facturar,
-    mensual: tp.of_periodo_de_facturacion,
-    hs_comments: tp.comments,
-    motivo_de_pausa: tp.motivo_pausa,
-    id_factura_nodum: tp.id_factura_nodum,
-    etapa_de_la_factura: tp.etapa_factura || 'Pendiente',
+    periodo_a_facturar: tp.fecha_resolucion_esperada,
+    mensual: frecuenciaDerivada,                            // 'Frecuente' | 'Único' | null
+    hs_comments: tp.content,                                // era: tp.comments
+    motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
+    id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
+    etapa_de_la_factura: tp.of_invoice_status || 'Pendiente', // era: tp.etapa_factura
     modo_de_generacion_de_factura: modoGeneracion,
   };
 
@@ -394,60 +396,39 @@ const invoicePropsRaw = {
       logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, err }, '[invoice] No se pudo re-leer invoice post-create');
     }
 
-// 8) Asociaciones
-// ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
-const assocCalls = [];
+    // 8) Asociaciones
+    // ⚠️ NO asociamos Invoice → Line Item para evitar que HubSpot borre los line items
+    const assocCalls = [];
 
-if (tp.of_deal_id) {
-  assocCalls.push(
-    associateV4('invoices', invoiceId, 'deals', tp.of_deal_id)
-      .catch(err => logger.warn({ module: 'invoiceService', invoiceId, dealId: tp.of_deal_id, err }, '[invoice] Error asociación invoice→deal'))
-  );
-}
-
-assocCalls.push(
-  associateV4('invoices', invoiceId, 'tickets', ticketId)
-    .catch(err => logger.warn({ module: 'invoiceService', invoiceId, ticketId, err }, '[invoice] Error asociación invoice→ticket'))
-);
-
-if (tp.of_deal_id) {
-  try {
-    const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'contacts', 10);
-    const contactId = contacts.results?.[0]?.toObjectId || null;
-    if (contactId) {
+    if (tp.of_deal_id) {
       assocCalls.push(
-        associateV4('invoices', invoiceId, 'contacts', contactId)
-          .catch(err => logger.warn({ module: 'invoiceService', invoiceId, contactId, err }, '[invoice] Error asociación invoice→contact'))
+        associateV4('invoices', invoiceId, 'deals', tp.of_deal_id)
+          .catch(err => logger.warn({ module: 'invoiceService', invoiceId, dealId: tp.of_deal_id, err }, '[invoice] Error asociación invoice→deal'))
       );
     }
-  } catch (err) {
-    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener contacto del deal');
-  }
-}
 
-// Obtener company del deal para nombre_empresa informativo
-if (tp.of_deal_id) {
-  try {
-    const companies = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'companies', 10);
-    const companyId = companies.results?.[0]?.toObjectId || null;
-    if (companyId) {
-      const company = await hubspotClient.crm.companies.basicApi.getById(String(companyId), ['name']);
-      const companyName = company?.properties?.name || null;
-      if (companyName) {
-        try {
-          await updateInvoiceDirect(invoiceId, { nombre_empresa: companyName });
-          logger.debug({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, companyName }, '[invoice] nombre_empresa actualizado desde company del deal');
-        } catch (err) {
-          logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, err }, '[invoice] No se pudo actualizar nombre_empresa desde company');
+    assocCalls.push(
+      associateV4('invoices', invoiceId, 'tickets', ticketId)
+        .catch(err => logger.warn({ module: 'invoiceService', invoiceId, ticketId, err }, '[invoice] Error asociación invoice→ticket'))
+    );
+
+    if (tp.of_deal_id) {
+      try {
+        const contacts = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', tp.of_deal_id, 'contacts', 10);
+        const contactId = contacts.results?.[0]?.toObjectId || null;
+        if (contactId) {
+          assocCalls.push(
+            associateV4('invoices', invoiceId, 'contacts', contactId)
+              .catch(err => logger.warn({ module: 'invoiceService', invoiceId, contactId, err }, '[invoice] Error asociación invoice→contact'))
+          );
         }
+      } catch (err) {
+        logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener contacto del deal');
       }
     }
-  } catch (err) {
-    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', dealId: tp.of_deal_id, err }, '[invoice] No se pudo obtener company del deal');
-  }
-}
 
-await Promise.all(assocCalls);
+    await Promise.all(assocCalls);
+
     // 9) Actualizar ticket con fecha real y referencia a factura
     try {
       await hubspotClient.crm.tickets.basicApi.update(ticketId, {
@@ -761,5 +742,14 @@ export async function getInvoice(invoiceId) {
  *
  * Confirmación: "No se reportan warns a HubSpot;
  *                solo errores 4xx (≠429)" — implementado en reportIfActionable().
+ *
+ * MAPEO CORREGIDO (ticket → factura):
+ * - tp.content        → hs_comments          (era: tp.comments — no existe)
+ * - tp.of_motivo_pausa → motivo_de_pausa     (era: tp.motivo_pausa — faltaba prefijo of_)
+ * - tp.numero_de_factura → id_factura_nodum  (era: tp.id_factura_nodum — nombre incorrecto)
+ * - tp.of_invoice_status → etapa_de_la_factura (era: tp.etapa_factura — no existe)
+ * - frecuenciaDerivada → mensual             (era: tp.of_periodo_de_facturacion — no existe;
+ *                                             derivado de tp.repetitivo: true→'Frecuente', false→'Único')
+ * - periodo_a_facturar → undefined (TODO: pendiente definir formato con el equipo)
  * ─────────────────────────────────────────────────────────────
  */

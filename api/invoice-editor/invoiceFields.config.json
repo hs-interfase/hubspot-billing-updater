@@ -1,0 +1,226 @@
+[
+  {
+    "internalName": "etapa_de_la_factura",
+    "label": "Etapa de la Factura",
+    "type": "select",
+    "required": false,
+    "readOnly": false,
+    "helpText": "Estado actual del proceso de facturación",
+    "options": [
+      { "label": "Pendiente", "value": "Pendiente" },
+      { "label": "Emitida",   "value": "Emitida"   },
+      { "label": "Enviada",   "value": "Enviada"    },
+      { "label": "Paga",      "value": "Paga"       },
+      { "label": "Atrasada",  "value": "Atrasada"   },
+      { "label": "Cancelada", "value": "Cancelada"  }
+    ]
+  },
+  {
+    "internalName": "motivo_de_cancelacion",
+    "label": "Motivo de Cancelación",
+    "type": "textarea",
+    "required": false,
+    "readOnly": false,
+    "helpText": "Completar si la factura fue cancelada"
+  },
+  {
+    "internalName": "fecha_de_cancelacion",
+    "label": "Fecha de Cancelación",
+    "type": "date",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "fecha_de_emision",
+    "label": "Fecha de Emisión",
+    "type": "date",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "descripcion",
+    "label": "Descripción",
+    "type": "textarea",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "descripcion_producto",
+    "label": "Descripción del Producto",
+    "type": "textarea",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "mensaje_del_vendedor",
+    "label": "Mensaje del Vendedor",
+    "type": "textarea",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "nombre_empresa",
+    "label": "Nombre Empresa",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "nombre_producto",
+    "label": "Nombre Producto",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "servicio",
+    "label": "Servicio",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "unidad_de_negocio",
+    "label": "Unidad de Negocio",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "pais_operativo",
+    "label": "País Operativo",
+    "type": "select",
+    "required": false,
+    "readOnly": false,
+    "helpText": "",
+    "options": [
+      { "label": "Uruguay (UY)", "value": "UY" },
+      { "label": "Paraguay (PY)", "value": "PY" }
+    ]
+  },
+  {
+    "internalName": "iva",
+    "label": "IVA",
+    "type": "select",
+    "required": false,
+    "readOnly": false,
+    "helpText": "¿Aplica IVA?",
+    "options": [
+      { "label": "Sí", "value": "si" },
+      { "label": "No", "value": "no" }
+    ]
+  },
+  {
+    "internalName": "exonera_irae",
+    "label": "Exonera IRAE",
+    "type": "select",
+    "required": false,
+    "readOnly": false,
+    "helpText": "¿El cliente está exonerado de IRAE?",
+    "options": [
+      { "label": "Sí", "value": "si" },
+      { "label": "No", "value": "no" }
+    ]
+  },
+  {
+    "internalName": "reventa",
+    "label": "Reventa",
+    "type": "select",
+    "required": false,
+    "readOnly": false,
+    "helpText": "¿Es una reventa?",
+    "options": [
+      { "label": "Sí", "value": "si" },
+      { "label": "No", "value": "no" }
+    ]
+  },
+  {
+    "internalName": "monto_a_facturar",
+    "label": "Monto a Facturar",
+    "type": "number",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "monto_unitario",
+    "label": "Monto Unitario",
+    "type": "number",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "cantidad",
+    "label": "Cantidad",
+    "type": "number",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "descuento",
+    "label": "Descuento %",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": "Porcentaje de descuento aplicado"
+  },
+  {
+    "internalName": "descuento_por_unidad",
+    "label": "Descuento por Unidad",
+    "type": "number",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "id_factura_nodum",
+    "label": "ID Factura Nodum",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": "ID de la factura en Nodum"
+  },
+  {
+    "internalName": "ticket_id",
+    "label": "Ticket ID",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": "ID del ticket asociado en HubSpot"
+  },
+  {
+    "internalName": "id_empresa",
+    "label": "ID Empresa",
+    "type": "text",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "of_invoice_key",
+    "label": "Invoice Key",
+    "type": "text",
+    "required": false,
+    "readOnly": true,
+    "helpText": "Clave interna que conecta la factura al ticket generador (solo lectura)"
+  },
+  {
+    "internalName": "line_item_key",
+    "label": "Line Item Key",
+    "type": "text",
+    "required": false,
+    "readOnly": true,
+    "helpText": "Clave interna de línea de producto (solo lectura)"
+  }
+]
