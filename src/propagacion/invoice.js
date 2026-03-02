@@ -25,13 +25,13 @@ const CANCELLED_STAGE = 'Cancelada';
  * @returns {object} { status, invoiceId, ticketId? }
  */
 export async function propagateInvoiceCancellation(invoiceId) {
-  // 1. Verificar que la invoice efectivamente está Cancelada
+  // 1. Leer invoice y obtener of_invoice_key
   let invoice;
   try {
     invoice = await hubspotClient.crm.objects.basicApi.getById(
       INVOICE_OBJECT_TYPE,
       invoiceId,
-      ['etapa_de_la_factura']
+      ['etapa_de_la_factura', 'of_invoice_key']
     );
   } catch (err) {
     logger.error({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, err }, 'Error al obtener invoice');
@@ -39,48 +39,44 @@ export async function propagateInvoiceCancellation(invoiceId) {
   }
 
   const stage = invoice.properties.etapa_de_la_factura;
-  if (stage !== CANCELLED_STAGE) {
-    logger.info({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, stage }, 'No es Cancelada, skip');
-    return { status: 'skipped', reason: 'not_cancelled', invoiceId };
+
+
+  const invoiceKey = invoice.properties.of_invoice_key;
+  if (!invoiceKey) {
+    logger.warn({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId }, 'Invoice sin of_invoice_key, skip');
+    return { status: 'skipped', reason: 'no_invoice_key', invoiceId };
   }
 
-  // 2. Buscar ticket asociado vía Associations API
+  // 2. Buscar ticket por of_invoice_key
   let ticketId;
   try {
-    const associations = await hubspotClient.crm.objects.associationsApi.getAll(
-      INVOICE_OBJECT_TYPE,
-      invoiceId,
-      TICKET_OBJECT_TYPE
-    );
+    const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
+      properties: ['of_invoice_status', 'of_invoice_key'],
+      limit: 1,
+    });
 
-    const results = associations?.results ?? [];
-    if (results.length === 0) {
-      logger.warn({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId }, 'No hay ticket asociado');
-      return { status: 'skipped', reason: 'no_associated_ticket', invoiceId };
+    const ticket = resp?.results?.[0];
+    if (!ticket) {
+      logger.warn({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, invoiceKey }, 'No se encontró ticket con ese of_invoice_key');
+      return { status: 'skipped', reason: 'no_ticket_found', invoiceId };
     }
 
-    ticketId = results[0].id;
-  } catch (err) {
-    logger.error({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, err }, 'Error al obtener asociaciones');
-    throw err;
-  }
+    ticketId = ticket.id;
 
-  // 3. Verificar si el ticket ya tiene of_invoice_status = Cancelada (evitar update innecesario)
-  try {
-    const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_status']);
-    if (ticket.properties.of_invoice_status === CANCELLED_STAGE) {
+    if (ticket.properties.of_invoice_status === stage) {
       logger.info({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, ticketId }, 'Ticket ya tiene status Cancelada, skip');
       return { status: 'skipped', reason: 'already_propagated', invoiceId, ticketId };
     }
   } catch (err) {
-    // fail open: si no podemos leer el ticket, igual intentamos actualizar
-    logger.warn({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, ticketId, err }, 'Error leyendo ticket, continuando igual');
+    logger.error({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, invoiceKey, err }, 'Error buscando ticket');
+    throw err;
   }
 
-  // 4. Marcar of_invoice_status en el ticket
+  // 3. Actualizar of_invoice_status en el ticket
   try {
     await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-      properties: { of_invoice_status: CANCELLED_STAGE },
+      properties: { of_invoice_status: stage },  // ← FALTA ESTA LÍNEA
     });
     logger.info({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, ticketId }, 'Ticket actualizado: of_invoice_status=Cancelada');
   } catch (err) {
@@ -118,18 +114,24 @@ export async function propagateCancelledInvoicesForDeal(lineItems) {
 
   // Buscar invoices canceladas para estos LIKs
   // Cada LIK es un filterGroup separado (OR entre LIKs, AND dentro de cada grupo)
-  let cancelledInvoices = [];
+let cancelledInvoices = [];
   try {
+    // ▼ LOG 1: ver qué LIKs se van a buscar
+    logger.info({ module: 'propagacion/invoice', fn: 'propagateCancelledInvoicesForDeal', liks }, 'LIKs extraídos para búsqueda');
+
     const resp = await hubspotClient.crm.objects.searchApi.doSearch(INVOICE_OBJECT_TYPE, {
       filterGroups: liks.map(lik => ({
         filters: [
           { propertyName: 'line_item_key', operator: 'EQ', value: lik },
-          { propertyName: 'etapa_de_la_factura', operator: 'EQ', value: CANCELLED_STAGE },
         ],
       })),
-      properties: ['etapa_de_la_factura', 'line_item_key'],
+      properties: ['etapa_de_la_factura', 'line_item_key', 'of_invoice_key'],
       limit: 100,
     });
+
+    // ▼ LOG 2: ver qué devolvió HubSpot
+    logger.info({ module: 'propagacion/invoice', fn: 'propagateCancelledInvoicesForDeal', total: resp?.total, found: resp?.results?.length }, 'Resultado búsqueda invoices canceladas');
+
     cancelledInvoices = resp?.results ?? [];
   } catch (err) {
     // fail open: no bloqueamos las fases si falla esta búsqueda
