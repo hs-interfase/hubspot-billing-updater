@@ -1,4 +1,4 @@
-import { logger } from '../../lib/logger.js';
+import logger from '../../lib/logger.js';
 
 export async function countActivePlanInvoices(lik) {
   try {
