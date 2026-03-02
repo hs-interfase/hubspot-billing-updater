@@ -118,8 +118,11 @@ export async function propagateCancelledInvoicesForDeal(lineItems) {
 
   // Buscar invoices canceladas para estos LIKs
   // Cada LIK es un filterGroup separado (OR entre LIKs, AND dentro de cada grupo)
-  let cancelledInvoices = [];
+let cancelledInvoices = [];
   try {
+    // ▼ LOG 1: ver qué LIKs se van a buscar
+    logger.info({ module: 'propagacion/invoice', fn: 'propagateCancelledInvoicesForDeal', liks }, 'LIKs extraídos para búsqueda');
+
     const resp = await hubspotClient.crm.objects.searchApi.doSearch(INVOICE_OBJECT_TYPE, {
       filterGroups: liks.map(lik => ({
         filters: [
@@ -130,6 +133,10 @@ export async function propagateCancelledInvoicesForDeal(lineItems) {
       properties: ['etapa_de_la_factura', 'line_item_key'],
       limit: 100,
     });
+
+    // ▼ LOG 2: ver qué devolvió HubSpot
+    logger.info({ module: 'propagacion/invoice', fn: 'propagateCancelledInvoicesForDeal', total: resp?.total, found: resp?.results?.length }, 'Resultado búsqueda invoices canceladas');
+
     cancelledInvoices = resp?.results ?? [];
   } catch (err) {
     // fail open: no bloqueamos las fases si falla esta búsqueda

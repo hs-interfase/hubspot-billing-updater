@@ -47,16 +47,12 @@ async function syncTicketInvoiceStatus(ticketId, etapa, invoiceId) {
     return
   }
 
-  const props = { invoice_status: etapa }
-
-  if (etapa === 'Cancelada') {
-    props.of_invoice_id  = ''
-    props.of_invoice_key = ''
-  }
+  // ✅ propiedad correcta, sin borrar of_invoice_id/of_invoice_key
+  const props = { of_invoice_status: etapa }
 
   try {
     await hs().patch(`/crm/v3/objects/tickets/${ticketId}`, { properties: props })
-    console.info(`[InvoiceEditor] Ticket ${ticketId} actualizado → invoice_status=${etapa}`)
+    console.info(`[InvoiceEditor] Ticket ${ticketId} actualizado → of_invoice_status=${etapa}`)
   } catch (err) {
     console.error(
       `[InvoiceEditor] Error actualizando ticket ${ticketId} desde invoice ${invoiceId}:`,
