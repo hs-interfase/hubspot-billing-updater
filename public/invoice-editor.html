@@ -349,27 +349,28 @@ let pendingChanges = {};
 // Campos no listados aquí aparecen al final en sección "Otros" automáticamente.
 const FORM_SECTIONS = [
   {
-    title: 'A1 · Identificación de la factura',
+    title: 'Identificación de la factura',
     fields: ['id_factura_nodum', 'fecha_de_emision', 'fecha_de_vencimiento'],
   },
   {
-    title: 'A2 · Datos de emisión',
-    fields: ['nombre_empresa', 'pais_operativo', 'iva', 'exonera_irae'],
+    title: 'Datos de emisión',
+    fields: ['pais_operativo', 'iva', 'exonera_irae'],
   },
   {
-    title: 'A3 · Información del producto',
+    title: 'Información del producto',
     fields: ['unidad_de_negocio', 'nombre_producto', 'descripcion', 'descripcion_producto', 'servicio', 'notas'],
   },
   {
-    title: 'A4 · Datos de facturación',
+    title: 'Datos de facturación',
     fields: ['monto_unitario', 'cantidad', 'descuento', 'descuento_por_unidad', 'monto_a_facturar'],
   },
   {
     title: 'Solo lectura',
-    fields: ['of_invoice_key', 'line_item_key', 'ticket_id'],
+    fields: ['nombre_empresa', 'id_empresa', 'of_invoice_key', 'line_item_key', 'ticket_id'],
     readOnlySection: true,
   },
 ];
+
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', async () => {
