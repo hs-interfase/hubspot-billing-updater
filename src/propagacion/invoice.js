@@ -15,7 +15,6 @@ import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 
 const INVOICE_OBJECT_TYPE = 'invoices';
-const TICKET_OBJECT_TYPE = 'tickets';
 const CANCELLED_STAGE = 'Cancelada';
 
 /**
@@ -76,7 +75,7 @@ export async function propagateInvoiceCancellation(invoiceId) {
   // 3. Actualizar of_invoice_status en el ticket
   try {
     await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-      properties: { of_invoice_status: stage },  // ← FALTA ESTA LÍNEA
+      properties: { of_invoice_status: stage }, 
     });
     logger.info({ module: 'propagacion/invoice', fn: 'propagateInvoiceCancellation', invoiceId, ticketId }, 'Ticket actualizado: of_invoice_status=Cancelada');
   } catch (err) {
