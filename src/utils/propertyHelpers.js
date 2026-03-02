@@ -9,22 +9,29 @@
 
 import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from './hubspotErrorCollector.js';
+import { parseBool } from '../utils/parsers.js';
+
+// Mapeo de campos de invoice que necesitan transformación antes de enviar a HubSpot
+const INVOICE_FIELD_MAPPERS = {
+  exonera_irae: (v) => String(parseBool(v)),
+  iva: (v) => String(parseBool(v)),
+  pais_operativo: (v) => {
+    const map = { UY: 'Uruguay', PY: 'Paraguay' };
+    return map[v] ?? v;
+  },
+};
 
 /**
- * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
- * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ * Transforma propiedades de invoice al formato exacto que espera HubSpot.
  */
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) {
-    reportHubSpotError({ objectType, objectId, message });
-    return;
+export function mapInvoicePropsToHubspot(props) {
+  const mapped = { ...props };
+  for (const [field, mapper] of Object.entries(INVOICE_FIELD_MAPPERS)) {
+    if (field in mapped) {
+      mapped[field] = mapper(mapped[field]);
+    }
   }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) {
-    reportHubSpotError({ objectType, objectId, message });
-  }
+  return mapped;
 }
 
 // Cache de schemas por objectType
@@ -183,9 +190,11 @@ export async function validateProperties(objectType, props) {
 export async function buildValidatedUpdateProps(objectType, props, options = {}) {
   const logPrefix = options.logPrefix || '[UpdateProps]';
 
-  // 1) Limpiar valores vacíos/inválidos
-  const cleaned = buildUpdateProps(props);
+  // 0) Mapear valores de invoice al formato HubSpot
+  const preMapped = objectType === 'invoices' ? mapInvoicePropsToHubspot(props) : props;
 
+  // 1) Limpiar valores vacíos/inválidos
+  const cleaned = buildUpdateProps(preMapped);
   if (Object.keys(cleaned).length === 0) {
     logger.info({ module: 'propertyHelpers', fn: 'buildValidatedUpdateProps', objectType, logPrefix }, `${logPrefix} ⊘ SKIP_EMPTY_UPDATE - No properties to set`);
     return {};
