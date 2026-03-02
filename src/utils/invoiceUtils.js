@@ -1,3 +1,5 @@
+import logger from '../../lib/logger.js';
+
 export async function countActivePlanInvoices(lik) {
   try {
     const resp = await hubspotClient.crm.objects.searchApi.doSearch('invoices', {
