@@ -257,7 +257,13 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     const ticketKey = safeString(tp.of_invoice_key);
     const expected = invoiceKey;
 
-    if (ticketKey && ticketKey === expected) {
+    if (tp.of_invoice_status === 'Cancelada') {
+      logger.info(
+        { module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceId: tp.of_invoice_id },
+        '[invoice] Factura cancelada, permitiendo re-facturación'
+      );
+      // No retornar — continuar con creación de nueva factura
+    } else if (ticketKey && ticketKey === expected) {
       if (lineItemId && fechaPlan) {
         try {
           await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
@@ -277,9 +283,9 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       }
       logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceId: tp.of_invoice_id }, '[invoice] Ticket ya tiene factura válida, saliendo (idempotente)');
       return { invoiceId: tp.of_invoice_id, created: false };
+    } else {
+      logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, of_invoice_id: tp.of_invoice_id, invoiceKeyExpected: expected, invoiceKeyActual: ticketKey }, '[invoice] of_invoice_id existe pero invoice_key inválida, ignorando (posible clon sucio)');
     }
-
-    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, of_invoice_id: tp.of_invoice_id, invoiceKeyExpected: expected, invoiceKeyActual: ticketKey }, '[invoice] of_invoice_id existe pero invoice_key inválida, ignorando (posible clon sucio)');
   }
 
   // 3) DRY RUN
@@ -348,7 +354,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     hs_comments: tp.content,                                // era: tp.comments
     motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
     id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
-    etapa_de_la_factura: tp.of_invoice_status || 'Pendiente', // era: tp.etapa_factura
+    etapa_de_la_factura: 'Pendiente',
     modo_de_generacion_de_factura: modoGeneracion,
   };
 
