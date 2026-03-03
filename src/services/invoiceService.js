@@ -171,7 +171,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
       'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
       'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
-      'facturar_ahora', 'repetitivo',
+      'facturar_ahora', 'repetitivo', 'nombre_empresa',
     ]);
   } catch (err) {
     logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, err }, '[invoice] No se pudo re-leer ticket completo, usando datos originales');
@@ -345,7 +345,11 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     responsable_asignado: toNumericOwnerOrNull(tp.hubspot_owner_id || tp.responsable_asignado),
     vendedor_factura: tp.of_propietario_secundario,
     frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || (tp.repetitivo ? 'Mensual' : undefined),
-    nombre_empresa: tp.of_cliente,
+    // NUEVAS LÍNEAS SEGÚN DIFF
+    hs_title: [tp.of_cliente, tp.of_producto_nombres, totalFinal].filter(Boolean).join(' - '),
+    monto_unitario: montoUnitarioResolved,
+    id_empresa: tp.of_deal_id,
+    nombre_empresa: tp.nombre_empresa,
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
@@ -395,7 +399,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
         'iva','exonera_irae','hs_title','nombre_producto','descripcion',
         'servicio','etapa_de_la_factura','id_factura_nodum','hs_currency',
         'pais_operativo','frecuencia_de_facturacion','vendedor_factura',
-        'responsable_asignado','hubspot_owner_id',
+        'responsable_asignado','hubspot_owner_id', 'nombre_empresa',
       ]);
       logger.debug({ module: 'invoiceService', fn: 'createInvoiceFromTicket', invoiceId, invoiceProps: invoiceFull?.properties }, '[invoice] Props confirmadas post-create');
     } catch (err) {
@@ -584,14 +588,15 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     return { invoiceId: null, created: false };
   }
 
-  // 4) Nombre
-  const dealName = dp.dealname || 'Deal';
-  let liShort = lp.name || null;
-  if (!liShort) {
-    liShort = `Line Item ${lineItemId}`;
-    logger.warn({ module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem', lineItemId }, '[invoice] Line item sin nombre, usando fallback');
-  }
-  const invoiceTitle = `${dealName} - ${liShort} - ${billingPeriodDate}`;
+    // 4) Nombre
+const dealName = dp.dealname || 'Deal';
+let liShort = lp.name || null;
+if (!liShort) {
+  liShort = `Line Item ${lineItemId}`;
+  logger.warn({ module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem', lineItemId }, '[invoice] Line item sin nombre, usando fallback');
+}
+const totalFinal = parseNumber(lp.total_real_a_facturar ?? lp.price ?? null, 0); // ← aquí
+const invoiceTitle = `${dealName} - ${liShort} - ${totalFinal}`;
 
   // 5) Fechas
   const billDate = new Date(billingPeriodDate);
@@ -612,6 +617,8 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     ...(lp.description ? { descripcion: lp.description } : {}),
     ...(lp.servicio ? { servicio: lp.servicio } : {}),
     ...(dp.dealname ? { nombre_empresa: dp.dealname } : {}),
+    ...(lp.monto_unitario_real ? { monto_unitario: lp.monto_unitario_real } : {}),
+    id_empresa: dealId,
     ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
   };
 
