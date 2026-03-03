@@ -345,7 +345,11 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     responsable_asignado: toNumericOwnerOrNull(tp.hubspot_owner_id || tp.responsable_asignado),
     vendedor_factura: tp.of_propietario_secundario,
     frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || (tp.repetitivo ? 'Mensual' : undefined),
-    nombre_empresa: tp.of_cliente,
+    // NUEVAS LÍNEAS SEGÚN DIFF
+    hs_title: [tp.of_cliente, tp.of_producto_nombres, fechaPlan].filter(Boolean).join(' - '),
+    monto_unitario: montoUnitarioResolved,
+    id_empresa: tp.of_deal_id,
+    nombre_empresa: tp.of_cliente, // confirmar que sigue
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
@@ -612,6 +616,8 @@ export async function createAutoInvoiceFromLineItem(deal, lineItem, billingPerio
     ...(lp.description ? { descripcion: lp.description } : {}),
     ...(lp.servicio ? { servicio: lp.servicio } : {}),
     ...(dp.dealname ? { nombre_empresa: dp.dealname } : {}),
+    ...(lp.monto_unitario_real ? { monto_unitario: lp.monto_unitario_real } : {}),
+    id_empresa: dealId,
     ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
   };
 
