@@ -8,8 +8,9 @@ import { updateTicket } from '../services/tickets/ticketService.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
-import { createInvoiceFromTicket } from '../services/invoiceService.js';
+import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import {
@@ -259,7 +260,20 @@ export async function runPhase3({ deal, lineItems }) {
         );
         continue;
       }
-
+try {
+        await checkMissedBillingsForLineItem({
+          dealId,
+          lineItemId,
+          lineItemKey,
+          today,
+        });
+      } catch (err) {
+        // Best-effort: error en el guard no detiene la facturación de hoy
+        logger.error(
+          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
+          'Error en missedBillingGuard, continuando con flujo normal'
+        );
+      }
       // 1) FACTURAR AHORA (urgente)
       if (facturarAhora) {
         const promoted = await promoteAutoForecastTicketToReady({
@@ -272,24 +286,27 @@ export async function runPhase3({ deal, lineItems }) {
 
         if (promoted.moved) {
           ticketsEnsured++;
+
+          // Leer ticket con todas las props requeridas para evitar re-lectura en invoiceService
           const ticket = await hubspotClient.crm.tickets.basicApi.getById(
             promoted.ticketId,
-            ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+            REQUIRED_TICKET_PROPS
           );
 
           const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
-const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
-if (!isAutoRenew) {
-  const activeCount = await countActivePlanInvoices(lineItemKey);
-  if (activeCount !== null && activeCount >= totalPayments) {
-    logger.info(
-      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
-      'Plan completado, no se emite factura'
-    );
-    continue;
-  }
-}
-          await createInvoiceFromTicket(ticket);
+          const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+          if (!isAutoRenew) {
+            const activeCount = await countActivePlanInvoices(lineItemKey);
+            if (activeCount !== null && activeCount >= totalPayments) {
+              logger.info(
+                { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+                'Plan completado, no se emite factura'
+              );
+              continue;
+            }
+          }
+
+          await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
           invoicesEmitted++;
 
           logger.info(
@@ -343,25 +360,26 @@ if (!isAutoRenew) {
       if (promoted.moved) {
         ticketsEnsured++;
 
+        // Leer ticket con todas las props requeridas para evitar re-lectura en invoiceService
         const ticket = await hubspotClient.crm.tickets.basicApi.getById(
           promoted.ticketId,
-          ['of_ticket_key', 'of_line_item_key', 'of_deal_id']
+          REQUIRED_TICKET_PROPS
         );
 
         const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
-const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
-if (!isAutoRenew) {
-  const activeCount = await countActivePlanInvoices(lineItemKey);
-  if (activeCount !== null && activeCount >= totalPayments) {
-    logger.info(
-      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
-      'Plan completado, no se emite factura'
-    );
-    continue;
-  }
-}
+        const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+        if (!isAutoRenew) {
+          const activeCount = await countActivePlanInvoices(lineItemKey);
+          if (activeCount !== null && activeCount >= totalPayments) {
+            logger.info(
+              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+              'Plan completado, no se emite factura'
+            );
+            continue;
+          }
+        }
 
-        await createInvoiceFromTicket(ticket);
+        await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
         invoicesEmitted++;
 
         logger.info(
@@ -394,21 +412,3 @@ if (!isAutoRenew) {
 
   return { invoicesEmitted, ticketsEnsured, errors };
 }
-
-/*
- * CATCHES con reportHubSpotError agregados:
- *   - moveTicketToStage() rama currentStage !== expectedForecastStage → objectType="ticket"
- *   - moveTicketToStage() rama currentStage === expectedForecastStage → objectType="ticket"
- *   - updateTicket() en bloque "marcar urgente" (best-effort) → objectType="ticket"
- *     (no re-throw; el warn se loguea y se continúa)
- *
- * NO reportados:
- *   - getDealCompanies / getDealContacts → lecturas, .catch(() => []) absorbe
- *   - createTicketAssociations → asociaciones excluidas (Regla 4)
- *   - syncLineItemAfterPromotion → delegado
- *   - createInvoiceFromTicket → no es update de ticket/line_item; servicio externo
- *   - tickets.basicApi.getById → lectura
- *   - catch externo de runPhase3 → error ya reportado en moveTicketToStage antes del re-throw
- *
- * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- */

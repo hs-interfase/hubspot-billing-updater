@@ -19,6 +19,29 @@ const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
 
 /**
+ * Lista canónica de propiedades que createInvoiceFromTicket necesita del ticket.
+ * Los callers que quieran evitar la re-lectura deben:
+ *   1. Importar REQUIRED_TICKET_PROPS
+ *   2. Incluirlas en su propio getById()
+ *   3. Pasar { skipRefetch: true } a createInvoiceFromTicket()
+ */
+export const REQUIRED_TICKET_PROPS = [
+  'of_ticket_key', 'of_deal_id', 'of_line_item_ids', 'of_line_item_key',
+  'of_invoice_id', 'of_invoice_key',
+  'of_fecha_de_facturacion', 'fecha_real_de_facturacion', 'fecha_resolucion_esperada',
+  'total_real_a_facturar', 'cantidad_real', 'monto_unitario_real',
+  'subject', 'of_producto_nombres', 'of_descripcion_producto', 'of_rubro',
+  'descuento_en_porcentaje', 'descuento_por_unidad_real', 'of_iva', 'of_exonera_irae',
+  'of_aplica_para_cupo', 'of_cupo_alerta_preventiva_emitida', 'of_cupo_alerta_preventiva_fecha',
+  'of_cupo_restante_proyectado', 'of_cupo_consumo_estimado',
+  'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
+  'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
+  'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
+  'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
+  'facturar_ahora', 'repetitivo', 'nombre_empresa',
+];
+
+/**
  * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
  * 429 y 5xx son transitorios → solo logger.error, sin reporte.
  */
@@ -148,33 +171,28 @@ async function updateInvoiceDirect(invoiceId, properties) {
  * @param {Object} ticket
  * @param {string} modoGeneracion - 'AUTO_LINEITEM' | 'MANUAL_TICKET' | 'MANUAL_LINEITEM'
  * @param {string|null} usuarioDisparador
+ * @param {Object} options
+ * @param {boolean} [options.skipRefetch=false]
+ *   Si true, asume que el ticket ya viene con todas las props de REQUIRED_TICKET_PROPS
+ *   y omite la re-lectura a HubSpot. El caller es responsable de garantizarlo.
+ *   Si false (default), siempre re-lee el ticket para completar props faltantes.
  * @returns {Object} { invoiceId, created }
  */
-export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null) {
+export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LINEITEM', usuarioDisparador = null, options = {}) {
+  const { skipRefetch = false } = options;
   const ticketId = ticket.id || ticket.properties?.hs_object_id;
 
-  logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, modoGeneracion }, '[invoice] Iniciando creación de factura desde ticket');
+  logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, modoGeneracion, skipRefetch }, '[invoice] Iniciando creación de factura desde ticket');
 
-  // Re-leer ticket con todas las propiedades relevantes
+  // Re-leer ticket con todas las propiedades relevantes, a menos que el caller
+  // garantice que el ticket ya viene completo (skipRefetch: true).
   let ticketFull = ticket;
-  try {
-    ticketFull = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
-      'of_ticket_key', 'of_deal_id', 'of_line_item_ids', 'of_line_item_key',
-      'of_invoice_id', 'of_invoice_key',
-      'of_fecha_de_facturacion', 'fecha_real_de_facturacion', 'fecha_resolucion_esperada',
-      'total_real_a_facturar', 'cantidad_real', 'monto_unitario_real',
-      'subject', 'of_producto_nombres', 'of_descripcion_producto', 'of_rubro',
-      'descuento_en_porcentaje', 'descuento_por_unidad_real', 'of_iva', 'of_exonera_irae',
-      'of_aplica_para_cupo', 'of_cupo_alerta_preventiva_emitida', 'of_cupo_alerta_preventiva_fecha',
-      'of_cupo_restante_proyectado', 'of_cupo_consumo_estimado',
-      'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
-      'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
-      'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
-      'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
-      'facturar_ahora', 'repetitivo', 'nombre_empresa',
-    ]);
-  } catch (err) {
-    logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, err }, '[invoice] No se pudo re-leer ticket completo, usando datos originales');
+  if (!skipRefetch) {
+    try {
+      ticketFull = await hubspotClient.crm.tickets.basicApi.getById(ticketId, REQUIRED_TICKET_PROPS);
+    } catch (err) {
+      logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, err }, '[invoice] No se pudo re-leer ticket completo, usando datos originales');
+    }
   }
 
   const tp = ticketFull.properties || {};
@@ -595,7 +613,7 @@ if (!liShort) {
   liShort = `Line Item ${lineItemId}`;
   logger.warn({ module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem', lineItemId }, '[invoice] Line item sin nombre, usando fallback');
 }
-const totalFinal = parseNumber(lp.total_real_a_facturar ?? lp.price ?? null, 0); // ← aquí
+const totalFinal = parseNumber(lp.total_real_a_facturar ?? lp.price ?? null, 0);
 const invoiceTitle = `${dealName} - ${liShort} - ${totalFinal}`;
 
   // 5) Fechas

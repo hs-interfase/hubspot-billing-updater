@@ -1,11 +1,12 @@
 // src/services/urgentBillingService.js
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
-import { createInvoiceFromTicket } from './invoiceService.js';
+import { createInvoiceFromTicket, createAutoInvoiceFromLineItem, REQUIRED_TICKET_PROPS } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
+import { findMirrorLineItem } from './mirrorUtils.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import  { countActivePlanInvoices } from '../utils/invoiceUtils.js';
@@ -123,7 +124,7 @@ export async function processUrgentLineItem(lineItemId) {
       'billing_next_date',
       'billing_anchor_date',
       'billing_last_billed_date',
-      'hs_recurring_billing_number_of_payments', // ← NUEVO
+      'hs_recurring_billing_number_of_payments',
     ]);
 
     const lineItemProps = lineItem.properties || {};
@@ -274,7 +275,7 @@ export async function processUrgentLineItem(lineItemId) {
       }
     }
 
-    // ← NUEVO: GUARD plan completo (va después de resolver lik, antes de crear ticket)
+    // GUARD plan completo (va después de resolver lik, antes de crear ticket)
     const totalPayments = Number(lineItemProps.hs_recurring_billing_number_of_payments);
     const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
 
@@ -288,7 +289,6 @@ export async function processUrgentLineItem(lineItemId) {
         return { skipped: true, reason: 'plan_completed', activeCount, totalPayments };
       }
     }
-    // ← FIN GUARD
 
     logger.info(
       { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, lik },
@@ -343,14 +343,14 @@ export async function processUrgentLineItem(lineItemId) {
     let invoiceIdFinal = null;
     let existingTicketInvoiceId = null;
 
-let ticketReload = null;
-if (ticketId) {
-  ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
-  existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
-}
-const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
+    let ticketReload = null;
+    if (ticketId) {
+      ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
+      existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
+    }
+    const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
 
-if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
+    if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
       logger.info(
         { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, invoiceId: existingTicketInvoiceId },
         'Factura ya creada desde ticket, omitiendo auto-invoice'
@@ -452,13 +452,12 @@ export async function processUrgentTicket(ticketId) {
   let shouldResetFlag = false;
 
   try {
-    const ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
-      'subject',
-      'facturar_ahora',
-      'of_invoice_id',
-      'of_invoice_status',
-      'of_line_item_key',
-    ]);
+    // Leer ticket con todas las props requeridas por invoiceService de una sola vez,
+    // para no volver a leerlo dentro de createInvoiceFromTicket.
+    const ticket = await hubspotClient.crm.tickets.basicApi.getById(
+      ticketId,
+      REQUIRED_TICKET_PROPS
+    );
 
     const ticketProps = ticket.properties || {};
 
@@ -473,14 +472,14 @@ export async function processUrgentTicket(ticketId) {
     shouldResetFlag = true;
 
     if (ticketProps.of_invoice_id && ticketProps.of_invoice_status !== 'Cancelada') {
-  logger.info(
-    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
-    'Ticket ya facturado, saltando'
-  );
-  return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
-}
- 
-    // ← NUEVO: GUARD plan completo
+      logger.info(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
+        'Ticket ya facturado, saltando'
+      );
+      return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
+    }
+
+    // GUARD plan completo
     const lik = (ticketProps.of_line_item_key || '').trim();
 
     if (lik) {
@@ -520,9 +519,9 @@ export async function processUrgentTicket(ticketId) {
         'of_line_item_key vacío, omitiendo guard de plan completo'
       );
     }
-    // ← FIN GUARD
 
-    const invoiceResult = await createInvoiceFromTicket(ticket);
+    // Ticket ya viene completo con REQUIRED_TICKET_PROPS → skipRefetch: true
+    const invoiceResult = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
       throw new Error('Error al crear factura de ticket');
