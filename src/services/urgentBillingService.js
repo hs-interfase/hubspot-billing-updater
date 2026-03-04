@@ -385,6 +385,29 @@ export async function processUrgentLineItem(lineItemId) {
       'Facturación urgente de Line Item completada'
     );
 
+    // 9) Propagar al line item espejo UY (si existe).
+    // Corre DESPUÉS de que el PY completó con éxito.
+    // Un fallo aquí loguea pero NO revierte ni bloquea el resultado del PY.
+    try {
+      const mirror = await findMirrorLineItem(lineItemId);
+      if (mirror) {
+        logger.info(
+          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, mirrorLineItemId: mirror.mirrorLineItemId, mirrorDealId: mirror.mirrorDealId },
+          'Propagando facturación urgente al espejo UY'
+        );
+        await processUrgentLineItem(mirror.mirrorLineItemId);
+        logger.info(
+          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, mirrorLineItemId: mirror.mirrorLineItemId },
+          'Espejo UY facturado con éxito'
+        );
+      }
+    } catch (mirrorErr) {
+      logger.warn(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err: mirrorErr },
+        'Error propagando facturación urgente al espejo UY (no afecta el resultado PY)'
+      );
+    }
+
     return {
       success: true,
       invoiceId: invoiceIdFinal,
@@ -625,10 +648,8 @@ export async function processUrgentTicket(ticketId) {
  *   - getDealWithLineItems / getById / isInvoiceIdValidForLineItem → lecturas
  *   - associations.v4 → excluidas
  *   - createInvoiceFromTicket / createAutoInvoiceFromLineItem → servicios delegados
+ *   - findMirrorLineItem → lookup de resolución, no update accionable
+ *   - propagación al mirror UY (paso 9) → capturada en try/catch propio, no escala al catch principal
  *
  * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- *
- * ⚠️  BUG PREEXISTENTE (no corregido per Regla 5):
- *   `createAutoInvoiceFromLineItem` se llama en processUrgentLineItem pero no está
- *   importada ni definida en este archivo; fallará en runtime con ReferenceError.
  */
