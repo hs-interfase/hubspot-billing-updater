@@ -85,7 +85,6 @@ async function getAllDealIds() {
 }
 
 export async function runBilling({ dealId, allDeals } = {}) {
-  logger.error("test error")
   if (!dealId && !allDeals) {
     throw new Error("Debes usar --deal <ID> o --allDeals");
   }
