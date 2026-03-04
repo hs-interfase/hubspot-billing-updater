@@ -17,7 +17,6 @@ function reportIfActionable({ objectType, objectId, message, err }) {
 }
 
 async function getDealIdForLineItem(lineItemId) {
-logger.error("[TEST_BETTERSTACK] runBilling triggered");
   const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
     "line_items",
     String(lineItemId),
