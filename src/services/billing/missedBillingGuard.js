@@ -28,7 +28,7 @@
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
-import { createInvoiceFromTicket } from '../invoiceService.js';
+import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../invoiceService.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 import {
   FORECAST_AUTO_STAGES,
@@ -236,10 +236,9 @@ export async function checkMissedBillingsForLineItem({
       // ── 3b. Obtener ticket completo y emitir factura ─────────────────────
       const fullTicket = await hubspotClient.crm.tickets.basicApi.getById(
         ticketId,
-        ['of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_invoice_id', 'hs_pipeline']
+        REQUIRED_TICKET_PROPS  // ← traer todo lo necesario de una sola vez
       );
-
-      await createInvoiceFromTicket(fullTicket, 'AUTO_LINEITEM');
+      await createInvoiceFromTicket(fullTicket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
       // ── 3c. Registrar el evento de reintento exitoso en of_billing_error ─
       const successMsg =

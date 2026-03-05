@@ -1,5 +1,5 @@
 // src/services/invoiceService.js
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient, axiosHubSpot } from '../hubspotClient.js';
 import { buildInvoiceKeyFromLIK } from '../utils/invoiceKey.js';
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateUtils.js';
@@ -11,7 +11,6 @@ import { syncBillingState } from './billing/syncBillingState.js';
 import { isAutoRenew } from './billing/mode.js';
 import { ensure24FutureTickets } from './tickets/ticketService.js';
 import { buildValidatedUpdateProps } from '../utils/propertyHelpers.js';
-import axios from 'axios';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 
@@ -140,7 +139,8 @@ function toNumericOwnerOrNull(v) {
 }
 
 async function createInvoiceDirect(properties) {
-  const response = await axios.post(
+  const response = await axiosHubSpot.post(
+
     `${HUBSPOT_API_BASE}/crm/v3/objects/invoices`,
     { properties },
     { headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
@@ -149,7 +149,7 @@ async function createInvoiceDirect(properties) {
 }
 
 async function updateInvoiceDirect(invoiceId, properties) {
-  const response = await axios.patch(
+  const response = await axiosHubSpot.patch(
     `${HUBSPOT_API_BASE}/crm/v3/objects/invoices/${invoiceId}`,
     { properties },
     { headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
