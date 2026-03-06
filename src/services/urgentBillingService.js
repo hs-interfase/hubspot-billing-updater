@@ -385,11 +385,24 @@ export async function processUrgentLineItem(lineItemId) {
       'Facturación urgente de Line Item completada'
     );
 
-    // 9) Propagar al line item espejo UY (si existe).
+// 9) Propagar al line item espejo UY (si existe).
     // Corre DESPUÉS de que el PY completó con éxito.
     // Un fallo aquí loguea pero NO revierte ni bloquea el resultado del PY.
     try {
-      const mirror = await findMirrorLineItem(lineItemId);
+      let mirror = await findMirrorLineItem(lineItemId);
+
+      if (!mirror) {
+        // Mirror no existe aún (ej: primera vez que se factura urgente antes del cron).
+        // Intentar crearlo con mirrorDealToUruguay y reintentar lookup.
+        logger.info(
+          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId },
+          'Mirror UY no encontrado, ejecutando mirrorDealToUruguay antes de propagar'
+        );
+        const { mirrorDealToUruguay } = await import('../dealMirroring.js');
+        await mirrorDealToUruguay(dealId);
+        mirror = await findMirrorLineItem(lineItemId);
+      }
+
       if (mirror) {
         logger.info(
           { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, mirrorLineItemId: mirror.mirrorLineItemId, mirrorDealId: mirror.mirrorDealId },
@@ -399,6 +412,11 @@ export async function processUrgentLineItem(lineItemId) {
         logger.info(
           { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, mirrorLineItemId: mirror.mirrorLineItemId },
           'Espejo UY facturado con éxito'
+        );
+      } else {
+        logger.info(
+          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId },
+          'Sin espejo UY tras mirrorDealToUruguay, nada que propagar'
         );
       }
     } catch (mirrorErr) {
