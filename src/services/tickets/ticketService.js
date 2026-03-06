@@ -597,7 +597,13 @@ export async function safeCreateTicket(hubspotClient, payload) {
       return await hubspotClient.crm.tickets.basicApi.create(current);
     } catch (err) {
       const missing = getMissingPropertyNameFromHubSpotError(err);
-      if (!missing) throw err;
+      if (!missing) {
+        logger.error(
+          { module: 'ticketService', fn: 'safeCreateTicket', attempt: i, err },
+          'Error no recuperable en safeCreateTicket'
+        );
+        throw err;
+      }
 
       if (current?.properties?.[missing] === undefined) throw err;
 
