@@ -202,13 +202,30 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
           { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
           'Usando start_date como período (pago único)'
         );
-      } else {
-        billingPeriodDate = today;
-        logger.info(
-          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
-          'Sin next ni start, usando today como período'
-        );
-      }
+} else {
+  billingPeriodDate = today;
+ logger.info(
+  { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
+  'Sin next ni start, usando today como período'
+);
+
+  // Persistir para que la key sea estable en reintentos
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { hs_recurring_billing_start_date: toHubSpotDateOnly(today) },
+    });
+    logger.info(
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, today },
+      'hs_recurring_billing_start_date seteado a today (fallback urgente)'
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err },
+      'No se pudo setear hs_recurring_billing_start_date, continuando'
+    );
+    // no throw — no bloquear la facturación por esto
+  }
+}
     }
 
     logger.debug(
