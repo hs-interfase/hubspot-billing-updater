@@ -70,15 +70,15 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
   }
 
   // 6. Calcular nextYmd
-  const nextYmd = resolveNextBillingDate({
-    lineItemProps: properties,
-    facturasRestantes,
-    dealIsCanceled: false,
-    upcomingDates, // ⚠️ OJO: esto está undefined en tu snippet (ver nota abajo)
-    startRaw: startDate ? formatDateISO(startDate) : null,
-    interval,
-    addInterval,
-  });
+const nextYmd = resolveNextBillingDate({
+  lineItemProps: properties,
+  facturasRestantes,
+  dealIsCanceled: false,
+  // upcomingDates: no disponible en este contexto, resolveNextBillingDate lo trata como undefined
+  startRaw: startDate ? formatDateISO(startDate) : null,
+  interval,
+  addInterval,
+});
 
   // 7. Persistir solo si cambia
   const nextStr = nextYmd ? String(nextYmd) : '';
