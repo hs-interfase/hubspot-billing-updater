@@ -428,7 +428,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
     const props = {};
 
-    const excludedProps = new Set([
+    /*const excludedProps = new Set([
       'uy',
       'pais_operativo',
       'hubspot_owner_id',
@@ -439,9 +439,42 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       'tax',
       'hs_tax_amount',
       'of_line_item_py_origen_id',
+      'invoice_id',
+      'invoice_key',
       'line_item_key',
       'parte_del_cupo',
     ]);
+*/
+const excludedProps = new Set([
+  'uy',
+  'pais_operativo',
+  'hubspot_owner_id',
+  'price',
+  'hs_cost_of_goods_sold',
+  'discount',
+  'hs_discount_percentage',
+  'tax',
+  'hs_tax_amount',
+  'of_line_item_py_origen_id',
+  'line_item_key',
+  'parte_del_cupo',
+  // ── invoice refs ──
+  'invoice_id',
+  'invoice_key',
+  // ── ticket refs ──
+  'last_ticketed_date',
+  'billing_next_date',
+  'facturas_restantes',
+  'fechas_completas',
+  // ── billing state urgente ──
+  'facturar_ahora',
+  'facturado_con_urgencia',
+  'ultima_fecha_facturacion_urgente',
+  'cantidad_de_facturaciones_urgentes',
+  'last_billing_period',
+  'of_billing_error',
+  'of_billing_error_at',
+]);
 
     for (const key of Object.keys(srcPropsLi)) {
       if (!excludedProps.has(key)) {

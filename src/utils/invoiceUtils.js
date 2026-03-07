@@ -1,4 +1,5 @@
 import logger from '../../lib/logger.js';
+import { hubspotClient } from '../hubspotClient.js';
 
 export async function countActivePlanInvoices(lik) {
   try {

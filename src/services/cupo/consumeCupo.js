@@ -281,7 +281,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
   return {
     consumed: true,
     consumo,
-poRestanteNuevo,
+    cupoRestanteNuevo,
     cupoDeactivated,
   };
 }

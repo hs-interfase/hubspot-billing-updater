@@ -6,6 +6,7 @@ import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
 import auditRouter from './api/invoice-editor/audit.js'          // ← aquí arriba ✅
 import { initDB } from './api/invoice-editor/Db.js'
+import debugUrgent from './api/debugUrgent.js'                 // ← aquí arriba ✅
 
 // ── Invoice Editor ──────────────────────────────
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
@@ -29,6 +30,8 @@ app.use('/invoice-editor/api', invoiceEditorAuth, invoiceEditorRouter) // ← DE
 app.get('/invoice-editor', invoiceEditorAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'invoice-editor.html'))
 })
+
+app.post('/api/debug-urgent', debugUrgent)
 
 // ── Static & Health ──
 app.use(express.static(path.join(__dirname, 'public')))

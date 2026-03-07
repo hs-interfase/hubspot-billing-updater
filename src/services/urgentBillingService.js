@@ -1,14 +1,16 @@
 // src/services/urgentBillingService.js
 
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
-import { createInvoiceFromTicket } from './invoiceService.js';
+import { createInvoiceFromTicket, createAutoInvoiceFromLineItem, REQUIRED_TICKET_PROPS } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
+import { findMirrorLineItem } from './mirrorUtils.js';
+import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
-import  { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -24,6 +26,7 @@ function parseBool(v) {
   const s = String(v ?? '').trim().toLowerCase();
   return s === 'true' || s === '1' || s === 'yes' || s === 'si' || s === 'sí';
 }
+
 /**
  * Obtiene el dealId asociado a un line item (FUENTE DE VERDAD: associations v4)
  */
@@ -95,16 +98,19 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 }
 
 /**
- * Procesa la facturación urgente de un Line Item.
- * CAMBIO CRÍTICO: Usa billingPeriodDate para ticket/invoice keys, NO today.
+ * Núcleo de la facturación urgente de un Line Item.
+ * NO contiene guard de facturar_ahora — eso es responsabilidad del caller.
+ * Puede ser llamado tanto para el line item PY (desde processUrgentLineItem)
+ * como para el mirror UY (desde _propagateToMirror), sin pasar por el portero.
  */
-export async function processUrgentLineItem(lineItemId) {
+async function _executeUrgentBillingForLineItem(lineItemId) {
   logger.info(
-    { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+    { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
     'Inicio facturación urgente de Line Item'
   );
 
-  let shouldResetFlag = false;
+  // Siempre resetear facturar_ahora al terminar (idempotente para el mirror que ya lo tiene en false)
+  const shouldResetFlag = true;
 
   try {
     // 1) Traer line item con fechas para calcular billingPeriodDate
@@ -115,6 +121,7 @@ export async function processUrgentLineItem(lineItemId) {
       'line_item_key',
       'invoice_key',
       'invoice_id',
+      'of_line_item_py_origen_id',
       'cantidad_de_facturaciones_urgentes',
       'hs_recurring_billing_start_date',
       'recurringbillingstartdate',
@@ -123,23 +130,67 @@ export async function processUrgentLineItem(lineItemId) {
       'billing_next_date',
       'billing_anchor_date',
       'billing_last_billed_date',
-      'hs_recurring_billing_number_of_payments', // ← NUEVO
+      'hs_recurring_billing_number_of_payments',
     ]);
 
     const lineItemProps = lineItem.properties || {};
-
-    // 2) Validar flag
-    if (!parseBool(lineItemProps.facturar_ahora)) {
+ 
+    // ─── GUARD DE MIRROR UY ───────────────────────────────────────────────────
+    const pyOrigenLIId = (lineItemProps.of_line_item_py_origen_id || '').trim();
+    if (pyOrigenLIId) {
       logger.info(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
-        'facturar_ahora no está en true, ignorando'
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId },
+        'LI es mirror UY — sincronizando deal espejo antes de facturar'
       );
-      return { skipped: true, reason: 'facturar_ahora_false' };
+      let pyDealId;
+      try {
+        pyDealId = await getDealIdForLineItem(pyOrigenLIId);
+      } catch (err) {
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId, err },
+          'Error obteniendo deal PY origen para sync de mirror'
+        );
+      }
+      if (!pyDealId) {
+        const msg = 'No se pudo sincronizar el mirror: deal PY origen no encontrado. Se reintentará automáticamente.';
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId },
+          msg
+        );
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: {
+            of_billing_error: msg.slice(0, 250),
+            of_billing_error_at: String(getTodayMillis()),
+            facturar_ahora: 'true',
+          },
+        });
+        return { skipped: true, reason: 'mirror_py_deal_not_found' };
+      }
+      try {
+        await mirrorDealToUruguay(pyDealId);
+        logger.info(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyDealId },
+          'Deal espejo UY sincronizado correctamente'
+        );
+      } catch (err) {
+        const msg = `No se pudo sincronizar el mirror antes de facturar: ${String(err?.message || 'unknown').slice(0, 180)}. Se reintentará automáticamente.`;
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyDealId, err },
+          'Error sincronizando deal espejo — abortando facturación'
+        );
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: {
+            of_billing_error: msg.slice(0, 250),
+            of_billing_error_at: String(getTodayMillis()),
+            facturar_ahora: 'true',
+          },
+        });
+        return { skipped: true, reason: 'mirror_sync_failed' };
+      }
     }
+    // ─── FIN GUARD DE MIRROR UY ──────────────────────────────────────────────
 
-    shouldResetFlag = true;
-
-    // 3) Calcular billingPeriodDate (NO usar today para keys)
+    // 2) Calcular billingPeriodDate (NO usar today para keys)
     let billingPeriodDate = getBillingPeriodDate(lineItemProps);
     const today = getTodayYMD();
 
@@ -148,20 +199,37 @@ export async function processUrgentLineItem(lineItemId) {
       if (startDate) {
         billingPeriodDate = startDate;
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, billingPeriodDate },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
           'Usando start_date como período (pago único)'
         );
-      } else {
-        billingPeriodDate = today;
-        logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, billingPeriodDate },
-          'Sin next ni start, usando today como período'
-        );
-      }
+} else {
+  billingPeriodDate = today;
+ logger.info(
+  { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
+  'Sin next ni start, usando today como período'
+);
+
+  // Persistir para que la key sea estable en reintentos
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: { hs_recurring_billing_start_date: toHubSpotDateOnly(today) },
+    });
+    logger.info(
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, today },
+      'hs_recurring_billing_start_date seteado a today (fallback urgente)'
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err },
+      'No se pudo setear hs_recurring_billing_start_date, continuando'
+    );
+    // no throw — no bloquear la facturación por esto
+  }
+}
     }
 
     logger.debug(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, billingPeriodDate, today },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate, today },
       'Fechas de facturación urgente'
     );
 
@@ -177,25 +245,25 @@ export async function processUrgentLineItem(lineItemId) {
       return { skipped: true, reason: 'no_billing_period_date' };
     }
 
-    // 4) Resolver dealId
+    // 3) Resolver dealId
     const dealId = await getDealIdForLineItem(lineItemId);
     if (!dealId) {
       logger.error(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
         'Line Item no tiene deal asociado'
       );
       throw new Error('Line item no tiene deal asociado');
     }
 
     logger.info(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, billingPeriodDate },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, billingPeriodDate },
       'Deal asociado encontrado'
     );
 
-    // 5) Guardar invoice existente para validar después de tener el lik
+    // 4) Guardar invoice existente para validar después de tener el lik
     const existingInvoiceId = lineItemProps.invoice_id;
 
-    // 6) Obtener deal completo
+    // 5) Obtener deal completo
     const { deal, lineItems } = await getDealWithLineItems(dealId);
     const targetLineItem = lineItems.find(li => String(li.id) === String(lineItemId));
     if (!targetLineItem) throw new Error('Line item no encontrado en el deal');
@@ -205,7 +273,7 @@ export async function processUrgentLineItem(lineItemId) {
 
     if (!lik) {
       logger.warn(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
         'line_item_key vacío, generando con ensureLineItemKey'
       );
 
@@ -223,7 +291,7 @@ export async function processUrgentLineItem(lineItemId) {
           properties: { line_item_key: lik },
         });
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, lik },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik },
           'line_item_key seteada en HubSpot'
         );
       }
@@ -236,7 +304,7 @@ export async function processUrgentLineItem(lineItemId) {
     if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
     targetLineItem.line_item_key = lik;
 
-    // 6b) Idempotencia
+    // 5b) Idempotencia
     if (existingInvoiceId) {
       const validation = await isInvoiceIdValidForLineItem({
         dealId,
@@ -247,14 +315,14 @@ export async function processUrgentLineItem(lineItemId) {
 
       if (validation.valid) {
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, invoiceId: existingInvoiceId },
           'Line Item ya tiene factura válida, saltando'
         );
         return { skipped: true, reason: 'already_invoiced', invoiceId: existingInvoiceId };
       }
 
       logger.warn(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: existingInvoiceId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, invoiceId: existingInvoiceId },
         'invoice_id inválido, limpiando'
       );
       try {
@@ -262,19 +330,19 @@ export async function processUrgentLineItem(lineItemId) {
           properties: { invoice_id: '', invoice_key: '' },
         });
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
           'Line Item limpiado de invoice_id inválido'
         );
       } catch (err) {
         reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error limpiando invoice_id inválido en line item', err });
         logger.warn(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err },
           'Error limpiando invoice_id inválido'
         );
       }
     }
 
-    // ← NUEVO: GUARD plan completo (va después de resolver lik, antes de crear ticket)
+    // 6) GUARD plan completo (va después de resolver lik, antes de crear ticket)
     const totalPayments = Number(lineItemProps.hs_recurring_billing_number_of_payments);
     const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
 
@@ -282,16 +350,15 @@ export async function processUrgentLineItem(lineItemId) {
       const activeCount = await countActivePlanInvoices(lik);
       if (activeCount !== null && activeCount >= totalPayments) {
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, lik, activeCount, totalPayments },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, activeCount, totalPayments },
           'Plan completado, no se emite factura'
         );
         return { skipped: true, reason: 'plan_completed', activeCount, totalPayments };
       }
     }
-    // ← FIN GUARD
 
     logger.info(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, lik },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, lik },
       'Procediendo a facturar'
     );
 
@@ -306,7 +373,7 @@ export async function processUrgentLineItem(lineItemId) {
     });
 
     logger.info(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, ticketId, created },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, ticketId, created },
       'Ticket creado/reutilizado'
     );
 
@@ -329,7 +396,7 @@ export async function processUrgentLineItem(lineItemId) {
             },
           });
           logger.info(
-            { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, readyStage },
+            { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, readyStage },
             'Ticket movido a READY'
           );
         } catch (err) {
@@ -343,23 +410,23 @@ export async function processUrgentLineItem(lineItemId) {
     let invoiceIdFinal = null;
     let existingTicketInvoiceId = null;
 
-let ticketReload = null;
-if (ticketId) {
-  ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
-  existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
-}
-const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
+    let ticketReload = null;
+    if (ticketId) {
+      ticketReload = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), ['of_invoice_id', 'of_invoice_status']);
+      existingTicketInvoiceId = (ticketReload?.properties?.of_invoice_id || '').trim() || null;
+    }
+    const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
 
-if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
+    if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
       logger.info(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, invoiceId: existingTicketInvoiceId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, invoiceId: existingTicketInvoiceId },
         'Factura ya creada desde ticket, omitiendo auto-invoice'
       );
       invoiceIdFinal = existingTicketInvoiceId;
     } else {
       const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, billingPeriodDate, today);
       logger.info(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, invoiceId: invoiceResult.invoiceId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, invoiceId: invoiceResult.invoiceId },
         'Factura creada'
       );
       invoiceIdFinal = invoiceResult.invoiceId;
@@ -372,7 +439,7 @@ if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
     if (ticketId && invoiceIdFinal) {
       await updateTicket(ticketId, { of_invoice_id: invoiceIdFinal });
       logger.info(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', ticketId, invoiceId: invoiceIdFinal },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, invoiceId: invoiceIdFinal },
         'Ticket actualizado con invoice ID'
       );
     }
@@ -381,7 +448,7 @@ if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
 
     logger.info(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId, ticketId, invoiceId: invoiceIdFinal, billingPeriodDate },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, ticketId, invoiceId: invoiceIdFinal, billingPeriodDate },
       'Facturación urgente de Line Item completada'
     );
 
@@ -395,7 +462,7 @@ if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
     };
   } catch (err) {
     logger.error(
-      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
+      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err },
       'Error en facturación urgente de Line Item'
     );
 
@@ -407,13 +474,13 @@ if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
         },
       });
       logger.warn(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
         'of_billing_error guardado en Line Item'
       );
-    } catch (err) {
-      reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error guardando of_billing_error en line item', err });
+    } catch (updateErr) {
+      reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error guardando of_billing_error en line item', err: updateErr });
       logger.error(
-        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err: updateErr },
         'No se pudo guardar of_billing_error'
       );
     }
@@ -426,16 +493,128 @@ if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
           properties: { facturar_ahora: 'false' },
         });
         logger.info(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
           'Flag facturar_ahora reseteado (finally)'
         );
       } catch (err) {
         reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error reseteando flag facturar_ahora en line item', err });
         logger.error(
-          { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err },
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err },
           'Error reseteando flag facturar_ahora'
         );
       }
+    }
+  }
+}
+
+/**
+ * Entry point público para facturación urgente de un Line Item.
+ * Contiene el guard de intención del usuario (facturar_ahora = true).
+ * Después de facturar el PY, propaga al mirror UY de forma asíncrona (fire-and-forget).
+ */
+export async function processUrgentLineItem(lineItemId) {
+  const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(
+    String(lineItemId),
+    ['facturar_ahora', 'name']
+  );
+
+  if (!parseBool(lineItem?.properties?.facturar_ahora)) {
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+      'facturar_ahora no está en true, ignorando'
+    );
+    return { skipped: true, reason: 'facturar_ahora_false' };
+  }
+
+  // Facturar PY — un error aquí sí bloquea (es lo principal)
+  const result = await _executeUrgentBillingForLineItem(lineItemId);
+
+  // Propagar al mirror UY — fire-and-forget, no bloquea la respuesta al caller
+  _propagateToMirror(lineItemId).catch(() => {
+    // Los errores ya son manejados y logueados dentro de _propagateToMirror
+  });
+
+  return result;
+}
+
+/**
+ * Intenta facturar el line item espejo UY correspondiente al PY dado.
+ * Si falla, deja facturar_ahora=true en el mirror para que el cron lo reintente,
+ * y escribe of_billing_error para visibilidad del equipo UY en HubSpot.
+ */
+async function _propagateToMirror(pyLineItemId) {
+  const log = logger.child({
+    module: 'urgentBillingService',
+    fn: '_propagateToMirror',
+    pyLineItemId: String(pyLineItemId),
+  });
+
+  // 1) Obtener deal PY del line item original
+  let pyDealId;
+  try {
+    pyDealId = await getDealIdForLineItem(pyLineItemId);
+    if (!pyDealId) {
+      log.info('Line item PY sin deal asociado, nada que propagar');
+      return;
+    }
+  } catch (err) {
+    log.error({ err }, 'Error obteniendo deal PY para propagación mirror');
+    return;
+  }
+
+  // 2) Sincronizar/crear mirror completo — garantiza que el deal UY y sus LIs existan
+  let mirrorResult;
+  try {
+    mirrorResult = await mirrorDealToUruguay(pyDealId);
+  } catch (err) {
+    log.error({ err, pyDealId }, 'Error en mirrorDealToUruguay — abortando propagación');
+    return;
+  }
+
+  if (!mirrorResult?.mirrored) {
+    log.info({ reason: mirrorResult?.reason }, 'Deal PY no tiene mirror UY activo, nada que propagar');
+    return;
+  }
+
+  log.info({ mirrorDealId: mirrorResult.targetDealId }, 'Mirror UY sincronizado');
+
+  // 3) Encontrar el line item espejo UY (ya existe gracias al sync anterior)
+  let mirrorLineItemId;
+  try {
+    const found = await findMirrorLineItem(pyLineItemId);
+    if (!found) {
+      log.warn(
+        { pyDealId, mirrorDealId: mirrorResult.targetDealId },
+        'Mirror sincronizado pero no se encontró LI espejo — LI puede no tener uy=true'
+      );
+      return;
+    }
+    mirrorLineItemId = found.mirrorLineItemId;
+  } catch (err) {
+    log.error({ err }, 'Error buscando mirror line item tras sync');
+    return;
+  }
+
+  log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
+
+  // 4) Facturar el mirror — el guard interno sincroniza de nuevo antes de emitir
+  try {
+    await _executeUrgentBillingForLineItem(mirrorLineItemId);
+    log.info({ mirrorLineItemId }, 'Mirror UY facturado correctamente');
+  } catch (err) {
+    log.error({ err, mirrorLineItemId }, 'Error facturando mirror UY — marcando para reintento');
+
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
+        properties: {
+          facturar_ahora: 'true',
+          of_billing_error: `mirror_propagation_failed: ${String(err?.message || 'unknown').slice(0, 200)}`,
+          of_billing_error_at: String(getTodayMillis()),
+        },
+      });
+      log.info({ mirrorLineItemId }, 'Mirror UY marcado con facturar_ahora=true para reintento');
+    } catch (updateErr) {
+      log.error({ updateErr, mirrorLineItemId }, 'No se pudo marcar el mirror para reintento');
     }
   }
 }
@@ -452,13 +631,10 @@ export async function processUrgentTicket(ticketId) {
   let shouldResetFlag = false;
 
   try {
-    const ticket = await hubspotClient.crm.tickets.basicApi.getById(ticketId, [
-      'subject',
-      'facturar_ahora',
-      'of_invoice_id',
-      'of_invoice_status',
-      'of_line_item_key',
-    ]);
+    const ticket = await hubspotClient.crm.tickets.basicApi.getById(
+      ticketId,
+      REQUIRED_TICKET_PROPS
+    );
 
     const ticketProps = ticket.properties || {};
 
@@ -473,14 +649,14 @@ export async function processUrgentTicket(ticketId) {
     shouldResetFlag = true;
 
     if (ticketProps.of_invoice_id && ticketProps.of_invoice_status !== 'Cancelada') {
-  logger.info(
-    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
-    'Ticket ya facturado, saltando'
-  );
-  return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
-}
- 
-    // ← NUEVO: GUARD plan completo
+      logger.info(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },
+        'Ticket ya facturado, saltando'
+      );
+      return { skipped: true, reason: 'already_invoiced', invoiceId: ticketProps.of_invoice_id };
+    }
+
+    // GUARD plan completo
     const lik = (ticketProps.of_line_item_key || '').trim();
 
     if (lik) {
@@ -520,9 +696,8 @@ export async function processUrgentTicket(ticketId) {
         'of_line_item_key vacío, omitiendo guard de plan completo'
       );
     }
-    // ← FIN GUARD
 
-    const invoiceResult = await createInvoiceFromTicket(ticket);
+    const invoiceResult = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
     if (!invoiceResult || !invoiceResult.invoiceId) {
       throw new Error('Error al crear factura de ticket');
@@ -576,10 +751,10 @@ export async function processUrgentTicket(ticketId) {
         { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId },
         'of_billing_error guardado en Ticket'
       );
-    } catch (err) {
-      reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error guardando of_billing_error en ticket', err });
+    } catch (updateErr) {
+      reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error guardando of_billing_error en ticket', err: updateErr });
       logger.error(
-        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err },
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err: updateErr },
         'No se pudo guardar of_billing_error en Ticket'
       );
     }
@@ -609,10 +784,10 @@ export async function processUrgentTicket(ticketId) {
 /*
  * CATCHES con reportHubSpotError agregados:
  *   - updateUrgentBillingEvidence: lineItems.basicApi.update() → objectType="line_item", re-throw
- *   - processUrgentLineItem: lineItems.basicApi.update() limpieza invoice_id → objectType="line_item", NO re-throw (warn absorbe)
- *   - processUrgentLineItem: tickets.basicApi.update() mover a READY → objectType="ticket", re-throw
- *   - processUrgentLineItem catch externo: lineItems.basicApi.update() of_billing_error → objectType="line_item", NO re-throw (best-effort)
- *   - processUrgentLineItem finally: lineItems.basicApi.update() reset flag → objectType="line_item", NO re-throw (finally no puede relanzar de forma segura)
+ *   - _executeUrgentBillingForLineItem: lineItems.basicApi.update() limpieza invoice_id → objectType="line_item", NO re-throw
+ *   - _executeUrgentBillingForLineItem: tickets.basicApi.update() mover a READY → objectType="ticket", re-throw
+ *   - _executeUrgentBillingForLineItem catch externo: lineItems.basicApi.update() of_billing_error → objectType="line_item", NO re-throw (best-effort)
+ *   - _executeUrgentBillingForLineItem finally: lineItems.basicApi.update() reset flag → objectType="line_item", NO re-throw
  *   - processUrgentTicket: tickets.basicApi.update() mover a READY → objectType="ticket", re-throw
  *   - processUrgentTicket catch externo: tickets.basicApi.update() of_billing_error → objectType="ticket", NO re-throw (best-effort)
  *   - processUrgentTicket finally: tickets.basicApi.update() reset flag → objectType="ticket", NO re-throw
@@ -620,16 +795,14 @@ export async function processUrgentTicket(ticketId) {
  * NO reportados:
  *   - updateTicket() → ya tiene reportIfActionable interno (ticketService.js migrado), evita doble reporte
  *   - createAutoBillingTicket() → delegado
- *   - lineItems.basicApi.update() en guard no_billing_period_date → es un update de error/cleanup, no acción de negocio
- *   - lineItems.basicApi.update() ensureLineItemKey shouldUpdate → es inicialización, no update accionable
- *   - lineItems.basicApi.update() last_ticketed_date / last_billing_period → actualizaciones de estado interno, no accionables para cliente
+ *   - lineItems.basicApi.update() en guard no_billing_period_date → cleanup, no acción de negocio
+ *   - lineItems.basicApi.update() ensureLineItemKey shouldUpdate → inicialización
+ *   - lineItems.basicApi.update() last_ticketed_date / last_billing_period → estado interno
  *   - getDealWithLineItems / getById / isInvoiceIdValidForLineItem → lecturas
  *   - associations.v4 → excluidas
  *   - createInvoiceFromTicket / createAutoInvoiceFromLineItem → servicios delegados
+ *   - findMirrorLineItem → lookup, no update accionable
+ *   - _propagateToMirror → fire-and-forget, errores capturados internamente
  *
  * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- *
- * ⚠️  BUG PREEXISTENTE (no corregido per Regla 5):
- *   `createAutoInvoiceFromLineItem` se llama en processUrgentLineItem pero no está
- *   importada ni definida en este archivo; fallará en runtime con ReferenceError.
  */

@@ -590,8 +590,8 @@ export async function updateLineItemSchedule(lineItem) {
 
   let lastPlannedYmd = null;
 
-  if (maxOccurrences && maxOccurrences > 0 && interval && startYmd) {
-    let cur = parseLocalDate(startYmd);
+    if (maxOccurrences && maxOccurrences > 0 && interval && anchorStartRaw) {
+    let cur = parseLocalDate(anchorStartRaw);
     for (let i = 1; i < maxOccurrences; i++) {
       cur = addInterval(cur, interval);
     }
@@ -615,7 +615,7 @@ export async function updateLineItemSchedule(lineItem) {
   // Si NO quedó nulo por CAP_END, calculamos next normal
   if (updatesRecurring.billing_next_date !== '') {
     const nextYmd = computeNextFromInterval({
-      startRaw: startYmd,
+      startRaw: anchorStartRaw,
       interval,
       todayYmd: floorYmd,
       addInterval,

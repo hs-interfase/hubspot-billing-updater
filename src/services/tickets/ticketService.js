@@ -335,6 +335,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
       lineItemKey: lineItem?.properties?.line_item_key,
       billDateYMD: billingDate,
       lineItemId,
+      lineItem,
 
       buildTicketPayload: async ({ dealId, lineItemKey, billDateYMD, expectedKey }) => {
         const expectedDate = billDateYMD;
@@ -542,8 +543,9 @@ export async function buildTicketFullProps({
 
 /**
  * Busca TODOS los tickets asociados a un Deal.
+ * FIX: eliminado parámetro hubspotClient — usa el import del módulo directamente.
  */
-async function getTicketsForDeal(hubspotClient, dealId) {
+async function getTicketsForDeal(dealId) {
   try {
     const assoc = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
@@ -595,7 +597,13 @@ export async function safeCreateTicket(hubspotClient, payload) {
       return await hubspotClient.crm.tickets.basicApi.create(current);
     } catch (err) {
       const missing = getMissingPropertyNameFromHubSpotError(err);
-      if (!missing) throw err;
+      if (!missing) {
+        logger.error(
+          { module: 'ticketService', fn: 'safeCreateTicket', attempt: i, err },
+          'Error no recuperable en safeCreateTicket'
+        );
+        throw err;
+      }
 
       if (current?.properties?.[missing] === undefined) throw err;
 
@@ -742,12 +750,15 @@ export async function archiveClonedTicketsByKey({ expectedKey, dealId, dryRun = 
 
 /**
  * Asegura que existe un ticket canónico y marca los duplicados.
+ * FIX: agregado parámetro opcional `lineItem` para permitir el chequeo
+ * de isAutoRenew y la llamada a ensure24FutureTickets.
  */
 export async function ensureTicketCanonical({
   dealId,
   lineItemKey,
   billDateYMD,
   lineItemId,
+  lineItem = null,
   buildTicketPayload,
   maxPayments,
 }) {
@@ -797,7 +808,7 @@ export async function ensureTicketCanonical({
         billDateYMD,
       });
       await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey, dealIsCanceled: false });
-      if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
+      if (lineItem && isAutoRenew({ properties: lineItem?.properties || lineItem })) {
         await ensure24FutureTickets({
           hubspotClient,
           dealId,
@@ -1054,36 +1065,31 @@ export async function updateTicket(ticketId, properties) {
 }
 
 /*
+ * FIXES aplicados (2025):
+ *
+ * FIX 1 — getTicketsForDeal: eliminado parámetro `hubspotClient` de la firma.
+ *   La función ahora usa el `hubspotClient` importado al tope del módulo.
+ *   Los call sites internos (findCanonicalAndDuplicates, archiveClonedTicketsByKey,
+ *   ensure24FutureTickets) ya la llamaban con un solo argumento (dealId), por lo que
+ *   quedan correctos sin modificación.
+ *
+ * FIX 2 — ensureTicketCanonical: agregado parámetro opcional `lineItem = null`.
+ *   Antes, `lineItem` era referenciado en el bloque del canonical existente pero no
+ *   era parte de la destructuración, causando que `isAutoRenew` siempre recibiera
+ *   `undefined` y `ensure24FutureTickets` nunca se llamara.
+ *   El call site en `createAutoBillingTicket` fue actualizado para pasar `lineItem`.
+ *   Los call sites que no pasan `lineItem` (ej: manualTicketService) reciben `null`
+ *   por defecto y el bloque `ensure24FutureTickets` se saltea correctamente.
+ *
  * CATCHES con reportHubSpotError agregados:
  *   - syncLineItemAfterCanonicalTicket: lineItems.basicApi.update() rama "completado" → objectType="line_item"
  *   - syncLineItemAfterCanonicalTicket: lineItems.basicApi.update() rama "billing dates" → objectType="line_item"
- *     (este catch NO re-throws; warn + continúa, consistent con el original)
- *   - resetTriggersFromLineItem: lineItems.basicApi.update() → objectType="line_item", antes del throw
- *     (el segundo update interno —billing_error— es best-effort dentro del catch, no se reporta para evitar
- *     recursión y porque es solo un intento de diagnóstico)
- *   - updateTicket: safeUpdateTicket() → objectType="ticket", antes del re-throw
+ *   - resetTriggersFromLineItem: lineItems.basicApi.update() → objectType="line_item"
+ *   - updateTicket: safeUpdateTicket() → objectType="ticket"
  *
  * NO reportados:
- *   - markDuplicateTickets: safeUpdateTicket() → es marcado de estado interno (DUPLICADO_UI),
- *     no accionable desde perspectiva del cliente; error absorbido con warn
- *   - safeCreateTicket / safeUpdateTicket internos (retry loop) → el error se re-throws
- *     al caller que sí reporta
- *   - getDealCompanies / getDealContacts / createTicketAssociations → lecturas y asociaciones excluidas
- *   - archiveClonedTicketsByKey → archivado, no update accionable
- *   - syncBillingState → delegado a otro servicio
- *   - createInvoiceFromTicket → no es ticket/line_item update directo
- *   - ensure24FutureTickets → delegado
- *   - findTicketByKey → lectura
- *   - getTicketsForDeal → lectura
- *
- * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- *
- * ⚠️  BUGS PREEXISTENTES (no corregidos per Regla 5):
- *   1. getTicketsForDeal() tiene firma (hubspotClient, dealId) pero en los call sites
- *      internos (findCanonicalAndDuplicates, archiveClonedTicketsByKey, ensure24FutureTickets)
- *      se llama solo con (dealId), por lo que hubspotClient queda undefined dentro de la función
- *      y todas las calls a hubspotClient.crm.* fallarán en runtime.
- *   2. En ensureTicketCanonical, `lineItem` se referencia en el bloque
- *      `isAutoRenew({ properties: lineItem?.properties || lineItem })` pero no es
- *      un parámetro de la función (no está en la destructuración); siempre será undefined.
+ *   - markDuplicateTickets, safeCreateTicket/safeUpdateTicket internos,
+ *     getDealCompanies/getDealContacts/createTicketAssociations,
+ *     archiveClonedTicketsByKey, syncBillingState, createInvoiceFromTicket,
+ *     ensure24FutureTickets, findTicketByKey, getTicketsForDeal → ver notas originales
  */
