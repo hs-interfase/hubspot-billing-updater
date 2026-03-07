@@ -7,6 +7,7 @@ import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.j
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { findMirrorLineItem } from './mirrorUtils.js';
+import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
@@ -120,6 +121,7 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       'line_item_key',
       'invoice_key',
       'invoice_id',
+      'of_line_item_py_origen_id',
       'cantidad_de_facturaciones_urgentes',
       'hs_recurring_billing_start_date',
       'recurringbillingstartdate',
@@ -132,6 +134,61 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
     ]);
 
     const lineItemProps = lineItem.properties || {};
+ 
+    // ─── GUARD DE MIRROR UY ───────────────────────────────────────────────────
+    const pyOrigenLIId = (lineItemProps.of_line_item_py_origen_id || '').trim();
+    if (pyOrigenLIId) {
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId },
+        'LI es mirror UY — sincronizando deal espejo antes de facturar'
+      );
+      let pyDealId;
+      try {
+        pyDealId = await getDealIdForLineItem(pyOrigenLIId);
+      } catch (err) {
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId, err },
+          'Error obteniendo deal PY origen para sync de mirror'
+        );
+      }
+      if (!pyDealId) {
+        const msg = 'No se pudo sincronizar el mirror: deal PY origen no encontrado. Se reintentará automáticamente.';
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyOrigenLIId },
+          msg
+        );
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: {
+            of_billing_error: msg.slice(0, 250),
+            of_billing_error_at: String(getTodayMillis()),
+            facturar_ahora: 'true',
+          },
+        });
+        return { skipped: true, reason: 'mirror_py_deal_not_found' };
+      }
+      try {
+        await mirrorDealToUruguay(pyDealId);
+        logger.info(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyDealId },
+          'Deal espejo UY sincronizado correctamente'
+        );
+      } catch (err) {
+        const msg = `No se pudo sincronizar el mirror antes de facturar: ${String(err?.message || 'unknown').slice(0, 180)}. Se reintentará automáticamente.`;
+        logger.error(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, pyDealId, err },
+          'Error sincronizando deal espejo — abortando facturación'
+        );
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: {
+            of_billing_error: msg.slice(0, 250),
+            of_billing_error_at: String(getTodayMillis()),
+            facturar_ahora: 'true',
+          },
+        });
+        return { skipped: true, reason: 'mirror_sync_failed' };
+      }
+    }
+    // ─── FIN GUARD DE MIRROR UY ──────────────────────────────────────────────
 
     // 2) Calcular billingPeriodDate (NO usar today para keys)
     let billingPeriodDate = getBillingPeriodDate(lineItemProps);
@@ -475,21 +532,55 @@ async function _propagateToMirror(pyLineItemId) {
     pyLineItemId: String(pyLineItemId),
   });
 
+  // 1) Obtener deal PY del line item original
+  let pyDealId;
+  try {
+    pyDealId = await getDealIdForLineItem(pyLineItemId);
+    if (!pyDealId) {
+      log.info('Line item PY sin deal asociado, nada que propagar');
+      return;
+    }
+  } catch (err) {
+    log.error({ err }, 'Error obteniendo deal PY para propagación mirror');
+    return;
+  }
+
+  // 2) Sincronizar/crear mirror completo — garantiza que el deal UY y sus LIs existan
+  let mirrorResult;
+  try {
+    mirrorResult = await mirrorDealToUruguay(pyDealId);
+  } catch (err) {
+    log.error({ err, pyDealId }, 'Error en mirrorDealToUruguay — abortando propagación');
+    return;
+  }
+
+  if (!mirrorResult?.mirrored) {
+    log.info({ reason: mirrorResult?.reason }, 'Deal PY no tiene mirror UY activo, nada que propagar');
+    return;
+  }
+
+  log.info({ mirrorDealId: mirrorResult.targetDealId }, 'Mirror UY sincronizado');
+
+  // 3) Encontrar el line item espejo UY (ya existe gracias al sync anterior)
   let mirrorLineItemId;
   try {
     const found = await findMirrorLineItem(pyLineItemId);
     if (!found) {
-      log.info('No se encontró mirror line item, nada que propagar');
+      log.warn(
+        { pyDealId, mirrorDealId: mirrorResult.targetDealId },
+        'Mirror sincronizado pero no se encontró LI espejo — LI puede no tener uy=true'
+      );
       return;
     }
     mirrorLineItemId = found.mirrorLineItemId;
   } catch (err) {
-    log.error({ err }, 'Error buscando mirror line item');
+    log.error({ err }, 'Error buscando mirror line item tras sync');
     return;
   }
 
   log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
 
+  // 4) Facturar el mirror — el guard interno sincroniza de nuevo antes de emitir
   try {
     await _executeUrgentBillingForLineItem(mirrorLineItemId);
     log.info({ mirrorLineItemId }, 'Mirror UY facturado correctamente');
