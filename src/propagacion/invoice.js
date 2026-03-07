@@ -122,6 +122,7 @@ let cancelledInvoices = [];
       filterGroups: liks.map(lik => ({
         filters: [
           { propertyName: 'line_item_key', operator: 'EQ', value: lik },
+          { propertyName: 'etapa_de_la_factura',  operator: 'EQ', value: CANCELLED_STAGE },
         ],
       })),
       properties: ['etapa_de_la_factura', 'line_item_key', 'of_invoice_key'],
