@@ -20,7 +20,7 @@ import logger from '../../../lib/logger.js';
  * @param {number} cuotasTotales  Total de pagos del plan
  * @returns {string}
  */
-function buildPagoDisplay(countInvoices, cuotasTotales) {
+export function buildPagoDisplay(countInvoices, cuotasTotales) {
   if (!cuotasTotales || cuotasTotales <= 0) return '';
 
   const emitidas = Math.min(countInvoices ?? 0, cuotasTotales);
