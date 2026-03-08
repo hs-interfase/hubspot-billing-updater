@@ -39,6 +39,45 @@ import logger from '../../../lib/logger.js';
 // ─── Constante configurable por env ──────────────────────────────────────────
 const DEFAULT_LOOKBACK_DAYS = Number(process.env.BILLING_RETRY_LOOKBACK_DAYS ?? 3);
 
+// ─── Retry con backoff exponencial para llamadas HubSpot ─────────────────────
+
+/**
+ * Ejecuta `fn` reintentando si HubSpot responde 429 (rate limit por segundo).
+ *
+ * @param {() => Promise<any>} fn        Función async a ejecutar
+ * @param {Object}             [opts]
+ * @param {number}             [opts.maxRetries=4]     Intentos máximos (1 original + 4 reintentos)
+ * @param {number}             [opts.baseDelayMs=1000] Delay base en ms (se duplica con cada intento)
+ * @param {string}             [opts.label='']         Etiqueta para el log
+ */
+async function withHubSpotRetry(fn, { maxRetries = 4, baseDelayMs = 1000, label = '' } = {}) {
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      const is429 = err?.code === 429 ||
+                    err?.response?.status === 429 ||
+                    String(err?.message).includes('429');
+
+      if (!is429 || attempt >= maxRetries) {
+        throw err;
+      }
+
+      attempt++;
+      const delayMs = baseDelayMs * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s
+
+      logger.warn(
+        { module: 'missedBillingGuard', label, attempt, maxRetries, delayMs },
+        `HubSpot 429 rate limit, reintentando en ${delayMs}ms (intento ${attempt}/${maxRetries})`
+      );
+
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 // ─── Helpers locales ─────────────────────────────────────────────────────────
 
 /**
@@ -78,7 +117,11 @@ async function findTicketByKey(ticketKey) {
     limit: 2,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await withHubSpotRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { label: `findTicketByKey:${ticketKey}` }
+  );
+
   return (resp?.results || [])[0] ?? null;
 }
 
@@ -86,9 +129,12 @@ async function findTicketByKey(ticketKey) {
  * Promueve un ticket a BILLING_AUTOMATED_READY.
  */
 async function promoteToReady(ticketId) {
-  await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-    properties: { hs_pipeline_stage: String(BILLING_AUTOMATED_READY) },
-  });
+  await withHubSpotRetry(
+    () => hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+      properties: { hs_pipeline_stage: String(BILLING_AUTOMATED_READY) },
+    }),
+    { label: `promoteToReady:${ticketId}` }
+  );
 }
 
 /**
@@ -107,8 +153,6 @@ async function writeBillingError(ticketId, newMessage, today, existingProps) {
   const existingError   = String(existingProps?.of_billing_error ?? '').trim();
   const existingErrorAt = String(existingProps?.of_billing_error_at ?? '').trim();
 
-  // Extraemos la fecha YMD del timestamp guardado (millis → slice no sirve; lo
-  // comparamos parseando solo los primeros 10 chars de una ISO string).
   let errorDate = '';
   if (existingErrorAt && /^\d+$/.test(existingErrorAt)) {
     errorDate = new Date(Number(existingErrorAt)).toISOString().slice(0, 10);
@@ -116,18 +160,22 @@ async function writeBillingError(ticketId, newMessage, today, existingProps) {
 
   const isSameDay = errorDate === today;
   const finalMessage = (isSameDay && existingError)
-    ? `${existingError}\n${newMessage}`.slice(0, 500)   // acumula, límite 500 chars
-    : newMessage.slice(0, 500);                          // sobreescribe
+    ? `${existingError}\n${newMessage}`.slice(0, 500)
+    : newMessage.slice(0, 500);
 
   const nowMillis = String(Date.now());
 
   try {
-    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-      properties: {
-        of_billing_error:    finalMessage,
-        of_billing_error_at: nowMillis,
-      },
-    });
+    await withHubSpotRetry(
+      () => hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+        properties: {
+          of_billing_error:    finalMessage,
+          of_billing_error_at: nowMillis,
+        },
+      }),
+      { label: `writeBillingError:${ticketId}` }
+    );
+
     logger.info(
       { module: 'missedBillingGuard', ticketId, isSameDay },
       `of_billing_error ${isSameDay ? 'acumulado' : 'sobreescrito'} en ticket`
@@ -192,7 +240,6 @@ export async function checkMissedBillingsForLineItem({
     }
 
     if (!ticket) {
-      // Modo A: Phase P no creó este ticket → no es problema del guard.
       logger.warn(
         { module: 'missedBillingGuard', dealId, lineItemId, ymd, ticketKey },
         'MISSED_BILLING_NO_TICKET: no existe ticket forecast para fecha pasada'
@@ -234,9 +281,9 @@ export async function checkMissedBillingsForLineItem({
       }
 
       // ── 3b. Obtener ticket completo y emitir factura ─────────────────────
-      const fullTicket = await hubspotClient.crm.tickets.basicApi.getById(
-        ticketId,
-        REQUIRED_TICKET_PROPS  // ← traer todo lo necesario de una sola vez
+      const fullTicket = await withHubSpotRetry(
+        () => hubspotClient.crm.tickets.basicApi.getById(ticketId, REQUIRED_TICKET_PROPS),
+        { label: `getById:${ticketId}` }
       );
       await createInvoiceFromTicket(fullTicket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
@@ -269,10 +316,8 @@ export async function checkMissedBillingsForLineItem({
         failMsg
       );
 
-      // Escribir error en ticket
       await writeBillingError(ticketId, failMsg, today, tp);
 
-      // Reportar en HubSpot como nota accionable
       reportHubSpotError({
         objectType: 'ticket',
         objectId:   ticketId,
