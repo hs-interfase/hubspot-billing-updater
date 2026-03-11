@@ -5,6 +5,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
 import pool from './Db.js'
+import { syncInvoiceToTicket } from './syncInvoiceToTicket.js'
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
@@ -137,18 +139,31 @@ router.patch('/:id', async (req, res) => {
   }
 
   try {
-    await hs().patch(`/crm/v3/objects/invoices/${id}`, {
+await hs().patch(`/crm/v3/objects/invoices/${id}`, {
       properties: filteredProperties,
     })
 
-    // Propagar etapa al ticket si cambió
-    if (filteredProperties.etapa_de_la_factura) {
+    // Leer ticket_id una sola vez si hay cualquier campo que propagar
+    const needsTicketId =
+      filteredProperties.etapa_de_la_factura ||
+      Object.keys(filteredProperties).some(k => k !== 'etapa_de_la_factura')
+
+    let ticketId = null
+    if (needsTicketId) {
       const { data: invoiceData } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
         params: { properties: 'ticket_id' },
       })
-      const ticketId = invoiceData.properties?.ticket_id
+      ticketId = invoiceData.properties?.ticket_id
+    }
+
+    // Propagar etapa (lógica especial existente, sin cambios)
+    if (filteredProperties.etapa_de_la_factura) {
       await syncTicketInvoiceStatus(ticketId, filteredProperties.etapa_de_la_factura, id)
     }
+
+    // Propagar el resto de los campos al ticket
+    await syncInvoiceToTicket(ticketId, filteredProperties, id, hs)
+
 
     writeAuditLog({
       timestamp: new Date().toISOString(),

@@ -75,7 +75,7 @@ export async function ensureForecastMetaOnLineItem(lineItem) {
   }
 
   // --- Facturas restantes (visible): solo para TERM
-  const facturasRestantes = (!autorenew && term && term > 0) ? String(term) : '';
+  const facturasRestantes = (!autorenew && term && term > 0) ? String(term) : '2099-12-12';
 
   // --- Vencimiento contrato: solo para TERM
   const vencimiento = (!autorenew && term && term > 0)
