@@ -139,16 +139,23 @@ router.patch('/:id', async (req, res) => {
     return res.status(400).json({ error: 'No hay campos válidos para actualizar.' })
   }
 
+// Si se setea id_factura_nodum y no viene etapa explícita → auto Emitida
+  if (
+    filteredProperties.id_factura_nodum &&
+    filteredProperties.id_factura_nodum !== null &&
+    !filteredProperties.etapa_de_la_factura
+  ) {
+    filteredProperties.etapa_de_la_factura = 'Emitida'
+  }
+
   try {
-await hs().patch(`/crm/v3/objects/invoices/${id}`, {
+    await hs().patch(`/crm/v3/objects/invoices/${id}`, {
       properties: filteredProperties,
     })
 
-    // Leer ticket_id una sola vez si hay cualquier campo que propagar
-const shouldPropagate =
+    const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
-      (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== '')
-
+      (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null)
     if (shouldPropagate) {
       try {
         await propagateInvoiceStateToTicket(id)
