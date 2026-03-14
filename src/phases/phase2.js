@@ -10,6 +10,8 @@ import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { withRetry } from '../utils/withRetry.js';
+
 
 /**
  * PHASE 2 (MANUAL):
@@ -70,7 +72,10 @@ async function findTicketByTicketKey(ticketKey) {
     limit: 2,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await withRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { module: 'phase2', fn: 'findTicketByTicketKey', ticketKey }
+  );
   return (resp?.results || [])[0] || null;
 }
 

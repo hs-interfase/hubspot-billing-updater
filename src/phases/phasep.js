@@ -9,6 +9,7 @@ import { updateTicket } from '../services/tickets/ticketService.js';
 import { buildTicketFullProps } from '../services/tickets/ticketService.js';
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
+import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import {
   TICKET_PIPELINE,
@@ -99,7 +100,10 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
     limit: 100,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await withRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId }
+  );
   const allTickets = resp?.results || [];
   const forecastTickets = allTickets.filter(isForecastTicket);
 
@@ -301,7 +305,10 @@ async function findTicketsByLineItemKey(lineItemKey) {
     limit: 100,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await withRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { module: 'phaseP', fn: 'findTicketsByLineItemKey', lineItemKey }
+  );
   return resp?.results || [];
 }
 
@@ -422,6 +429,7 @@ export async function runPhaseP({ deal, lineItems }) {
       );
 
       // 2) Traer existentes
+      
       const allTickets = await findTicketsByLineItemKey(lineItemKey);
       const forecastTickets = allTickets.filter(isForecastTicket);
 

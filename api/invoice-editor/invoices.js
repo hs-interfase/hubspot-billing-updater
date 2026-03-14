@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import axios from 'axios'
 import pool from './Db.js'
 import { syncInvoiceToTicket } from './syncInvoiceToTicket.js'
+import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -41,7 +42,7 @@ async function writeAuditLog(entry) {
 }
 
 // ── Helper: propagar etapa al ticket asociado ──
-async function syncTicketInvoiceStatus(ticketId, etapa, invoiceId) {
+/*async function syncTicketInvoiceStatus(ticketId, etapa, invoiceId) {
   console.log('[InvoiceEditor] syncTicketInvoiceStatus called', { invoiceId, ticketId, etapa })
 
   if (!ticketId) {
@@ -62,7 +63,7 @@ async function syncTicketInvoiceStatus(ticketId, etapa, invoiceId) {
     )
   }
 }
-
+*/
 // ─────────────────────────────────────────────
 // GET /invoice-editor/api/config
 // ─────────────────────────────────────────────
@@ -144,26 +145,17 @@ await hs().patch(`/crm/v3/objects/invoices/${id}`, {
     })
 
     // Leer ticket_id una sola vez si hay cualquier campo que propagar
-    const needsTicketId =
+const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
-      Object.keys(filteredProperties).some(k => k !== 'etapa_de_la_factura')
+      (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== '')
 
-    let ticketId = null
-    if (needsTicketId) {
-      const { data: invoiceData } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
-        params: { properties: 'ticket_id' },
-      })
-      ticketId = invoiceData.properties?.ticket_id
+    if (shouldPropagate) {
+      try {
+        await propagateInvoiceStateToTicket(id)
+      } catch (propagateErr) {
+        console.error('[InvoiceEditor][PATCH] Error en propagación invoice→ticket:', propagateErr?.message)
+      }
     }
-
-    // Propagar etapa (lógica especial existente, sin cambios)
-    if (filteredProperties.etapa_de_la_factura) {
-      await syncTicketInvoiceStatus(ticketId, filteredProperties.etapa_de_la_factura, id)
-    }
-
-    // Propagar el resto de los campos al ticket
-    await syncInvoiceToTicket(ticketId, filteredProperties, id, hs)
-
 
     writeAuditLog({
       timestamp: new Date().toISOString(),
@@ -224,8 +216,11 @@ router.post('/:id/cancelar', async (req, res) => {
     })
 
     // 3) Propagar al ticket
-    await syncTicketInvoiceStatus(ticketId, 'Cancelada', id)
-
+ try {
+        await propagateInvoiceStateToTicket(id)
+      } catch (propagateErr) {
+        console.error('[InvoiceEditor][CANCELAR] Error en propagación invoice→ticket:', propagateErr?.message)
+      }
     // 4) Audit log
     writeAuditLog({
       timestamp: new Date().toISOString(),

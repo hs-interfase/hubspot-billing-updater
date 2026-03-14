@@ -63,6 +63,31 @@ export const BILLING_AUTOMATED_FORECAST_95 =
 export const BILLING_AUTOMATED_CANCELLED =
   process.env.BILLING_AUTOMATED_CANCELLED || '1311404155';
 
+// ===============================                          ← AGREGAR DESDE AQUÍ
+// Stages post-emisión — MANUALES
+// ===============================
+export const BILLING_TICKET_STAGE_ID_CREATED =
+  process.env.BILLING_TICKET_STAGE_ID_CREATED || '';
+
+export const BILLING_TICKET_STAGE_ID_LATE =
+  process.env.BILLING_TICKET_STAGE_ID_LATE || '';
+
+export const BILLING_TICKET_STAGE_ID_PAID =
+  process.env.BILLING_TICKET_PIPELINE_ID_PAID || '';
+
+// ===============================
+// Stages post-emisión — AUTOMÁTICOS
+// ===============================
+export const BILLING_AUTOMATED_CREATED =
+  process.env.BILLING_AUTOMATED_CREATED || '';
+
+export const BILLING_AUTOMATED_LATE =
+  process.env.BILLING_AUTOMATED_LATE || '';
+
+export const BILLING_AUTOMATED_PAID =
+  process.env.BILLING_AUTOMATED_PAID || '';
+// ===============================                          ← HASTA AQUÍ
+
 export const FORECAST_AUTO_STAGES = new Set([
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,

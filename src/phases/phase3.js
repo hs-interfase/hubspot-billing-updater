@@ -12,6 +12,7 @@ import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invo
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
+import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import {
   BILLING_AUTOMATED_READY,
@@ -81,7 +82,10 @@ async function findTicketByTicketKey(ticketKey) {
     limit: 2,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await withRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { module: 'phase3', fn: 'findTicketByTicketKey', ticketKey }
+  );
   return (resp?.results || [])[0] || null;
 }
 
