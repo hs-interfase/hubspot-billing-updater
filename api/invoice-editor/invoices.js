@@ -5,7 +5,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
 import pool from './Db.js'
-import { syncInvoiceToTicket } from './syncInvoiceToTicket.js'
+import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 
 
@@ -152,7 +152,19 @@ router.patch('/:id', async (req, res) => {
     await hs().patch(`/crm/v3/objects/invoices/${id}`, {
       properties: filteredProperties,
     })
-
+    // Sync campos factura → ticket (si hay algo mapeable)
+    const hasMappableFields = Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0
+    if (hasMappableFields) {
+      try {
+        const { data: invoiceData } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
+          params: { properties: 'ticket_id' },
+        })
+        const ticketId = invoiceData.properties?.ticket_id
+        await syncInvoiceToTicket(ticketId, filteredProperties, id, hs)
+      } catch (syncErr) {
+        console.error('[InvoiceEditor][PATCH] Error en syncInvoiceToTicket:', syncErr?.message)
+      }
+    }
     const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
       (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null)
