@@ -8,7 +8,6 @@ import pool from './Db.js'
 import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
 
@@ -41,29 +40,6 @@ async function writeAuditLog(entry) {
   }
 }
 
-// ── Helper: propagar etapa al ticket asociado ──
-/*async function syncTicketInvoiceStatus(ticketId, etapa, invoiceId) {
-  console.log('[InvoiceEditor] syncTicketInvoiceStatus called', { invoiceId, ticketId, etapa })
-
-  if (!ticketId) {
-    console.warn('[InvoiceEditor] syncTicketInvoiceStatus: ticketId vacío, skip')
-    return
-  }
-
-  // ✅ propiedad correcta, sin borrar of_invoice_id/of_invoice_key
-  const props = { of_invoice_status: etapa }
-
-  try {
-    await hs().patch(`/crm/v3/objects/tickets/${ticketId}`, { properties: props })
-    console.info(`[InvoiceEditor] Ticket ${ticketId} actualizado → of_invoice_status=${etapa}`)
-  } catch (err) {
-    console.error(
-      `[InvoiceEditor] Error actualizando ticket ${ticketId} desde invoice ${invoiceId}:`,
-      err.response?.data || err.message
-    )
-  }
-}
-*/
 // ─────────────────────────────────────────────
 // GET /invoice-editor/api/config
 // ─────────────────────────────────────────────
@@ -82,14 +58,52 @@ router.get('/:id', async (req, res) => {
   }
 
   try {
+    // Incluir hs_due_date además de los campos del config
+    const propsToFetch = [...new Set([...ALL_FIELD_NAMES, 'hs_due_date'])].join(',')
+
     const { data } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
-      params: { properties: ALL_FIELD_NAMES.join(',') },
+      params: { properties: propsToFetch },
     })
+
+    const properties = { ...data.properties }
+    const ticketId = properties.ticket_id
+
+    // Fallback al ticket si campos clave están vacíos
+    const FALLBACK_FIELDS = ['pais_operativo', 'iva', 'exonera_irae', 'unidad_de_negocio', 'monto_a_facturar']
+    const needsFallback = ticketId && FALLBACK_FIELDS.some(f => !properties[f])
+
+    if (needsFallback) {
+      try {
+        const { data: ticketData } = await hs().get(`/crm/v3/objects/tickets/${ticketId}`, {
+          params: { properties: 'of_pais_operativo,of_iva,of_exonera_irae,unidad_de_negocio,total_real_a_facturar' },
+        })
+        const tp = ticketData.properties || {}
+
+        if (!properties.pais_operativo && tp.of_pais_operativo)
+          properties.pais_operativo = tp.of_pais_operativo
+
+        // iva y exonera_irae se guardan como "true"/"false" en HubSpot
+        if (!properties.iva && tp.of_iva != null)
+          properties.iva = (tp.of_iva === 'true' || tp.of_iva === true) ? 'true' : 'false'
+
+        if (!properties.exonera_irae && tp.of_exonera_irae != null)
+          properties.exonera_irae = (tp.of_exonera_irae === 'true' || tp.of_exonera_irae === true) ? 'true' : 'false'
+
+        if (!properties.unidad_de_negocio && tp.unidad_de_negocio)
+          properties.unidad_de_negocio = tp.unidad_de_negocio
+
+        if (!properties.monto_a_facturar && tp.total_real_a_facturar)
+          properties.monto_a_facturar = tp.total_real_a_facturar
+
+      } catch (fallbackErr) {
+        console.warn('[InvoiceEditor][GET] Error en fallback desde ticket:', fallbackErr.message)
+      }
+    }
 
     return res.json({
       id: data.id,
       updatedAt: data.updatedAt,
-      properties: data.properties,
+      properties,
     })
 
   } catch (err) {
@@ -139,7 +153,7 @@ router.patch('/:id', async (req, res) => {
     return res.status(400).json({ error: 'No hay campos válidos para actualizar.' })
   }
 
-// Si se setea id_factura_nodum y no viene etapa explícita → auto Emitida
+  // Si se setea id_factura_nodum y no viene etapa explícita → auto Emitida
   if (
     filteredProperties.id_factura_nodum &&
     filteredProperties.id_factura_nodum !== null &&
@@ -148,10 +162,33 @@ router.patch('/:id', async (req, res) => {
     filteredProperties.etapa_de_la_factura = 'Emitida'
   }
 
+  // Si se cancela y no viene fecha_de_cancelacion → inyectar fecha del día
+  if (
+    filteredProperties.etapa_de_la_factura === 'Cancelada' &&
+    !filteredProperties.fecha_de_cancelacion
+  ) {
+    try {
+      const { data: invoiceActual } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
+        params: { properties: 'fecha_de_cancelacion' },
+      })
+      if (!invoiceActual.properties?.fecha_de_cancelacion) {
+        const hoy = new Date()
+        hoy.setUTCHours(0, 0, 0, 0)
+        filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
+      }
+    } catch (err) {
+      console.warn('[InvoiceEditor][PATCH] No se pudo verificar fecha_de_cancelacion:', err.message)
+      const hoy = new Date()
+      hoy.setUTCHours(0, 0, 0, 0)
+      filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
+    }
+  }
+
   try {
     await hs().patch(`/crm/v3/objects/invoices/${id}`, {
       properties: filteredProperties,
     })
+
     // Sync campos factura → ticket (si hay algo mapeable)
     const hasMappableFields = Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0
     if (hasMappableFields) {
@@ -165,9 +202,11 @@ router.patch('/:id', async (req, res) => {
         console.error('[InvoiceEditor][PATCH] Error en syncInvoiceToTicket:', syncErr?.message)
       }
     }
+
     const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
       (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null)
+
     if (shouldPropagate) {
       try {
         await propagateInvoiceStateToTicket(id)
@@ -215,32 +254,33 @@ router.post('/:id/cancelar', async (req, res) => {
   }
 
   try {
-    // 1) Leer invoice para obtener ticket_id y etapa actual
     const { data: invoice } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
-      params: { properties: 'etapa_de_la_factura,ticket_id' },
+      params: { properties: 'etapa_de_la_factura,ticket_id,fecha_de_cancelacion' },
     })
 
-    const etapaActual = invoice.properties?.etapa_de_la_factura
-    const ticketId    = invoice.properties?.ticket_id
-
-    console.log('[InvoiceEditor][CANCELAR] invoice leída', { id, etapaActual, ticketId })
+    const etapaActual  = invoice.properties?.etapa_de_la_factura
+    const ticketId     = invoice.properties?.ticket_id
+    const fechaExiste  = invoice.properties?.fecha_de_cancelacion
 
     if (etapaActual === 'Cancelada') {
       return res.status(400).json({ error: 'La factura ya está cancelada.' })
     }
 
-    // 2) Actualizar invoice en HubSpot
-    await hs().patch(`/crm/v3/objects/invoices/${id}`, {
-      properties: { etapa_de_la_factura: 'Cancelada' },
-    })
+    const propsToUpdate = { etapa_de_la_factura: 'Cancelada' }
+    if (!fechaExiste) {
+      const hoy = new Date()
+      hoy.setUTCHours(0, 0, 0, 0)
+      propsToUpdate.fecha_de_cancelacion = String(hoy.getTime())
+    }
 
-    // 3) Propagar al ticket
- try {
-        await propagateInvoiceStateToTicket(id)
-      } catch (propagateErr) {
-        console.error('[InvoiceEditor][CANCELAR] Error en propagación invoice→ticket:', propagateErr?.message)
-      }
-    // 4) Audit log
+    await hs().patch(`/crm/v3/objects/invoices/${id}`, { properties: propsToUpdate })
+
+    try {
+      await propagateInvoiceStateToTicket(id)
+    } catch (propagateErr) {
+      console.error('[InvoiceEditor][CANCELAR] Error en propagación invoice→ticket:', propagateErr?.message)
+    }
+
     writeAuditLog({
       timestamp: new Date().toISOString(),
       invoiceId: id,

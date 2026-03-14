@@ -350,7 +350,7 @@ let pendingChanges = {};
 const FORM_SECTIONS = [
   {
     title: 'Identificación de la factura',
-    fields: ['id_factura_nodum', 'fecha_de_emision', 'fecha_de_vencimiento'],
+    fields: ['id_factura_nodum', 'etapa_de_la_factura', 'fecha_de_emision', 'hs_due_date'],
   },
   {
     title: 'Datos de emisión',
@@ -649,8 +649,13 @@ async function confirmSave() {
   for (const [key, change] of Object.entries(pendingChanges)) {
     const field = FIELDS_CONFIG.find(f => f.internalName === key);
     let val = change.after;
-    if (field?.type === 'date' && val) val = String(new Date(val).getTime());
-    properties[key] = val;
+    if (field?.type === 'date' && val) {
+      if (key === 'hs_due_date') {
+        val = String(new Date(`${val}T23:59:00-03:00`).getTime());
+      } else {
+        val = String(new Date(val).getTime());
+      }
+    }    properties[key] = val;
     changes[key] = { before: change.before, after: change.after, label: change.label };
   }
 

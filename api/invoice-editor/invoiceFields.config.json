@@ -29,11 +29,19 @@
     "type": "date",
     "required": false,
     "readOnly": false,
-    "helpText": ""
+    "helpText": "Si se cancela sin fecha, se registra la fecha del día automáticamente"
   },
   {
     "internalName": "fecha_de_emision",
     "label": "Fecha de Emisión",
+    "type": "date",
+    "required": false,
+    "readOnly": false,
+    "helpText": ""
+  },
+  {
+    "internalName": "hs_due_date",
+    "label": "Fecha de Vencimiento",
     "type": "date",
     "required": false,
     "readOnly": false,
@@ -60,7 +68,7 @@
     "label": "Mensaje del Vendedor",
     "type": "textarea",
     "required": false,
-    "readOnly": false,
+    "readOnly": true,
     "helpText": ""
   },
   {
@@ -82,10 +90,18 @@
   {
     "internalName": "servicio",
     "label": "Servicio",
-    "type": "text",
+    "type": "select",
     "required": false,
     "readOnly": false,
-    "helpText": ""
+    "helpText": "",
+    "options": [
+      { "label": "Outsourcing",           "value": "Outsourcing" },
+      { "label": "Hardware y Software",   "value": "Hardware y Software" },
+      { "label": "Desarrollo y Proyecto", "value": "Desarrollo y Proyecto" },
+      { "label": "Licencias",             "value": "Licencias" },
+      { "label": "Soporte",               "value": "Soporte" },
+      { "label": "Otros",                 "value": "Otros" }
+    ]
   },
   {
     "internalName": "unidad_de_negocio",
@@ -115,8 +131,8 @@
     "readOnly": false,
     "helpText": "¿Aplica IVA?",
     "options": [
-      { "label": "Sí", "value": "si" },
-      { "label": "No", "value": "no" }
+      { "label": "Sí", "value": "true" },
+      { "label": "No", "value": "false" }
     ]
   },
   {
@@ -127,8 +143,8 @@
     "readOnly": false,
     "helpText": "¿El cliente está exonerado de IRAE?",
     "options": [
-      { "label": "Sí", "value": "si" },
-      { "label": "No", "value": "no" }
+      { "label": "Sí", "value": "true" },
+      { "label": "No", "value": "false" }
     ]
   },
   {
@@ -139,8 +155,8 @@
     "readOnly": false,
     "helpText": "¿Es una reventa?",
     "options": [
-      { "label": "Sí", "value": "si" },
-      { "label": "No", "value": "no" }
+      { "label": "Sí", "value": "true" },
+      { "label": "No", "value": "false" }
     ]
   },
   {
