@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getEffectiveBillingConfig } from '../../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../../utils/dateUtils.js';  
 import { hubspotClient } from '../../hubspotClient.js';
+
 function stableStringify(obj) {
   return JSON.stringify(obj, Object.keys(obj).sort());
 }
@@ -28,7 +29,6 @@ function computeContractEndYmd({ startYmd, interval, term }) {
   return formatDateISO(d);
 }
 
-// Ajustá estos nombres según tu config real
 function getTermAndAutorenew(lineItem, config) {
   const p = lineItem.properties || {};
 
@@ -39,7 +39,7 @@ function getTermAndAutorenew(lineItem, config) {
   const termRaw =
     config?.term ??
     p.hs_recurring_billing_number_of_payments ??
-    p.term; // por si lo tenés
+    p.term;
 
   const term = termRaw ? Number(termRaw) : null;
   return { autorenew, term: Number.isFinite(term) ? term : null };
@@ -53,7 +53,7 @@ export async function ensureForecastMetaOnLineItem(lineItem) {
     (p.hs_recurring_billing_start_date || '').toString().slice(0, 10) ||
     (p.recurringbillingstartdate || '').toString().slice(0, 10) ||
     (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
-    ''; // si ya lo normalizaste
+    '';
 
   const interval = config?.interval ?? null;
 
@@ -67,20 +67,19 @@ export async function ensureForecastMetaOnLineItem(lineItem) {
       interval: interval ? String(interval) : 'ONE_TIME',
       autorenew: !!autorenew,
       term: term ?? null,
-      // opcional: monto/moneda si impactan forecast
       currency: p.currency || p.hs_currency || null,
       amount: p.amount || p.hs_recurring_billing_amount || null,
     };
     signature = hashSignature(payload);
   }
 
-  // --- Facturas restantes (visible): solo para TERM
-  const facturasRestantes = (!autorenew && term && term > 0) ? String(term) : '2099-12-12';
+  // --- Facturas restantes: solo para plan fijo con term
+  const facturasRestantes = (!autorenew && term && term > 0) ? String(term) : '';
 
-  // --- Vencimiento contrato: solo para TERM
+  // --- Vencimiento contrato: fecha fija para auto-renew, calculada para plan fijo
   const vencimiento = (!autorenew && term && term > 0)
     ? computeContractEndYmd({ startYmd: startRaw, interval, term })
-    : '';
+    : '2099-12-12';
 
   const updates = {};
   if ((p.forecast_signature || '') !== signature) updates.forecast_signature = signature;
