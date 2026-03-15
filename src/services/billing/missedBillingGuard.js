@@ -240,7 +240,7 @@ export async function checkMissedBillingsForLineItem({
     }
 
     if (!ticket) {
-      logger.warn(
+      logger.debug(
         { module: 'missedBillingGuard', dealId, lineItemId, ymd, ticketKey },
         'MISSED_BILLING_NO_TICKET: no existe ticket forecast para fecha pasada'
       );
