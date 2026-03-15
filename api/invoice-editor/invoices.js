@@ -75,26 +75,36 @@ router.get('/:id', async (req, res) => {
     if (needsFallback) {
       try {
         const { data: ticketData } = await hs().get(`/crm/v3/objects/tickets/${ticketId}`, {
-          params: { properties: 'of_pais_operativo,of_iva,of_exonera_irae,unidad_de_negocio,total_real_a_facturar' },
+          params: { properties: 'of_pais_operativo,of_iva,of_exonera_irae,total_real_a_facturar,of_line_item_ids' },
         })
         const tp = ticketData.properties || {}
-
+      
         if (!properties.pais_operativo && tp.of_pais_operativo)
           properties.pais_operativo = tp.of_pais_operativo
-
-        // iva y exonera_irae se guardan como "true"/"false" en HubSpot
+      
         if (!properties.iva && tp.of_iva != null)
           properties.iva = (tp.of_iva === 'true' || tp.of_iva === true) ? 'true' : 'false'
-
+      
         if (!properties.exonera_irae && tp.of_exonera_irae != null)
-          properties.exonera_irae = (tp.of_exonera_irae === 'true' || tp.of_exonera_irae === true) ? 'true' : 'false'
-
-        if (!properties.unidad_de_negocio && tp.unidad_de_negocio)
-          properties.unidad_de_negocio = tp.unidad_de_negocio
-
+          properties.exonera_irae = (tp.of_exonera_irae === 'true' || tp.of_exonera_irae === true) ? 'Si' : 'No'
+      
         if (!properties.monto_a_facturar && tp.total_real_a_facturar)
           properties.monto_a_facturar = tp.total_real_a_facturar
-
+      
+        // unidad_de_negocio viene del line item, no del ticket
+        if (!properties.unidad_de_negocio && tp.of_line_item_ids) {
+          const lineItemId = tp.of_line_item_ids.split(',')[0].trim()
+          try {
+            const { data: liData } = await hs().get(`/crm/v3/objects/line_items/${lineItemId}`, {
+              params: { properties: 'unidad_de_negocio' },
+            })
+            if (liData.properties?.unidad_de_negocio)
+              properties.unidad_de_negocio = liData.properties.unidad_de_negocio
+          } catch (liErr) {
+            console.warn('[InvoiceEditor][GET] Error leyendo line item para unidad_de_negocio:', liErr.message)
+          }
+        }
+      
       } catch (fallbackErr) {
         console.warn('[InvoiceEditor][GET] Error en fallback desde ticket:', fallbackErr.message)
       }

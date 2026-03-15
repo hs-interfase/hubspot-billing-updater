@@ -357,9 +357,9 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_line_item_key: lineItemKey,
           of_ticket_key: expectedKey,
           observaciones_ventas: lineItem?.properties?.mensaje_para_responsable || '',
+          unidad_de_negocio: lineItem?.properties?.unidad_de_negocio || '',
           ...snapshots,
         };
-
         if (vendedorId) ticketProps.of_propietario_secundario = vendedorId;
 
         return { properties: ticketProps };

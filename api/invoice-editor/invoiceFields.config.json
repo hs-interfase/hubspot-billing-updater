@@ -143,8 +143,8 @@
     "readOnly": false,
     "helpText": "¿El cliente está exonerado de IRAE?",
     "options": [
-      { "label": "Sí", "value": "true" },
-      { "label": "No", "value": "false" }
+      { "label": "Sí", "value": "Si" },
+      { "label": "No", "value": "No" }
     ]
   },
   {
