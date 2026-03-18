@@ -515,15 +515,39 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
 export async function processUrgentLineItem(lineItemId) {
   const lineItem = await hubspotClient.crm.lineItems.basicApi.getById(
     String(lineItemId),
-    ['facturar_ahora', 'name']
+    ['facturar_ahora', 'name', 'facturacion_automatica'] // ← agregado
   );
 
-  if (!parseBool(lineItem?.properties?.facturar_ahora)) {
+  const props = lineItem?.properties || {};
+
+  if (!parseBool(props.facturar_ahora)) {
     logger.info(
       { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
       'facturar_ahora no está en true, ignorando'
     );
     return { skipped: true, reason: 'facturar_ahora_false' };
+  }
+
+  // Guard: facturar ahora no aplica a line items con facturación automática
+  if (parseBool(props.facturacion_automatica)) {
+    const msg =
+      'Facturar ahora no está disponible para líneas con facturación automática. ' +
+      'Este ítem es procesado automáticamente por el motor de facturación.';
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err: updateErr },
+        'Error escribiendo bloqueo automated en line item'
+      );
+    }
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+      'Bloqueado: facturar_ahora en line item con facturacion_automatica=true'
+    );
+    return { skipped: true, reason: 'automated_billing_no_urgent' };
   }
 
   // Facturar PY — un error aquí sí bloquea (es lo principal)
