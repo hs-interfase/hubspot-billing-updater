@@ -21,7 +21,7 @@ export function isRetryable(status) {
 
 /** Extrae el status HTTP de cualquier forma que lo arroje el SDK o axios */
 export function extractStatus(err) {
-  return err?.response?.status ?? err?.statusCode ?? err?.status ?? null;
+  return err?.response?.status ?? err?.statusCode ?? err?.status ?? err?.code ?? null;
 }
 
 /**
