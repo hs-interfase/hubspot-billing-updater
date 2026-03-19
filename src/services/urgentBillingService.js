@@ -672,6 +672,63 @@ export async function processUrgentTicket(ticketId) {
 
     shouldResetFlag = true;
 
+    // Guard: facturacion_activa del deal debe estar en true
+const dealId = (ticketProps.of_deal_id || '').trim();
+if (dealId) {
+  let dealProps = {};
+  try {
+    const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname']);
+    dealProps = deal.properties || {};
+  } catch (err) {
+    logger.error(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealId, err },
+      'Error obteniendo deal para verificar facturacion_activa'
+    );
+  }
+
+  if (!parseBool(dealProps.facturacion_activa)) {
+    const dealName = (dealProps.dealname || dealId).slice(0, 100);
+    const fechaEsperada = (ticketProps.fecha_resolucion_esperada || 'sin fecha').slice(0, 20);
+    const msg = `No se facturó porque facturación activa no está en true. Negocio: ${dealName}. Fecha esperada: ${fechaEsperada}.`;
+    try {
+      await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err: updateErr },
+        'Error escribiendo bloqueo facturacion_activa en ticket'
+      );
+    }
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealId },
+      'Bloqueado: facturacion_activa del deal no está en true'
+    );
+    return { skipped: true, reason: 'facturacion_activa_false' };
+  }
+}
+/*
+// Guard: solo tickets en etapa forecast son promovibles con facturar_ahora
+const currentStage = (ticketProps.hs_pipeline_stage || '').trim();
+if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
+  const msg = `Facturar ahora solo está disponible para tickets en etapa forecast. Etapa actual: ${currentStage}.`;
+  try {
+    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+      properties: { facturar_ahora: 'false', of_billing_error: msg },
+    });
+  } catch (updateErr) {
+    logger.error(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err: updateErr },
+      'Error escribiendo bloqueo de stage en ticket'
+    );
+  }
+  logger.info(
+    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, currentStage },
+    'Bloqueado: ticket no está en etapa forecast'
+  );
+  return { skipped: true, reason: 'invalid_stage_for_urgent' };
+}
+*/
     if (ticketProps.of_invoice_id && ticketProps.of_invoice_status !== 'Cancelada') {
       logger.info(
         { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: ticketProps.of_invoice_id },

@@ -37,7 +37,7 @@ export const REQUIRED_TICKET_PROPS = [
   'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
   'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
   'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
-  'facturar_ahora', 'repetitivo', 'nombre_empresa',
+  'facturar_ahora', 'repetitivo', 'nombre_empresa', 'hs_pipeline_stage',
 ];
 
 /**
