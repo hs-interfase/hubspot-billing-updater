@@ -135,3 +135,6 @@ export const DEFAULT_CURRENCY = 'USD';
 export const isDryRun = () => {
   return (process.env.DRY_RUN || '').toString().toLowerCase() === 'true';
 };
+
+// Lookback para el cron (días hacia atrás en hs_lastmodifieddate)
+export const CRON_LOOKBACK_DAYS = parseInt(process.env.CRON_LOOKBACK_DAYS || '3', 10);

@@ -7,7 +7,10 @@ import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
-
+import {
+  CRON_LOOKBACK_DAYS,
+  FORECAST_MANUAL_STAGES,
+} from '../config/constants.js';
 
 // -------------------- Paths / Config --------------------
 const STATE_PATH =
@@ -30,8 +33,6 @@ const MAX_RUN_MS = Number(process.env.CRON_MAX_RUN_MS || 6 * 60 * 60 * 1000);
 const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
 const LOCK_TTL_MS = Number(process.env.CRON_LOCK_TTL_MS || 60 * 60 * 1000);
-
-const LOOKBACK_DAYS = Number(process.env.CRON_WEEKDAYS_LOOKBACK_DAYS || 7);
 
 // Your deal properties (adjust if your portal uses different names)
 const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
@@ -204,6 +205,25 @@ async function searchDeals({ after, limit, filters, properties, sorts }) {
   );
 }
 
+async function searchOverdueForecasts({ after, limit }) {
+  const todayMs = String(Date.now());
+  const stages = [...FORECAST_MANUAL_STAGES];
+  return await withRetry(() =>
+    hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: stages.map(stageId => ({
+        filters: [
+          { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stageId },
+          { propertyName: 'fecha_resolucion_esperada', operator: 'LTE', value: todayMs },
+        ],
+      })),
+      properties: ['hs_pipeline_stage', 'of_deal_id', 'fecha_resolucion_esperada', 'of_ticket_key'],
+      sorts: [{ propertyName: 'fecha_resolucion_esperada', direction: 'ASCENDING' }],
+      limit,
+      after: after || undefined,
+    })
+  );
+}
+
 function baseFiltersCancelled() {
   if (!CANCELLED_STAGE_ID) return [];
   return [{ propertyName: "dealstage", operator: "NEQ", value: String(CANCELLED_STAGE_ID) }];
@@ -283,8 +303,8 @@ if (!acquireLock()) {
   let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
   // State includes cursors per mode AND per weekday-filter-set
-  const state = readJson(STATE_PATH, {
-    weekday: { after_s1: null, after_s2: null, after_s3: null },
+  const state = readJson(STATE_PATH, {weekday: { after_s1: null, after_s2: null, after_s3: null, after_s4: null },
+    
     weekend: { after_full: null },
     lastRun: {},
   });
@@ -297,7 +317,7 @@ if (!acquireLock()) {
     todayPlus30,
     maxRunMs: MAX_RUN_MS,
     pageLimit: PAGE_LIMIT,
-    lookbackDays: LOOKBACK_DAYS,
+    lookbackDays: CRON_LOOKBACK_DAYS,
     onlyDealId: onlyDealId || null,
     dry,
   });
@@ -424,7 +444,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
             searchDeals({
               after: state.weekday.after_s3,
               limit: PAGE_LIMIT,
-              filters: weekdayFilters_set3_modifiedLookback(LOOKBACK_DAYS),
+              filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS),
               properties: props,
               sorts: SORTS,
             }),
@@ -447,7 +467,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
             r3 = await searchDeals({
               after: state.weekday.after_s3,
               limit: PAGE_LIMIT,
-              filters: weekdayFilters_set3_modifiedLookback(LOOKBACK_DAYS),
+              filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS),
               properties: props,
               sorts: SORTS,
             });
@@ -470,10 +490,33 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
         const a3 = r3?.results || [];
         const merged = [...a1, ...a2, ...a3];
 
+                // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
+       try {
+         const r4 = await searchOverdueForecasts({ after: state.weekday.after_s4, limit: PAGE_LIMIT });
+         for (const t of r4?.results || []) {
+           const dealId = String(t?.properties?.of_deal_id || '').trim();
+           if (!dealId || seen.has(dealId)) continue;
+           seen.add(dealId);
+           yield { id: dealId, summary: null };
+         }
+         state.weekday.after_s4 = r4?.paging?.next?.after || null;
+         writeJson(STATE_PATH, state);
+       } catch (e4) {
+         appendAudit({
+           at: new Date().toISOString(),
+           type: 'error',
+           where: 'candidateDealsGenerator.s4_overdue_forecasts',
+           msg: e4?.message || String(e4),
+           status: e4?.code || e4?.statusCode || e4?.response?.status || null,
+         });
+         // No rompe el generator
+       } 
+
         if (merged.length === 0) {
           state.weekday.after_s1 = null;
           state.weekday.after_s2 = null;
           state.weekday.after_s3 = null;
+          state.weekday.after_s4 = null;
           writeJson(STATE_PATH, state);
           break;
         }
@@ -496,8 +539,9 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
         state.weekday.after_s2 = r2?.paging?.next?.after || null;
         state.weekday.after_s3 = r3?.paging?.next?.after || null;
         writeJson(STATE_PATH, state);
+        
 
-        if (!state.weekday.after_s1 && !state.weekday.after_s2 && !state.weekday.after_s3) {
+        if (!state.weekday.after_s1 && !state.weekday.after_s2 && !state.weekday.after_s3 && !state.weekday.after_s4) {
           break;
         }
       }

@@ -348,8 +348,8 @@ try {
         continue;
       }
 
-      // 2) Facturación programada: solo si planYMD === HOY
-      if (billingPeriodDate !== today) {
+      // 2) Facturación programada: solo si planYMD <= HOY
+      if (billingPeriodDate > today) {
         continue;
       }
 
