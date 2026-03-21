@@ -177,6 +177,7 @@ async function countInvoicesByLIK({ hubspotClient, lik, dealId }) {
     throw new Error('countInvoicesByLIK requiere dealId');
   }
 
+  
   let after = undefined;
   let invoiceIds = [];
   let page = 0;
