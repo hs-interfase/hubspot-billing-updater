@@ -180,7 +180,7 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   return `Próxima facturación ${fmtYMD(nextDate)} · ${dealName} · ${count} line items`;
 }
 
-async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true } = {}) {
+async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true, dealProps = {} } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
   const debug = process.env.DBG_PHASE1 === 'true';
@@ -449,7 +449,7 @@ export async function runPhase1(dealId) {
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
-  await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true });
+await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, dealProps });
 
   // 2.1) Procesar espejo UY (si existe)
   if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
@@ -471,7 +471,7 @@ export async function runPhase1(dealId) {
       }
 
 // CORRECTO
-await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, today, { alsoInitCupo: true });
+await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, today, { alsoInitCupo: true, dealProps: mirrorDeal.properties || {} });
       try {
         await updateDealCupo(mirrorDeal, mirrorLineItems);
       } catch (err) {
