@@ -307,7 +307,11 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
 
         logger.debug({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id }, '[phase1] fechas_completas=true -> skip schedule');
       } else {
-        await updateLineItemSchedule(li);
+        await updateLineItemSchedule(li, {
+          dealId,
+          dealName: dealProps.dealname,
+          ownerId:  dealProps.hubspot_owner_id || null,
+        });
       }
 
       await ensureForecastMetaOnLineItem(li);

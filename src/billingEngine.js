@@ -264,7 +264,7 @@ export function getEffectiveBillingConfig(lineItem) {
 
 // Actualiza el calendario y contadores de un line item en HubSpot.
 // MIGRACIÓN: Anchor-based. Calendario queda LEGACY comentado (no se usa / no se escribe).
-export async function updateLineItemSchedule(lineItem) {
+export async function updateLineItemSchedule(lineItem, dealContext = {}) {
   if (!lineItem || !lineItem.id) {
     logger.warn({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItem }, 'lineItem inválido recibido');
     return lineItem;
@@ -356,9 +356,21 @@ export async function updateLineItemSchedule(lineItem) {
       lineItem.properties = { ...p, ...updatesIrregular };
       return lineItem;
     }
+const { dealId, dealName, ownerId } = dealContext;
+const contextParts = [
+  dealName  ? `Negocio: ${dealName}`    : null,
+  dealId    ? `Deal ID: ${dealId}`      : null,
+  ownerId   ? `Owner ID: ${ownerId}`    : null,
+].filter(Boolean).join(' | ');
 
-    const msg =
-      'irregular=true pero falta fecha_irregular_puntual. Completar la fecha puntual o desactivar irregular.';
+const lineItemName = p.name || `Line Item ${lineItem.id}`;
+const frequency    = config?.frequency || 'sin frecuencia';
+
+const msg = [
+  contextParts,
+  `Falta fecha de inicio en "${lineItemName}" (${frequency}).`,
+  'Setear hs_recurring_billing_start_date (Start date) para calcular próximas fechas.',
+].filter(Boolean).join(' — ');
 
     logger.warn({
       module: 'billingEngine',

@@ -372,7 +372,6 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
     periodo_a_facturar: tp.fecha_resolucion_esperada,
-    mensual: frecuenciaDerivada,                            // 'Frecuente' | 'Único' | null
     hs_comments: tp.content,                                // era: tp.comments
     motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
     id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
