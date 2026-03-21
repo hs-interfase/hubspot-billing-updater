@@ -258,10 +258,6 @@ export async function runPhase2({ deal, lineItems }) {
         continue;
       }
 
-      if (daysUntilBilling < 0) {
-        continue;
-      }
-
       if (daysUntilBilling > MANUAL_TICKET_LOOKAHEAD_DAYS) {
         continue;
       }
