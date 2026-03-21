@@ -1,4 +1,23 @@
+// src/normalizeBillingStartDelay.js
 import { hubspotClient } from "./hubspotClient.js";
+import logger from "../lib/logger.js";
+import { reportHubSpotError } from "./utils/hubspotErrorCollector.js";
+
+/**
+ * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) {
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
 
 /**
  * Normaliza los campos hs_billing_start_delay_days y hs_billing_start_delay_months
@@ -10,29 +29,31 @@ import { hubspotClient } from "./hubspotClient.js";
  * @returns {Promise<{changed: boolean, updatedStartDate?: string}>}
  */
 export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
-  console.log(`\n[normalizeBillingStartDelay] 🔍 Procesando line item ${lineItem.id}...`);
-  
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, `[normalizeBillingStartDelay] 🔍 Procesando line item ${lineItem.id}...`);
+
   const p = lineItem?.properties || {};
   const existingStart = (p.hs_recurring_billing_start_date ?? "").toString().trim();
   const delayDays = parseInt((p.hs_billing_start_delay_days ?? "").toString(), 10) || 0;
   const delayMonths = parseInt((p.hs_billing_start_delay_months ?? "").toString(), 10) || 0;
 
-  console.log(`[normalizeBillingStartDelay] 📊 Estado actual:`, {
+  logger.info({
+    module: 'normalizeBillingStartDelay',
+    fn: 'normalizeBillingStartDelayForLineItem',
     lineItemId: lineItem.id,
     existingStart,
     delayDays,
     delayMonths,
     rawDelayDays: p.hs_billing_start_delay_days,
-    rawDelayMonths: p.hs_billing_start_delay_months
-  });
+    rawDelayMonths: p.hs_billing_start_delay_months,
+  }, '[normalizeBillingStartDelay] 📊 Estado actual');
 
   // Si ya tiene fecha de inicio o no hay retrasos, salir sin cambios.
   if (existingStart || (!delayDays && !delayMonths)) {
-    console.log(`[normalizeBillingStartDelay] ⏭️  Saltando: ${existingStart ? 'ya tiene fecha' : 'no hay delays'}`);
+    logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, reason: existingStart ? 'ya tiene fecha' : 'no hay delays' }, `[normalizeBillingStartDelay] ⏭️  Saltando`);
     return { changed: false };
   }
 
-  console.log(`[normalizeBillingStartDelay] ✅ Necesita normalización`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, '[normalizeBillingStartDelay] ✅ Necesita normalización');
 
   // Obtener fecha base: createdate del line item, hs_createdate o closedate del deal;
   // si ninguna es válida, usar hoy.
@@ -41,12 +62,15 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
     p.hs_createdate,
     deal?.properties?.closedate,
   ];
-  
-  console.log(`[normalizeBillingStartDelay] 📅 Buscando fecha base...`, {
+
+  logger.info({
+    module: 'normalizeBillingStartDelay',
+    fn: 'normalizeBillingStartDelayForLineItem',
+    lineItemId: lineItem.id,
     createdate: p.createdate,
     hs_createdate: p.hs_createdate,
-    closedate: deal?.properties?.closedate
-  });
+    closedate: deal?.properties?.closedate,
+  }, '[normalizeBillingStartDelay] 📅 Buscando fecha base...');
 
   let baseDate = null;
   for (const raw of candidates) {
@@ -55,23 +79,23 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
     if (!Number.isNaN(d.getTime())) {
       d.setHours(0, 0, 0, 0);
       baseDate = d;
-      console.log(`[normalizeBillingStartDelay] ✅ Fecha base encontrada:`, baseDate.toISOString());
+      logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, baseDate: baseDate.toISOString() }, '[normalizeBillingStartDelay] ✅ Fecha base encontrada');
       break;
     }
   }
   if (!baseDate) {
     baseDate = new Date();
     baseDate.setHours(0, 0, 0, 0);
-    console.log(`[normalizeBillingStartDelay] ⚠️  Sin fecha válida, usando hoy:`, baseDate.toISOString());
+    logger.warn({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, baseDate: baseDate.toISOString() }, '[normalizeBillingStartDelay] ⚠️  Sin fecha válida, usando hoy');
   }
 
   // Calcular nueva fecha
   let newDate = new Date(baseDate.getTime());
   if (delayDays > 0) {
-    console.log(`[normalizeBillingStartDelay] ➕ Añadiendo ${delayDays} días a ${baseDate.toISOString().slice(0,10)}`);
+    logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, delayDays, base: baseDate.toISOString().slice(0, 10) }, `[normalizeBillingStartDelay] ➕ Añadiendo ${delayDays} días`);
     newDate.setDate(newDate.getDate() + delayDays);
   } else if (delayMonths > 0) {
-    console.log(`[normalizeBillingStartDelay] ➕ Añadiendo ${delayMonths} meses a ${baseDate.toISOString().slice(0,10)}`);
+    logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, delayMonths, base: baseDate.toISOString().slice(0, 10) }, `[normalizeBillingStartDelay] ➕ Añadiendo ${delayMonths} meses`);
     const day = newDate.getDate();
     newDate.setMonth(newDate.getMonth() + delayMonths);
     // Ajuste para fin de mes
@@ -81,10 +105,10 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
   }
 
   const iso = newDate.toISOString().slice(0, 10);
-  console.log(`[normalizeBillingStartDelay] 📆 Nueva fecha calculada: ${iso}`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, iso }, `[normalizeBillingStartDelay] 📆 Nueva fecha calculada: ${iso}`);
 
   // HubSpot requiere limpiar delays ANTES de setear fecha
-  console.log(`[normalizeBillingStartDelay] 🧹 PASO 1: Limpiando delays...`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, '[normalizeBillingStartDelay] 🧹 PASO 1: Limpiando delays...');
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
       properties: {
@@ -92,26 +116,38 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
         hs_billing_start_delay_months: "",
       },
     });
-    console.log(`[normalizeBillingStartDelay] ✅ PASO 1 completado: Delays limpiados`);
+    logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, '[normalizeBillingStartDelay] ✅ PASO 1 completado: Delays limpiados');
   } catch (err) {
-    console.error(`[normalizeBillingStartDelay] ❌ ERROR en PASO 1:`, err.message);
+    logger.error({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, err }, '[normalizeBillingStartDelay] ❌ ERROR en PASO 1');
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: lineItem.id,
+      message: `line_item_update_failed (PASO 1 limpiar delays): ${err?.message || err}`,
+      err,
+    });
     throw err;
   }
 
   // Esperar un poco para que HubSpot procese
-  console.log(`[normalizeBillingStartDelay] ⏳ Esperando 1.5 segundos para que HubSpot procese...`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, '[normalizeBillingStartDelay] ⏳ Esperando 1.5 segundos para que HubSpot procese...');
   await new Promise(resolve => setTimeout(resolve, 1500));
 
-  console.log(`[normalizeBillingStartDelay] 📝 PASO 2: Seteando fecha de inicio a ${iso}...`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, iso }, `[normalizeBillingStartDelay] 📝 PASO 2: Seteando fecha de inicio a ${iso}...`);
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
       properties: {
         hs_recurring_billing_start_date: iso,
       },
     });
-    console.log(`[normalizeBillingStartDelay] ✅ PASO 2 completado: Fecha seteada`);
+    logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id }, '[normalizeBillingStartDelay] ✅ PASO 2 completado: Fecha seteada');
   } catch (err) {
-    console.error(`[normalizeBillingStartDelay] ❌ ERROR en PASO 2:`, err.message);
+    logger.error({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, err }, '[normalizeBillingStartDelay] ❌ ERROR en PASO 2');
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: lineItem.id,
+      message: `line_item_update_failed (PASO 2 setear fecha inicio): ${err?.message || err}`,
+      err,
+    });
     throw err;
   }
 
@@ -123,7 +159,7 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
     hs_billing_start_delay_months: "",
   };
 
-  console.log(`[normalizeBillingStartDelay] 🎉 Line item ${lineItem.id} normalizado exitosamente a ${iso}\n`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelayForLineItem', lineItemId: lineItem.id, iso }, `[normalizeBillingStartDelay] 🎉 Line item ${lineItem.id} normalizado exitosamente a ${iso}`);
   return { changed: true, updatedStartDate: iso };
 }
 
@@ -135,16 +171,17 @@ export async function normalizeBillingStartDelayForLineItem(lineItem, deal) {
  * @param {Object} deal
  */
 export async function normalizeBillingStartDelay(lineItems, deal) {
-  console.log(`\n[normalizeBillingStartDelay] 🚀 Iniciando normalización de ${lineItems?.length || 0} line items...`);
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelay', count: lineItems?.length || 0 }, `[normalizeBillingStartDelay] 🚀 Iniciando normalización de ${lineItems?.length || 0} line items...`);
+
   if (!Array.isArray(lineItems)) {
-    console.log(`[normalizeBillingStartDelay] ⚠️  lineItems no es array, saltando`);
+    logger.warn({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelay' }, '[normalizeBillingStartDelay] ⚠️  lineItems no es array, saltando');
     return;
   }
-  
+
   let processed = 0;
   let changed = 0;
   let errors = 0;
-  
+
   for (const li of lineItems) {
     try {
       const result = await normalizeBillingStartDelayForLineItem(li, deal);
@@ -152,9 +189,36 @@ export async function normalizeBillingStartDelay(lineItems, deal) {
       if (result.changed) changed++;
     } catch (err) {
       errors++;
-      console.error(`[normalizeBillingStartDelay] ❌ Error normalizando line item ${li?.id}:`, err.message);
+      logger.error({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelay', lineItemId: li?.id, err }, `[normalizeBillingStartDelay] ❌ Error normalizando line item ${li?.id}`);
+      // reportIfActionable no aplica acá: el error ya fue reportado (y re-thrown)
+      // desde normalizeBillingStartDelayForLineItem en PASO 1 o PASO 2.
+      continue;
     }
   }
-  
-  console.log(`[normalizeBillingStartDelay] 📊 Resumen: ${processed} procesados, ${changed} normalizados, ${errors} errores\n`);
+
+  logger.info({ module: 'normalizeBillingStartDelay', fn: 'normalizeBillingStartDelay', processed, changed, errors }, `[normalizeBillingStartDelay] 📊 Resumen: ${processed} procesados, ${changed} normalizados, ${errors} errores`);
 }
+
+/*
+ * ─────────────────────────────────────────────────────────────
+ * CATCHES con reportHubSpotError agregados:
+ *
+ * 1. normalizeBillingStartDelayForLineItem() — PASO 1
+ *    hubspotClient.crm.lineItems.basicApi.update() limpiar delays
+ *    → objectType: "line_item", objectId: lineItem.id
+ *    → re-throw para cortar flujo (comportamiento original preservado)
+ *
+ * 2. normalizeBillingStartDelayForLineItem() — PASO 2
+ *    hubspotClient.crm.lineItems.basicApi.update() setear fecha inicio
+ *    → objectType: "line_item", objectId: lineItem.id
+ *    → re-throw para cortar flujo (comportamiento original preservado)
+ *
+ * NO reportado por segunda vez:
+ * - normalizeBillingStartDelay() catch del loop → el error ya fue
+ *   reportado en PASO 1 o PASO 2 antes del re-throw; doble reporte
+ *   sería spam. Solo logger.error + continue.
+ *
+ * Confirmación: "No se reportan warns a HubSpot;
+ *                solo errores 4xx (≠429)" — implementado en reportIfActionable().
+ * ─────────────────────────────────────────────────────────────
+ */

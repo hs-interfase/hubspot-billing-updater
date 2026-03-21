@@ -283,17 +283,24 @@
 
 ## DECISIONES CLAVE
 
-### ¿Cuándo se crea un TICKET?
-- ✅ Line Item tiene `facturacion_activa=true`
-- ✅ Line Item tiene `facturacion_automatica=false`
+
+cuando existe startDate, frequency o term, antes de facturacion activa se mueven en etapas de promesa.
+### ¿Cuándo se usa un TICKET, se edita por un responsable?
+- ✅ Deal tiene `facturacion_activa=true`
+- ✅ Line Item tiene `facturacion_automatica=false o null`
 - ✅ Próxima fecha de facturación está dentro de 30 días
-- ✅ NO existe ticket previo con la misma key
+- ✅ El ticket pasa a una etapa listo donde el responsable puede editar montos y detalles. La facturacion se hara siempre de forma manual en esta modalidad. 
 
 ### ¿Cuándo se crea una FACTURA?
 - ✅ Line Item tiene `facturacion_activa=true`
 - ✅ Line Item tiene `facturacion_automatica=true`
 - ✅ HOY es la fecha de facturación **O** `facturar_ahora=true`
 - ✅ NO existe factura previa (ni en `of_invoice_id` ni por `of_invoice_key`)
+              o
+- ✅ Ticket usa `facturar_ahora=true`
+              o
+- ✅ Line Item usa `facturar_ahora=true`
+
 
 ### Idempotencia
 - **Tickets:** Buscar por `of_ticket_key` antes de crear
@@ -301,5 +308,5 @@
 
 ---
 
-**Fecha:** 2025-12-25  
-**Versión:** 2.0.0
+**Fecha:** 2026-02-06  
+**Versión:** 3.0.0

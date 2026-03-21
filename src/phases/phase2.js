@@ -1,132 +1,320 @@
 // src/phases/phase2.js
 
+import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
-import { MANUAL_TICKET_LOOKAHEAD_DAYS } from '../config/constants.js';
-import { createManualBillingTicket } from '../services/tickets/manualTicketService.js';
+import { MANUAL_TICKET_LOOKAHEAD_DAYS, TICKET_STAGES, BILLING_TICKET_FORECAST, BILLING_TICKET_FORECAST_50, BILLING_TICKET_FORECAST_75, BILLING_TICKET_FORECAST_95, FORECAST_MANUAL_STAGES } from '../config/constants.js';
+import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
+import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
+import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
+import logger from '../../lib/logger.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { withRetry } from '../utils/withRetry.js';
+
 
 /**
- * PHASE 2: Generación de tickets manuales para line items con facturacion_automatica!=true.
- * 
- * Lógica:
- * - Verificar que el DEAL tenga facturacion_activa=true
- * - Filtrar line items con facturacion_automatica!=true (false, null, undefined)
- * - Para cada line item, buscar la próxima fecha de facturación
- * - Si la fecha está dentro de los próximos 30 días (LOOKAHEAD), crear ticket
- * - Aplicar idempotencia: no duplicar tickets existentes
- * 
- * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Array} params.lineItems - Line Items del Deal
- * @returns {Object} { ticketsCreated, errors }
+ * PHASE 2 (MANUAL):
+ * - Requiere deal.facturacion_activa=true
+ * - Solo aplica a line items manuales (facturacion_automatica != true)
+ * - Si la próxima fecha (planYMD) está en la ventana de lookahead (ej. 30 días),
+ *   NO crea tickets: PROMUEVE el ticket forecast existente a READY (entrada al flujo real manual).
+ *
+ * Idempotencia:
+ * - El ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
+ * - Si ya fue promovido (ya no está en forecast stage), no se toca.
  */
+
+// BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW (primera entrada al flujo real manual)
+const BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW;
+
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
+}
+
+function buildTicketKey(dealId, lineItemKey, ymd) {
+  return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
+}
+
+function resolveDealBucket(dealstage) {
+  const s = String(dealstage || '');
+  if (s === 'decisionmakerboughtin') return '50';
+  if (s === 'contractsent') return '75';
+  if (s === 'closedwon') return '95';
+  return '25';
+}
+
+function resolveManualForecastStageForDealStage(dealstage) {
+  const b = resolveDealBucket(dealstage);
+  if (b === '50') return BILLING_TICKET_FORECAST_50;
+  if (b === '75') return BILLING_TICKET_FORECAST_75;
+  if (b === '95') return BILLING_TICKET_FORECAST_95;
+  return BILLING_TICKET_FORECAST;
+}
+
+async function findTicketByTicketKey(ticketKey) {
+  const body = {
+    filterGroups: [
+      {
+        filters: [{ propertyName: 'of_ticket_key', operator: 'EQ', value: String(ticketKey) }],
+      },
+    ],
+    properties: [
+      'hs_pipeline_stage',
+      'of_ticket_key',
+      'fecha_resolucion_esperada',
+      'of_line_item_key',
+      'of_deal_id',
+    ],
+    limit: 2,
+  };
+
+  const resp = await withRetry(
+    () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    { module: 'phase2', fn: 'findTicketByTicketKey', ticketKey }
+  );
+  return (resp?.results || [])[0] || null;
+}
+
+async function moveTicketToStage(ticketId, stageId) {
+  return hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+    properties: { hs_pipeline_stage: String(stageId) },
+  });
+}
+
+/**
+ * Promueve un ticket forecast manual a READY (entrada al flujo real).
+ */
+async function promoteManualForecastTicketToReady({
+  dealId,
+  dealStage,
+  lineItemKey,
+  nextBillingDate,
+  lineItemId,
+}) {
+  if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
+
+  const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, nextBillingDate);
+  let t = await findTicketByTicketKey(ticketKeyNew);
+
+  let ticketKeyUsed = ticketKeyNew;
+
+  if (ticketKeyUsed !== ticketKeyNew) {
+    logger.info(
+      { module: 'phase2', fn: 'promoteManualForecastTicketToReady', ticketKeyNew, ticketKeyUsed },
+      'Lookup: usado fallback key'
+    );
+  }
+
+  if (!t) {
+    return { moved: false, reason: 'missing_forecast_ticket', ticketKey: ticketKeyUsed };
+  }
+
+  const currentStage = String(t?.properties?.hs_pipeline_stage || '');
+
+  if (currentStage === BILLING_TICKET_STAGE_READY_ENTRY) {
+    return { moved: false, reason: 'already_ready_entry', ticketId: t.id };
+  }
+
+  if (!FORECAST_MANUAL_STAGES.has(currentStage)) {
+    return { moved: false, reason: `not_manual_forecast_stage:${currentStage}`, ticketId: t.id };
+  }
+
+  const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
+  const contactIds =
+    (typeof getDealContacts === 'function'
+      ? await getDealContacts(String(dealId)).catch(() => [])
+      : []);
+
+  const expectedForecastStage = resolveManualForecastStageForDealStage(dealStage);
+
+  let moved = false;
+  let reason = '';
+
+  if (currentStage !== expectedForecastStage) {
+    try {
+      await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+      moved = true;
+      reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
+    } catch (err) {
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket a READY_ENTRY desde stage inesperado', err });
+      throw err;
+    }
+  } else {
+    try {
+      await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+      moved = true;
+      reason = 'moved';
+    } catch (err) {
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket forecast a READY_ENTRY', err });
+      throw err;
+    }
+  }
+
+  if (lineItemId) {
+    await createTicketAssociations(
+      String(t.id),
+      String(dealId),
+      String(lineItemId),
+      companyIds || [],
+      contactIds || []
+    );
+  }
+
+  if (moved) {
+    await syncLineItemAfterPromotion({
+      dealId,
+      lineItemId,
+      lineItemKey,
+      expectedYMD: nextBillingDate,
+    });
+  }
+
+  return { moved, ticketId: t.id, reason };
+}
+
+
 export async function runPhase2({ deal, lineItems }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
+  const dealStage = String(dp.dealstage || '');
   const today = getTodayYMD();
-  
-  console.log(`   [Phase2] Hoy: ${today}`);
-  console.log(`   [Phase2] Lookahead: ${MANUAL_TICKET_LOOKAHEAD_DAYS} días (hasta ${calculateLookaheadDate(today, MANUAL_TICKET_LOOKAHEAD_DAYS)})`);
-  console.log(`   [Phase2] Total line items: ${lineItems.length}`);
-  
-  // Verificar si el DEAL tiene facturacion_activa=true
+
   const dealFacturacionActiva = parseBool(dp.facturacion_activa);
-  console.log(`   [Phase2] Deal facturacion_activa: ${dp.facturacion_activa} (parsed=${dealFacturacionActiva})`);
-  
+
+  logger.info(
+    { module: 'phase2', fn: 'runPhase2', dealId, today, lookaheadDays: MANUAL_TICKET_LOOKAHEAD_DAYS, totalLineItems: lineItems.length, facturacionActiva: dealFacturacionActiva },
+    'Inicio Phase 2'
+  );
+
   if (!dealFacturacionActiva) {
-    console.log(`   [Phase2] ⚠️  Deal NO tiene facturacion_activa=true, saltando Phase 2`);
+    logger.info(
+      { module: 'phase2', fn: 'runPhase2', dealId },
+      'Deal sin facturacion_activa=true, saltando Phase 2'
+    );
     return { ticketsCreated: 0, errors: [] };
   }
-  
+
   let ticketsCreated = 0;
   const errors = [];
-  
-  // Filtrar line items elegibles para tickets manuales
-  // Condición: facturacion_automatica !== true (puede ser false, null, undefined)
+
   const manualLineItems = (lineItems || []).filter((li) => {
     const lp = li?.properties || {};
-    const facturacionAutomaticaRaw = lp.facturacion_automatica;
-    
-    // Solo incluir si facturacion_automatica NO es true (ni booleano ni string)
-    const isManual = facturacionAutomaticaRaw !== true && facturacionAutomaticaRaw !== 'true';
-    
-    console.log(`   [Phase2] LI ${li.id}: facturacion_automatica=${facturacionAutomaticaRaw} → es manual: ${isManual}`);
-    
+    const raw = lp.facturacion_automatica;
+    const isManual = raw !== true && raw !== 'true';
     return isManual;
   });
-  
-  console.log(`   [Phase2] Line items MANUALES (facturacion_automatica!=true): ${manualLineItems.length}`);
-  
+
+  logger.info(
+    { module: 'phase2', fn: 'runPhase2', dealId, manualLineItemsCount: manualLineItems.length },
+    'Line items manuales a procesar'
+  );
+
   if (manualLineItems.length === 0) {
-    console.log(`   [Phase2] No hay line items para tickets manuales`);
     return { ticketsCreated: 0, errors: [] };
   }
-  
+
   for (const li of manualLineItems) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
-    const liName = lp.name || `LI ${lineItemId}`;
-    
-    console.log(`\n   [Phase2] Analizando: ${liName} (${lineItemId})`);
-    console.log(`      facturacion_automatica: ${lp.facturacion_automatica || 'undefined/null'}`);
-    console.log(`      recurringbillingstartdate: ${lp.recurringbillingstartdate || 'undefined'}`);
-    console.log(`      hs_recurring_billing_start_date: ${lp.hs_recurring_billing_start_date || 'undefined'}`);
-    console.log(`      fecha_inicio_de_facturacion: ${lp.fecha_inicio_de_facturacion || 'undefined'}`);
-    console.log(`      fecha_2: ${lp.fecha_2 || 'undefined'}, fecha_3: ${lp.fecha_3 || 'undefined'}, fecha_4: ${lp.fecha_4 || 'undefined'}`);
-    
+
+    // PAUSA: si el line item está en pausa, skip
+    const isPaused = parseBool(lp.pausa);
+    if (isPaused) {
+      logger.info(
+        { module: 'phase2', fn: 'runPhase2', dealId, lineItemId },
+        'Line item en pausa, saltando Phase 2'
+      );
+      continue;
+    }
     try {
-      // Obtener la próxima fecha de facturación
-      const nextBillingDate = getNextBillingDate(lp);
-      
-      console.log(`      → getNextBillingDate retornó: ${nextBillingDate}`);
-      
+      const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
+
+      const planYMD = resolvePlanYMD({
+        lineItemProps: lp,
+        context: { flow: 'PHASE2', dealId, lineItemId },
+      });
+
+      const nextBillingDate = planYMD;
+
       if (!nextBillingDate) {
-        console.log(`      ⚠️  Sin próxima fecha de facturación, saltando...`);
+        logger.info(
+          { module: 'phase2', fn: 'runPhase2', dealId, lineItemId },
+          'Sin próxima fecha de facturación, saltando'
+        );
         continue;
       }
-      
-      console.log(`      Próxima fecha encontrada: ${nextBillingDate}`);
-      
-      // Verificar si la fecha está dentro del lookahead (30 días)
+
       const daysUntilBilling = diffDays(today, nextBillingDate);
-      
+
       if (daysUntilBilling === null) {
-        console.log(`      ⚠️  No se pudo calcular días hasta facturación, saltando...`);
+        logger.warn(
+          { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, nextBillingDate },
+          'No se pudo calcular días hasta facturación, saltando'
+        );
         continue;
       }
-      
+
       if (daysUntilBilling < 0) {
-        // Fecha pasada, no crear ticket
-        console.log(`      📅 Fecha pasada (${nextBillingDate}), saltando...`);
         continue;
       }
-      
+
       if (daysUntilBilling > MANUAL_TICKET_LOOKAHEAD_DAYS) {
-        // Fecha muy lejana, esperar
-        console.log(`      📅 Fecha ${nextBillingDate} en ${daysUntilBilling} días (fuera de lookahead de ${MANUAL_TICKET_LOOKAHEAD_DAYS} días)`);
         continue;
       }
-      
-      // Crear ticket (está dentro del lookahead)
-      console.log(`      🎫 ¡DENTRO DEL LOOKAHEAD! Creando ticket...`);
-      console.log(`      Fecha: ${nextBillingDate}, faltan ${daysUntilBilling} días`);
-      
-      const result = await createManualBillingTicket(deal, li, nextBillingDate);
-      
-      if (result.created) {
+
+      const lineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
+      if (!lineItemKey) {
+        logger.warn(
+          { module: 'phase2', fn: 'runPhase2', dealId, lineItemId },
+          'line_item_key vacío, Phase1 debería setearlo, saltando'
+        );
+        continue;
+      }
+
+      const promoted = await promoteManualForecastTicketToReady({
+        dealId,
+        dealStage,
+        lineItemKey,
+        nextBillingDate: planYMD,
+        lineItemId,
+      });
+
+      if (promoted.moved) {
         ticketsCreated++;
-        console.log(`      ✅ Ticket creado: ${result.ticketId}`);
+        logger.info(
+          { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, ticketId: promoted.ticketId, reason: promoted.reason },
+          'Ticket promovido a READY'
+        );
       } else {
-        console.log(`      🔄 Ticket ya existía: ${result.ticketId} (idempotencia)`);
+        logger.debug(
+          { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
+          'Ticket no movido'
+        );
+        if (promoted.reason === 'missing_forecast_ticket') {
+          errors.push({
+            lineItemId,
+            error: `Missing forecast ticket for ${promoted.ticketKey}`,
+          });
+        }
       }
     } catch (err) {
-      console.error(`      ❌ Error procesando:`, err?.message || err);
-      errors.push({ lineItemId, error: err?.message || 'Error desconocido' });
+      logger.error(
+        { module: 'phase2', fn: 'runPhase2', dealId, lineItemId: li.id, err },
+        'Error procesando line item'
+      );
+      errors.push({ lineItemId: li.id, error: err?.message || 'Error desconocido' });
     }
   }
-  
-  console.log(`\n   ✅ Phase 2 completada: ${ticketsCreated} tickets creados, ${errors.length} errores`);
-  
+
+  logger.info(
+    { module: 'phase2', fn: 'runPhase2', dealId, ticketsPromoted: ticketsCreated, errors: errors.length },
+    'Phase 2 completada'
+  );
+
   return { ticketsCreated, errors };
 }
 
@@ -140,51 +328,23 @@ function calculateLookaheadDate(today, days) {
   return formatDateISO(date);
 }
 
-/**
- * Obtiene la próxima fecha de facturación de un line item.
- * Busca en recurringbillingstartdate y fecha_2, fecha_3, ..., fecha_24.
- * Devuelve la fecha más cercana >= hoy.
+/*
+ * CATCHES con reportHubSpotError agregados:
+ *   - moveTicketToStage() en rama currentStage !== expectedForecastStage
+ *   - moveTicketToStage() en rama currentStage === expectedForecastStage
+ *     (ambos son tickets.basicApi.update internamente, objectType="ticket")
+ *
+ * NO reportados:
+ *   - getDealCompanies / getDealContacts → lecturas, .catch(() => []) absorbe el error
+ *   - createTicketAssociations → asociaciones excluidas (Regla 4)
+ *   - syncLineItemAfterPromotion → delegado, ese módulo gestiona su reporte
+ *   - catch externo de runPhase2 → el error ya fue reportado en moveTicketToStage
+ *     antes del re-throw; el catch externo solo loguea y empuja a errors[]
+ *
+ * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
+ *
+ * ⚠️  BUG PREEXISTENTE (no corregido per Regla 5):
+ *   La condición `if (ticketKeyUsed !== ticketKeyNew)` siempre es false porque
+ *   ambas variables se asignan al mismo valor (`ticketKeyNew`) en las dos
+ *   líneas anteriores; el log de fallback nunca se ejecuta.
  */
-function getNextBillingDate(lineItemProps) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const allDates = [];
-  
-  // 1) Verificar todas las variantes de la fecha de inicio
-  const startDate = lineItemProps.hs_recurring_billing_start_date ||  // ✅ AGREGADO: nombre con guiones
-                    lineItemProps.recurringbillingstartdate || 
-                    lineItemProps.fecha_inicio_de_facturacion;
-  if (startDate) {
-    const d = parseLocalDate(startDate);
-    if (d) {
-      allDates.push(d);
-    }
-  }
-  
-  // 2) Buscar en fecha_2, fecha_3, ..., fecha_24
-  for (let i = 2; i <= 24; i++) {
-    const dateKey = `fecha_${i}`;
-    const dateValue = lineItemProps[dateKey];
-    if (dateValue) {
-      const d = parseLocalDate(dateValue);
-      if (d) {
-        allDates.push(d);
-      }
-    }
-  }
-  
-  if (allDates.length === 0) {
-    return null;
-  }
-  
-  // 3) Filtrar solo fechas >= hoy
-  const futureDates = allDates.filter(d => d >= today);
-  
-  if (futureDates.length === 0) {
-    return null; // Todas las fechas son pasadas
-  }
-  
-  // 4) Ordenar y devolver la más cercana
-  futureDates.sort((a, b) => a.getTime() - b.getTime());
-  return formatDateISO(futureDates[0]);
-}

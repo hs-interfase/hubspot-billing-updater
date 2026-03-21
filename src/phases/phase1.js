@@ -1,31 +1,58 @@
 // src/phases/phase1.js
+<<<<<<< HEAD
 import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { mirrorDealToUruguay } from "../dealMirroring.js";
+=======
+import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
+import { syncBillingState } from '../services/billing/syncBillingState.js';
+import { DEAL_STAGE_LOST } from '../config/constants.js';
+import { mirrorDealToUruguay } from '../dealMirroring.js';
+>>>>>>> pruebas
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
   computeLastBillingDateFromLineItems,
+<<<<<<< HEAD
   computeBillingCountersForLineItem,
 } from "../billingEngine.js";
 import { updateDealCupo } from "../utils/propertyHelpers.js";
 import { normalizeBillingStartDelay } from "../normalizeBillingStartDelay.js";
+=======
+} from '../billingEngine.js';
+import { updateDealCupo } from '../utils/propertyHelpers.js';
+import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
+>>>>>>> pruebas
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
+import { ensureLineItemKey } from '../utils/lineItemKey.js';
+import { sanitizeClonedLineItem } from '../services/lineItems/cloneSanitizerService.js';
+import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaService.js';
+import logger from '../../lib/logger.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+
+const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 
 logDateEnvOnce();
 
 /**
+ * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
+ * 429 y 5xx son transitorios → solo logger.error, sin reporte.
+ */
+function reportIfActionable({ objectType, objectId, message, err }) {
+  const status = err?.response?.status ?? err?.statusCode ?? null;
+  if (status === null) {
+    reportHubSpotError({ objectType, objectId, message });
+    return;
+  }
+  if (status === 429 || status >= 500) return;
+  if (status >= 400 && status < 500) {
+    reportHubSpotError({ objectType, objectId, message });
+  }
+}
+
+/**
  * Activa o desactiva cupo según reglas simplificadas.
- *
- * REGLAS SIMPLIFICADAS:
- * 1) Si facturacion_activa == true Y tipo_de_cupo tiene valor → cupo_activo = true
- * 2) Si NO → cupo_activo = false
- * 3) Si cupo_consumido o cupo_restante están null:
- *    - cupo_consumido = 0
- *    - cupo_restante = cupo_total (para "Por Horas") o cupo_total_monto (para "Por Monto")
- *
- * OPCIONAL (comentado): Validar que exista ≥1 line item con parte_del_cupo=true
  */
 async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
   const facturacionActiva = parseBool(dealProps.facturacion_activa);
@@ -56,7 +83,6 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_activo = String(shouldActivate);
   }
 
-  // ✅ Inicializar SOLO si se activa cupo
   if (shouldActivate && isConsumidoNull) {
     updateProps.cupo_consumido = "0";
   }
@@ -64,34 +90,29 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_restante = String(cupoTotal);
   }
 
+<<<<<<< HEAD
   /*  // ✅ A) Actualizar cupo_estado según reglas
   const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
   const newCupoEstado = calculateCupoEstado({
     cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
     cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
     cupo_umbral: dealProps.cupo_umbral,
+=======
+  const newCupoEstado = computeCupoEstadoFrom(dealProps, {
+    cupo_activo: updateProps.cupo_activo,
+    cupo_consumido: updateProps.cupo_consumido,
+    cupo_restante: updateProps.cupo_restante,
+    tipo_de_cupo: updateProps.tipo_de_cupo,
+    cupo_total: updateProps.cupo_total,
+    cupo_total_monto: updateProps.cupo_total_monto,
+>>>>>>> pruebas
   });
 
   const currentCupoEstado = dealProps.cupo_estado;
-  if (newCupoEstado === "Inconsistente") {
-    // Diagnóstico detallado
-    const total = parseFloat(dealProps.cupo_total) || parseFloat(dealProps.cupo_total_monto) || 0;
-    const consumido = parseFloat(updateProps.cupo_consumido ?? dealProps.cupo_consumido) || 0;
-    const restante = parseFloat(updateProps.cupo_restante ?? dealProps.cupo_restante) || 0;
-    const diff = Math.abs((consumido + restante) - total);
-    console.log("[cupo:activate][DIAG] Inconsistente diagnosticado", {
-      dealId,
-      cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
-      tipo_de_cupo: dealProps.tipo_de_cupo,
-      cupo_total: dealProps.cupo_total,
-      cupo_total_monto: dealProps.cupo_total_monto,
-      cupo_consumido: updateProps.cupo_consumido ?? dealProps.cupo_consumido,
-      cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
-      cupo_umbral: dealProps.cupo_umbral,
-      diff,
-    });
-  } else if (newCupoEstado && newCupoEstado !== currentCupoEstado) {
+
+  if (newCupoEstado !== 'Inconsistente' && newCupoEstado && newCupoEstado !== currentCupoEstado) {
     updateProps.cupo_estado = newCupoEstado;
+<<<<<<< HEAD
     console.log([cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado});
   }
 */
@@ -116,12 +137,17 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
       `[cupo:activate] cupo_estado: ${currentCupoEstado || "(null)"} → ${newCupoEstado}`
     );
   }
+=======
+    logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, from: currentCupoEstado || '(null)', to: newCupoEstado }, `[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
+  }
+>>>>>>> pruebas
 
   if (Object.keys(updateProps).length === 0) {
-    console.log(`[cupo:activate] dealId=${dealId} sin cambios (cupo_activo=${shouldActivate})`);
+    logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, cupo_activo: shouldActivate }, '[cupo:activate] sin cambios');
     return;
   }
 
+<<<<<<< HEAD
   console.log(
     `[cupo:activate] Updating deal ${dealId} with:`,
     Object.keys(updateProps).join(", ")
@@ -130,11 +156,37 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     properties: updateProps,
   });
   console.log(`[cupo:activate] ✅ Deal ${dealId} actualizado:`, updateProps);
+=======
+  logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, keys: Object.keys(updateProps) }, `[cupo:activate] Updating deal ${dealId}`);
+
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties: updateProps });
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, err }, 'deal_update_failed: activateCupoIfNeeded');
+    // deals fuera del criterio ticket/line_item → no reportIfActionable
+    return;
+  }
+
+  logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, updateProps }, '[cupo:activate] ✅ Deal actualizado');
+
+  // Hook: Centraliza estado billing si se cancela el deal
+  if (updateProps.dealstage && (
+    updateProps.dealstage === DEAL_STAGE_LOST ||
+    updateProps.dealstage === CANCELLED_STAGE_ID
+  )) {
+    try {
+      await syncBillingState({ hubspotClient, dealId, dealIsCanceled: true });
+    } catch (err) {
+      logger.warn({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, err }, '[activateCupoIfNeeded] syncBillingState failed');
+    }
+  }
+>>>>>>> pruebas
 }
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
 
+<<<<<<< HEAD
   // Irregular tiene prioridad
   const irregular = (p.irregular ?? "").toString().toLowerCase();
   if (irregular === "true" || irregular === "1" || irregular === "si" || irregular === "sí") {
@@ -143,21 +195,31 @@ function classifyLineItemFlow(li) {
 
   // Recurrente si tiene frecuencia
   const freq = (p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? "")
+=======
+  const irregular = (p.irregular ?? '').toString().toLowerCase();
+  if (irregular === 'true' || irregular === '1' || irregular === 'si' || irregular === 'sí') {
+    return 'Irregular';
+  }
+
+  const freq = (p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? '')
+>>>>>>> pruebas
     .toString()
     .toLowerCase()
     .trim();
   if (freq) return "Recurrente";
 
+<<<<<<< HEAD
   // Pago único si tiene 1 pago
   const num = (p.hs_recurring_billing_number_of_payments ?? "").toString().trim();
   if (num === "1") return "Pago Único";
+=======
+  const num = (p.hs_recurring_billing_number_of_payments ?? '').toString().trim();
+  if (num === '1') return 'Pago Único';
+>>>>>>> pruebas
 
   return null;
 }
 
-// Tipo del negocio = tipo del PRÓXIMO evento (no mezcla).
-// Usa las line items que tienen como "start" la próxima fecha.
-// Si vos tenés otra property "proxima_fecha_line_item", la cambiamos acá.
 function pickDealFlowTypeForNextEvent(lineItems, nextDateStr) {
   if (!nextDateStr) return null;
 
@@ -189,16 +251,13 @@ function fmtYMD(date) {
   return `${y}-${m}-${d}`;
 }
 
-/**
- * Mensaje simple (evita crash). Si querés un mensaje más rico, lo refinamos luego,
- * pero este garantiza que fase 1 no se caiga.
- */
 function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   const dealName = deal?.properties?.dealname || "";
   const count = Array.isArray(lineItems) ? lineItems.length : 0;
   return `Próxima facturación ${fmtYMD(nextDate)} · ${dealName} · ${count} line items`;
 }
 
+<<<<<<< HEAD
 /**
  * Deriva frecuencia del deal:
  * - si hay al menos un monthly => monthly
@@ -242,38 +301,185 @@ async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true
     } catch (err) {
       console.error("[phase1] Error en updateLineItemSchedule para line item", li.id, err);
     }
+=======
+async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true, dealProps = {} } = {}) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) return;
+
+  const debug = process.env.DBG_PHASE1 === 'true';
+
+  function parseLineItemKey(lineItemKey) {
+    if (!lineItemKey) return null;
+    const parts = String(lineItemKey).split(':');
+    if (parts.length < 2) return null;
+    return { dealId: parts[0], lineItemId: parts[1] };
+>>>>>>> pruebas
   }
 
-  // 2) contadores + persistencia
   for (const li of lineItems) {
     try {
-      const counters = computeBillingCountersForLineItem(li, today);
-      const updateProps = {
-        facturacion_total_avisos: String(counters.facturacion_total_avisos ?? 0),
-        avisos_emitidos_facturacion: String(counters.avisos_emitidos_facturacion ?? 0),
-        avisos_restantes_facturacion: String(counters.avisos_restantes_facturacion ?? 0),
-      };
+      const existingKey = String(li.properties?.line_item_key || '').trim();
+      const parsed = parseLineItemKey(existingKey);
 
+<<<<<<< HEAD
       li.properties = { ...(li.properties || {}), ...updateProps };
       await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
         properties: updateProps,
       });
     } catch (err) {
       console.error("[phase1] Error guardando contadores en line item", li.id, err);
+=======
+      const keyMatches =
+        !!parsed &&
+        String(parsed.dealId) === String(dealId) &&
+        String(parsed.lineItemId) === String(li.id);
+
+      if (debug) {
+        logger.debug({
+          module: 'phase1',
+          fn: 'processLineItemsForPhase1',
+          lineItemId: li.id,
+          existingKey: existingKey || null,
+          parsedKey: parsed || null,
+          keyMatches,
+        }, '[phase1][line_item_key][pre]');
+      }
+
+      // 1) Si hay key pero NO matchea => limpiar + rekey forzado
+      if (existingKey && !keyMatches) {
+        const updates = sanitizeClonedLineItem(li, dealId, { debug });
+        if (updates && Object.keys(updates).length) {
+          try {
+            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), { properties: updates });
+          } catch (err) {
+            logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, 'line_item_update_failed: sanitizeClonedLineItem');
+            reportIfActionable({
+              objectType: 'line_item',
+              objectId: li.id,
+              message: `line_item_update_failed (sanitizeClonedLineItem): ${err?.message || err}`,
+              err,
+            });
+            continue;
+          }
+          li.properties = { ...(li.properties || {}), ...updates };
+        }
+
+        const { key: newKey } = ensureLineItemKey({ dealId, lineItem: li, forceNew: true });
+
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+            properties: { line_item_key: newKey },
+          });
+        } catch (err) {
+          logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, newKey, err }, 'line_item_update_failed: rekey forzado');
+          reportIfActionable({
+            objectType: 'line_item',
+            objectId: li.id,
+            message: `line_item_update_failed (rekey forzado): ${err?.message || err}`,
+            err,
+          });
+          continue;
+        }
+        li.properties = { ...(li.properties || {}), line_item_key: newKey };
+
+        logger.info({
+          module: 'phase1',
+          fn: 'processLineItemsForPhase1',
+          dealId,
+          lineItemId: li.id,
+          oldKey: existingKey,
+          newKey,
+        }, '[phase1][line_item_key] replaced (mismatch)');
+      }
+
+      // 2) Si NO hay key => crear
+      if (!existingKey) {
+        const { key: lineItemKey } = ensureLineItemKey({ dealId, lineItem: li });
+
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+            properties: { line_item_key: lineItemKey },
+          });
+        } catch (err) {
+          logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, lineItemKey, err }, 'line_item_update_failed: crear line_item_key');
+          reportIfActionable({
+            objectType: 'line_item',
+            objectId: li.id,
+            message: `line_item_update_failed (crear line_item_key): ${err?.message || err}`,
+            err,
+          });
+          continue;
+        }
+        li.properties = { ...(li.properties || {}), line_item_key: lineItemKey };
+
+        logger.info({ module: 'phase1', fn: 'processLineItemsForPhase1', dealId, lineItemId: li.id, line_item_key: lineItemKey }, '[phase1][line_item_key] created');
+      }
+
+      // 0.5) HARD STOP POR PROPERTY: si fechas_completas=true, no recalcular schedule
+      const fechasCompletas =
+        String(li.properties?.fechas_completas || '').toLowerCase() === 'true';
+
+      if (fechasCompletas) {
+        if ((li.properties?.billing_next_date ?? '') !== '') {
+          try {
+            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+              properties: { billing_next_date: '' },
+            });
+          } catch (err) {
+            logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, 'line_item_update_failed: limpiar billing_next_date (fechas_completas)');
+            reportIfActionable({
+              objectType: 'line_item',
+              objectId: li.id,
+              message: `line_item_update_failed (fechas_completas clear): ${err?.message || err}`,
+              err,
+            });
+          }
+          li.properties = { ...(li.properties || {}), billing_next_date: '' };
+        }
+
+        logger.debug({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id }, '[phase1] fechas_completas=true -> skip schedule');
+      } else {
+        await updateLineItemSchedule(li, {
+          dealId,
+          dealName: dealProps.dealname,
+          ownerId:  dealProps.hubspot_owner_id || null,
+        });
+      }
+
+      await ensureForecastMetaOnLineItem(li);
+
+      if (debug) {
+        logger.debug({
+          module: 'phase1',
+          fn: 'processLineItemsForPhase1',
+          lineItemId: li.id,
+          billing_next_date: li.properties?.billing_next_date,
+          last_ticketed_date: li.properties?.last_ticketed_date,
+          last_billing_period: li.properties?.last_billing_period,
+          fechas_completas: li.properties?.fechas_completas,
+        }, '[phase1][post-updateLineItemSchedule]');
+      }
+    } catch (err) {
+      logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, '[phase1] Error en updateLineItemSchedule para line item');
+>>>>>>> pruebas
     }
   }
 }
 
+<<<<<<< HEAD
 export async function runPhase1(dealId, {
    mode,
    sourceLineItemId
   } = {}) {
   if (!dealId) throw new Error("runPhase1 requiere un dealId");
+=======
+export async function runPhase1(dealId) {
+  if (!dealId) throw new Error('runPhase1 requiere un dealId');
+>>>>>>> pruebas
 
-  // Obtener negocio y line items
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
+<<<<<<< HEAD
   // Sanear identidad de line items clonados por UI (solo si no es espejo)
   await sanitizeClonedLineItemIdentity(deal, lineItems);
 
@@ -428,6 +634,87 @@ export async function runPhase1(dealId, {
     }
 
     console.log("\n═══════════════════════════════════════════════════════════\n");
+=======
+  const DBG_PHASE1 = process.env.DBG_PHASE1 === 'true';
+
+  // ===== DEBUG: dump de deal + line items en un solo log =====
+  if (DBG_PHASE1) {
+    const dp = deal?.properties || {};
+    logger.debug({
+      module: 'phase1',
+      fn: 'runPhase1',
+      dealId,
+      dealPropKeys: Object.keys(dp).sort(),
+      deal: {
+        dealname: dp.dealname,
+        dealstage: dp.dealstage,
+        deal_currency_code: dp.deal_currency_code,
+        pais_operativo: dp.pais_operativo,
+        unidad_de_negocio: dp.unidad_de_negocio,
+        facturacion_activa: dp.facturacion_activa,
+        facturacion_proxima_fecha: dp.facturacion_proxima_fecha,
+        facturacion_ultima_fecha: dp.facturacion_ultima_fecha,
+        cupo_activo: dp.cupo_activo,
+        cupo_total: dp.cupo_total,
+        cupo_total_monto: dp.cupo_total_monto,
+        cupo_consumido: dp.cupo_consumido,
+        cupo_restante: dp.cupo_restante,
+        cupo_umbral: dp.cupo_umbral,
+        tipo_de_cupo: dp.tipo_de_cupo,
+        deal_py_origen_id: dp.deal_py_origen_id,
+        deal_uy_mirror_id: dp.deal_uy_mirror_id,
+        es_mirror_de_py: dp.es_mirror_de_py,
+      },
+      lineItems: lineItems.map(li => {
+        const lp = li?.properties || {};
+        return {
+          id: li.id,
+          name: lp.name,
+          price: lp.price,
+          quantity: lp.quantity,
+          amount: lp.amount,
+          discount: lp.discount,
+          hs_discount_percentage: lp.hs_discount_percentage,
+          hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
+          recurringbillingfrequency: lp.recurringbillingfrequency,
+          hs_recurring_billing_start_date: lp.hs_recurring_billing_start_date,
+          number_of_payments: lp.number_of_payments ?? lp.hs_recurring_billing_number_of_payments,
+          hs_billing_start_delay_days: lp.hs_billing_start_delay_days,
+          hs_billing_start_delay_months: lp.hs_billing_start_delay_months,
+          facturacion_activa: lp.facturacion_activa,
+          facturacion_automatica: lp.facturacion_automatica,
+          facturar_ahora: lp.facturar_ahora,
+          irregular: lp.irregular,
+          parte_del_cupo: lp.parte_del_cupo,
+          pais_operativo: lp.pais_operativo,
+        };
+      }),
+    }, '[phase1] DEAL + LINE ITEMS cargados');
+  }
+
+  // -- Convertir retrasos en fecha de inicio concreta --
+  try {
+    await normalizeBillingStartDelay(lineItems, deal);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error normalizando retrasos de facturación');
+  }
+
+  // ===== DEBUG POST-NORMALIZE =====
+  if (DBG_PHASE1) {
+    logger.debug({
+      module: 'phase1',
+      fn: 'runPhase1',
+      dealId,
+      lineItems: lineItems.map(li => ({
+        id: li.id,
+        name: li.properties?.name,
+        hs_recurring_billing_start_date: li.properties?.hs_recurring_billing_start_date,
+        hs_billing_start_delay_type: li.properties?.hs_billing_start_delay_type,
+        hs_billing_start_delay_days: li.properties?.hs_billing_start_delay_days,
+        hs_billing_start_delay_months: li.properties?.hs_billing_start_delay_months,
+      })),
+    }, '[phase1] POST-NORMALIZE fechas finales line items');
+>>>>>>> pruebas
   }
 
   async function sanitizeClonedLineItemIdentity(deal, lineItems) {
@@ -458,6 +745,7 @@ export async function runPhase1(dealId, {
       sourceLineItemId,
     });
   } catch (err) {
+<<<<<<< HEAD
     console.error("[phase1] Error en mirrorDealToUruguay:", err?.response?.body || err);
   }
 
@@ -478,6 +766,9 @@ export async function runPhase1(dealId, {
     } catch (err) {
       console.warn(`[phase1] Error propagando facturar_ahora al mirror LI`, mirrorResult.mirrorLineItemId, err?.message);
     }
+=======
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en mirrorDealToUruguay');
+>>>>>>> pruebas
   }
 
   // Si no hay line items en el negocio original, terminamos
@@ -497,12 +788,17 @@ export async function runPhase1(dealId, {
   try {
     await activateCupoIfNeeded(dealId, dealProps, lineItems);
   } catch (err) {
+<<<<<<< HEAD
     console.error("[phase1] Error en activateCupoIfNeeded:", err);
+=======
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en activateCupoIfNeeded');
+>>>>>>> pruebas
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
-  await processLineItemsForPhase1(lineItems, today, { alsoInitCupo: true });
+await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, dealProps });
 
+<<<<<<< HEAD
   // 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
   if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
     try {
@@ -545,6 +841,36 @@ export async function runPhase1(dealId, {
         mirrorResult.targetDealId,
         err
       );
+=======
+  // 2.1) Procesar espejo UY (si existe)
+  if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
+    try {
+      const { deal: mirrorDeal, lineItems: mirrorLineItems } =
+        await getDealWithLineItems(mirrorResult.targetDealId);
+
+      logger.info({
+        module: 'phase1',
+        fn: 'runPhase1',
+        mirrorDealId: mirrorResult.targetDealId,
+        mirrorLineItemIds: mirrorLineItems.map(x => x.id),
+      }, '[phase1] Procesando ESPEJO UY');
+
+      try {
+        await activateCupoIfNeeded(mirrorResult.targetDealId, mirrorDeal.properties, mirrorLineItems);
+      } catch (err) {
+        logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error activateCupoIfNeeded en espejo UY');
+      }
+
+// CORRECTO
+await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, today, { alsoInitCupo: true, dealProps: mirrorDeal.properties || {} });
+      try {
+        await updateDealCupo(mirrorDeal, mirrorLineItems);
+      } catch (err) {
+        logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error updateDealCupo en espejo UY');
+      }
+    } catch (err) {
+      logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] No se pudo obtener o procesar el deal espejo');
+>>>>>>> pruebas
     }
   }
 
@@ -559,13 +885,14 @@ export async function runPhase1(dealId, {
     effectiveNext = null;
   }
 
-  // 4) Calcular strings de fechas ANTES de usarlas
+  // 4) Calcular strings de fechas
   const nextDateStr = fmtYMD(effectiveNext);
   const lastDateStr = fmtYMD(effectiveLast);
 
-  // 4b) Tipo del negocio = tipo del PRÓXIMO evento (no mezcla)
+  // 4b) Tipo del negocio = tipo del PRÓXIMO evento
   const dealBillingFrequency = pickDealFlowTypeForNextEvent(lineItems, nextDateStr);
 
+<<<<<<< HEAD
   // 5) Actualizar cupo a nivel negocio pasando también el negocio completo
   try {
     await updateDealCupo(deal, lineItems);
@@ -577,20 +904,44 @@ export async function runPhase1(dealId, {
   const message = effectiveNext ? buildNextBillingMessage({ deal, nextDate: effectiveNext, lineItems }) : "";
 
   // 7) Actualizar SIEMPRE propiedades del deal (aunque facturacion_activa=false)
+=======
+  // 5) Actualizar cupo a nivel negocio
+  try {
+    await updateDealCupo(deal, lineItems);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error updateDealCupo deal');
+  }
+
+  // 6) Construir mensaje
+  const message = effectiveNext
+    ? buildNextBillingMessage({ deal, nextDate: effectiveNext, lineItems })
+    : '';
+
+  // 7) Actualizar propiedades del deal
+>>>>>>> pruebas
   const updateBody = {
     properties: {
       facturacion_proxima_fecha: nextDateStr || null,
       facturacion_ultima_fecha: lastDateStr || null,
+<<<<<<< HEAD
       facturacion_mensaje_proximo_aviso: message || "",
       // ⚠️ SOLO PARA REPORTING: esta propiedad NO se usa en lógica de facturación
       // La fuente de verdad SIEMPRE es el Line Item
+=======
+      facturacion_mensaje_proximo_aviso: message || '',
+>>>>>>> pruebas
       facturacion_frecuencia_de_facturacion: dealBillingFrequency || null,
     },
   };
 
-  await hubspotClient.crm.deals.basicApi.update(String(dealId), updateBody);
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(dealId), updateBody);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] deal_update_failed: propiedades finales');
+    // deals fuera del criterio ticket/line_item → no reportIfActionable
+  }
 
-  // 8) “Skip” solo como semántica (ya actualizamos TODO lo que es fase 1)
+  // 8) "Skip" solo como semántica
   const active = parseBoolFromHubspot(dealProps.facturacion_activa);
   if (!active) {
     return {
@@ -604,7 +955,6 @@ export async function runPhase1(dealId, {
     };
   }
 
-  // Si no hay fechas ni futuras ni pasadas
   if (!nextBillingDate && !lastBillingDate) {
     return {
       dealId,
@@ -623,3 +973,26 @@ export async function runPhase1(dealId, {
     facturacion_frecuencia_de_facturacion: dealBillingFrequency,
   };
 }
+
+/*
+ * ─────────────────────────────────────────────────────────────
+ * CATCHES con reportHubSpotError agregados:
+ *
+ * En processLineItemsForPhase1() — todos sobre line_items:
+ * 1. sanitizeClonedLineItem update → objectType: "line_item"
+ * 2. rekey forzado (line_item_key mismatch) → objectType: "line_item"
+ * 3. crear line_item_key → objectType: "line_item"
+ * 4. limpiar billing_next_date (fechas_completas) → objectType: "line_item"
+ *    → con continue donde corresponde (loop for...of sobre lineItems)
+ *
+ * NO reportados (fuera de criterio ticket/line_item):
+ * - activateCupoIfNeeded deal update → solo logger.error (deals)
+ * - runPhase1 deal update final → solo logger.error (deals)
+ * - mirrorDealToUruguay, normalizeBillingStartDelay, updateDealCupo
+ *   → errores de orquestación, no de objeto accionable directo
+ * - syncBillingState → lógica interna, solo logger.warn
+ *
+ * Confirmación: "No se reportan warns a HubSpot;
+ *                solo errores 4xx (≠429)" — implementado en reportIfActionable().
+ * ─────────────────────────────────────────────────────────────
+ */

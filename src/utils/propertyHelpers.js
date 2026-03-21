@@ -8,7 +8,31 @@
  */
 
 import { hubspotClient } from '../hubspotClient.js';
+import logger from '../../lib/logger.js';
+import { parseBool } from '../utils/parsers.js';
 
+// Mapeo de campos de invoice que necesitan transformación antes de enviar a HubSpot
+const INVOICE_FIELD_MAPPERS = {
+  exonera_irae: (v) => String(parseBool(v)),
+  iva: (v) => String(parseBool(v)),
+  pais_operativo: (v) => {
+    const map = { UY: 'Uruguay', PY: 'Paraguay' };
+    return map[v] ?? v;
+  },
+};
+
+/**
+ * Transforma propiedades de invoice al formato exacto que espera HubSpot.
+ */
+export function mapInvoicePropsToHubspot(props) {
+  const mapped = { ...props };
+  for (const [field, mapper] of Object.entries(INVOICE_FIELD_MAPPERS)) {
+    if (field in mapped) {
+      mapped[field] = mapper(mapped[field]);
+    }
+  }
+  return mapped;
+}
 
 // Cache de schemas por objectType
 const schemaCache = new Map();
@@ -60,7 +84,7 @@ function computeCupoStatus(deal, lineItems) {
 /**
  * Obtiene el schema de propiedades de un tipo de objeto de HubSpot.
  * Cachea el resultado para no llamar múltiples veces.
- * 
+ *
  * @param {string} objectType - 'deals', 'tickets', 'invoices', 'line_items'
  * @returns {Promise<Set<string>>} Set de nombres de propiedades que existen
  */
@@ -70,14 +94,14 @@ export async function getPropertySchema(objectType) {
   }
 
   try {
-    console.log(`[PropertySchema] Fetching schema for ${objectType}...`);
+    logger.info({ module: 'propertyHelpers', fn: 'getPropertySchema', objectType }, `[PropertySchema] Fetching schema for ${objectType}...`);
     const response = await hubspotClient.crm.properties.coreApi.getAll(objectType);
     const propertyNames = new Set(response.results.map(p => p.name));
     schemaCache.set(objectType, propertyNames);
-    console.log(`[PropertySchema] ✅ Cached ${propertyNames.size} properties for ${objectType}`);
+    logger.info({ module: 'propertyHelpers', fn: 'getPropertySchema', objectType, count: propertyNames.size }, `[PropertySchema] ✅ Cached ${propertyNames.size} properties for ${objectType}`);
     return propertyNames;
   } catch (error) {
-    console.error(`[PropertySchema] ❌ Error fetching schema for ${objectType}:`, error?.message);
+    logger.error({ module: 'propertyHelpers', fn: 'getPropertySchema', objectType, err: error }, `[PropertySchema] ❌ Error fetching schema for ${objectType}`);
     // Return empty set en caso de error para no romper el flujo
     const emptySet = new Set();
     schemaCache.set(objectType, emptySet);
@@ -87,7 +111,7 @@ export async function getPropertySchema(objectType) {
 
 /**
  * Verifica si una propiedad existe en el schema de HubSpot.
- * 
+ *
  * @param {string} objectType - 'deals', 'tickets', 'invoices', 'line_items'
  * @param {string} propertyName - nombre de la propiedad
  * @returns {Promise<boolean>}
@@ -99,12 +123,12 @@ export async function propertyExists(objectType, propertyName) {
 
 /**
  * Construye un objeto de propiedades para update, removiendo valores vacíos/inválidos.
- * 
+ *
  * Reglas:
  * - Remueve null, undefined, "" (string vacío)
  * - Remueve NaN
  * - Retorna {} si no queda nada para setear
- * 
+ *
  * @param {Object} props - Objeto con propiedades a setear
  * @returns {Object} Objeto limpio o {}
  */
@@ -115,16 +139,16 @@ export function buildUpdateProps(props) {
   for (const [key, value] of Object.entries(props)) {
     // Skip null/undefined
     if (value === null || value === undefined) continue;
-    
+
     // Skip empty strings (pero permitir "0", "false", etc.)
     if (value === '') continue;
-    
+
     // Skip NaN
     if (typeof value === 'number' && isNaN(value)) {
-      console.warn(`[buildUpdateProps] ⚠️ Skipping NaN value for key: ${key}`);
+      logger.warn({ module: 'propertyHelpers', fn: 'buildUpdateProps', key }, `[buildUpdateProps] ⚠️ Skipping NaN value for key: ${key}`);
       continue;
     }
-    
+
     cleaned[key] = value;
   }
 
@@ -133,7 +157,7 @@ export function buildUpdateProps(props) {
 
 /**
  * Valida propiedades contra schema de HubSpot y separa en válidas/inválidas.
- * 
+ *
  * @param {string} objectType - 'deals', 'tickets', 'invoices', 'line_items'
  * @param {Object} props - Propiedades a validar
  * @returns {Promise<{valid: Object, missing: string[]}>}
@@ -157,7 +181,7 @@ export async function validateProperties(objectType, props) {
 /**
  * Construye propiedades de update validadas y limpia.
  * Combina buildUpdateProps + validateProperties.
- * 
+ *
  * @param {string} objectType - 'deals', 'tickets', 'invoices', 'line_items'
  * @param {Object} props - Propiedades a setear
  * @param {Object} options - { logPrefix: string }
@@ -166,11 +190,13 @@ export async function validateProperties(objectType, props) {
 export async function buildValidatedUpdateProps(objectType, props, options = {}) {
   const logPrefix = options.logPrefix || '[UpdateProps]';
 
+  // 0) Mapear valores de invoice al formato HubSpot
+  const preMapped = objectType === 'invoices' ? mapInvoicePropsToHubspot(props) : props;
+
   // 1) Limpiar valores vacíos/inválidos
-  const cleaned = buildUpdateProps(props);
-  
+  const cleaned = buildUpdateProps(preMapped);
   if (Object.keys(cleaned).length === 0) {
-    console.log(`${logPrefix} ⊘ SKIP_EMPTY_UPDATE - No properties to set`);
+    logger.info({ module: 'propertyHelpers', fn: 'buildValidatedUpdateProps', objectType, logPrefix }, `${logPrefix} ⊘ SKIP_EMPTY_UPDATE - No properties to set`);
     return {};
   }
 
@@ -178,11 +204,11 @@ export async function buildValidatedUpdateProps(objectType, props, options = {})
   const { valid, missing } = await validateProperties(objectType, cleaned);
 
   if (missing.length > 0) {
-    console.warn(`${logPrefix} ⚠️ MISSING_PROPS (${objectType}):`, missing.join(', '));
+    logger.warn({ module: 'propertyHelpers', fn: 'buildValidatedUpdateProps', objectType, logPrefix, missing }, `${logPrefix} ⚠️ MISSING_PROPS (${objectType}): ${missing.join(', ')}`);
   }
 
   if (Object.keys(valid).length > 0) {
-    console.log(`${logPrefix} ✅ SET_PROPS (${objectType}):`, Object.keys(valid).join(', '));
+    logger.info({ module: 'propertyHelpers', fn: 'buildValidatedUpdateProps', objectType, logPrefix, validKeys: Object.keys(valid) }, `${logPrefix} ✅ SET_PROPS (${objectType}): ${Object.keys(valid).join(', ')}`);
   }
 
   return valid;
@@ -213,7 +239,7 @@ export function calculateCupoEstado(dealProps) {
     String(dealProps.cupo_total || '').trim() !== '' ||
     String(dealProps.cupo_total_monto || '').trim() !== '';
 
-  if (!cupoActivo && !hasAnyTotalConfigured) return ''; // “null” en HubSpot
+  if (!cupoActivo && !hasAnyTotalConfigured) return ''; // "null" en HubSpot
 
   // Si faltan números → inconsistente (salvo el caso anterior)
   if (isNaN(cupoTotal) || isNaN(cupoConsumido) || isNaN(cupoRestante)) {
@@ -243,14 +269,14 @@ export function calculateCupoEstado(dealProps) {
 
 /**
  * Calcula el estado del cupo según las reglas del negocio.
- * 
+ *
  * Reglas:
  * - Si no hay cupo (cupo_activo=false) => null
  * - Si cupo_restante <= 0 => "Agotado"
  * - Si cupo_restante <= cupo_umbral => "Bajo Umbral"
  * - Si cupo_restante > cupo_umbral => "Ok"
  * - Si hay datos inconsistentes => "Inconsistente"
- * 
+ *
  * @param {Object} dealProps - Propiedades del deal
  * @returns {string|null} "Ok" | "Bajo Umbral" | "Inconsistente" | "Agotado" | null
  */
@@ -280,9 +306,13 @@ export async function updateDealCupo(deal, lineItems) {
     properties.cupo_activo = 'false';
   }
 
-  await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
+  try {
+    await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
+  } catch (err) {
+    logger.error({ module: 'propertyHelpers', fn: 'updateDealCupo', dealId: deal.id, err }, 'deal_update_failed: updateDealCupo');
+    // deals no es ticket ni line_item → no aplica reportIfActionable por el prompt.
+    // Se deja solo logger.error para visibilidad operativa.
+  }
 
   return { consumido, restante, total, estado };
 }
-
-

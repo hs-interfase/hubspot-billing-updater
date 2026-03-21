@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auditoría · Editor de Facturas</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2e3248;
+      --accent:   #ff7a59;
+      --accent-d: #cc5e40;
+      --text:     #e2e4ef;
+      --muted:    #7b7f9e;
+      --green:    #3ecf8e;
+      --radius:   8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 32px 24px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .header a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      transition: color .2s, border-color .2s;
+    }
+    .header a:hover { color: var(--text); border-color: var(--muted); }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header h1 span { color: var(--accent); }
+
+    /* ── Filtros ── */
+    .filters {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      margin-bottom: 20px;
+    }
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .filter-group label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+    }
+    .filter-group input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+      width: 180px;
+      transition: border-color .2s;
+    }
+    .filter-group input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .filter-group input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(0.6);
+      cursor: pointer;
+    }
+    .btn {
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background .2s, opacity .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-d); }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    /* ── Stats bar ── */
+    .stats {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .stats strong { color: var(--text); }
+
+    /* ── Tabla ── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead th {
+      background: var(--surface2);
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background .15s;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td {
+      padding: 12px 16px;
+      vertical-align: middle;
+    }
+    .invoice-id {
+      font-family: monospace;
+      font-size: 13px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+    .badge {
+      display: inline-block;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .user-tag {
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .expand-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .expand-btn:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ── Fila de detalle ── */
+    .detail-row td {
+      padding: 0;
+      background: var(--bg);
+    }
+    .detail-inner {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+    }
+    .diff-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .diff-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 14px;
+    }
+    .diff-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .diff-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+    .diff-row:last-child { margin-bottom: 0; }
+    .diff-tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .diff-before { background: #3a1f1f; color: #ff6b6b; }
+    .diff-after  { background: #1a3a2a; color: var(--green); }
+    .diff-value {
+      font-size: 13px;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .diff-empty { color: var(--muted); font-style: italic; }
+
+    /* ── Paginación ── */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    .page-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .page-btn:disabled { opacity: .35; cursor: default; }
+    .page-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .page-info { color: var(--muted); font-size: 13px; }
+
+    /* ── Empty / Error ── */
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--muted);
+    }
+    .empty-state .icon { font-size: 36px; margin-bottom: 12px; }
+    .empty-state p { font-size: 15px; }
+
+    /* ── Loading ── */
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: var(--muted);
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <a href="/invoice-editor">← Editor</a>
+    <h1>Auditoría · <span>Editor de Facturas</span></h1>
+  </div>
+
+  <!-- Filtros -->
+  <div class="filters">
+    <div class="filter-group">
+      <label>Invoice ID</label>
+      <input type="text" id="f-invoice" placeholder="ej. 535627410303" />
+    </div>
+    <div class="filter-group">
+      <label>Desde</label>
+      <input type="date" id="f-from" />
+    </div>
+    <div class="filter-group">
+      <label>Hasta</label>
+      <input type="date" id="f-to" />
+    </div>
+    <button class="btn btn-primary" id="btn-search">Buscar</button>
+    <button class="btn btn-ghost" id="btn-clear">Limpiar</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats" id="stats"></div>
+
+  <!-- Tabla -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Fecha / Hora</th>
+          <th>Invoice ID</th>
+          <th>Usuario</th>
+          <th>Campos modificados</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Paginación -->
+  <div class="pagination" id="pagination"></div>
+
+<script>
+  const API_BASE = '/invoice-editor/api/audit'
+  const LIMIT = 20
+
+  let state = { page: 1, total: 0, pages: 1, filters: {} }
+
+  // ── Helpers ──────────────────────────────────────────────
+  function fmt(iso) {
+    const d = new Date(iso)
+    return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+
+  function changesCount(changes) {
+    if (!changes || typeof changes !== 'object') return 0
+    return Object.keys(changes).length
+  }
+
+  function buildParams(page) {
+    const p = new URLSearchParams({ page, limit: LIMIT })
+    if (state.filters.invoiceId) p.set('invoiceId', state.filters.invoiceId)
+    if (state.filters.dateFrom)  p.set('dateFrom',  state.filters.dateFrom)
+    if (state.filters.dateTo)    p.set('dateTo',    state.filters.dateTo)
+    return p.toString()
+  }
+
+  // ── Fetch ────────────────────────────────────────────────
+  async function load(page = 1) {
+    const tbody = document.getElementById('tbody')
+    tbody.innerHTML = `<tr><td colspan="5"><div class="loading"><div class="spinner"></div><br>Cargando…</div></td></tr>`
+    document.getElementById('stats').textContent = ''
+    document.getElementById('pagination').innerHTML = ''
+
+    try {
+      const res = await fetch(`${API_BASE}?${buildParams(page)}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      state.page  = json.page
+      state.total = json.total
+      state.pages = json.pages
+      render(json.data)
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="icon">⚠️</div><p>Error al cargar los logs: ${err.message}</p></div></td></tr>`
+    }
+  }
+
+  // ── Render tabla ─────────────────────────────────────────
+  function render(data) {
+    const tbody = document.getElementById('tbody')
+    const stats = document.getElementById('stats')
+
+    // Stats
+    const start = (state.page - 1) * LIMIT + 1
+    const end   = Math.min(state.page * LIMIT, state.total)
+    stats.innerHTML = state.total > 0
+      ? `Mostrando <strong>${start}–${end}</strong> de <strong>${state.total}</strong> registros`
+      : ''
+
+    if (!data || data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="icon">📭</div><p>No hay registros que coincidan con los filtros.</p></div></td></tr>`
+      return
+    }
+
+    tbody.innerHTML = ''
+    data.forEach((entry, idx) => {
+      const count = changesCount(entry.changes)
+      const rowId = `detail-${idx}`
+
+      // Fila principal
+      const tr = document.createElement('tr')
+      tr.innerHTML = `
+        <td>${fmt(entry.timestamp)}</td>
+        <td><span class="invoice-id">${entry.invoiceId}</span></td>
+        <td><span class="user-tag">${entry.user || 'admin'}</span></td>
+        <td><span class="badge">${count} ${count === 1 ? 'campo' : 'campos'}</span></td>
+        <td><button class="expand-btn" data-target="${rowId}">Ver detalle</button></td>
+      `
+      tbody.appendChild(tr)
+
+      // Fila de detalle (oculta)
+      const detailTr = document.createElement('tr')
+      detailTr.className = 'detail-row'
+      detailTr.id = rowId
+      detailTr.style.display = 'none'
+      detailTr.innerHTML = `<td colspan="5">${buildDiff(entry.changes)}</td>`
+      tbody.appendChild(detailTr)
+    })
+
+    // Paginación
+    renderPagination()
+  }
+
+  // ── Diff ─────────────────────────────────────────────────
+  function buildDiff(changes) {
+    if (!changes || Object.keys(changes).length === 0) {
+      return `<div class="detail-inner"><span style="color:var(--muted)">Sin detalle disponible.</span></div>`
+    }
+
+    const cards = Object.entries(changes).map(([key, val]) => {
+      // Soporta formato { before, after, label } y formato plano
+      const label  = val?.label  || key
+      const before = val?.before !== undefined ? val.before : '—'
+      const after  = val?.after  !== undefined ? val.after  : String(val)
+
+      const beforeHtml = before === '' || before === null || before === undefined
+        ? `<span class="diff-empty">(vacío)</span>`
+        : before
+
+      const afterHtml = after === '' || after === null || after === undefined
+        ? `<span class="diff-empty">(vacío)</span>`
+        : after
+
+      return `
+        <div class="diff-card">
+          <div class="diff-label">${label}</div>
+          <div class="diff-row">
+            <span class="diff-tag diff-before">Antes</span>
+            <span class="diff-value">${beforeHtml}</span>
+          </div>
+          <div class="diff-row">
+            <span class="diff-tag diff-after">Después</span>
+            <span class="diff-value">${afterHtml}</span>
+          </div>
+        </div>
+      `
+    }).join('')
+
+    return `<div class="detail-inner"><div class="diff-grid">${cards}</div></div>`
+  }
+
+  // ── Paginación ───────────────────────────────────────────
+  function renderPagination() {
+    const el = document.getElementById('pagination')
+    if (state.pages <= 1) { el.innerHTML = ''; return }
+
+    let html = `<button class="page-btn" id="pg-prev" ${state.page === 1 ? 'disabled' : ''}>‹ Anterior</button>`
+
+    // Rango de páginas visible
+    const delta = 2
+    const range = []
+    for (let i = Math.max(1, state.page - delta); i <= Math.min(state.pages, state.page + delta); i++) {
+      range.push(i)
+    }
+    if (range[0] > 1) {
+      html += `<button class="page-btn" data-page="1">1</button>`
+      if (range[0] > 2) html += `<span class="page-info">…</span>`
+    }
+    range.forEach(p => {
+      html += `<button class="page-btn ${p === state.page ? 'active' : ''}" data-page="${p}">${p}</button>`
+    })
+    if (range[range.length - 1] < state.pages) {
+      if (range[range.length - 1] < state.pages - 1) html += `<span class="page-info">…</span>`
+      html += `<button class="page-btn" data-page="${state.pages}">${state.pages}</button>`
+    }
+
+    html += `<button class="page-btn" id="pg-next" ${state.page === state.pages ? 'disabled' : ''}>Siguiente ›</button>`
+    el.innerHTML = html
+
+    el.querySelectorAll('[data-page]').forEach(btn => {
+      btn.addEventListener('click', () => load(parseInt(btn.dataset.page)))
+    })
+    document.getElementById('pg-prev')?.addEventListener('click', () => load(state.page - 1))
+    document.getElementById('pg-next')?.addEventListener('click', () => load(state.page + 1))
+  }
+
+  // ── Expand/collapse ──────────────────────────────────────
+  document.getElementById('tbody').addEventListener('click', e => {
+    const btn = e.target.closest('.expand-btn')
+    if (!btn) return
+    const target = document.getElementById(btn.dataset.target)
+    if (!target) return
+    const open = target.style.display !== 'none'
+    target.style.display = open ? 'none' : 'table-row'
+    btn.textContent = open ? 'Ver detalle' : 'Ocultar'
+  })
+
+  // ── Filtros ──────────────────────────────────────────────
+  document.getElementById('btn-search').addEventListener('click', () => {
+    state.filters = {
+      invoiceId: document.getElementById('f-invoice').value.trim(),
+      dateFrom:  document.getElementById('f-from').value,
+      dateTo:    document.getElementById('f-to').value,
+    }
+    load(1)
+  })
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    document.getElementById('f-invoice').value = ''
+    document.getElementById('f-from').value = ''
+    document.getElementById('f-to').value = ''
+    state.filters = {}
+    load(1)
+  })
+
+  // Enter en inputs lanza búsqueda
+  ;['f-invoice', 'f-from', 'f-to'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('btn-search').click()
+    })
+  })
+
+  // ── Init ─────────────────────────────────────────────────
+  load(1)
+</script>
+</body>
+</html>

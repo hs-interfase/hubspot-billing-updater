@@ -9,6 +9,7 @@ const HUBSPOT_BASE_URL = "https://api.hubapi.com";
  * - facturacion_activa = true  O  sin propiedad facturacion_activa
  * - opcional: dealstage = HUBSPOT_CLOSED_WON_STAGE (si está seteado en env)
  */
+/*
 function buildDealsSearchBody() {
   const closedWonStage = process.env.HUBSPOT_CLOSED_WON_STAGE || null;
 
@@ -130,3 +131,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+*/

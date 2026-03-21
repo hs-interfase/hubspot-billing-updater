@@ -1,11 +1,10 @@
-// src/utils/__tests__/invoiceValidation.test.js
+// src/__tests__/invoiceValidation.test.js
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isInvoiceIdValidForLineItem } from '../invoiceValidation.js';
-import { hubspotClient } from '../../hubspotClient.js';
+import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
+import { hubspotClient } from '../hubspotClient.js';
 
-// Mock hubspotClient
-vi.mock('../../hubspotClient.js', () => ({
+vi.mock('../hubspotClient.js', () => ({
   hubspotClient: {
     crm: {
       objects: {
@@ -25,7 +24,7 @@ describe('isInvoiceIdValidForLineItem', () => {
   it('should return invalid when invoiceId is empty', async () => {
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: '',
       billDateYMD: '2024-01-15',
     });
@@ -38,7 +37,7 @@ describe('isInvoiceIdValidForLineItem', () => {
   it('should return invalid when invoiceId is null', async () => {
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: null,
       billDateYMD: '2024-01-15',
     });
@@ -48,17 +47,15 @@ describe('isInvoiceIdValidForLineItem', () => {
   });
 
   it('should return valid when invoice_key matches expected key', async () => {
-    const expectedKey = '123::LI:456::2024-01-15';
+    const expectedKey = '123::LIK:lik-abc::2024-01-15';
 
     hubspotClient.crm.objects.basicApi.getById.mockResolvedValue({
-      properties: {
-        of_invoice_key: expectedKey,
-      },
+      properties: { of_invoice_key: expectedKey },
     });
 
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: '789',
       billDateYMD: '2024-01-15',
     });
@@ -67,26 +64,20 @@ describe('isInvoiceIdValidForLineItem', () => {
     expect(result.reason).toBe('key_match');
     expect(result.expectedKey).toBe(expectedKey);
     expect(result.foundKey).toBe(expectedKey);
-    expect(hubspotClient.crm.objects.basicApi.getById).toHaveBeenCalledWith(
-      'invoices',
-      '789',
-      ['of_invoice_key']
-    );
+    expect(hubspotClient.crm.objects.basicApi.getById).toHaveBeenCalledWith('invoices', '789', ['of_invoice_key']);
   });
 
   it('should return invalid when invoice_key does not match', async () => {
-    const expectedKey = '123::LI:456::2024-01-15';
-    const wrongKey = '999::LI:888::2024-01-15'; // Clave de otro deal/lineItem
+    const expectedKey = '123::LIK:lik-abc::2024-01-15';
+    const wrongKey = '999::LIK:lik-xyz::2024-01-15';
 
     hubspotClient.crm.objects.basicApi.getById.mockResolvedValue({
-      properties: {
-        of_invoice_key: wrongKey,
-      },
+      properties: { of_invoice_key: wrongKey },
     });
 
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: '789',
       billDateYMD: '2024-01-15',
     });
@@ -105,14 +96,14 @@ describe('isInvoiceIdValidForLineItem', () => {
 
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: '789',
       billDateYMD: '2024-01-15',
     });
 
     expect(result.valid).toBe(false);
     expect(result.reason).toBe('invoice_not_found');
-    expect(result.expectedKey).toBe('123::LI:456::2024-01-15');
+    expect(result.expectedKey).toBe('123::LIK:lik-abc::2024-01-15');
   });
 
   it('should return invalid when API error occurs', async () => {
@@ -122,7 +113,7 @@ describe('isInvoiceIdValidForLineItem', () => {
 
     const result = await isInvoiceIdValidForLineItem({
       dealId: '123',
-      lineItemId: '456',
+      lik: 'lik-abc',
       invoiceId: '789',
       billDateYMD: '2024-01-15',
     });
