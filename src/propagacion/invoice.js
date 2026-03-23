@@ -230,18 +230,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
       ticketUpdate.fecha_real_de_facturacion = fechaHubSpot;
     }
   }
-// Justo antes del "if (Object.keys(ticketUpdate).length > 0)"
-console.log('[PROP DEBUG]', {
-  invoiceId,
-  ticketId,
-  etapa,
-  currentStage,
-  currentPipeline,
-  isAutomated,
-  targetStage,
-  ticketUpdate,
-  tp_of_invoice_status: tp.of_invoice_status,
-});
+
   // 5. Aplicar update en ticket
   if (Object.keys(ticketUpdate).length > 0) {
     try {
