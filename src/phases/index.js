@@ -4,7 +4,11 @@ import { runPhase1 } from './phase1.js';
 import { runPhaseP } from './phasep.js';
 import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
-
+import {
+  DEAL_STAGE_LOST,
+  DEAL_STAGE_SUSPENDED,
+  DEAL_STAGE_VOIDED,
+} from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
@@ -12,12 +16,13 @@ import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 
-const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
-const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || '';
-
 function isDealCancelled(dealProps) {
   const stage = String(dealProps?.dealstage || '');
-  return stage === DEAL_STAGE_LOST || (CANCELLED_STAGE_ID && stage === CANCELLED_STAGE_ID);
+  return (
+    stage === DEAL_STAGE_LOST ||
+    stage === DEAL_STAGE_SUSPENDED ||
+    stage === DEAL_STAGE_VOIDED
+  );
 }
 
 function formatHsLastModified(raw) {

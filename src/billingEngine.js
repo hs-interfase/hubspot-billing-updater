@@ -2,7 +2,7 @@
 import { hubspotClient } from './hubspotClient.js';
 import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
 import logger from '../lib/logger.js';
-import { reportHubSpotError } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
+import { reportHubSpotError, reportHubSpotWarn } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
 
 /**
  * Reporta a HubSpot solo errores accionables (4xx excepto 429).
@@ -378,6 +378,14 @@ const msg = [
       lineItemId: lineItem.id,
     }, 'irregular=true sin fecha puntual (manual no soportado)');
 
+    if (dealContext?.dealId) {
+      reportHubSpotWarn({
+        objectType: 'deal',
+        objectId: String(dealContext.dealId),
+        message: msg,
+      });
+    }
+
     const updatesError = { billing_error: msg };
 
     try {
@@ -445,16 +453,26 @@ const msg = [
     }
 
     const msg =
-      'Falta fecha de inicio de facturación en el line item. Setear hs_recurring_billing_start_date (Start date) para calcular próximas fechas.';
+     `Falta fecha de inicio en ${p.name || `LI ${lineItem.id}`} LI ${lineItem.id} - no se calcula schedule. Por favor agrega una fecha de inicio`;
 
     logger.warn({
       module: 'billingEngine',
       fn: 'updateLineItemSchedule',
       lineItemId: lineItem.id,
+      dealId: dealContext?.dealId,
+      dealName: dealContext?.dealName,
       isOneTime,
       isFacturarAhora,
       frequency: config?.frequency,
     }, 'Falta startDate → no se calcula schedule');
+
+    if (dealContext?.dealId) {
+      reportHubSpotWarn({
+        objectType: 'deal',
+        objectId: String(dealContext.dealId),
+        message: msg,
+      });
+    }
 
     const updatesError = { billing_error: msg };
 

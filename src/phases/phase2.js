@@ -3,7 +3,6 @@
 import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
-import { MANUAL_TICKET_LOOKAHEAD_DAYS, TICKET_STAGES, BILLING_TICKET_FORECAST, BILLING_TICKET_FORECAST_50, BILLING_TICKET_FORECAST_75, BILLING_TICKET_FORECAST_95, FORECAST_MANUAL_STAGES } from '../config/constants.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
@@ -11,7 +10,17 @@ import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromo
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { withRetry } from '../utils/withRetry.js';
-
+import { 
+  DEAL_STAGE_EN_EJECUCION, 
+  MANUAL_TICKET_LOOKAHEAD_DAYS, 
+  TICKET_STAGES, 
+  BILLING_TICKET_FORECAST, 
+  BILLING_TICKET_FORECAST_50, 
+  BILLING_TICKET_FORECAST_75,   
+  BILLING_TICKET_FORECAST_95,  
+  FORECAST_MANUAL_STAGES,
+  DEAL_STAGE_FINALIZADO 
+} from '../config/constants.js';
 
 /**
  * PHASE 2 (MANUAL):
@@ -44,6 +53,8 @@ function resolveDealBucket(dealstage) {
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
   if (s === 'closedwon') return '95';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
+  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
   return '25';
 }
 

@@ -25,6 +25,8 @@ import {
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
   isForecastStage,
+  DEAL_STAGE_EN_EJECUCION, 
+  DEAL_STAGE_FINALIZADO
 } from '../config/constants.js';
 
 const BILLING_TZ = 'America/Montevideo';
@@ -159,6 +161,8 @@ function resolveBucketFromDealStage(dealStage) {
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
   if (s === 'closedwon') return '95';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
+  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
   return null;
 }
 

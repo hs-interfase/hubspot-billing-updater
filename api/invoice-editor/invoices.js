@@ -7,6 +7,7 @@ import axios from 'axios'
 import pool from './Db.js'
 import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
+import { tryAdvanceDealToEnEjecucion } from './advanceDealToEnEjecucion.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
@@ -78,19 +79,19 @@ router.get('/:id', async (req, res) => {
           params: { properties: 'of_pais_operativo,of_iva,of_exonera_irae,total_real_a_facturar,of_line_item_ids' },
         })
         const tp = ticketData.properties || {}
-      
+
         if (!properties.pais_operativo && tp.of_pais_operativo)
           properties.pais_operativo = tp.of_pais_operativo
-      
+
         if (!properties.iva && tp.of_iva != null)
           properties.iva = (tp.of_iva === 'true' || tp.of_iva === true) ? 'true' : 'false'
-      
+
         if (!properties.exonera_irae && tp.of_exonera_irae != null)
           properties.exonera_irae = (tp.of_exonera_irae === 'true' || tp.of_exonera_irae === true) ? 'Si' : 'No'
-      
+
         if (!properties.monto_a_facturar && tp.total_real_a_facturar)
           properties.monto_a_facturar = tp.total_real_a_facturar
-      
+
         // unidad_de_negocio viene del line item, no del ticket
         if (!properties.unidad_de_negocio && tp.of_line_item_ids) {
           const lineItemId = tp.of_line_item_ids.split(',')[0].trim()
@@ -104,7 +105,7 @@ router.get('/:id', async (req, res) => {
             console.warn('[InvoiceEditor][GET] Error leyendo line item para unidad_de_negocio:', liErr.message)
           }
         }
-      
+
       } catch (fallbackErr) {
         console.warn('[InvoiceEditor][GET] Error en fallback desde ticket:', fallbackErr.message)
       }
@@ -199,20 +200,34 @@ router.patch('/:id', async (req, res) => {
       properties: filteredProperties,
     })
 
-    // Sync campos factura → ticket (si hay algo mapeable)
-    const hasMappableFields = Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0
-    if (hasMappableFields) {
+    // Leer ticket_id una sola vez si alguna de las operaciones post-save lo necesita
+    const needsTicketId =
+      Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0 ||
+      !!(filteredProperties.id_factura_nodum)
+
+    let ticketId = null
+
+    if (needsTicketId) {
       try {
         const { data: invoiceData } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
           params: { properties: 'ticket_id' },
         })
-        const ticketId = invoiceData.properties?.ticket_id
+        ticketId = invoiceData.properties?.ticket_id
+      } catch (err) {
+        console.warn('[InvoiceEditor][PATCH] No se pudo leer ticket_id de la factura:', err.message)
+      }
+    }
+
+    // Sync campos factura → ticket (id_factura_nodum, montos, etc.)
+    if (Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0) {
+      try {
         await syncInvoiceToTicket(ticketId, filteredProperties, id, hs)
       } catch (syncErr) {
         console.error('[InvoiceEditor][PATCH] Error en syncInvoiceToTicket:', syncErr?.message)
       }
     }
 
+    // Propagar etapa al ticket si cambió etapa o se emitió primera factura Nodum
     const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
       (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null)
@@ -223,6 +238,12 @@ router.patch('/:id', async (req, res) => {
       } catch (propagateErr) {
         console.error('[InvoiceEditor][PATCH] Error en propagación invoice→ticket:', propagateErr?.message)
       }
+    }
+
+    // Avanzar deal de Ganado → En Ejecución si se asoció primera factura Nodum
+    // Fire-and-forget: no bloquea la respuesta al cliente
+    if (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null) {
+      tryAdvanceDealToEnEjecucion(ticketId).catch(() => {})
     }
 
     writeAuditLog({

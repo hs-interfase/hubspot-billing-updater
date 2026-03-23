@@ -106,6 +106,22 @@ export const CANCELLED_STAGE_BY_PIPELINE = {
 };
 
 // ===============================
+// Deal stages — pipeline de negocio
+// ===============================
+export const DEAL_STAGE_WON          = process.env.DEAL_STAGE_80  || 'closedwon';      // SC6 Ganado
+export const DEAL_STAGE_EN_EJECUCION = process.env.DEAL_STAGE_95  || '1327905636';     // SC7 En Ejecución
+export const DEAL_STAGE_FINALIZADO   = process.env.DEAL_STAGE_100 || '1213354528';     // SC8 Finalizado
+export const DEAL_STAGE_SUSPENDED    = process.env.DEAL_STAGE_SUSPENDED || '1327857484'; // Suspendido
+export const DEAL_STAGE_VOIDED       = process.env.DEAL_STAGE_VOIDED   || '1327905964'; // No participamos
+
+// Stages activos para billing (bucket 95)
+export const BILLING_ACTIVE_DEAL_STAGES = new Set([
+  DEAL_STAGE_WON,
+  DEAL_STAGE_EN_EJECUCION,
+  DEAL_STAGE_FINALIZADO,
+]);
+
+// ===============================
 // Helpers semánticos
 // ===============================
 

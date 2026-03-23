@@ -21,6 +21,8 @@ import {
   BILLING_AUTOMATED_FORECAST_75,
   BILLING_AUTOMATED_FORECAST_95,
   FORECAST_AUTO_STAGES,
+  DEAL_STAGE_EN_EJECUCION,
+  DEAL_STAGE_FINALIZADO
 } from '../config/constants.js';
 
 /**
@@ -54,6 +56,8 @@ function resolveDealBucket(dealstage) {
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
   if (s === 'closedwon') return '95';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
+  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
   return '25';
 }
 
