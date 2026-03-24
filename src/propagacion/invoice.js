@@ -310,27 +310,32 @@ export async function propagateCancelledInvoicesForDeal(lineItems) {
     return results;
   }
 
-  let cancelledInvoices = [];
-  try {
-    logger.info({ module: mod, fn, liks }, 'LIKs extraídos para búsqueda');
+logger.info({ module: mod, fn, liks }, 'LIKs extraídos para búsqueda');
 
-    const resp = await hubspotClient.crm.objects.searchApi.doSearch(INVOICE_OBJECT_TYPE, {
-      filterGroups: liks.map(lik => ({
-        filters: [{ propertyName: 'line_item_key', operator: 'EQ', value: lik }],
-      })),
-      properties: ['etapa_de_la_factura', 'line_item_key', 'of_invoice_key'],
-      limit: 100,
-    });
+  const CHUNK_SIZE = 5;
+  const allInvoices = [];
 
-    logger.info({ module: mod, fn, total: resp?.total, found: resp?.results?.length }, 'Resultado búsqueda invoices');
-
-    cancelledInvoices = (resp?.results ?? []).filter(
-      inv => inv.properties?.etapa_de_la_factura === 'Cancelada'
-    );
-  } catch (err) {
-    logger.error({ module: mod, fn, err }, 'Error buscando invoices canceladas');
-    return results;
+  for (let i = 0; i < liks.length; i += CHUNK_SIZE) {
+    const chunk = liks.slice(i, i + CHUNK_SIZE);
+    try {
+      const resp = await hubspotClient.crm.objects.searchApi.doSearch(INVOICE_OBJECT_TYPE, {
+        filterGroups: chunk.map(lik => ({
+          filters: [{ propertyName: 'line_item_key', operator: 'EQ', value: lik }],
+        })),
+        properties: ['etapa_de_la_factura', 'line_item_key', 'of_invoice_key'],
+        limit: 100,
+      });
+      allInvoices.push(...(resp?.results ?? []));
+    } catch (err) {
+      logger.error({ module: mod, fn, chunk, err }, 'Error buscando invoices canceladas (chunk)');
+    }
   }
+
+  logger.info({ module: mod, fn, total: allInvoices.length }, 'Resultado búsqueda invoices');
+
+  const cancelledInvoices = allInvoices.filter(
+    inv => inv.properties?.etapa_de_la_factura === 'Cancelada'
+  );
 
   for (const inv of cancelledInvoices) {
     try {
