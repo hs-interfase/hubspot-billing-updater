@@ -3,8 +3,7 @@
 import { isAutoRenew } from './mode.js';
 import logger from '../../../lib/logger.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
-
-const INVOICE_LIK_PROP = 'line_item_key';
+import { INVOICED_TICKET_STAGES } from '../../config/constants.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -122,14 +121,14 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
     };
   }
 
-  const countInvoices = await countInvoicesByLIK({ hubspotClient, lik, dealId });
+  const countTickets = await countTicketsByLIK({ hubspotClient, lik });
 
-  const restantes = Math.max(0, cuotasTotales - countInvoices);
+  const restantes = Math.max(0, cuotasTotales - countTickets);
   const currentRaw = String(properties?.facturas_restantes ?? '').trim();
   const nextRaw = String(restantes);
 
   logger.debug(
-    { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id, lik, cuotasTotales, countInvoices, restantes, currentRaw, nextRaw },
+    { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id, lik, cuotasTotales, countTickets, restantes, currentRaw, nextRaw },
     'Cómputo de facturas_restantes'
   );
 
@@ -159,76 +158,33 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
   return {
     mode: 'PLAN_FIJO',
     facturas_restantes: restantes,
-    countInvoices,
+    countTickets,
     cuotasTotales,
     lik,
-    invoiceLikProp: INVOICE_LIK_PROP,
   };
 }
 
-async function countInvoicesByLIK({ hubspotClient, lik, dealId }) {
-  const v4 = hubspotClient?.crm?.associations?.v4?.basicApi;
+/**
+ * Cuenta tickets asociados a un LIK que están en etapa de factura real emitida.
+ * Cubre ambos pipelines (manual y automático).
+ */
+async function countTicketsByLIK({ hubspotClient, lik }) {
+  const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
+    filterGroups: [{
+      filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: lik }],
+    }],
+    properties: ['hs_pipeline_stage'],
+    limit: 100,
+  });
 
-  if (!v4?.getPage) {
-    throw new Error('countInvoicesByLIK: Associations v4 API no disponible');
-  }
-
-  if (!dealId) {
-    throw new Error('countInvoicesByLIK requiere dealId');
-  }
-
-  let after = undefined;
-  let invoiceIds = [];
-  let page = 0;
-
-  // 1) Traer todas las invoices asociadas al DEAL
-  while (true) {
-    page += 1;
-
-    const res = await v4.getPage(
-      'deals',
-      String(dealId),
-      'invoices',
-      100,
-      after
-    );
-
-    const results = res?.results ?? [];
-    invoiceIds.push(...results.map(r => r.toObjectId));
-
-    const nextAfter = res?.paging?.next?.after;
-    if (!nextAfter) break;
-    after = nextAfter;
-  }
-
-  if (invoiceIds.length === 0) {
-    logger.debug(
-      { module: 'recalcFacturasRestantes', fn: 'countInvoicesByLIK', dealId, total: 0 },
-      'Sin invoices asociadas al deal'
-    );
-    return 0;
-  }
-
-  // 2) Leer invoices y filtrar por LIK
-  let count = 0;
-
-  for (const invoiceId of invoiceIds) {
-    const inv = await hubspotClient.crm.objects.basicApi.getById(
-      'invoices',
-      invoiceId,
-      ['of_invoice_key', 'etapa_de_la_factura']
-    );
-
-    const invoiceKey = inv?.properties?.of_invoice_key || '';
-
-    if (invoiceKey.includes(lik)) {
-      count++;
-    }
-  }
+  const tickets = resp?.results ?? [];
+  const count = tickets.filter(t =>
+    INVOICED_TICKET_STAGES.has(String(t.properties?.hs_pipeline_stage))
+  ).length;
 
   logger.debug(
-    { module: 'recalcFacturasRestantes', fn: 'countInvoicesByLIK', dealId, lik, matched: count, totalInvoicesOnDeal: invoiceIds.length },
-    'Invoices filtradas por LIK'
+    { module: 'recalcFacturasRestantes', fn: 'countTicketsByLIK', lik, total: tickets.length, matched: count },
+    'Tickets en etapa de factura real'
   );
 
   return count;
@@ -242,8 +198,7 @@ async function countInvoicesByLIK({ hubspotClient, lik, dealId }) {
  *
  * NO reportados:
  *   - lineItems.basicApi.getById → lectura
- *   - objects.basicApi.getById (invoices) → lectura
- *   - associations.v4.basicApi.getPage → lectura/asociaciones excluidas
+ *   - tickets.searchApi.doSearch → lectura
  *
  * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
  */

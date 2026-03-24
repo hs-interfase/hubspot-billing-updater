@@ -121,6 +121,18 @@ export const BILLING_ACTIVE_DEAL_STAGES = new Set([
   DEAL_STAGE_FINALIZADO,
 ]);
 
+// Al final del archivo, antes del cierre
+export const INVOICED_TICKET_STAGES = new Set([
+  // Manual: Emitido, Atrasado, Cobrado
+  process.env.BILLING_TICKET_STAGE_ID_BILLED  || '1311451809',
+  process.env.BILLING_TICKET_STAGE_ID_LATE    || '1311451811',
+  process.env.BILLING_TICKET_PIPELINE_ID_PAID || '1311451810',
+  // Auto: Emitida Factura Real, Atrasada, Cobrada
+  process.env.BILLING_AUTOMATED_CREATED       || '1311404152',
+  process.env.BILLING_AUTOMATED_LATE          || '1311404153',
+  process.env.BILLING_AUTOMATED_PAID          || '1311404154',
+]);
+
 // ===============================
 // Helpers semánticos
 // ===============================
