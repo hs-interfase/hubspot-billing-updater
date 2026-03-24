@@ -15,6 +15,7 @@ import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
+import { assignTicketOwners } from '../services/tickets/assignTicketOwners.js';
 
 function isDealCancelled(dealProps) {
   const stage = String(dealProps?.dealstage || '');
@@ -181,6 +182,26 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       'Error en Phase P'
     );
     results.phaseP.error = err?.message || 'Error desconocido';
+  }
+
+  // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
+  try {
+    const ownerResult = await assignTicketOwners({
+      dealId,
+      lineItems: currentLineItems,
+      dealProps: currentDeal?.properties,
+    });
+    results.ownerAssignment = ownerResult;
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...ownerResult },
+      'Asignación de owner en tickets completada'
+    );
+  } catch (err) {
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en assignTicketOwners'
+    );
+    results.ownerAssignment = { error: err?.message };
   }
 
   // ========== PHASE 2: Tickets manuales ==========

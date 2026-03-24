@@ -1,11 +1,5 @@
-﻿Get-ChildItem -Recurse -File -Force |
-Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |     
-ForEach-Object { Resolve-Path -Relative $_.FullName } |     
-ForEach-Object { $_ -replace '^\.\[\\/]', '' } |     
-Set-Content -Encoding UTF8 estructura-limpia.txt     
-
-.env
-.env.real
+﻿.env
+.env.testing
 .gitignore
 .\FIX_TICKET_IDEMPOTENCY.md
 .\IMPLEMENTATION_SUMMARY.md
@@ -14,15 +8,21 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\package.json
 .\README.md
 .\server.js
+.\testPropagate.js
 .vercel\project.json
 .vercel\README.txt
 .\api\actualizar-webhook.js
+.\api\debugUrgent.js
 .\api\escuchar-cambios.js
 .\api\update-billing.js
+.\api\invoice-editor\advanceDealToEnEjecucion.js
+.\api\invoice-editor\audit.js
 .\api\invoice-editor\auth.js
+.\api\invoice-editor\Db.js
 .\api\invoice-editor\INTEGRACION.md
 .\api\invoice-editor\invoiceFields.config.json
 .\api\invoice-editor\invoices.js
+.\api\invoice-editor\syncInvoiceToTicket.js
 .\data\cron-state-deals.json
 .\data\cron-state-deals.lock
 .\data\cron_failed_deals.json
@@ -31,6 +31,12 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\data\logs\cron_deals_2026-02-20.log.jsonl
 .\data\logs\cron_deals_2026-02-22.log.jsonl
 .\data\logs\cron_deals_2026-02-26.log.jsonl
+.\data\logs\cron_deals_2026-03-03.log.jsonl
+.\data\logs\cron_deals_2026-03-05.log.jsonl
+.\data\logs\cron_deals_2026-03-07.log.jsonl
+.\data\logs\cron_deals_2026-03-15.log.jsonl
+.\data\logs\cron_deals_2026-03-21.log.jsonl
+.\data\logs\cron_deals_2026-03-23.log.jsonl
 .\docs\_archive\billing-flow.md
 .\docs\_archive\FLOW_DIAGRAM.md
 .\docs\_archive\HUBSPOT_PROPERTIES_CHECKLIST.md
@@ -43,6 +49,7 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\logs\warn.log
 .\public\favicon.ico
 .\public\favicon.png
+.\public\invoice-editor-audit.html
 .\public\invoice-editor.html
 .\src\associations.js
 .\src\billingEngine.js
@@ -52,22 +59,25 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\src\invoices.js
 .\src\normalizeBillingStartDelay.js
 .\src\runBilling.js
-.\src\api\facturar-ahora.js
 .\src\config\constants.js
 .\src\config\propertyMapping.js
 .\src\jobs\cronDealsBatch.js
+.\src\jobs\cronExchangeRates.js
 .\src\phases\index.js
 .\src\phases\phase1.js
 .\src\phases\phase2.js
 .\src\phases\phase3.js
 .\src\phases\phasep.js
+.\src\propagacion\invoice.js
 .\src\propagacion\deals\cancelDeal.js
 .\src\propagacion\tickets\cancelForecastTickets.js
 .\src\services\invoiceService.js
 .\src\services\mirrorLineItemsUyUpsert.js
+.\src\services\mirrorUtils.js
 .\src\services\snapshotService.js
 .\src\services\urgentBillingService.js
 .\src\services\alerts\cupoAlert.js
+.\src\services\billing\missedBillingGuard.js
 .\src\services\billing\mode.js
 .\src\services\billing\recalcFacturasRestantes.js
 .\src\services\billing\syncBillingState.js
@@ -77,6 +87,7 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\src\services\forecast\forecastMetaService.js
 .\src\services\lineItems\cloneSanitizerService.js
 .\src\services\lineItems\syncAfterPromotion.js
+.\src\services\tickets\assignTicketOwners.js
 .\src\services\tickets\manualTicketService.js
 .\src\services\tickets\snapshotService.js
 .\src\services\tickets\ticketCleanupService.js
@@ -95,6 +106,8 @@ Set-Content -Encoding UTF8 estructura-limpia.txt
 .\src\utils\resolveNextBillingDate.js
 .\src\utils\resolvePlanYMD.js
 .\src\utils\ticketKey.js
-.\src\__tests__\invoiceValidation.js
+.\src\utils\withRetry.js
+.\src\__tests__\buildPagosDisplay.test.js
 .\src\__tests__\invoiceValidation.test.js
+.\src\__tests__\testPropagate.js
 .\src\__tests__\ticketKeyIdempotency.js
