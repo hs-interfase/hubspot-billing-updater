@@ -470,12 +470,28 @@ export async function runPhaseP({ deal, lineItems }) {
       // con of_line_item_key desincronizado (ej: deals mirror, clones)
       const existingByTicketKey = new Map();
 
-      for (const t of allTickets) {
+for (const t of allTickets) {
         const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
         if (!k) continue;
 
         if (isForecastTicket(t)) {
-          if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
+          if (existingForecastByKey.has(k)) {
+            // Duplicado forecast para la misma key (ej: cambio de dealstage generó
+            // un segundo ticket en distinto stage sin borrar el anterior).
+            // Lo eliminamos aquí para que el paso 6 trabaje con un único canónico.
+            try {
+              await deleteTicket(t.id);
+              deleted++;
+              logger.info(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, key: k },
+                'Ticket forecast duplicado eliminado (misma key, stage distinto)'
+              );
+            } catch (err) {
+              logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
+            }
+          } else {
+            existingForecastByKey.set(k, t);
+          }
         } else {
           if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
         }
