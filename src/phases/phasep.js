@@ -569,12 +569,35 @@ for (const t of allTickets) {
           });
 
           created++;
-          changed = true;
+        changed = true;
+        continue;
+      }
+
+      // FIX: si existe forecast PERO también existe un ticket protegido para
+      // la misma key, el forecast es redundante y debe eliminarse.
+      {
+        const existingByKey = existingByTicketKey.get(key);
+        const foundProtected = existingProtected ||
+          (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+
+        if (foundProtected) {
+          logger.info(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, forecastTicketId: existingForecast.id, protectedTicketId: foundProtected.id },
+            'Forecast redundante eliminado: key ya cubierta por ticket protegido'
+          );
+          try {
+            await deleteTicket(existingForecast.id);
+            deleted++;
+            changed = true;
+          } catch (err) {
+            logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: existingForecast?.id, err }, 'unit_failed');
+          }
           continue;
         }
+      }
 
-        // Existe forecast => STAGE-ONLY
-        const existing = existingForecast;
+      // Existe forecast => STAGE-ONLY
+      const existing = existingForecast;
         const patch = {};
 
         const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;

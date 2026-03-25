@@ -1,6 +1,6 @@
 import { hubspotClient } from './src/hubspotClient.js';
 
-const dealId = '57093649716';
+const dealId = '57093541225';
 
 const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
   filterGroups: [
