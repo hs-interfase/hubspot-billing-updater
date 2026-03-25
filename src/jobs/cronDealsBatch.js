@@ -423,32 +423,14 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
 
       // Weekday: fetch a page from each set, merge-sort by hs_lastmodifieddate (desc), yield.
       while (Date.now() < deadline) {
-        let r1, r2, r3;
+       let r1, r2, r3;
 
         try {
-          [r1, r2, r3] = await Promise.all([
-            searchDeals({
-              after: state.weekday.after_s1,
-              limit: PAGE_LIMIT,
-              filters: weekdayFilters_set1_todayAutoTrue(today),
-              properties: props,
-              sorts: SORTS,
-            }),
-            searchDeals({
-              after: state.weekday.after_s2,
-              limit: PAGE_LIMIT,
-              filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30),
-              properties: props,
-              sorts: SORTS,
-            }),
-            searchDeals({
-              after: state.weekday.after_s3,
-              limit: PAGE_LIMIT,
-              filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS),
-              properties: props,
-              sorts: SORTS,
-            }),
-          ]);
+          r1 = await searchDeals({ after: state.weekday.after_s1, limit: PAGE_LIMIT, filters: weekdayFilters_set1_todayAutoTrue(today), properties: props, sorts: SORTS });
+          await sleep(300);
+          r2 = await searchDeals({ after: state.weekday.after_s2, limit: PAGE_LIMIT, filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30), properties: props, sorts: SORTS });
+          await sleep(300);
+          r3 = await searchDeals({ after: state.weekday.after_s3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
         } catch (e) {
           // 🔒 NO romper el cron por search 400/429/5xx
           appendAudit({

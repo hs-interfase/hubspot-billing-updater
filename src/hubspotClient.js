@@ -17,6 +17,21 @@ const rawHubspotClient = new Hubspot.Client({
   accessToken: process.env.HUBSPOT_PRIVATE_TOKEN,
 });
 
+// ─────────────────────────────────────────────────────────────
+// Token bucket — rate limiter (9 req/seg)
+// ─────────────────────────────────────────────────────────────
+const RATE_LIMIT_RPS = Number(process.env.HS_RATE_LIMIT_RPS || 9);
+const BUCKET_INTERVAL_MS = Math.floor(1000 / RATE_LIMIT_RPS); // ~111ms entre tokens
+
+let lastTokenAt = 0;
+
+async function acquireToken() {
+  const now = Date.now();
+  const wait = BUCKET_INTERVAL_MS - (now - lastTokenAt);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastTokenAt = Date.now();
+}
+
 function makeRetryProxy(target, path = '') {
   return new Proxy(target, {
     get(obj, prop) {
@@ -29,10 +44,10 @@ function makeRetryProxy(target, path = '') {
         const fullPath = path ? `${path}.${prop}` : String(prop);
         // Devolvemos una función síncrona que retorna la Promise de withRetry.
         // Mantiene el this original con .apply(obj, args).
-        return (...args) => withRetry(
+        return (...args) => acquireToken().then(() => withRetry(
           () => val.apply(obj, args),
           { sdkPath: fullPath }
-        );
+        ));
       }
 
       if (val !== null && typeof val === 'object') {
@@ -54,6 +69,11 @@ export const hubspotClient = makeRetryProxy(rawHubspotClient);
 // ─────────────────────────────────────────────────────────────
 
 export const axiosHubSpot = axios.create();
+
+axiosHubSpot.interceptors.request.use(async (config) => {
+  await acquireToken();
+  return config;
+});
 
 axiosHubSpot.interceptors.response.use(
   res => res,
