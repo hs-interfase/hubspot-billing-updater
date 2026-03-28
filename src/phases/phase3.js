@@ -19,6 +19,7 @@ import {
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
   BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
   FORECAST_AUTO_STAGES,
   DEAL_STAGE_EN_EJECUCION,
@@ -37,7 +38,7 @@ import {
  *
  * Reglas acordadas:
  * - Urgente (facturar_ahora==true): promover ticket forecast del planYMD a READY (si existe) y marcar urgente.
- * - Programado: solo si planYMD === HOY → promover a READY.
+* - Programado: si planYMD <= HOY → promover a READY (incluye fechas pasadas).
  *
  * Idempotencia:
  * - Ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
@@ -55,9 +56,9 @@ function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
-  if (s === 'closedwon') return '95';
-  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
-  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
+  if (s === 'closedwon') return '85';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';
+  if (s === DEAL_STAGE_FINALIZADO) return '100';
   return '25';
 }
 
@@ -65,7 +66,9 @@ function resolveAutoForecastStageForDealStage(dealstage) {
   const b = resolveDealBucket(dealstage);
   if (b === '50') return BILLING_AUTOMATED_FORECAST_50;
   if (b === '75') return BILLING_AUTOMATED_FORECAST_75;
+  if (b === '85') return BILLING_AUTOMATED_FORECAST_85;
   if (b === '95') return BILLING_AUTOMATED_FORECAST_95;
+  if (b === '100') return BILLING_AUTOMATED_FORECAST_95;
   return BILLING_AUTOMATED_FORECAST;
 }
 

@@ -17,10 +17,12 @@ import {
   BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
   BILLING_TICKET_FORECAST_75,
+  BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
   BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
@@ -38,10 +40,12 @@ const STAGE = {
   MANUAL_FORECAST_25: BILLING_TICKET_FORECAST,
   MANUAL_FORECAST_50: BILLING_TICKET_FORECAST_50,
   MANUAL_FORECAST_75: BILLING_TICKET_FORECAST_75,
+  MANUAL_FORECAST_85: BILLING_TICKET_FORECAST_85,
   MANUAL_FORECAST_95: BILLING_TICKET_FORECAST_95,
   AUTO_FORECAST_25:   BILLING_AUTOMATED_FORECAST,
   AUTO_FORECAST_50:   BILLING_AUTOMATED_FORECAST_50,
   AUTO_FORECAST_75:   BILLING_AUTOMATED_FORECAST_75,
+  AUTO_FORECAST_85:   BILLING_AUTOMATED_FORECAST_85,
   AUTO_FORECAST_95:   BILLING_AUTOMATED_FORECAST_95,
 };
 
@@ -160,9 +164,10 @@ function resolveBucketFromDealStage(dealStage) {
   if (s === 'presentationscheduled') return '25';
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
-  if (s === 'closedwon') return '95';
-  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
-  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
+  if (s === 'closedwon') return '85';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';
+  if (s === DEAL_STAGE_FINALIZADO) return '100';
+
   return null;
 }
 
@@ -173,13 +178,17 @@ function resolveForecastStage({ dealStage, automated }) {
   if (!automated) {
     if (bucket === '50') return STAGE.MANUAL_FORECAST_50;
     if (bucket === '75') return STAGE.MANUAL_FORECAST_75;
+    if (bucket === '85') return STAGE.MANUAL_FORECAST_85;
     if (bucket === '95') return STAGE.MANUAL_FORECAST_95;
+    if (bucket === '100') return STAGE.MANUAL_FORECAST_95; // 100% usa mismo stage que 95
     return STAGE.MANUAL_FORECAST_25;
   }
 
   if (bucket === '50') return STAGE.AUTO_FORECAST_50;
   if (bucket === '75') return STAGE.AUTO_FORECAST_75;
+  if (bucket === '85') return STAGE.AUTO_FORECAST_85;
   if (bucket === '95') return STAGE.AUTO_FORECAST_95;
+  if (bucket === '100') return STAGE.AUTO_FORECAST_95; // 100% usa mismo stage que 95
   return STAGE.AUTO_FORECAST_25;
 }
 
