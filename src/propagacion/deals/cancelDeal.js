@@ -1,6 +1,21 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { cancelForecastTickets } from '../tickets/cancelForecastTickets.js';
 import logger from '../../../lib/logger.js';
+// En cancelDeal.js, agregar import de las constantes
+import {
+  DEAL_STAGE_LOST,
+  DEAL_STAGE_SUSPENDED,
+  DEAL_STAGE_VOIDED,
+} from '../../config/constants.js';
+
+
+// Nueva función helper (arriba de propagateDealCancellation)
+function defaultCancellationReason(dealStage) {
+  const stage = String(dealStage || '');
+  if (stage === DEAL_STAGE_SUSPENDED) return 'Negocio suspendido';
+  if (stage === DEAL_STAGE_VOIDED)    return 'Negocio anulado';
+  return 'Negocio perdido';
+}
 
 /**
  * Propaga la cancelación de un deal:
@@ -18,7 +33,7 @@ export async function propagateDealCancellation({ dealId, dealProps, lineItems }
     return;
   }
 
-  const closedLostReason = dealProps?.closed_lost_reason || '';
+  const closedLostReason = dealProps?.closed_lost_reason || defaultCancellationReason(dealProps?.dealstage);
 
   logger.info(
     { module: 'cancelDeal', dealId, closedLostReason: closedLostReason || '(vacío)' },

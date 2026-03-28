@@ -37,7 +37,7 @@ import {
 import logger from '../../../lib/logger.js';
 
 // ─── Constante configurable por env ──────────────────────────────────────────
-const DEFAULT_LOOKBACK_DAYS = Number(process.env.BILLING_RETRY_LOOKBACK_DAYS ?? 3);
+const DEFAULT_LOOKBACK_DAYS = Number(process.env.BILLING_RETRY_LOOKBACK_DAYS ?? 7);
 
 // ─── Retry con backoff exponencial para llamadas HubSpot ─────────────────────
 

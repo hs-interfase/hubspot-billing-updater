@@ -17,6 +17,7 @@ import {
   BILLING_TICKET_FORECAST, 
   BILLING_TICKET_FORECAST_50, 
   BILLING_TICKET_FORECAST_75,   
+  BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,  
   FORECAST_MANUAL_STAGES,
   DEAL_STAGE_FINALIZADO 
@@ -52,9 +53,9 @@ function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
-  if (s === 'closedwon') return '95';
-  if (s === DEAL_STAGE_EN_EJECUCION) return '95';  // SC7
-  if (s === DEAL_STAGE_FINALIZADO) return '95';    // SC8
+  if (s === 'closedwon') return '85';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';
+  if (s === DEAL_STAGE_FINALIZADO) return '100';
   return '25';
 }
 
@@ -62,6 +63,7 @@ function resolveManualForecastStageForDealStage(dealstage) {
   const b = resolveDealBucket(dealstage);
   if (b === '50') return BILLING_TICKET_FORECAST_50;
   if (b === '75') return BILLING_TICKET_FORECAST_75;
+  if (b === '85') return BILLING_TICKET_FORECAST_85;
   if (b === '95') return BILLING_TICKET_FORECAST_95;
   return BILLING_TICKET_FORECAST;
 }
