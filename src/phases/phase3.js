@@ -288,23 +288,27 @@ try {
 
       // Limpieza defensiva: facturar_ahora no aplica a automáticos (se facturan solo por fecha).
       // Si alguien lo activó manualmente, resetearlo para evitar confusión.
-      if (facturarAhora) {
-        logger.info(
-          { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
-          'facturar_ahora detectado en line item automático, reseteando (no aplica a automáticos)'
-        );
-        try {
-          await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-            properties: { facturar_ahora: 'false' },
-          });
-        } catch (resetErr) {
-          logger.warn(
-            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err: resetErr },
-            'Error reseteando facturar_ahora, continuando'
-          );
-        }
-        // NO continue — dejar que siga a la lógica programada por fecha
-      }
+
+if (facturarAhora) {
+  logger.info(
+    { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+    'facturar_ahora detectado en line item automático, reseteando (no aplica a automáticos)'
+  );
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: {
+        facturar_ahora: 'false',
+        of_billing_error: 'Facturar ahora no aplica a líneas con facturación automática. El ítem se procesa automáticamente por fecha.',
+      },
+    });
+  } catch (resetErr) {
+    logger.warn(
+      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err: resetErr },
+      'Error reseteando facturar_ahora, continuando'
+    );
+  }
+  // NO continue — dejar que siga a la lógica programada por fecha
+}
 
       // 2) Facturación programada: solo si planYMD <= HOY
       if (billingPeriodDate > today) {

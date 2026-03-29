@@ -11,8 +11,8 @@ import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import {
-  TICKET_PIPELINE,
   AUTOMATED_TICKET_PIPELINE,
   BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
@@ -24,8 +24,8 @@ import {
   BILLING_AUTOMATED_FORECAST_75,
   BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
-  FORECAST_MANUAL_STAGES,
-  FORECAST_AUTO_STAGES,
+  TICKET_PIPELINE,
+  FORECAST_TICKET_STAGES,
   isForecastStage,
   DEAL_STAGE_EN_EJECUCION, 
   DEAL_STAGE_FINALIZADO
@@ -50,7 +50,6 @@ const STAGE = {
 };
 
 // Unión de stages forecast manuales + automáticos
-const FORECAST_TICKET_STAGES = new Set([...FORECAST_MANUAL_STAGES, ...FORECAST_AUTO_STAGES]);
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -449,16 +448,20 @@ export async function runPhaseP({ deal, lineItems }) {
       // 3) Si desiredCount=0 → borrar SOLO forecast existentes
       if (desiredCount === 0) {
         if (forecastTickets.length) {
-          logger.info(
-            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, count: forecastTickets.length },
-            'Sin start_date: eliminando tickets forecast existentes'
-          );
           for (const t of forecastTickets) {
             await deleteTicket(t.id);
             deleted++;
           }
           await updateLineItemLastGeneratedAt(li.id);
         }
+        // Sin tickets deseados → billing_next_date debe quedar vacío
+        await syncBillingNextDateFromTickets({
+          lineItemId: li.id,
+          allTickets: [],          // forzar vacío — ya borramos los forecasts
+          todayYmd: nowMontevideoYmd(),
+          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          currentBillingNextDate: toYmd(p.billing_next_date),
+        });
         continue;
       }
 
@@ -652,6 +655,21 @@ for (const t of allTickets) {
             logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
           }
         }
+      }
+
+      try {
+        await syncBillingNextDateFromTickets({
+          lineItemId: li.id,
+          allTickets,
+          todayYmd: nowMontevideoYmd(),
+          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          currentBillingNextDate: toYmd(p.billing_next_date),
+        });
+      } catch (err) {
+        logger.error(
+          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+          'Error en syncBillingNextDateFromTickets, continuando'
+        );
       }
 
       if (changed) {

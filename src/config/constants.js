@@ -207,6 +207,15 @@ export function isForecastStage(stageId) {
 }
 
 /**
+ * FORECAST_TICKET_STAGES: unión de todos los stages forecast (manual + auto).
+ * Usado para derivar billing_next_date desde tickets reales.
+ */
+export const FORECAST_TICKET_STAGES = new Set([
+  ...FORECAST_MANUAL_STAGES,
+  ...FORECAST_AUTO_STAGES,
+]);
+
+/**
  * Alias por compatibilidad con lo que veníamos hablando.
  */
 export function isForecastTicketStage(stageId) {
