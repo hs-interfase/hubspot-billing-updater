@@ -132,9 +132,44 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       'billing_last_billed_date',
       'hs_recurring_billing_number_of_payments',
     ]);
+const lineItemProps = lineItem.properties || {};
 
-    const lineItemProps = lineItem.properties || {};
- 
+    // ─── GUARD DE FACTURACIÓN ACTIVA ──────────────────────────────────────────
+    const dealId = await getDealIdForLineItem(lineItemId);
+    if (!dealId) {
+      logger.error(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
+        'Line Item no tiene deal asociado'
+      );
+      throw new Error('Line item no tiene deal asociado');
+    }
+
+    let dealForGuard;
+    try {
+      dealForGuard = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname']);
+    } catch (err) {
+      logger.error(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, err },
+        'Error obteniendo deal para verificar facturacion_activa'
+      );
+      throw err;
+    }
+
+    const dealGuardProps = dealForGuard?.properties || {};
+    if (!parseBool(dealGuardProps.facturacion_activa)) {
+      const dealName = (dealGuardProps.dealname || dealId).slice(0, 100);
+      const msg = `Falta activar la facturación. Pase el negocio a cierre ganado. Negocio: ${dealName}.`;
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId },
+        'Bloqueado: facturacion_activa del deal no está en true'
+      );
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { of_billing_error: msg, facturar_ahora: 'false' },
+      });
+      return { skipped: true, reason: 'facturacion_activa_false' };
+    }
+    // ─── FIN GUARD DE FACTURACIÓN ACTIVA ──────────────────────────────────────
+
     // ─── GUARD DE MIRROR UY ───────────────────────────────────────────────────
     const pyOrigenLIId = (lineItemProps.of_line_item_py_origen_id || '').trim();
     if (pyOrigenLIId) {
@@ -245,19 +280,10 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       return { skipped: true, reason: 'no_billing_period_date' };
     }
 
-    // 3) Resolver dealId
-    const dealId = await getDealIdForLineItem(lineItemId);
-    if (!dealId) {
-      logger.error(
-        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
-        'Line Item no tiene deal asociado'
-      );
-      throw new Error('Line item no tiene deal asociado');
-    }
-
+    // 3) dealId ya resuelto al inicio (guard de facturación activa)
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, billingPeriodDate },
-      'Deal asociado encontrado'
+      'Procediendo con deal asociado'
     );
 
     // 4) Guardar invoice existente para validar después de tener el lik

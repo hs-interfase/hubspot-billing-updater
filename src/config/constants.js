@@ -153,6 +153,21 @@ export const INVOICED_STAGES = new Set([
 ]);
 
 /**
+ * EMITTED_STAGES: tickets con factura confirmada por Nodum.
+ * Usado para promoción de deal 85% → 95%.
+ * Excluye CREATED (factura HubSpot sin confirmación Nodum).
+ */
+export const EMITTED_STAGES = new Set([
+  // Manual
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
  * COMPLETED_STAGES: tickets completamente pagados.
  * Usado para short-circuit en line items de 1 solo pago.
  */

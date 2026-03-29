@@ -350,6 +350,18 @@ try {
           if (promoted.reason === 'missing_forecast_ticket') {
             errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
           }
+}
+
+        // Resetear facturar_ahora para evitar re-procesamiento en próximas corridas
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+            properties: { facturar_ahora: 'false' },
+          });
+        } catch (resetErr) {
+          logger.warn(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err: resetErr },
+            'Error reseteando facturar_ahora, continuando'
+          );
         }
 
         continue;
