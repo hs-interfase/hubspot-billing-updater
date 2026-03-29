@@ -411,7 +411,6 @@ export async function runPhaseP({ deal, lineItems }) {
     const lik = p.line_item_key || p.of_line_item_key || '';
     if (lik) validLiks.add(String(lik).trim());
   }
-
   await cleanupOrphanForecastTicketsForDeal({ dealId, validLiks });
 
   const empresaNombre = await resolveEmpresaNombre(dealId);
