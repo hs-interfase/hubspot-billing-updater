@@ -17,6 +17,7 @@ import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { sanitizeClonedLineItem } from '../services/lineItems/cloneSanitizerService.js';
 import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaService.js';
 import logger from '../../lib/logger.js';
+import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";

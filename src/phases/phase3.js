@@ -14,6 +14,7 @@ import { checkMissedBillingsForLineItem } from '../services/billing/missedBillin
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
   BILLING_AUTOMATED_READY,
   BILLING_AUTOMATED_FORECAST,
@@ -184,14 +185,30 @@ async function promoteAutoForecastTicketToReady({
       contactIds || []
     );
   }
-
-  if (moved) {
+if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD: billingYMD,
     });
+
+    // Recalc post-promoción (belt-and-suspenders):
+    // syncLineItemAfterPromotion ya actualizó last_ticketed_date y billing_next_date.
+    // recalcFromTickets mira TODOS los tickets para corregir/completar las 4 fechas.
+    try {
+      await recalcFromTickets({
+        lineItemKey,
+        dealId,
+        lineItemId,
+        applyUpdate: true,
+      });
+    } catch (err) {
+      logger.warn(
+        { module: 'phase3', fn: 'promoteAutoForecastTicketToReady', dealId, lineItemId, err },
+        'recalcFromTickets falló (no bloquea promoción)'
+      );
+    }
   }
 
   return { moved, ticketId: t.id, reason };

@@ -176,6 +176,28 @@ export const COMPLETED_STAGES = new Set([
   BILLING_AUTOMATED_PAID,
 ]);
 
+/**
+ * PROMOTED_STAGES: tickets promovidos a READY o más allá.
+ * Usado por recalcFromTickets para last_ticketed_date.
+ * Excluye FORECAST y CANCELLED.
+ */
+export const PROMOTED_STAGES = new Set([
+  // Manual ready
+  TICKET_STAGES.NEW,
+  TICKET_STAGES.READY,
+  // Manual post-ready
+  BILLING_TICKET_STAGE_ID_CREATED,
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto ready
+  BILLING_AUTOMATED_READY,
+  // Auto post-ready
+  BILLING_AUTOMATED_CREATED,
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
 // ===============================
 // Deal stages — pipeline de negocio
 // ===============================
