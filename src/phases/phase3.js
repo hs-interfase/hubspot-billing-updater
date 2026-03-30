@@ -201,6 +201,8 @@ if (moved) {
         lineItemKey,
         dealId,
         lineItemId,
+        lineItemProps: liProps,
+        facturacionActiva: true, // Phase 3 solo corre si facturacionActiva=true
         applyUpdate: true,
       });
     } catch (err) {

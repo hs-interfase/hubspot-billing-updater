@@ -11,6 +11,7 @@ import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -485,9 +486,25 @@ const lineItemProps = lineItem.properties || {};
         'Ticket actualizado con invoice ID'
       );
     }
-
-    // 8) Evidencia
+ // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
+
+    // 9) Recalc fechas del line item desde tickets reales (post-facturación urgente)
+    try {
+      await recalcFromTickets({
+        lineItemKey: lik,
+        dealId,
+        lineItemId: String(lineItemId),
+        lineItemProps,
+        facturacionActiva: true,
+        applyUpdate: true,
+      });
+    } catch (recalcErr) {
+      logger.warn(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, err: recalcErr },
+        'recalcFromTickets falló post-facturación urgente, no bloquea flujo'
+      );
+    }
 
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, ticketId, invoiceId: invoiceIdFinal, billingPeriodDate },

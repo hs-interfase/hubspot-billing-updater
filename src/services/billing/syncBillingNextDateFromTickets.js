@@ -54,11 +54,25 @@ export async function syncBillingNextDateFromTickets({
     return fa.localeCompare(fb);
   });
 
-  const newValue = candidates.length > 0
+const rawNewValue = candidates.length > 0
     ? String(candidates[0].properties.fecha_resolucion_esperada).slice(0, 10)
     : '';
 
   const oldValue = String(currentBillingNextDate || '').slice(0, 10).trim();
+
+  // ====== GUARD: no borrar billing_next_date si no hay candidatos ======
+  // Si candidates=0 puede ser por lag de indexación de HubSpot Search
+  // (ticket recién creado por Phase P no aparece aún) o porque todos los
+  // forecasts tienen fecha pasada. En cualquier caso, NO borrar el valor
+  // existente — recalcFromTickets lo corregirá en el próximo ciclo.
+  let newValue = rawNewValue;
+  if (!rawNewValue && oldValue) {
+    log.debug(
+      { oldValue, candidates: candidates.length },
+      '[syncBillingNextDateFromTickets] GUARD: no hay candidatos pero existe billing_next_date, protegiendo valor actual'
+    );
+    return { updated: false, oldValue, newValue: oldValue };
+  }
 
   log.debug(
     {

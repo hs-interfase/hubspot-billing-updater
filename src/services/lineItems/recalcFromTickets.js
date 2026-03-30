@@ -4,30 +4,36 @@
 // reales que existen en HubSpot para ese lineItemKey.
 //
 // Propiedades recalculadas:
-//   - last_ticketed_date     ← fecha_resolucion_esperada más reciente de tickets PROMOTED (READY+)
-//   - last_billing_period    ← fecha_resolucion_esperada más reciente de tickets EMITTED
+//   - last_ticketed_date       ← fecha_resolucion_esperada más reciente de tickets PROMOTED (READY+)
+//   - last_billing_period      ← fecha_resolucion_esperada más reciente de tickets EMITTED
 //   - billing_last_billed_date ← fecha_real_de_facturacion más reciente de tickets EMITTED
-//   - billing_next_date      ← fecha_resolucion_esperada más próxima de tickets FORECAST
+//   - billing_next_date        ← fecha_resolucion_esperada más próxima de tickets FORECAST (futuro)
+//
+// Invariantes enforced:
+//   I1: Forecast con fecha pasada → promover a READY (si facturacionActiva=true)
+//   I2: billing_next_date nunca puede ser < last_ticketed_date
+//   I3: billing_next_date = '' cuando promotedCount + emittedCount >= numberOfPayments
+//   I4: Si no hay forecasts visibles → NO borrar billing_next_date existente
 //
 // Diseñada para ser llamada desde:
 //   - Phase 1 (recalcula al inicio del ciclo, corrige drift)
 //   - Phase 2 / Phase 3 (después de promover un ticket)
-//   - syncLineItemAfterPromotion (reemplaza la lógica vieja)
+//   - missedBillingGuard / urgentBillingService (pendiente integración)
 
 import { hubspotClient } from '../../hubspotClient.js';
 import {
   TICKET_PIPELINE,
   AUTOMATED_TICKET_PIPELINE,
+  TICKET_STAGES,
+  BILLING_AUTOMATED_READY,
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
   EMITTED_STAGES,
   PROMOTED_STAGES,
-  TICKET_STAGES,
   BILLING_AUTOMATED_CANCELLED,
 } from '../../config/constants.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
-
 
 const MOD = 'recalcFromTickets';
 
@@ -54,7 +60,7 @@ function toYmd(raw) {
 
 /**
  * Busca TODOS los tickets no-cancelados para un lineItemKey en un pipeline.
- * Retorna array de { stage, fechaEsperada, fechaReal }.
+ * Retorna array de { id, stage, pipelineId, fechaEsperada, fechaReal }.
  */
 async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
   const cancelledStages = new Set([
@@ -96,7 +102,7 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
     } catch (err) {
       logger.warn({ module: MOD, fn: 'fetchTicketsForLIK', lineItemKey, pipelineId, err },
         'Error buscando tickets para LIK');
-      return allTickets; // devolver lo que tengamos hasta ahora
+      return allTickets;
     }
 
     const results = res?.results || [];
@@ -116,7 +122,9 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
       }
 
       allTickets.push({
+        id: String(t.id),
         stage,
+        pipelineId, // sabemos el pipeline porque el search filtra por él
         fechaEsperada,
         fechaReal: toYmd(p.fecha_real_de_facturacion),
       });
@@ -132,6 +140,53 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
 }
 
 // ─────────────────────────────────────────────
+// I1: Promover forecasts con fecha pasada a READY
+// ─────────────────────────────────────────────
+
+/**
+ * Resuelve el stage READY destino según el pipeline del ticket.
+ */
+function resolveReadyStage(pipelineId) {
+  if (String(pipelineId) === String(AUTOMATED_TICKET_PIPELINE)) {
+    return BILLING_AUTOMATED_READY;
+  }
+  // Manual pipeline → TICKET_STAGES.NEW (entrada al flujo manual)
+  return TICKET_STAGES.NEW;
+}
+
+/**
+ * Promueve un ticket forecast con fecha pasada a READY.
+ * Retorna true si se promovió, false si falló.
+ */
+async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId }) {
+  const readyStage = resolveReadyStage(pipelineId);
+  if (!readyStage) {
+    logger.warn({ module: MOD, fn: 'promotePastDueForecast', ticketId, pipelineId },
+      'No se pudo resolver READY stage para pipeline');
+    return false;
+  }
+
+  try {
+    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+      properties: { hs_pipeline_stage: String(readyStage) },
+    });
+
+    logger.warn({
+      module: MOD, fn: 'promotePastDueForecast',
+      ticketId, pipelineId, readyStage, fechaEsperada, lineItemKey, dealId,
+    }, 'FORECAST_PAST_DUE_PROMOTED: ticket forecast con fecha pasada promovido a READY');
+
+    return true;
+  } catch (err) {
+    logger.error({
+      module: MOD, fn: 'promotePastDueForecast',
+      ticketId, pipelineId, fechaEsperada, err,
+    }, 'Error promoviendo forecast past-due a READY');
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────
 // Función principal
 // ─────────────────────────────────────────────
 
@@ -144,7 +199,10 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
  * @param {string} [params.lineItemId] - si se pasa, actualiza el line item en HubSpot
  * @param {boolean} [params.applyUpdate=true] - si false, solo retorna los valores sin escribir
  * @param {object} [params.lineItemProps] - propiedades del line item ya leídas (evita un getById extra)
- * @returns {object} { lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate, updates, changed, skipped }
+ * @param {boolean} [params.facturacionActiva=false] - si true, habilita I1 (promover forecasts pasados)
+ * @returns {object} { lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate,
+ *                     updates, changed, skipped, promotedCount, emittedCount, forecastCount,
+ *                     pastDuePromoted }
  */
 export async function recalcFromTickets({
   lineItemKey,
@@ -152,10 +210,15 @@ export async function recalcFromTickets({
   lineItemId = '',
   applyUpdate = true,
   lineItemProps = null,
+  facturacionActiva = false,
 }) {
   const fn = 'recalcFromTickets';
   const todayYmd = getTodayYMD();
-  const EMPTY_RESULT = { lastTicketedDate: '', lastBillingPeriod: '', billingLastBilledDate: '', billingNextDate: '', updates: {}, changed: false, skipped: true };
+  const EMPTY_RESULT = {
+    lastTicketedDate: '', lastBillingPeriod: '', billingLastBilledDate: '',
+    billingNextDate: '', updates: {}, changed: false, skipped: true,
+    promotedCount: 0, emittedCount: 0, forecastCount: 0, pastDuePromoted: 0,
+  };
 
   if (!lineItemKey) {
     logger.warn({ module: MOD, fn, dealId, lineItemId }, 'lineItemKey vacío, skip');
@@ -163,14 +226,23 @@ export async function recalcFromTickets({
   }
 
   // ====== GUARD: fechas_completas = true → no recalcular ======
-  // Si el plan ya se completó, no tocamos nada. Esta es la protección
-  // más importante contra emitir de más.
   if (lineItemProps) {
     const fechasCompletas = String(lineItemProps.fechas_completas || '').trim().toLowerCase() === 'true';
     if (fechasCompletas) {
       logger.debug({ module: MOD, fn, lineItemKey, dealId, lineItemId },
         'fechas_completas=true → skip recalc (plan completado)');
       return EMPTY_RESULT;
+    }
+  }
+
+  // ====== LEER numberOfPayments de lineItemProps (para I3) ======
+  let numberOfPayments = 0;
+  if (lineItemProps) {
+    const raw = lineItemProps.hs_recurring_billing_number_of_payments
+      ?? lineItemProps.number_of_payments;
+    const parsed = Number.parseInt(String(raw ?? ''), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      numberOfPayments = parsed;
     }
   }
 
@@ -185,13 +257,40 @@ export async function recalcFromTickets({
   logger.debug({ module: MOD, fn, lineItemKey, dealId, totalTickets: allTickets.length },
     'Tickets encontrados para recalc');
 
-  // 2) Clasificar tickets por grupo de stages
-  let lastTicketedDate = '';   // max fecha_resolucion_esperada de PROMOTED
-  let lastBillingPeriod = '';  // max fecha_resolucion_esperada de EMITTED
-  let billingLastBilledDate = ''; // max fecha_real_de_facturacion de EMITTED
-  let billingNextDate = '';    // min fecha_resolucion_esperada de FORECAST (>= hoy)
+  // ====== I1: Promover forecasts con fecha pasada a READY ======
+  let pastDuePromoted = 0;
 
-  let forecastDatesAll = [];   // todas las fechas forecast, para elegir la mínima
+  if (facturacionActiva) {
+    for (const t of allTickets) {
+      const isForecast = FORECAST_MANUAL_STAGES.has(t.stage) || FORECAST_AUTO_STAGES.has(t.stage);
+      if (!isForecast) continue;
+      if (!t.fechaEsperada) continue;
+      if (t.fechaEsperada > todayYmd) continue; // futuro → no tocar
+
+      // Fecha pasada o de hoy en FORECAST → promover
+      const promoted = await promotePastDueForecast({
+        ticketId: t.id,
+        pipelineId: t.pipelineId,
+        fechaEsperada: t.fechaEsperada,
+        lineItemKey,
+        dealId,
+      });
+
+      if (promoted) {
+        // Reclasificar en memoria para que el cálculo de abajo lo trate como PROMOTED
+        t.stage = resolveReadyStage(t.pipelineId);
+        pastDuePromoted++;
+      }
+    }
+  }
+
+  // 2) Clasificar tickets por grupo de stages
+  let lastTicketedDate = '';     // max fecha_resolucion_esperada de PROMOTED
+  let lastBillingPeriod = '';    // max fecha_resolucion_esperada de EMITTED
+  let billingLastBilledDate = ''; // max fecha_real_de_facturacion de EMITTED
+  let billingNextDate = '';      // min fecha_resolucion_esperada de FORECAST (futuro)
+
+  const forecastDatesAll = [];
 
   for (const t of allTickets) {
     const { stage, fechaEsperada, fechaReal } = t;
@@ -213,31 +312,61 @@ export async function recalcFromTickets({
       }
     }
 
-    // FORECAST: para billing_next_date
+    // FORECAST: para billing_next_date (solo fechas futuras)
     if (FORECAST_MANUAL_STAGES.has(stage) || FORECAST_AUTO_STAGES.has(stage)) {
-      if (fechaEsperada) {
+      if (fechaEsperada && fechaEsperada > todayYmd) {
         forecastDatesAll.push(fechaEsperada);
       }
     }
   }
 
-  // billing_next_date: la más próxima fecha forecast (sin restricción de >= hoy,
-  // porque un forecast con fecha pasada aún no promovido sigue siendo "next")
+  // billing_next_date: la más próxima fecha forecast FUTURA
   if (forecastDatesAll.length > 0) {
     forecastDatesAll.sort();
     billingNextDate = forecastDatesAll[0];
   }
 
-  // ====== CONTEO DE SEGURIDAD ======
-  // Contar tickets promoted (para logging/auditoría — útil para detectar
-  // si se emitieron de más comparando con number_of_payments)
+  // ====== I2: billing_next_date nunca puede ser < last_ticketed_date ======
+  if (billingNextDate && lastTicketedDate && billingNextDate < lastTicketedDate) {
+    logger.warn({
+      module: MOD, fn, lineItemKey, dealId,
+      billingNextDate, lastTicketedDate,
+    }, 'INVARIANT_I2: billing_next_date < last_ticketed_date → buscando siguiente válido');
+
+    // Buscar el primer forecast con fecha > lastTicketedDate
+    const valid = forecastDatesAll.filter(d => d > lastTicketedDate);
+    billingNextDate = valid.length > 0 ? valid[0] : '';
+  }
+
+  // ====== CONTEO ======
   const promotedCount = allTickets.filter(t => PROMOTED_STAGES.has(t.stage)).length;
   const emittedCount = allTickets.filter(t => EMITTED_STAGES.has(t.stage)).length;
   const forecastCount = forecastDatesAll.length;
 
-  logger.debug({ module: MOD, fn, lineItemKey, dealId, promotedCount, emittedCount, forecastCount,
-    lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate },
-    'Recalc ticket summary');
+  // ====== I3: billing_next_date = '' cuando el plan terminó ======
+  if (numberOfPayments > 0) {
+    const totalResolved = promotedCount + emittedCount;
+    // Nota: promotedCount incluye emittedCount (EMITTED ⊂ PROMOTED),
+    // pero lo que importa es: ¿ya hay suficientes tickets no-forecast?
+    // promotedCount ya cuenta READY + INVOICED + LATE + PAID,
+    // por lo que promotedCount >= emittedCount siempre.
+    // Usamos solo promotedCount (que incluye todos los no-forecast no-cancelled).
+    if (promotedCount >= numberOfPayments) {
+      if (billingNextDate) {
+        logger.info({
+          module: MOD, fn, lineItemKey, dealId,
+          promotedCount, numberOfPayments, billingNextDate,
+        }, 'INVARIANT_I3: plan completo (promoted >= payments) → billing_next_date = vacío');
+      }
+      billingNextDate = '';
+    }
+  }
+
+  logger.debug({
+    module: MOD, fn, lineItemKey, dealId,
+    promotedCount, emittedCount, forecastCount, pastDuePromoted,
+    lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate,
+  }, 'Recalc ticket summary');
 
   // 3) Leer valores actuales del line item para comparar (update mínimo)
   let currentProps = {};
@@ -273,23 +402,17 @@ export async function recalcFromTickets({
     updates.billing_last_billed_date = billingLastBilledDate;
   }
 
-  // ====== GUARD: billing_next_date — no vaciar si no hay forecasts ======
-  // Si no encontramos ningún ticket forecast, NO borrar el billing_next_date
-  // existente. Puede ser que Phase P no corrió aún, o que los forecasts no
-  // se indexaron todavía en HubSpot Search.
-  // Solo actualizamos billing_next_date si:
-  //   a) Hay forecasts y el valor calculado difiere del actual, O
-  //   b) El valor actual es vacío y el calculado también (noop)
-  if (forecastCount > 0) {
-    // Hay forecasts → usar el valor calculado (puede ser diferente o igual)
+  // ====== I4: billing_next_date — no vaciar si no hay forecasts visibles ======
+  if (forecastCount > 0 || (numberOfPayments > 0 && promotedCount >= numberOfPayments)) {
+    // Hay forecasts, O el plan está completo (I3 ya puso billingNextDate='')
+    // → usar el valor calculado
     if (billingNextDate !== currentNext) {
       updates.billing_next_date = billingNextDate;
     }
   } else if (currentNext && !billingNextDate) {
-    // No hay forecasts pero hay un next actual → NO borrar, proteger
+    // No hay forecasts y no podemos confirmar plan completo → proteger
     logger.info({ module: MOD, fn, lineItemKey, dealId, lineItemId, currentNext },
-      'billing_next_date protegido: no hay forecasts visibles, manteniendo valor actual');
-    // No agregamos billing_next_date a updates → se mantiene el actual
+      'INVARIANT_I4: billing_next_date protegido: no hay forecasts visibles, manteniendo valor actual');
   } else if (billingNextDate !== currentNext) {
     updates.billing_next_date = billingNextDate;
   }
@@ -319,9 +442,9 @@ export async function recalcFromTickets({
     updates,
     changed,
     skipped: false,
-    // Conteos de auditoría (para que el caller pueda validar contra number_of_payments)
     promotedCount,
     emittedCount,
     forecastCount,
+    pastDuePromoted,
   };
 }
