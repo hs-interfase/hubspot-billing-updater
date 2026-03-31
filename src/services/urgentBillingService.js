@@ -12,6 +12,7 @@ import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
+import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -344,8 +345,48 @@ const lineItemProps = lineItem.properties || {};
       lineItemProps.line_item_key = lik;
     }
 
-    if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
+if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
     targetLineItem.line_item_key = lik;
+
+    // 5a) Sanitización de clones — detectar si la key pertenece a otro line item
+    const sanitizeUpdates = sanitizeClonedLineItem(targetLineItem, dealId, { debug: true });
+    if (sanitizeUpdates) {
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, oldLik: lik },
+        'Clone detectado: sanitizando props operativas y regenerando line_item_key'
+      );
+
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: sanitizeUpdates });
+        targetLineItem.properties = { ...targetLineItem.properties, ...sanitizeUpdates };
+        Object.assign(lineItemProps, sanitizeUpdates);
+      } catch (err) {
+        reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error sanitizando clone en urgent billing', err });
+        throw new Error(`Clone sanitize failed: ${err?.message}`);
+      }
+
+      const { key: newLik } = ensureLineItemKey({ dealId: String(dealId), lineItem: targetLineItem, forceNew: true });
+      if (!newLik) throw new Error('Urgent billing: ensureLineItemKey devolvió key vacía tras sanitizar clone');
+
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: { line_item_key: newLik },
+        });
+      } catch (err) {
+        reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error seteando nueva line_item_key tras sanitizar clone', err });
+        throw new Error(`Clone rekey failed: ${err?.message}`);
+      }
+
+      lik = newLik;
+      targetLineItem.properties = { ...targetLineItem.properties, line_item_key: newLik };
+      targetLineItem.line_item_key = newLik;
+      lineItemProps.line_item_key = newLik;
+
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, newLik },
+        'Clone sanitizado y rekeyed exitosamente'
+      );
+    }
 
     // 5b) Idempotencia
     if (existingInvoiceId) {
