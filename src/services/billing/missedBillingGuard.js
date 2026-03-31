@@ -30,6 +30,7 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../invoiceService.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+import { recalcFromTickets } from '../lineItems/recalcFromTickets.js';
 import {
   FORECAST_AUTO_STAGES,
   BILLING_AUTOMATED_READY,
@@ -295,11 +296,29 @@ export async function checkMissedBillingsForLineItem({
 
       await writeBillingError(ticketId, successMsg, today, tp);
 
+// DESPUÉS:
       stats.recovered++;
       logger.info(
         { module: 'missedBillingGuard', dealId, lineItemId, ymd, ticketId },
         successMsg
       );
+
+      // Recalc fechas del line item desde tickets reales (post-facturación recuperada)
+      try {
+        await recalcFromTickets({
+          lineItemKey,
+          dealId,
+          lineItemId,
+          lineItemProps: null,
+          facturacionActiva: true,
+          applyUpdate: true,
+        });
+      } catch (recalcErr) {
+        logger.warn(
+          { module: 'missedBillingGuard', dealId, lineItemId, lineItemKey, err: recalcErr },
+          'recalcFromTickets falló post-recovery, no bloquea flujo'
+        );
+      }
 
     } catch (err) {
       // ── 3d. Reintento fallido ────────────────────────────────────────────

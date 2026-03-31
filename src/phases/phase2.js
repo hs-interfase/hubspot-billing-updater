@@ -1,4 +1,4 @@
-// src/phases/phase2.js
+// deal// src/phases/phase2.js
 
 import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
@@ -9,6 +9,7 @@ import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { withRetry } from '../utils/withRetry.js';
 import { 
   DEAL_STAGE_EN_EJECUCION, 
@@ -177,13 +178,30 @@ async function promoteManualForecastTicketToReady({
     );
   }
 
-  if (moved) {
+if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD: nextBillingDate,
     });
+
+    // Recalc post-promoción (belt-and-suspenders):
+    // syncLineItemAfterPromotion ya actualizó last_ticketed_date y billing_next_date.
+    // recalcFromTickets mira TODOS los tickets para corregir/completar las 4 fechas.
+    try {
+      await recalcFromTickets({
+        lineItemKey,
+        dealId,
+        lineItemId,
+        applyUpdate: true,
+      });
+    } catch (err) {
+      logger.warn(
+        { module: 'phase2', fn: 'promoteManualForecastTicketToReady', dealId, lineItemId, err },
+        'recalcFromTickets falló (no bloquea promoción)'
+      );
+    }
   }
 
   return { moved, ticketId: t.id, reason };

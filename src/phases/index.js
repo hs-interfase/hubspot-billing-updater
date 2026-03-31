@@ -11,7 +11,7 @@ import {
   DEAL_STAGE_VOIDED,
   DEAL_STAGE_WON,
   DEAL_STAGE_EN_EJECUCION,
-  INVOICED_TICKET_STAGES,
+  EMITTED_STAGES,
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
@@ -53,7 +53,7 @@ async function promoteToEjecucionIfNeeded(deal) {
     return false;
   }
 
-  const invoicedStagesArr = [...INVOICED_TICKET_STAGES];
+  const invoicedStagesArr = [...EMITTED_STAGES];
 
   // HubSpot Pro: max 5 filterGroups. Partimos en chunks de 5.
   let hasInvoicedTicket = false;

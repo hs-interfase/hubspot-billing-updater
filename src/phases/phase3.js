@@ -14,6 +14,7 @@ import { checkMissedBillingsForLineItem } from '../services/billing/missedBillin
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
   BILLING_AUTOMATED_READY,
   BILLING_AUTOMATED_FORECAST,
@@ -184,14 +185,32 @@ async function promoteAutoForecastTicketToReady({
       contactIds || []
     );
   }
-
-  if (moved) {
+if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD: billingYMD,
     });
+
+    // Recalc post-promoción (belt-and-suspenders):
+    // syncLineItemAfterPromotion ya actualizó last_ticketed_date y billing_next_date.
+    // recalcFromTickets mira TODOS los tickets para corregir/completar las 4 fechas.
+    try {
+      await recalcFromTickets({
+        lineItemKey,
+        dealId,
+        lineItemId,
+        lineItemProps: liProps,
+        facturacionActiva: true, // Phase 3 solo corre si facturacionActiva=true
+        applyUpdate: true,
+      });
+    } catch (err) {
+      logger.warn(
+        { module: 'phase3', fn: 'promoteAutoForecastTicketToReady', dealId, lineItemId, err },
+        'recalcFromTickets falló (no bloquea promoción)'
+      );
+    }
   }
 
   return { moved, ticketId: t.id, reason };
@@ -285,75 +304,30 @@ try {
           'Error en missedBillingGuard, continuando con flujo normal'
         );
       }
-      // 1) FACTURAR AHORA (urgente)
-      if (facturarAhora) {
-        const promoted = await promoteAutoForecastTicketToReady({
-          dealId,
-          dealStage,
-          lineItemKey,
-          billingYMD: billingPeriodDate,
-          lineItemId,
-        });
 
-        if (promoted.moved) {
-          ticketsEnsured++;
+      // Limpieza defensiva: facturar_ahora no aplica a automáticos (se facturan solo por fecha).
+      // Si alguien lo activó manualmente, resetearlo para evitar confusión.
 
-          // Leer ticket con todas las props requeridas para evitar re-lectura en invoiceService
-          const ticket = await hubspotClient.crm.tickets.basicApi.getById(
-            promoted.ticketId,
-            REQUIRED_TICKET_PROPS
-          );
-
-          const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
-          const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
-          if (!isAutoRenew) {
-            const activeCount = await countActivePlanInvoices(lineItemKey);
-            if (activeCount !== null && activeCount >= totalPayments) {
-              logger.info(
-                { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
-                'Plan completado, no se emite factura'
-              );
-              continue;
-            }
-          }
-
-          await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
-          invoicesEmitted++;
-
-          logger.info(
-            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
-            'Ticket promovido a READY (urgente) y factura emitida'
-          );
-
-          // Best-effort: marcar urgente
-          try {
-            await updateTicket(promoted.ticketId, {
-              of_facturacion_urgente: 'true',
-              of_fecha_de_facturacion: today,
-            });
-            logger.info(
-              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
-              'Ticket marcado como urgente'
-            );
-          } catch (err) {
-            reportIfActionable({ objectType: 'ticket', objectId: String(promoted.ticketId), message: 'Error al marcar ticket como urgente', err });
-            logger.warn(
-              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId, err },
-              'No se pudo marcar ticket como urgente'
-            );
-          }
-        } else {
-          logger.info(
-            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
-            'Ticket urgente no promovido'
-          );
-          if (promoted.reason === 'missing_forecast_ticket') {
-            errors.push({ dealId, lineItemId, error: `Missing forecast ticket for ${promoted.ticketKey}` });
-          }
-        }
-
-        continue;
-      }
+if (facturarAhora) {
+  logger.info(
+    { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+    'facturar_ahora detectado en line item automático, reseteando (no aplica a automáticos)'
+  );
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: {
+        facturar_ahora: 'false',
+        of_billing_error: 'Facturar ahora no aplica a líneas con facturación automática. El ítem se procesa automáticamente por fecha.',
+      },
+    });
+  } catch (resetErr) {
+    logger.warn(
+      { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err: resetErr },
+      'Error reseteando facturar_ahora, continuando'
+    );
+  }
+  // NO continue — dejar que siga a la lógica programada por fecha
+}
 
       // 2) Facturación programada: solo si planYMD <= HOY
       if (billingPeriodDate > today) {

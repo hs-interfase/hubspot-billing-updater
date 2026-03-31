@@ -153,11 +153,48 @@ export const INVOICED_STAGES = new Set([
 ]);
 
 /**
+ * EMITTED_STAGES: tickets con factura confirmada por Nodum.
+ * Usado para promoción de deal 85% → 95%.
+ * Excluye CREATED (factura HubSpot sin confirmación Nodum).
+ */
+export const EMITTED_STAGES = new Set([
+  // Manual
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
  * COMPLETED_STAGES: tickets completamente pagados.
  * Usado para short-circuit en line items de 1 solo pago.
  */
 export const COMPLETED_STAGES = new Set([
   BILLING_TICKET_STAGE_ID_PAID,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
+ * PROMOTED_STAGES: tickets promovidos a READY o más allá.
+ * Usado por recalcFromTickets para last_ticketed_date.
+ * Excluye FORECAST y CANCELLED.
+ */
+export const PROMOTED_STAGES = new Set([
+  // Manual ready
+  TICKET_STAGES.NEW,
+  TICKET_STAGES.READY,
+  // Manual post-ready
+  BILLING_TICKET_STAGE_ID_CREATED,
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto ready
+  BILLING_AUTOMATED_READY,
+  // Auto post-ready
+  BILLING_AUTOMATED_CREATED,
+  BILLING_AUTOMATED_LATE,
   BILLING_AUTOMATED_PAID,
 ]);
 
@@ -202,6 +239,15 @@ export function isForecastStage(stageId) {
   const id = String(stageId);
   return FORECAST_MANUAL_STAGES.has(id) || FORECAST_AUTO_STAGES.has(id);
 }
+
+/**
+ * FORECAST_TICKET_STAGES: unión de todos los stages forecast (manual + auto).
+ * Usado para derivar billing_next_date desde tickets reales.
+ */
+export const FORECAST_TICKET_STAGES = new Set([
+  ...FORECAST_MANUAL_STAGES,
+  ...FORECAST_AUTO_STAGES,
+]);
 
 /**
  * Alias por compatibilidad con lo que veníamos hablando.
