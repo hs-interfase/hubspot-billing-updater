@@ -120,7 +120,7 @@ const ALLOWED_INVOICE_PROPS = [
   "id_factura_nodum","impacto_facturado","impacto_forecast","impacto_historico","iva",
   "mensual","modo_de_generacion_de_factura","monto_a_facturar","motivo_de_pausa","nombre_empresa",
   "nombre_producto","of_invoice_key","of_monto_total_facturado","pais_operativo","pedido_por",
-  "periodo_a_facturar","procede_de","responsable_asignado","reventa","servicio","ticket_id",
+  "procede_de","responsable_asignado","reventa","servicio","ticket_id",
   "unidad_de_negocio","usuario_disparador_de_factura","vendedor_factura","line_item_key"
 ];
 
@@ -372,7 +372,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    periodo_a_facturar: tp.fecha_resolucion_esperada,
+    fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
     hs_comments: tp.content,                                // era: tp.comments
     motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
     id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
@@ -785,8 +785,7 @@ export async function getInvoice(invoiceId) {
  * - tp.of_motivo_pausa → motivo_de_pausa     (era: tp.motivo_pausa — faltaba prefijo of_)
  * - tp.numero_de_factura → id_factura_nodum  (era: tp.id_factura_nodum — nombre incorrecto)
  * - tp.of_invoice_status → etapa_de_la_factura (era: tp.etapa_factura — no existe)
- * - frecuenciaDerivada → mensual             (era: tp.of_periodo_de_facturacion — no existe;
+ * - frecuenciaDerivada → mensual             (era: tp.of__de_facturacion — no existe;
  *                                             derivado de tp.repetitivo: true→'Frecuente', false→'Único')
- * - periodo_a_facturar → undefined (TODO: pendiente definir formato con el equipo)
  * ─────────────────────────────────────────────────────────────
  */

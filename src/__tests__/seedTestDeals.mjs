@@ -16,7 +16,7 @@
  */
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 

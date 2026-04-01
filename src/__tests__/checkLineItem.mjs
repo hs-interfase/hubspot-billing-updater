@@ -1,5 +1,5 @@
 // checkLineItem.mjs
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 
 const liResp = await hubspotClient.crm.lineItems.basicApi.getById(
   '52362055235',

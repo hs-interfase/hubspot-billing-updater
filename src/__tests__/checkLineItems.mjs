@@ -1,4 +1,4 @@
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 
 const ids = ['52362055235', '53090632117'];
 for (const id of ids) {

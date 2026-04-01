@@ -5,11 +5,11 @@
 //
 // Uso: node findPastDueForecast.mjs
 
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../hubspotClient.js';
 import {
   FORECAST_AUTO_STAGES,
   FORECAST_MANUAL_STAGES,
-} from './src/config/constants.js';
+} from '../config/constants.js';
 
 const DEAL_ID = '58479672592';
 

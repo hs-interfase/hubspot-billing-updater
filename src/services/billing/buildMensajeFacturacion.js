@@ -9,9 +9,14 @@
 //   - Si la fecha es distinta o la propiedad está vacía → limpia y construye
 //     desde cero (encabezado + primer div).
 //
+// NOTA: HubSpot stripea HTML comments, data-* attributes, display:none y
+// font-size:0px en propiedades rich text. Los markers de acumulación se
+// basan en texto visible que sobrevive la sanitización:
+//   - Fecha: se extrae del título "📋 Solicitud de Facturación — YYYY-MM-DD"
+//   - Inserción: se busca el último cierre de div de line item (border-radius:6px)
+//
 // El workflow de HubSpot maneja el delay de 10 min y envío de correo.
 
-import { build } from 'pino-pretty';
 import { BILLING_TICKET_PIPELINE_ID } from '../../config/constants.js';
 import { hubspotClient } from '../../hubspotClient.js';
 import logger from '../../utils/logger.js';
@@ -26,9 +31,13 @@ function todayYMD() {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Extrae la fecha del marker <!--FECHA:YYYY-MM-DD--> del HTML existente */
+/**
+ * Extrae la fecha del título visible del mensaje.
+ * Busca el patrón "📋 Solicitud de Facturación — YYYY-MM-DD"
+ * que sobrevive la sanitización de HubSpot.
+ */
 function extractFechaFromMessage(html) {
-  const match = (html || '').match(/<!--FECHA:(\d{4}-\d{2}-\d{2})-->/);
+  const match = (html || '').match(/Solicitud de Facturación\s*(?:—|&mdash;|-)\s*(\d{4}-\d{2}-\d{2})/);
   return match ? match[1] : null;
 }
 
@@ -77,6 +86,10 @@ const STYLES = {
   separator: 'border:0;border-top:1px solid #eee;margin:12px 0;',
 };
 
+// Estilo único que identifica los divs de line items para buscar punto de inserción.
+// Si se cambia STYLES.lineItemDiv, actualizar también esta constante.
+const LINE_ITEM_MARKER_STYLE = 'border-radius:6px';
+
 // ────────────────────────────────────────────────────────────
 // Builders
 // ────────────────────────────────────────────────────────────
@@ -101,7 +114,6 @@ function buildHeader(ticket) {
     : val(tp.of_deal_id) || '-';
 
   const rows = [
-    `<!--FECHA:${hoy}-->`,
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
 
@@ -121,8 +133,6 @@ function buildHeader(ticket) {
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
-
-    '<!--LINE_ITEMS_START-->',
   ];
 
   return rows.filter(r => r !== '').join('\n');
@@ -160,7 +170,57 @@ function buildLineItemDiv(ticket) {
 }
 
 function buildFooter() {
-  return '<!--LINE_ITEMS_END-->\n</div>';
+  return '</div>';
+}
+
+/**
+ * Encuentra el punto de inserción para acumular un nuevo line item.
+ * Busca el último cierre </div> del último div de line item
+ * (identificado por border-radius:6px), y retorna el índice
+ * DESPUÉS de ese </div>.
+ *
+ * @returns {number} índice de inserción, o -1 si no se encuentra
+ */
+function findInsertionPoint(html) {
+  // Buscar la última aparición del estilo que identifica un line item div
+  const lastLineItemStart = html.lastIndexOf(LINE_ITEM_MARKER_STYLE);
+  if (lastLineItemStart === -1) return -1;
+
+  // Desde ahí, buscar el cierre </div> que corresponde al line item.
+  // Los line items tienen estructura: <div style="...border-radius:6px...">...contenido...</div>
+  // Necesitamos encontrar el </div> que cierra este div, contando nesting.
+  let depth = 0;
+  let i = html.indexOf('<div', lastLineItemStart - 50); // retroceder un poco para capturar el <div de apertura
+  if (i === -1) i = lastLineItemStart;
+
+  // Buscar el <div de apertura más cercano antes del marker
+  const searchStart = html.lastIndexOf('<div', lastLineItemStart);
+  if (searchStart === -1) return -1;
+
+  // Recorrer desde el <div de apertura contando depth
+  let pos = searchStart;
+  while (pos < html.length) {
+    const nextOpen = html.indexOf('<div', pos + 1);
+    const nextClose = html.indexOf('</div>', pos + 1);
+
+    if (nextClose === -1) return -1; // HTML malformado
+
+    if (nextOpen !== -1 && nextOpen < nextClose) {
+      // Hay un <div anidado antes del próximo </div>
+      depth++;
+      pos = nextOpen;
+    } else {
+      // </div> encontrado
+      if (depth === 0) {
+        // Este es el cierre del div de line item
+        return nextClose + '</div>'.length;
+      }
+      depth--;
+      pos = nextClose;
+    }
+  }
+
+  return -1;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -181,17 +241,17 @@ export function buildMensajeFacturacion(ticket, currentMessage) {
 
   // ── ACUMULAR: fecha existente es hoy → solo agregar el nuevo div ──
   if (fechaExistente === hoy && currentMessage) {
-    const insertPoint = currentMessage.indexOf('<!--LINE_ITEMS_END-->');
+    const insertPoint = findInsertionPoint(currentMessage);
 
     if (insertPoint !== -1) {
       return (
         currentMessage.slice(0, insertPoint) +
-        nuevoDiv + '\n' +
+        '\n' + nuevoDiv +
         currentMessage.slice(insertPoint)
       );
     }
 
-    // Fallback: si no encuentra el marker, agregar antes del último </div>
+    // Fallback: agregar antes del último </div> (el container)
     const lastDiv = currentMessage.lastIndexOf('</div>');
     if (lastDiv !== -1) {
       return (
