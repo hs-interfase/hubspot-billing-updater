@@ -13,7 +13,7 @@
 
 import { BILLING_TICKET_PIPELINE_ID } from '../../config/constants.js';
 import { hubspotClient } from '../../hubspotClient.js';
-import logger from '../../utils/logger.js';
+import logger from '../../lib/logger.js';
 
 const DEAL_PROPERTY = 'mensaje_de_facturacion';
 
