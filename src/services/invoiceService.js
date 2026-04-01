@@ -536,14 +536,14 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       modoGeneracion,
       responsable: invoicePropsRaw.responsable_asignado || tp.hubspot_owner_id || 'no asignado',
     }, '[invoice] ✅ FACTURA CREADA EXITOSAMENTE');
-
-    return { invoiceId, created: true };
-
-    // Mensaje a administración (solo manual o facturar_ahora, NO automático programado)
+    
+        // Mensaje a administración (solo manual o facturar_ahora, NO automático programado)
     const esAutomaticoProgramado = parseBool(tp.facturacion_automatica) && !parseBool(tp.facturar_ahora);
     if (!esAutomaticoProgramado) {
       await actualizarMensajeFacturacion(ticket, dealId);
     }
+
+    return { invoiceId, created: true };
 
   } catch (err) {
     logger.error({

@@ -1,0 +1,44 @@
+{
+  "prefix": "[TEST-SEED]",
+  "createdAt": "2026-04-01T02:20:24.128Z",
+  "today": "2026-03-31",
+  "deals": [
+    {
+      "dealId": "58652169392",
+      "dealName": "A — Manual / Plan Fijo / UY",
+      "lineItemIds": [
+        "53820900995",
+        "53835805709",
+        "53827573858",
+        "53837971347"
+      ]
+    },
+    {
+      "dealId": "58648871807",
+      "dealName": "B — Automático / Plan Fijo + Auto-Renew",
+      "lineItemIds": [
+        "53817032973",
+        "53828652607",
+        "53826832907"
+      ]
+    },
+    {
+      "dealId": "58637370478",
+      "dealName": "C — Paraguay / Mirror UY / Cupo Horas",
+      "lineItemIds": [
+        "53824669831",
+        "53827413169",
+        "53818777689"
+      ]
+    },
+    {
+      "dealId": "58641781368",
+      "dealName": "D — Cupo Monto / Fecha Ancla / Bordes",
+      "lineItemIds": [
+        "53815011120",
+        "53817032979",
+        "53838592002"
+      ]
+    }
+  ]
+}
