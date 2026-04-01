@@ -11,7 +11,7 @@
 //
 // El workflow de HubSpot maneja el delay de 10 min y envío de correo.
 
-import { BILLING_TICKET_PIPELINE_ID } from '../../config/constants.js';
+import { TICKET_PIPELINE } from '../../config/constants.js';
 import { hubspotClient } from '../../hubspotClient.js';
 import logger from '../../../lib/logger.js';
 
@@ -53,7 +53,7 @@ function resolverFrecuencia(ticket) {
   if (frecuencia === 'Irregular' || frecuencia === 'Único') return frecuencia;
 
   // Si es pipeline manual y no es Único → forzar Irregular
-  if (pipeline === BILLING_TICKET_PIPELINE_ID && frecuencia !== 'Único') {
+  if (pipeline === TICKET_PIPELINE && frecuencia !== 'Único') {
     return 'Irregular';
   }
 
