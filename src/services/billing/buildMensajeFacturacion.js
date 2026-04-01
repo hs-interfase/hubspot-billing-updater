@@ -11,9 +11,10 @@
 //
 // El workflow de HubSpot maneja el delay de 10 min y envío de correo.
 
-import { TICKET_PIPELINE } from '../../config/constants.js';
+import { build } from 'pino-pretty';
+import { BILLING_TICKET_PIPELINE_ID } from '../../config/constants.js';
 import { hubspotClient } from '../../hubspotClient.js';
-import logger from '../../../lib/logger.js';
+import logger from '../../utils/logger.js';
 
 const DEAL_PROPERTY = 'mensaje_de_facturacion';
 
@@ -53,7 +54,7 @@ function resolverFrecuencia(ticket) {
   if (frecuencia === 'Irregular' || frecuencia === 'Único') return frecuencia;
 
   // Si es pipeline manual y no es Único → forzar Irregular
-  if (pipeline === TICKET_PIPELINE && frecuencia !== 'Único') {
+  if (pipeline === BILLING_TICKET_PIPELINE_ID && frecuencia !== 'Único') {
     return 'Irregular';
   }
 
@@ -150,7 +151,8 @@ function buildLineItemDiv(ticket) {
     buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
     buildRow('Frecuencia', frecuencia),
     buildRow('Cantidad de pagos', val(tp.of_cantidad_de_pagos)),
-    buildRow('Fecha de vencimiento', val(tp.fecha_resolucion_esperada)),
+    buildRow('Fecha de solicitud de facturación', todayYMD()),
+    buildRow('Observaciones', val(tp.observaciones_ventas)),
     `</div>`,
   ];
 
@@ -212,50 +214,86 @@ export function buildMensajeFacturacion(ticket, currentMessage) {
  * Lee la propiedad actual del deal, construye/acumula el HTML
  * y escribe el resultado en `mensaje_de_facturacion`.
  *
- * Condición de llamada: solo para tickets manuales o facturar_ahora.
- * NO llamar cuando facturacion_automatica = true (automático programado).
+ * Usa optimistic locking: después de escribir, relee la propiedad.
+ * Si otro proceso escribió entre medio (race condition), hace merge
+ * y reintenta hasta MAX_RETRIES veces.
  *
  * @param {Object} ticket  - Ticket promovido con snapshots
  * @param {string} dealId  - ID del deal (normalmente tp.of_deal_id)
  */
 export async function actualizarMensajeFacturacion(ticket, dealId) {
-  try {
-    // 1) Leer el valor actual de la propiedad del deal
-    const dealResponse = await hubspotClient.crm.deals.basicApi.getById(
-      dealId,
-      [DEAL_PROPERTY]
-    );
-    const currentMessage = dealResponse?.properties?.[DEAL_PROPERTY] || '';
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY_MS = 2000;
 
-    // 2) Construir / acumular el HTML
-    const nuevoHTML = buildMensajeFacturacion(ticket, currentMessage);
-
-    // 3) Escribir la propiedad actualizada en el deal
-    await hubspotClient.crm.deals.basicApi.update(dealId, {
-      properties: { [DEAL_PROPERTY]: nuevoHTML },
-    });
-
-    logger.info(
-      {
-        module: 'buildMensajeFacturacion',
-        fn: 'actualizarMensajeFacturacion',
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // 1) Leer el valor actual de la propiedad del deal
+      const dealResponse = await hubspotClient.crm.deals.basicApi.getById(
         dealId,
-        ticketId: ticket?.id,
-        acumulado: currentMessage ? 'sí' : 'no',
-      },
-      'mensaje_de_facturacion actualizado'
-    );
-  } catch (err) {
-    logger.error(
-      {
-        module: 'buildMensajeFacturacion',
-        fn: 'actualizarMensajeFacturacion',
+        [DEAL_PROPERTY]
+      );
+      const currentMessage = dealResponse?.properties?.[DEAL_PROPERTY] || '';
+
+      // 2) Construir / acumular el HTML
+      const nuevoHTML = buildMensajeFacturacion(ticket, currentMessage);
+
+      // 3) Escribir la propiedad actualizada en el deal
+      await hubspotClient.crm.deals.basicApi.update(dealId, {
+        properties: { [DEAL_PROPERTY]: nuevoHTML },
+      });
+
+      // 4) Esperar un momento y releer para verificar consistencia
+      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+
+      const verificacion = await hubspotClient.crm.deals.basicApi.getById(
         dealId,
-        ticketId: ticket?.id,
-        err,
-      },
-      'Error al actualizar mensaje_de_facturacion'
-    );
-    // No lanzamos el error para no interrumpir el flujo de facturación
+        [DEAL_PROPERTY]
+      );
+      const mensajeActual = verificacion?.properties?.[DEAL_PROPERTY] || '';
+
+      // 5) Verificar que nuestro div sigue presente
+      const productoNombre = ticket?.properties?.of_producto_nombres || '';
+      if (productoNombre && !mensajeActual.includes(productoNombre)) {
+        // Otro proceso sobrescribió — releer y hacer merge
+        logger.warn(
+          {
+            module: 'buildMensajeFacturacion',
+            fn: 'actualizarMensajeFacturacion',
+            dealId,
+            ticketId: ticket?.id,
+            attempt,
+          },
+          'Race condition detectada, reintentando merge'
+        );
+        continue; // reintenta con el valor actualizado
+      }
+
+      logger.info(
+        {
+          module: 'buildMensajeFacturacion',
+          fn: 'actualizarMensajeFacturacion',
+          dealId,
+          ticketId: ticket?.id,
+          attempt,
+          acumulado: currentMessage ? 'sí' : 'no',
+        },
+        'mensaje_de_facturacion actualizado'
+      );
+      return; // éxito
+
+    } catch (err) {
+      logger.error(
+        {
+          module: 'buildMensajeFacturacion',
+          fn: 'actualizarMensajeFacturacion',
+          dealId,
+          ticketId: ticket?.id,
+          attempt,
+          err,
+        },
+        'Error al actualizar mensaje_de_facturacion'
+      );
+      if (attempt === MAX_RETRIES) return; // no interrumpir flujo de facturación
+    }
   }
 }
