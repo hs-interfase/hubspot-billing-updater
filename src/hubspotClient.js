@@ -166,6 +166,7 @@ export async function getDealWithLineItems(dealId) {
     "facturacion_proxima_fecha",
     "facturacion_ultima_fecha",
     "facturacion_mensaje_proximo_aviso",
+    "mensaje_de_facturacion",
 
     // --- cancelación ---
     "closed_lost_reason",

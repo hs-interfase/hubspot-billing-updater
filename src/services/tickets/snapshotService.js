@@ -89,6 +89,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
   const baseSnapshots = {
+      of_cantidad_de_pagos: parseNumber(lp.hs_recurring_billing_number_of_payments, null),
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
     of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
