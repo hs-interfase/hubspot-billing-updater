@@ -1,44 +1,39 @@
 // src/services/billing/buildMensajeFacturacion.js
 //
-// Construye (o acumula) el HTML rich-text que se escribe en la propiedad
-// `mensaje_de_facturacion` del Deal.
+// Construye el HTML rich-text para la propiedad `mensaje_de_facturacion` del Deal.
 //
-// Lógica de acumulación:
-//   - Si la propiedad ya contiene un mensaje con fecha de HOY → conserva
-//     el HTML existente y agrega el nuevo div de line item al final.
-//   - Si la fecha es distinta o la propiedad está vacía → limpia y construye
-//     desde cero (encabezado + primer div).
+// v2 — Batch: recibe un array de tickets y construye el mensaje completo
+// de una sola pasada. Elimina toda la lógica de acumulación incremental,
+// race conditions y optimistic locking.
 //
-// NOTA: HubSpot stripea HTML comments, data-* attributes, display:none y
-// font-size:0px en propiedades rich text. Los markers de acumulación se
-// basan en texto visible que sobrevive la sanitización:
-//   - Fecha: se extrae del título "📋 Solicitud de Facturación — YYYY-MM-DD"
-//   - Inserción: se busca el último cierre de div de line item (border-radius:6px)
-//
-// El workflow de HubSpot maneja el delay de 10 min y envío de correo.
+// Llamado exclusivamente por cronMensajeFacturacion.js después de agrupar
+// todos los tickets READY de un deal.
 
 import { TICKET_PIPELINE } from '../../config/constants.js';
-import { hubspotClient } from '../../hubspotClient.js';
 import logger from '../../../lib/logger.js';
-
-const DEAL_PROPERTY = 'mensaje_de_facturacion';
 
 // ────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────
 
 function todayYMD() {
-  return new Date().toISOString().slice(0, 10);
+  const tz = process.env.BILLING_TZ || 'America/Montevideo';
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = dtf.formatToParts(new Date());
+  const y = parts.find(p => p.type === 'year')?.value;
+  const m = parts.find(p => p.type === 'month')?.value;
+  const d = parts.find(p => p.type === 'day')?.value;
+  return `${y}-${m}-${d}`;
 }
 
-/**
- * Extrae la fecha del título visible del mensaje.
- * Busca el patrón "📋 Solicitud de Facturación — YYYY-MM-DD"
- * que sobrevive la sanitización de HubSpot.
- */
-function extractFechaFromMessage(html) {
-  const match = (html || '').match(/Solicitud de Facturación\s*(?:—|&mdash;|-)\s*(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : null;
+function horaActual() {
+  const tz = process.env.BILLING_TZ || 'America/Montevideo';
+  return new Date().toLocaleTimeString('es-UY', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
 }
 
 /** Si el valor es null/undefined/vacío, retorna null; si no, retorna el string */
@@ -59,15 +54,12 @@ function resolverFrecuencia(ticket) {
   const frecuencia = val(tp.of_frecuencia_de_facturacion);
   const pipeline = val(tp.hs_pipeline);
 
-  // Si ya es Irregular o Único, usar tal cual
   if (frecuencia === 'Irregular' || frecuencia === 'Único') return frecuencia;
 
-  // Si es pipeline manual y no es Único → forzar Irregular
-  if (pipeline === BILLING_TICKET_PIPELINE_ID && frecuencia !== 'Único') {
+  if (pipeline === TICKET_PIPELINE && frecuencia !== 'Único') {
     return 'Irregular';
   }
 
-  // Automático → usar valor del snapshot
   return frecuencia || '-';
 }
 
@@ -84,47 +76,34 @@ const STYLES = {
   lineItemDiv: 'background:#f7f9fc;border:1px solid #dde3eb;border-radius:6px;padding:12px;margin:10px 0;',
   lineItemTitle: 'font-size:14px;font-weight:bold;color:#0056b3;margin-bottom:8px;border-bottom:1px solid #dde3eb;padding-bottom:6px;',
   separator: 'border:0;border-top:1px solid #eee;margin:12px 0;',
+  footer: 'margin-top:16px;padding-top:8px;border-top:1px solid #dde3eb;font-size:12px;color:#888;',
 };
-
-// Estilo único que identifica los divs de line items para buscar punto de inserción.
-// Si se cambia STYLES.lineItemDiv, actualizar también esta constante.
-const LINE_ITEM_MARKER_STYLE = 'border-radius:6px';
 
 // ────────────────────────────────────────────────────────────
 // Builders
 // ────────────────────────────────────────────────────────────
 
-/** Genera una fila label: value. Si value es null, retorna string vacío (se omite) */
 function buildRow(label, value) {
   if (value === null) return '';
   return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${value}</div>`;
 }
 
 /**
- * Construye el encabezado del mensaje (fecha, datos del negocio, datos de facturación).
- * Solo se genera al crear un mensaje nuevo (no al acumular).
+ * Construye el encabezado del mensaje usando datos del primer ticket.
  */
-function buildHeader(ticket) {
-  const tp = ticket?.properties || {};
+function buildHeader(firstTicket, dealName) {
+  const tp = firstTicket?.properties || {};
   const hoy = todayYMD();
-
-  // Extraer nombre del negocio del subject del ticket: "Empresa - Producto - Fecha"
-  const dealName = val(tp.subject)
-    ? tp.subject.split(' - ')[0].trim()
-    : val(tp.of_deal_id) || '-';
 
   const rows = [
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
 
-    // TODO: lógica ISA / Interfase
-    // if (condicionISA) { tipo = 'ISA' } else if (condicionInterfase) { tipo = 'Interfase' }
-
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRow('Negocio', dealName),
+    buildRow('Negocio', dealName || '-'),
     buildRow('Cliente principal', val(tp.nombre_empresa)),
-    buildRow('Empresa que factura', val(tp.empresa_que_factura)),   // TODO: confirmar propiedad en ticket
-    buildRow('Persona que factura', val(tp.persona_que_factura)),   // TODO: confirmar propiedad en ticket
+    buildRow('Empresa que factura', val(tp.empresa_que_factura)),
+    buildRow('Persona que factura', val(tp.persona_que_factura)),
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos de facturación</div>`,
     buildRow('Moneda', val(tp.of_moneda)),
@@ -140,7 +119,6 @@ function buildHeader(ticket) {
 
 /**
  * Construye el div de un line item individual.
- * Se usa tanto para el primer item como para los acumulados.
  */
 function buildLineItemDiv(ticket) {
   const tp = ticket?.properties || {};
@@ -161,7 +139,7 @@ function buildLineItemDiv(ticket) {
     buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
     buildRow('Frecuencia', frecuencia),
     buildRow('Cantidad de pagos', val(tp.of_cantidad_de_pagos)),
-    buildRow('Fecha de solicitud de facturación', todayYMD()),
+    buildRow('Fecha de vencimiento', val(tp.fecha_resolucion_esperada)?.slice(0, 10)),
     buildRow('Observaciones', val(tp.observaciones_ventas)),
     `</div>`,
   ];
@@ -169,191 +147,48 @@ function buildLineItemDiv(ticket) {
   return rows.filter(r => r !== '').join('\n');
 }
 
-function buildFooter() {
-  return '</div>';
-}
-
-/**
- * Encuentra el punto de inserción para acumular un nuevo line item.
- * Busca el último cierre </div> del último div de line item
- * (identificado por border-radius:6px), y retorna el índice
- * DESPUÉS de ese </div>.
- *
- * @returns {number} índice de inserción, o -1 si no se encuentra
- */
-function findInsertionPoint(html) {
-  // Buscar la última aparición del estilo que identifica un line item div
-  const lastLineItemStart = html.lastIndexOf(LINE_ITEM_MARKER_STYLE);
-  if (lastLineItemStart === -1) return -1;
-
-  // Desde ahí, buscar el cierre </div> que corresponde al line item.
-  // Los line items tienen estructura: <div style="...border-radius:6px...">...contenido...</div>
-  // Necesitamos encontrar el </div> que cierra este div, contando nesting.
-  let depth = 0;
-  let i = html.indexOf('<div', lastLineItemStart - 50); // retroceder un poco para capturar el <div de apertura
-  if (i === -1) i = lastLineItemStart;
-
-  // Buscar el <div de apertura más cercano antes del marker
-  const searchStart = html.lastIndexOf('<div', lastLineItemStart);
-  if (searchStart === -1) return -1;
-
-  // Recorrer desde el <div de apertura contando depth
-  let pos = searchStart;
-  while (pos < html.length) {
-    const nextOpen = html.indexOf('<div', pos + 1);
-    const nextClose = html.indexOf('</div>', pos + 1);
-
-    if (nextClose === -1) return -1; // HTML malformado
-
-    if (nextOpen !== -1 && nextOpen < nextClose) {
-      // Hay un <div anidado antes del próximo </div>
-      depth++;
-      pos = nextOpen;
-    } else {
-      // </div> encontrado
-      if (depth === 0) {
-        // Este es el cierre del div de line item
-        return nextClose + '</div>'.length;
-      }
-      depth--;
-      pos = nextClose;
-    }
-  }
-
-  return -1;
-}
-
-// ────────────────────────────────────────────────────────────
-// Función principal
-// ────────────────────────────────────────────────────────────
-
-/**
- * Construye o acumula el HTML del mensaje de facturación.
- *
- * @param {Object} ticket          - Ticket promovido (con snapshots del deal y line item)
- * @param {string} currentMessage  - Valor actual de `mensaje_de_facturacion` del deal (puede ser null/vacío)
- * @returns {string}               - HTML completo para escribir en la propiedad del deal
- */
-export function buildMensajeFacturacion(ticket, currentMessage) {
+function buildFooter(ticketIds) {
   const hoy = todayYMD();
-  const fechaExistente = extractFechaFromMessage(currentMessage);
-  const nuevoDiv = buildLineItemDiv(ticket);
-
-  // ── ACUMULAR: fecha existente es hoy → solo agregar el nuevo div ──
-  if (fechaExistente === hoy && currentMessage) {
-    const insertPoint = findInsertionPoint(currentMessage);
-
-    if (insertPoint !== -1) {
-      return (
-        currentMessage.slice(0, insertPoint) +
-        '\n' + nuevoDiv +
-        currentMessage.slice(insertPoint)
-      );
-    }
-
-    // Fallback: agregar antes del último </div> (el container)
-    const lastDiv = currentMessage.lastIndexOf('</div>');
-    if (lastDiv !== -1) {
-      return (
-        currentMessage.slice(0, lastDiv) +
-        nuevoDiv + '\n' +
-        currentMessage.slice(lastDiv)
-      );
-    }
-  }
-
-  // ── NUEVO: fecha distinta o propiedad vacía → construir desde cero ──
-  return buildHeader(ticket) + '\n' + nuevoDiv + '\n' + buildFooter();
+  return [
+    `<div style="${STYLES.footer}">`,
+`Generado automáticamente — ${hoy} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,    `</div>`,
+    `</div>`,
+  ].join('\n');
 }
 
 // ────────────────────────────────────────────────────────────
-// Función pública: leer deal → construir HTML → escribir propiedad
+// Función principal (batch)
 // ────────────────────────────────────────────────────────────
 
 /**
- * Lee la propiedad actual del deal, construye/acumula el HTML
- * y escribe el resultado en `mensaje_de_facturacion`.
+ * Construye el HTML completo del mensaje de facturación a partir de
+ * un array de tickets.
  *
- * Usa optimistic locking: después de escribir, relee la propiedad.
- * Si otro proceso escribió entre medio (race condition), hace merge
- * y reintenta hasta MAX_RETRIES veces.
- *
- * @param {Object} ticket  - Ticket promovido con snapshots
- * @param {string} dealId  - ID del deal (normalmente tp.of_deal_id)
+ * @param {Object[]} tickets  - Array de tickets (con properties)
+ * @param {string}   dealName - Nombre del deal (para el encabezado)
+ * @returns {string}          - HTML completo
  */
+export function buildMensajeFacturacion(tickets, dealName) {
+  if (!tickets || tickets.length === 0) return '';
+
+  const header = buildHeader(tickets[0], dealName);
+  const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
+  const ticketIds = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
+  const footer = buildFooter(ticketIds);
+
+  return header + '\n' + lineItemDivs + '\n' + footer;
+}
+
+// ── Legacy export (mantener compatibilidad temporal) ──
+// Si alguien todavía llama actualizarMensajeFacturacion, loguea warning
 export async function actualizarMensajeFacturacion(ticket, dealId) {
-  const MAX_RETRIES = 3;
-  const RETRY_DELAY_MS = 2000;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // 1) Leer el valor actual de la propiedad del deal
-      const dealResponse = await hubspotClient.crm.deals.basicApi.getById(
-        dealId,
-        [DEAL_PROPERTY]
-      );
-      const currentMessage = dealResponse?.properties?.[DEAL_PROPERTY] || '';
-
-      // 2) Construir / acumular el HTML
-      const nuevoHTML = buildMensajeFacturacion(ticket, currentMessage);
-
-      // 3) Escribir la propiedad actualizada en el deal
-      await hubspotClient.crm.deals.basicApi.update(dealId, {
-        properties: { [DEAL_PROPERTY]: nuevoHTML },
-      });
-
-      // 4) Esperar un momento y releer para verificar consistencia
-      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-
-      const verificacion = await hubspotClient.crm.deals.basicApi.getById(
-        dealId,
-        [DEAL_PROPERTY]
-      );
-      const mensajeActual = verificacion?.properties?.[DEAL_PROPERTY] || '';
-
-      // 5) Verificar que nuestro div sigue presente
-      const productoNombre = ticket?.properties?.of_producto_nombres || '';
-      if (productoNombre && !mensajeActual.includes(productoNombre)) {
-        // Otro proceso sobrescribió — releer y hacer merge
-        logger.warn(
-          {
-            module: 'buildMensajeFacturacion',
-            fn: 'actualizarMensajeFacturacion',
-            dealId,
-            ticketId: ticket?.id,
-            attempt,
-          },
-          'Race condition detectada, reintentando merge'
-        );
-        continue; // reintenta con el valor actualizado
-      }
-
-      logger.info(
-        {
-          module: 'buildMensajeFacturacion',
-          fn: 'actualizarMensajeFacturacion',
-          dealId,
-          ticketId: ticket?.id,
-          attempt,
-          acumulado: currentMessage ? 'sí' : 'no',
-        },
-        'mensaje_de_facturacion actualizado'
-      );
-      return; // éxito
-
-    } catch (err) {
-      logger.error(
-        {
-          module: 'buildMensajeFacturacion',
-          fn: 'actualizarMensajeFacturacion',
-          dealId,
-          ticketId: ticket?.id,
-          attempt,
-          err,
-        },
-        'Error al actualizar mensaje_de_facturacion'
-      );
-      if (attempt === MAX_RETRIES) return; // no interrumpir flujo de facturación
-    }
-  }
+  logger.warn(
+    {
+      module: 'buildMensajeFacturacion',
+      fn: 'actualizarMensajeFacturacion',
+      dealId,
+      ticketId: ticket?.id,
+    },
+    '⚠️ actualizarMensajeFacturacion LEGACY llamada — esta función ya no se usa, el cron se encarga'
+  );
 }

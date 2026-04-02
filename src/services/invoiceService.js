@@ -6,7 +6,6 @@ import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateU
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
-import { actualizarMensajeFacturacion } from './billing/buildMensajeFacturacion.js';
 import { recalcFacturasRestantes } from './billing/recalcFacturasRestantes.js';
 import { syncBillingState } from './billing/syncBillingState.js';
 import { isAutoRenew } from './billing/mode.js';
@@ -537,12 +536,6 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       responsable: invoicePropsRaw.responsable_asignado || tp.hubspot_owner_id || 'no asignado',
     }, '[invoice] ✅ FACTURA CREADA EXITOSAMENTE');
     
-        // Mensaje a administración (solo manual o facturar_ahora, NO automático programado)
-    const esAutomaticoProgramado = parseBool(tp.facturacion_automatica) && !parseBool(tp.facturar_ahora);
-    if (!esAutomaticoProgramado) {
-      await actualizarMensajeFacturacion(ticket, dealId);
-    }
-
     return { invoiceId, created: true };
 
   } catch (err) {
