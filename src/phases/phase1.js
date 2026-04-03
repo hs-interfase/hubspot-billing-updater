@@ -1,27 +1,15 @@
 // src/phases/phase1.js
-<<<<<<< HEAD
-import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
-import { mirrorDealToUruguay } from "../dealMirroring.js";
-=======
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { syncBillingState } from '../services/billing/syncBillingState.js';
 import { DEAL_STAGE_LOST } from '../config/constants.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
->>>>>>> pruebas
 import {
   updateLineItemSchedule,
   computeNextBillingDateFromLineItems,
   computeLastBillingDateFromLineItems,
-<<<<<<< HEAD
-  computeBillingCountersForLineItem,
-} from "../billingEngine.js";
-import { updateDealCupo } from "../utils/propertyHelpers.js";
-import { normalizeBillingStartDelay } from "../normalizeBillingStartDelay.js";
-=======
 } from '../billingEngine.js';
 import { updateDealCupo } from '../utils/propertyHelpers.js';
 import { normalizeBillingStartDelay } from '../normalizeBillingStartDelay.js';
->>>>>>> pruebas
 import { logDateEnvOnce } from "../utils/dateDebugs.js";
 import { parseBool, parseNumber, safeString } from "../utils/parsers.js";
 import { computeCupoEstadoFrom } from "../utils/calculateCupoEstado.js";
@@ -91,38 +79,10 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
     updateProps.cupo_restante = String(cupoTotal);
   }
 
-<<<<<<< HEAD
-  /*  // ✅ A) Actualizar cupo_estado según reglas
-  const { calculateCupoEstado } = await import('../utils/propertyHelpers.js');
-  const newCupoEstado = calculateCupoEstado({
-    cupo_activo: updateProps.cupo_activo ?? dealProps.cupo_activo,
-    cupo_restante: updateProps.cupo_restante ?? dealProps.cupo_restante,
-    cupo_umbral: dealProps.cupo_umbral,
-=======
   const newCupoEstado = computeCupoEstadoFrom(dealProps, {
     cupo_activo: updateProps.cupo_activo,
     cupo_consumido: updateProps.cupo_consumido,
     cupo_restante: updateProps.cupo_restante,
-    tipo_de_cupo: updateProps.tipo_de_cupo,
-    cupo_total: updateProps.cupo_total,
-    cupo_total_monto: updateProps.cupo_total_monto,
->>>>>>> pruebas
-  });
-
-  const currentCupoEstado = dealProps.cupo_estado;
-
-  if (newCupoEstado !== 'Inconsistente' && newCupoEstado && newCupoEstado !== currentCupoEstado) {
-    updateProps.cupo_estado = newCupoEstado;
-<<<<<<< HEAD
-    console.log([cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado});
-  }
-*/
-
-  const newCupoEstado = computeCupoEstadoFrom(dealProps, {
-    cupo_activo: updateProps.cupo_activo,
-    cupo_consumido: updateProps.cupo_consumido,
-    cupo_restante: updateProps.cupo_restante,
-    // si en Phase 1 también se puede modificar tipo/total, incluilo acá
     tipo_de_cupo: updateProps.tipo_de_cupo,
     cupo_total: updateProps.cupo_total,
     cupo_total_monto: updateProps.cupo_total_monto,
@@ -130,34 +90,16 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
 
   const currentCupoEstado = dealProps.cupo_estado;
 
-  if (newCupoEstado === "Inconsistente") {
-    // tu diag puede quedarse, pero calculalo desde merged también para que no mienta
-  } else if (newCupoEstado && newCupoEstado !== currentCupoEstado) {
+  if (newCupoEstado !== 'Inconsistente' && newCupoEstado && newCupoEstado !== currentCupoEstado) {
     updateProps.cupo_estado = newCupoEstado;
-    console.log(
-      `[cupo:activate] cupo_estado: ${currentCupoEstado || "(null)"} → ${newCupoEstado}`
-    );
-  }
-=======
     logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, from: currentCupoEstado || '(null)', to: newCupoEstado }, `[cupo:activate] cupo_estado: ${currentCupoEstado || '(null)'} → ${newCupoEstado}`);
   }
->>>>>>> pruebas
 
   if (Object.keys(updateProps).length === 0) {
     logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, cupo_activo: shouldActivate }, '[cupo:activate] sin cambios');
     return;
   }
 
-<<<<<<< HEAD
-  console.log(
-    `[cupo:activate] Updating deal ${dealId} with:`,
-    Object.keys(updateProps).join(", ")
-  );
-  await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-    properties: updateProps,
-  });
-  console.log(`[cupo:activate] ✅ Deal ${dealId} actualizado:`, updateProps);
-=======
   logger.info({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, keys: Object.keys(updateProps) }, `[cupo:activate] Updating deal ${dealId}`);
 
   try {
@@ -181,42 +123,24 @@ async function activateCupoIfNeeded(dealId, dealProps, lineItems) {
       logger.warn({ module: 'phase1', fn: 'activateCupoIfNeeded', dealId, err }, '[activateCupoIfNeeded] syncBillingState failed');
     }
   }
->>>>>>> pruebas
 }
 
 function classifyLineItemFlow(li) {
   const p = li?.properties || {};
 
-<<<<<<< HEAD
-  // Irregular tiene prioridad
-  const irregular = (p.irregular ?? "").toString().toLowerCase();
-  if (irregular === "true" || irregular === "1" || irregular === "si" || irregular === "sí") {
-    return "Irregular";
-  }
-
-  // Recurrente si tiene frecuencia
-  const freq = (p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? "")
-=======
   const irregular = (p.irregular ?? '').toString().toLowerCase();
   if (irregular === 'true' || irregular === '1' || irregular === 'si' || irregular === 'sí') {
     return 'Irregular';
   }
 
   const freq = (p.recurringbillingfrequency ?? p.hs_recurring_billing_frequency ?? '')
->>>>>>> pruebas
     .toString()
     .toLowerCase()
     .trim();
   if (freq) return "Recurrente";
 
-<<<<<<< HEAD
-  // Pago único si tiene 1 pago
-  const num = (p.hs_recurring_billing_number_of_payments ?? "").toString().trim();
-  if (num === "1") return "Pago Único";
-=======
   const num = (p.hs_recurring_billing_number_of_payments ?? '').toString().trim();
   if (num === '1') return 'Pago Único';
->>>>>>> pruebas
 
   return null;
 }
@@ -258,51 +182,6 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   return `Próxima facturación ${fmtYMD(nextDate)} · ${dealName} · ${count} line items`;
 }
 
-<<<<<<< HEAD
-/**
- * Deriva frecuencia del deal:
- * - si hay al menos un monthly => monthly
- * - si hay al menos un yearly => yearly
- * - si hay mezcla => mixed
- * - si no hay recurring => one_time
- */
-function deriveDealBillingFrequency(lineItems) {
-  const freqs = new Set();
-
-  for (const li of lineItems || []) {
-    const p = li?.properties || {};
-    const f = (p.hs_recurring_billing_frequency ?? p.recurringbillingfrequency ?? "")
-      .toString()
-      .toLowerCase()
-      .trim();
-
-    // HubSpot suele usar monthly, annually, yearly, etc.
-    if (f) freqs.add(f);
-    else {
-      // si tiene number_of_payments=1 y no tiene frecuencia, lo tratamos como one-time
-      const n = (p.hs_recurring_billing_number_of_payments ?? "").toString();
-      if (n === "1") freqs.add("one_time");
-    }
-  }
-
-  if (freqs.size === 0) return null;
-  if (freqs.size === 1) return [...freqs][0];
-
-  // si hay mezcla
-  return "mixed";
-}
-
-async function processLineItemsForPhase1(lineItems, today, { alsoInitCupo = true } = {}) {
-  if (!Array.isArray(lineItems) || lineItems.length === 0) return;
-
-  // 1) calendario
-  for (const li of lineItems) {
-    try {
-      await updateLineItemSchedule(li);
-    } catch (err) {
-      console.error("[phase1] Error en updateLineItemSchedule para line item", li.id, err);
-    }
-=======
 async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true, dealProps = {} } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
@@ -313,7 +192,6 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
     const parts = String(lineItemKey).split(':');
     if (parts.length < 2) return null;
     return { dealId: parts[0], lineItemId: parts[1] };
->>>>>>> pruebas
   }
 
   for (const li of lineItems) {
@@ -321,14 +199,6 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
       const existingKey = String(li.properties?.line_item_key || '').trim();
       const parsed = parseLineItemKey(existingKey);
 
-<<<<<<< HEAD
-      li.properties = { ...(li.properties || {}), ...updateProps };
-      await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-        properties: updateProps,
-      });
-    } catch (err) {
-      console.error("[phase1] Error guardando contadores en line item", li.id, err);
-=======
       const keyMatches =
         !!parsed &&
         String(parsed.dealId) === String(dealId) &&
@@ -461,181 +331,16 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
       }
     } catch (err) {
       logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, '[phase1] Error en updateLineItemSchedule para line item');
->>>>>>> pruebas
     }
   }
 }
 
-<<<<<<< HEAD
-export async function runPhase1(dealId, {
-   mode,
-   sourceLineItemId
-  } = {}) {
-  if (!dealId) throw new Error("runPhase1 requiere un dealId");
-=======
 export async function runPhase1(dealId) {
   if (!dealId) throw new Error('runPhase1 requiere un dealId');
->>>>>>> pruebas
 
   const { deal, lineItems } = await getDealWithLineItems(dealId);
   const dealProps = deal.properties || {};
 
-<<<<<<< HEAD
-  // Sanear identidad de line items clonados por UI (solo si no es espejo)
-  await sanitizeClonedLineItemIdentity(deal, lineItems);
-
-  // Derivar intención de facturación urgente
-  const shouldPropagateUrgentBilling = mode === "line_item.facturar_ahora" && sourceLineItemId;
-
-  // ========= DEBUG HELPERS =========
-  const DBG_PHASE1 = process.env.DBG_PHASE1 === "true";
-
-  function statusOf(obj, key) {
-    const has = Object.prototype.hasOwnProperty.call(obj || {}, key);
-    const val = obj?.[key];
-    const empty = val === null || val === "" || typeof val === "undefined";
-    const status = !has ? "MISSING" : empty ? "EMPTY" : "OK";
-    return { val, status };
-  }
-
-  function showProp(obj, key, label = key) {
-    const { val, status } = statusOf(obj, key);
-    console.log(`   ${label}:`, val, `(${status})`);
-  }
-
-  // ========== DEBUG LOGS - DEAL + LINE ITEMS (PHASE 1) ==========
-  if (DBG_PHASE1) {
-    const dp = deal?.properties || {};
-
-    console.log("\n╔════════════════════════════════════════════════════════╗");
-    console.log("║              PHASE 1 - DEAL CARGADO                   ║");
-    console.log("╚════════════════════════════════════════════════════════╝");
-
-    // 🔎 Ver si realmente vinieron las props
-    console.log("\n🔎 DEAL PROP KEYS:", Object.keys(dp).sort());
-
-    console.log("\n📊 INFORMACIÓN GENERAL");
-    showProp({ dealId }, "dealId", "Deal ID");
-    showProp(dp, "dealname", "Deal Name");
-    showProp(dp, "dealstage", "Deal Stage");
-    showProp(dp, "deal_currency_code", "Moneda");
-    showProp(dp, "pais_operativo", "País");
-    showProp(dp, "unidad_de_negocio", "Unidad de Negocio");
-
-    console.log("\n💰 CUPO");
-    showProp(dp, "tipo_de_cupo");
-    showProp(dp, "cupo_activo");
-    showProp(dp, "cupo_total");
-    showProp(dp, "cupo_total_monto");
-    showProp(dp, "cupo_consumido");
-    showProp(dp, "cupo_restante");
-    showProp(dp, "cupo_umbral");
-    showProp(dp, "cupo_ultima_actualizacion");
-
-    console.log("\n📅 FACTURACIÓN");
-    showProp(dp, "facturacion_activa");
-    showProp(dp, "facturacion_proxima_fecha");
-    showProp(dp, "facturacion_ultima_fecha");
-    showProp(dp, "facturacion_frecuencia_de_facturacion");
-    showProp(dp, "facturacion_mensaje_proximo_aviso");
-
-    console.log("\n🔗 MIRRORS");
-    showProp(dp, "deal_py_origen_id");
-    showProp(dp, "deal_uy_mirror_id");
-    showProp(dp, "es_mirror_de_py");
-
-    console.log("\n╔════════════════════════════════════════════════════════╗");
-    console.log(
-      `║           LINE ITEMS CARGADOS (${lineItems.length})                   ║`
-    );
-    console.log("╚════════════════════════════════════════════════════════╝");
-
-    for (const li of lineItems) {
-      const lp = li?.properties || {};
-
-      console.log("\n────────────────────────────────────────────────────────");
-      console.log("📦 LINE ITEM ID:", li?.id);
-
-      // 🔎 Ver si realmente vinieron las props
-      console.log("🔎 LI PROP KEYS:", Object.keys(lp).sort());
-
-      console.log("   Nombre:", lp.name);
-
-      console.log("\n   💵 PRICING");
-      showProp(lp, "price");
-      showProp(lp, "quantity");
-      showProp(lp, "amount");
-      showProp(lp, "discount", "discount (monto/unidad)");
-      showProp(lp, "hs_discount_percentage", "hs_discount_percentage (%)");
-
-      console.log("\n   🧾 TAX");
-      showProp(lp, "hs_tax_rate_group_id");
-      showProp(lp, "hs_post_tax_amount");
-
-      console.log("\n   🔄 RECURRING");
-      showProp(lp, "recurringbillingfrequency");
-      showProp(lp, "hs_recurring_billing_start_date");
-      // compat: a veces viene en una u otra
-      const nop = lp.number_of_payments ?? lp.hs_recurring_billing_number_of_payments;
-      console.log("   number_of_payments:", nop, "(OK)");
-
-      console.log("\n   ⏰ BILLING DELAY");
-      showProp(lp, "hs_billing_start_delay_type");
-      showProp(lp, "hs_billing_start_delay_days");
-      showProp(lp, "hs_billing_start_delay_months");
-
-      console.log("\n   📅 FACTURACIÓN");
-      showProp(lp, "facturacion_activa");
-      showProp(lp, "facturacion_automatica");
-      showProp(lp, "facturar_ahora");
-      showProp(lp, "irregular");
-      showProp(lp, "pausa");
-      showProp(lp, "motivo_de_pausa");
-
-      console.log("\n   💰 CUPO");
-      showProp(lp, "parte_del_cupo");
-
-      console.log("\n   🔗 REFERENCIAS");
-      showProp(lp, "invoice_id");
-      showProp(lp, "invoice_key");
-      showProp(lp, "pais_operativo");
-      showProp(lp, "uy");
-    }
-
-    console.log("\n═══════════════════════════════════════════════════════════\n");
-  }
-
-  // -- Convertir retrasos en fecha de inicio concreta --
-  // Esto modifica los line items en HubSpot y los actualiza en memoria.
-  try {
-    await normalizeBillingStartDelay(lineItems, deal);
-  } catch (err) {
-    console.error("[phase1] Error normalizando retrasos de facturación", err);
-  }
-
-  // ========== DEBUG POST-NORMALIZE (FECHAS FINALES) ==========
-  if (DBG_PHASE1) {
-    console.log("\n╔════════════════════════════════════════════════════════╗");
-    console.log("║       POST-NORMALIZE - FECHAS FINALES LINE ITEMS      ║");
-    console.log("╚════════════════════════════════════════════════════════╝");
-
-    for (const li of lineItems) {
-      const lp = li?.properties || {};
-      console.log(`\n📦 Line Item ${li.id} - ${lp.name}`);
-      console.log(`   hs_recurring_billing_start_date: ${lp.hs_recurring_billing_start_date}`);
-      console.log(
-        `   hs_billing_start_delay_type: ${lp.hs_billing_start_delay_type || "(vacío)"}`
-      );
-      console.log(
-        `   hs_billing_start_delay_days: ${lp.hs_billing_start_delay_days || "(vacío)"}`
-      );
-      console.log(
-        `   hs_billing_start_delay_months: ${lp.hs_billing_start_delay_months || "(vacío)"}`
-      );
-    }
-
-    console.log("\n═══════════════════════════════════════════════════════════\n");
-=======
   const DBG_PHASE1 = process.env.DBG_PHASE1 === 'true';
 
   // ===== DEBUG: dump de deal + line items en un solo log =====
@@ -715,7 +420,6 @@ export async function runPhase1(dealId) {
         hs_billing_start_delay_months: li.properties?.hs_billing_start_delay_months,
       })),
     }, '[phase1] POST-NORMALIZE fechas finales line items');
->>>>>>> pruebas
   }
 
   async function sanitizeClonedLineItemIdentity(deal, lineItems) {
@@ -746,30 +450,7 @@ export async function runPhase1(dealId) {
       sourceLineItemId,
     });
   } catch (err) {
-<<<<<<< HEAD
-    console.error("[phase1] Error en mirrorDealToUruguay:", err?.response?.body || err);
-  }
-
-  // Propagar facturar_ahora al line item espejo si corresponde
-  if (
-    shouldPropagateUrgentBilling &&
-    mirrorResult?.mirrored &&
-    mirrorResult?.mirrorLineItemId
-  ) {
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(
-        String(mirrorResult.mirrorLineItemId),
-        {
-          properties: { facturar_ahora: "true" },
-        }
-      );
-      console.log(`[phase1] Propagado facturar_ahora al mirror LI ${mirrorResult.mirrorLineItemId}`);
-    } catch (err) {
-      console.warn(`[phase1] Error propagando facturar_ahora al mirror LI`, mirrorResult.mirrorLineItemId, err?.message);
-    }
-=======
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en mirrorDealToUruguay');
->>>>>>> pruebas
   }
 
   // Si no hay line items en el negocio original, terminamos
@@ -789,60 +470,12 @@ export async function runPhase1(dealId) {
   try {
     await activateCupoIfNeeded(dealId, dealProps, lineItems);
   } catch (err) {
-<<<<<<< HEAD
-    console.error("[phase1] Error en activateCupoIfNeeded:", err);
-=======
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en activateCupoIfNeeded');
->>>>>>> pruebas
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
 await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, dealProps });
 
-<<<<<<< HEAD
-  // 2.1) Procesar espejo UY (si existe): calendario + contadores + cupo por línea
-  if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
-    try {
-      const { deal: mirrorDeal, lineItems: mirrorLineItems } = await getDealWithLineItems(
-        mirrorResult.targetDealId
-      );
-
-      console.log(
-        `[phase1] Procesando ESPEJO deal=${mirrorResult.targetDealId} lineItems=${mirrorLineItems
-          .map((x) => x.id)
-          .join(",")}`
-      );
-
-      // Inicializar cupo del espejo también
-      try {
-        await activateCupoIfNeeded(
-          mirrorResult.targetDealId,
-          mirrorDeal.properties,
-          mirrorLineItems
-        );
-      } catch (err) {
-        console.error(
-          "[phase1] Error activateCupoIfNeeded en espejo UY",
-          mirrorResult.targetDealId,
-          err
-        );
-      }
-
-      await processLineItemsForPhase1(mirrorLineItems, today, { alsoInitCupo: true });
-
-      // actualizar cupo a nivel deal espejo usando sus props (no pisar inputs)
-      try {
-        await updateDealCupo(mirrorDeal, mirrorLineItems);
-      } catch (err) {
-        console.error("[phase1] Error updateDealCupo en espejo UY", mirrorResult.targetDealId, err);
-      }
-    } catch (err) {
-      console.error(
-        "[phase1] No se pudo obtener o procesar el deal espejo",
-        mirrorResult.targetDealId,
-        err
-      );
-=======
   // 2.1) Procesar espejo UY (si existe)
   if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
     try {
@@ -871,7 +504,6 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
       }
     } catch (err) {
       logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] No se pudo obtener o procesar el deal espejo');
->>>>>>> pruebas
     }
   }
 
@@ -893,19 +525,6 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
   // 4b) Tipo del negocio = tipo del PRÓXIMO evento
   const dealBillingFrequency = pickDealFlowTypeForNextEvent(lineItems, nextDateStr);
 
-<<<<<<< HEAD
-  // 5) Actualizar cupo a nivel negocio pasando también el negocio completo
-  try {
-    await updateDealCupo(deal, lineItems);
-  } catch (err) {
-    console.error("[phase1] Error updateDealCupo deal", dealId, err);
-  }
-
-  // 6) Construir mensaje
-  const message = effectiveNext ? buildNextBillingMessage({ deal, nextDate: effectiveNext, lineItems }) : "";
-
-  // 7) Actualizar SIEMPRE propiedades del deal (aunque facturacion_activa=false)
-=======
   // 5) Actualizar cupo a nivel negocio
   try {
     await updateDealCupo(deal, lineItems);
@@ -919,18 +538,11 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
     : '';
 
   // 7) Actualizar propiedades del deal
->>>>>>> pruebas
   const updateBody = {
     properties: {
       facturacion_proxima_fecha: nextDateStr || null,
       facturacion_ultima_fecha: lastDateStr || null,
-<<<<<<< HEAD
-      facturacion_mensaje_proximo_aviso: message || "",
-      // ⚠️ SOLO PARA REPORTING: esta propiedad NO se usa en lógica de facturación
-      // La fuente de verdad SIEMPRE es el Line Item
-=======
       facturacion_mensaje_proximo_aviso: message || '',
->>>>>>> pruebas
       facturacion_frecuencia_de_facturacion: dealBillingFrequency || null,
     },
   };

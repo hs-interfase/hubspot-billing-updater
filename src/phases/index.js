@@ -135,7 +135,6 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     },
     'Inicio procesamiento de fases'
   );
->>>>>>> pruebas
 
   const results = {
     dealId,
@@ -150,7 +149,6 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
   // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
   try {
-<<<<<<< HEAD
     console.log(
       `🧹 PRE: Limpieza de tickets clonados/duplicados (por of_ticket_key/of_invoice_key)...`
     );
@@ -166,36 +164,15 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     console.error(`   ❌ Error en Cleanup PRE:`, err?.message || err);
     results.cleanup.error = err?.message || "Error desconocido";
     // NO frenamos el proceso
-=======
-    const cleanupResult = await cleanupClonedTicketsForDeal({
-      dealId,
-      lineItems: currentLineItems,
-    });
-    results.cleanup = cleanupResult || results.cleanup;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.cleanup },
-      'Cleanup PRE completado'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Cleanup PRE'
-    );
-    results.cleanup.error = err?.message || 'Error desconocido';
->>>>>>> pruebas
   }
 
   // ========== PHASE 1: Fechas, calendario, cupo ==========
   try {
-<<<<<<< HEAD
     console.log(`📅 PHASE 1: Actualizando fechas, calendario y cupo...`);
 
     // Solo pasamos sourceLineItemId si realmente vino (opcional)
     await runPhase1(dealId, { mode, sourceLineItemId });
 
-=======
-    await runPhase1(dealId);
->>>>>>> pruebas
     results.phase1.success = true;
     logger.info(
       { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
@@ -222,7 +199,6 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       'Refetch post-Phase1 completado'
     );
   } catch (err) {
-<<<<<<< HEAD
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
     results.phase1.error = err?.message || "Error desconocido";
   }
@@ -241,140 +217,10 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   } catch (err) {
     console.error(`   ❌ Error en Phase 2:`, err?.message || err);
     results.phase2.error = err?.message || "Error desconocido";
-=======
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 1'
-    );
-    results.phase1.error = err?.message || 'Error desconocido';
-  }
-
-  // ========== CANCELACIÓN: si el deal está perdido/cancelado ==========
-  if (isDealCancelled(currentDeal?.properties)) {
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, dealStage: currentDeal?.properties?.dealstage },
-      'Deal cancelado — propagando cancelación y saltando Phase P/2/3'
-    );
-
-    try {
-      await propagateDealCancellation({
-        dealId,
-        dealProps: currentDeal?.properties,
-        lineItems: currentLineItems,
-      });
-      results.cancellation = { propagated: true };
-    } catch (err) {
-      logger.error(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-        'Error en propagateDealCancellation'
-      );
-      results.cancellation = { propagated: false, error: err?.message };
-    }
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-      'Deal completado (cancelado)'
-    );
-
-    return results;
-  }
-    try {
-    const propagationResult = await propagateCancelledInvoicesForDeal(currentLineItems);
-    results.invoicePropagation = propagationResult;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...propagationResult },
-      'Propagación de facturas canceladas completada'
-    );
-  } catch (err) {
-    // fail open: no bloqueamos las fases si falla la propagación
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en propagación de facturas canceladas, continuando'
-    );
-  }
-
-  
-// ========== PROMOCIÓN 85% → 95% ==========
-  try {
-    const promoted = await promoteToEjecucionIfNeeded(currentDeal);
-    if (promoted) {
-      const refreshed = await getDealWithLineItems(dealId);
-      currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
-      currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
-      logger.info(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-        'Refetch post-promoción a 95% completado'
-      );
-    }
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en promoción a 95%'
-    );
-  }
-
-  // ========== PHASE P: Forecast/Promesa ==========
-
-  try {
-    const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: currentLineItems });
-    results.phaseP = phasePResult;
-    results.ticketsCreated += phasePResult?.created || 0;
-
-    const { created, updated, deleted, skipped } = phasePResult || {};
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, created, updated, deleted, skipped },
-      'Phase P completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase P'
-    );
-    results.phaseP.error = err?.message || 'Error desconocido';
-  }
-
-  // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
-  try {
-    const ownerResult = await assignTicketOwners({
-      dealId,
-      lineItems: currentLineItems,
-      dealProps: currentDeal?.properties,
-    });
-    results.ownerAssignment = ownerResult;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...ownerResult },
-      'Asignación de owner en tickets completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en assignTicketOwners'
-    );
-    results.ownerAssignment = { error: err?.message };
-  }
-
-  // ========== PHASE 2: Tickets manuales ==========
-  try {
-    const phase2Result = await runPhase2({ deal: currentDeal, lineItems: currentLineItems });
-    results.phase2 = phase2Result;
-    results.ticketsCreated = phase2Result?.ticketsCreated || 0;
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated },
-      'Phase 2 completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 2'
-    );
-    results.phase2.error = err?.message || 'Error desconocido';
->>>>>>> pruebas
   }
 
   // ========== PHASE 3: Facturas automáticas ==========
   try {
-<<<<<<< HEAD
     console.log(
       `💰 PHASE 3: Emitiendo facturas automáticas (facturacion_automatica=true)...`
     );
@@ -397,45 +243,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   console.log(`🏁 Deal ${dealId} completado:`);
   console.log(`   - Tickets totales: ${results.ticketsCreated}`);
   console.log(`   - Facturas: ${results.autoInvoicesEmitted}`);
-=======
-    const phase3Result = await runPhase3({ deal: currentDeal, lineItems: currentLineItems });
-    results.phase3 = phase3Result;
-    results.autoInvoicesEmitted = phase3Result?.invoicesEmitted || 0;
-
-    const ticketsPhase3 = phase3Result?.ticketsEnsured || 0;
-    results.ticketsCreated += ticketsPhase3;
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, autoInvoicesEmitted: results.autoInvoicesEmitted, ticketsPhase3 },
-      'Phase 3 completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 3'
-    );
-    results.phase3.error = err?.message || 'Error desconocido';
-  }
-
-  logger.info(
-    { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
-    'Deal completado'
-  );
->>>>>>> pruebas
 
   return results;
 }
 
-<<<<<<< HEAD
-
-=======
-/*
- * CATCHES con reportHubSpotError agregados: ninguno
- * NO reportados:
- *   - cleanupClonedTicketsForDeal → delegado; ese servicio gestiona su reporte
- *   - runPhase1/runPhaseP/runPhase2/runPhase3 → cada phase gestiona su propio reporte
- *   - propagateDealCancellation → cada módulo interno gestiona su reporte
- *   - getDealWithLineItems → lectura
- * Confirmación: "No se reportan warns a HubSpot; solo errores 4xx (≠429)"
- */
->>>>>>> pruebas
