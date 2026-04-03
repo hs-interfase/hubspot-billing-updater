@@ -6,7 +6,7 @@
 // Horarios en Railway: 08:10, 11:10, 14:10, 17:10 (America/Montevideo)
 //
 // Lógica:
-//   1. Buscar tickets en stage READY (manual + automático) donde
+//   1. Buscar tickets en stage READY (manual) donde
 //      ticket_emitio_aviso_a_admin ≠ true
 //   2. Agrupar por dealId (of_deal_id)
 //   3. Para cada deal: si algún ticket fue modificado hace < 10 min → skip
@@ -25,8 +25,6 @@ import { buildMensajeFacturacion } from '../services/billing/buildMensajeFactura
 import {
   TICKET_PIPELINE,
   TICKET_STAGES,
-  AUTOMATED_TICKET_PIPELINE,
-  BILLING_AUTOMATED_READY,
 } from '../config/constants.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
@@ -205,14 +203,13 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
   );
 
   // 1. Buscar tickets READY en ambos pipelines
-  const [manualTickets, autoTickets] = await Promise.all([
+  const [manualTickets] = await Promise.all([
     searchReadyTickets(TICKET_PIPELINE, TICKET_STAGES.READY),
-    searchReadyTickets(AUTOMATED_TICKET_PIPELINE, BILLING_AUTOMATED_READY),
   ]);
 
-  const allReady = [...manualTickets, ...autoTickets];
+  const allReady = [...manualTickets];
   logger.info(
-    { module: 'cronMensajeFacturacion', manual: manualTickets.length, auto: autoTickets.length, total: allReady.length },
+    { module: 'cronMensajeFacturacion', manual: manualTickets.length, total: allReady.length },
     'Tickets READY encontrados'
   );
 
