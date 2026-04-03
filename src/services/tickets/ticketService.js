@@ -777,13 +777,33 @@ export async function ensureTicketCanonical({
 
   await archiveClonedTicketsByKey({ expectedKey, dealId, dryRun: isDryRun() });
 
-  const { canonical, duplicates } = await findCanonicalAndDuplicates({
+let { canonical, duplicates } = await findCanonicalAndDuplicates({
     dealId,
     expectedKey,
     billDateYMD,
     lineItemId,
     lineItemKey,
   });
+
+  // FIX: fallback por Search API para tickets no asociados al deal (ej: forecast)
+  if (!canonical) {
+    try {
+      const fallback = await findTicketByKey(expectedKey);
+      if (fallback) {
+        logger.info(
+          { module: 'ticketService', fn: 'ensureTicketCanonical', expectedKey, ticketId: fallback.id },
+          'Ticket encontrado por Search API fallback (no asociado al deal)'
+        );
+        canonical = { id: String(fallback.id), properties: fallback.properties || {} };
+        duplicates = [];
+      }
+    } catch (err) {
+      logger.warn(
+        { module: 'ticketService', fn: 'ensureTicketCanonical', expectedKey, err },
+        'Error en fallback Search API, continuando sin él'
+      );
+    }
+  }
 
   if (canonical) {
     logger.info(

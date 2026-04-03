@@ -4,9 +4,10 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
-import auditRouter from './api/invoice-editor/audit.js'          // ← aquí arriba ✅
+import auditRouter from './api/invoice-editor/audit.js'         
 import { initDB } from './api/invoice-editor/Db.js'
-import debugUrgent from './api/debugUrgent.js'                 // ← aquí arriba ✅
+import { initExchangeRatesTable } from './src/db.js'
+import debugUrgent from './api/debugUrgent.js'                
 
 // ── Invoice Editor ──────────────────────────────
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
@@ -38,5 +39,6 @@ app.use(express.static(path.join(__dirname, 'public')))
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
 
 await initDB()
+await initExchangeRatesTable()  
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))

@@ -102,10 +102,12 @@ export async function syncLineItemAfterPromotion({
   let lineItem;
   try {
     lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
-      'billing_next_date',
-      'last_ticketed_date',
-      'hs_recurring_billing_number_of_payments',
-      'pagos_restantes',
+    'billing_next_date',
+    'last_ticketed_date',
+    'last_billing_period',
+    'billing_last_billed_date',
+    'hs_recurring_billing_number_of_payments',
+    'pagos_restantes',
     ]);
   } catch (err) {
     logger.warn({ module: 'syncAfterPromotion', fn: 'syncLineItemAfterPromotion', lineItemId, err }, '[syncLineItemAfterPromotion] No se pudo leer line item');

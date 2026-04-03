@@ -11,20 +11,24 @@ import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import {
-  TICKET_PIPELINE,
   AUTOMATED_TICKET_PIPELINE,
   BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
   BILLING_TICKET_FORECAST_75,
+  BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
   BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
-  FORECAST_MANUAL_STAGES,
-  FORECAST_AUTO_STAGES,
+  TICKET_PIPELINE,
+  FORECAST_TICKET_STAGES,
   isForecastStage,
+  DEAL_STAGE_EN_EJECUCION, 
+  DEAL_STAGE_FINALIZADO
 } from '../config/constants.js';
 
 const BILLING_TZ = 'America/Montevideo';
@@ -36,15 +40,16 @@ const STAGE = {
   MANUAL_FORECAST_25: BILLING_TICKET_FORECAST,
   MANUAL_FORECAST_50: BILLING_TICKET_FORECAST_50,
   MANUAL_FORECAST_75: BILLING_TICKET_FORECAST_75,
+  MANUAL_FORECAST_85: BILLING_TICKET_FORECAST_85,
   MANUAL_FORECAST_95: BILLING_TICKET_FORECAST_95,
   AUTO_FORECAST_25:   BILLING_AUTOMATED_FORECAST,
   AUTO_FORECAST_50:   BILLING_AUTOMATED_FORECAST_50,
   AUTO_FORECAST_75:   BILLING_AUTOMATED_FORECAST_75,
+  AUTO_FORECAST_85:   BILLING_AUTOMATED_FORECAST_85,
   AUTO_FORECAST_95:   BILLING_AUTOMATED_FORECAST_95,
 };
 
 // Unión de stages forecast manuales + automáticos
-const FORECAST_TICKET_STAGES = new Set([...FORECAST_MANUAL_STAGES, ...FORECAST_AUTO_STAGES]);
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -158,7 +163,10 @@ function resolveBucketFromDealStage(dealStage) {
   if (s === 'presentationscheduled') return '25';
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
-  if (s === 'closedwon') return '95';
+  if (s === 'closedwon') return '85';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';
+  if (s === DEAL_STAGE_FINALIZADO) return '100';
+
   return null;
 }
 
@@ -169,13 +177,17 @@ function resolveForecastStage({ dealStage, automated }) {
   if (!automated) {
     if (bucket === '50') return STAGE.MANUAL_FORECAST_50;
     if (bucket === '75') return STAGE.MANUAL_FORECAST_75;
+    if (bucket === '85') return STAGE.MANUAL_FORECAST_85;
     if (bucket === '95') return STAGE.MANUAL_FORECAST_95;
+    if (bucket === '100') return STAGE.MANUAL_FORECAST_95; // 100% usa mismo stage que 95
     return STAGE.MANUAL_FORECAST_25;
   }
 
   if (bucket === '50') return STAGE.AUTO_FORECAST_50;
   if (bucket === '75') return STAGE.AUTO_FORECAST_75;
+  if (bucket === '85') return STAGE.AUTO_FORECAST_85;
   if (bucket === '95') return STAGE.AUTO_FORECAST_95;
+  if (bucket === '100') return STAGE.AUTO_FORECAST_95; // 100% usa mismo stage que 95
   return STAGE.AUTO_FORECAST_25;
 }
 
@@ -436,16 +448,20 @@ export async function runPhaseP({ deal, lineItems }) {
       // 3) Si desiredCount=0 → borrar SOLO forecast existentes
       if (desiredCount === 0) {
         if (forecastTickets.length) {
-          logger.info(
-            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lineItemKey, count: forecastTickets.length },
-            'Sin start_date: eliminando tickets forecast existentes'
-          );
           for (const t of forecastTickets) {
             await deleteTicket(t.id);
             deleted++;
           }
           await updateLineItemLastGeneratedAt(li.id);
         }
+        // Sin tickets deseados → billing_next_date debe quedar vacío
+        await syncBillingNextDateFromTickets({
+          lineItemId: li.id,
+          allTickets: [],          // forzar vacío — ya borramos los forecasts
+          todayYmd: nowMontevideoYmd(),
+          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          currentBillingNextDate: toYmd(p.billing_next_date),
+        });
         continue;
       }
 
@@ -466,12 +482,28 @@ export async function runPhaseP({ deal, lineItems }) {
       // con of_line_item_key desincronizado (ej: deals mirror, clones)
       const existingByTicketKey = new Map();
 
-      for (const t of allTickets) {
+for (const t of allTickets) {
         const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
         if (!k) continue;
 
         if (isForecastTicket(t)) {
-          if (!existingForecastByKey.has(k)) existingForecastByKey.set(k, t);
+          if (existingForecastByKey.has(k)) {
+            // Duplicado forecast para la misma key (ej: cambio de dealstage generó
+            // un segundo ticket en distinto stage sin borrar el anterior).
+            // Lo eliminamos aquí para que el paso 6 trabaje con un único canónico.
+            try {
+              await deleteTicket(t.id);
+              deleted++;
+              logger.info(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, key: k },
+                'Ticket forecast duplicado eliminado (misma key, stage distinto)'
+              );
+            } catch (err) {
+              logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
+            }
+          } else {
+            existingForecastByKey.set(k, t);
+          }
         } else {
           if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
         }
@@ -549,12 +581,35 @@ export async function runPhaseP({ deal, lineItems }) {
           });
 
           created++;
-          changed = true;
+        changed = true;
+        continue;
+      }
+
+      // FIX: si existe forecast PERO también existe un ticket protegido para
+      // la misma key, el forecast es redundante y debe eliminarse.
+      {
+        const existingByKey = existingByTicketKey.get(key);
+        const foundProtected = existingProtected ||
+          (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+
+        if (foundProtected) {
+          logger.info(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, forecastTicketId: existingForecast.id, protectedTicketId: foundProtected.id },
+            'Forecast redundante eliminado: key ya cubierta por ticket protegido'
+          );
+          try {
+            await deleteTicket(existingForecast.id);
+            deleted++;
+            changed = true;
+          } catch (err) {
+            logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: existingForecast?.id, err }, 'unit_failed');
+          }
           continue;
         }
+      }
 
-        // Existe forecast => STAGE-ONLY
-        const existing = existingForecast;
+      // Existe forecast => STAGE-ONLY
+      const existing = existingForecast;
         const patch = {};
 
         const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;
@@ -600,6 +655,21 @@ export async function runPhaseP({ deal, lineItems }) {
             logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
           }
         }
+      }
+
+      try {
+        await syncBillingNextDateFromTickets({
+          lineItemId: li.id,
+          allTickets,
+          todayYmd: nowMontevideoYmd(),
+          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          currentBillingNextDate: toYmd(p.billing_next_date),
+        });
+      } catch (err) {
+        logger.error(
+          { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+          'Error en syncBillingNextDateFromTickets, continuando'
+        );
       }
 
       if (changed) {

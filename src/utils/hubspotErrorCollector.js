@@ -31,12 +31,19 @@ function normalizeType(t) {
   const s = String(t).toLowerCase().trim();
   if (s === "lineitem" || s === "line_item" || s === "line item") return "line_item";
   if (s === "ticket") return "ticket";
+  if (s === "deal") return "deal";
   return s;
 }
 
 function getPropForType(objectType) {
   if (objectType === "ticket") return "of_billing_error";
   if (objectType === "line_item") return "billing_error";
+  if (objectType === "deal") return "billing_error";
+  return null;
+}
+
+function getAtPropForType(objectType) {
+  if (objectType === "deal") return "billing_error_at";
   return null;
 }
 
@@ -87,6 +94,13 @@ async function appendToHubSpotProperty({ objectType, objectId, prop, newLines })
   } else if (objectType === "line_item") {
     const r = await hubspotClient.crm.lineItems.basicApi.getById(objectId, [prop]);
     current = r?.properties?.[prop] || "";
+    } else if (objectType === "deal") {
+    // deals: sobreescribe con los errores de esta corrida, no acumula entre corridas
+    const merged = compactLines(newLines);
+    const atProp = getAtPropForType(objectType);
+    const payload = { properties: { [prop]: merged, ...(atProp ? { [atProp]: new Date().toISOString() } : {}) } };
+    await hubspotClient.crm.deals.basicApi.update(objectId, payload);
+    return;
   } else {
     return;
   }
@@ -98,9 +112,11 @@ async function appendToHubSpotProperty({ objectType, objectId, prop, newLines })
   if (objectType === "ticket") {
     await hubspotClient.crm.tickets.basicApi.update(objectId, payload);
   } else if (objectType === "line_item") {
-    await hubspotClient.crm.lineItems.basicApi.update(objectId, payload);
-  }
-}
+       await hubspotClient.crm.lineItems.basicApi.update(objectId, payload);
+    } else if (objectType === "deal") {
+      await hubspotClient.crm.deals.basicApi.update(objectId, payload);
+     }
+    }
 
 async function flushKey(key) {
   const item = queue.get(key);

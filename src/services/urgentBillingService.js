@@ -16,6 +16,8 @@ import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
+import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -137,9 +139,60 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       'billing_last_billed_date',
       'hs_recurring_billing_number_of_payments',
     ]);
+const lineItemProps = lineItem.properties || {};
 
-    const lineItemProps = lineItem.properties || {};
- 
+    // Reset inmediato — facturar_ahora siempre termina en false, pase lo que pase
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { facturar_ahora: 'false' },
+      });
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
+        'facturar_ahora reseteado a false (inicio)'
+      );
+    } catch (resetErr) {
+      logger.warn(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err: resetErr },
+        'No se pudo resetear facturar_ahora al inicio, continuando'
+      );
+    }
+
+    // ─── GUARD DE FACTURACIÓN ACTIVA ──────────────────────────────────────────
+    const dealId = await getDealIdForLineItem(lineItemId);
+    if (!dealId) {
+      logger.error(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
+        'Line Item no tiene deal asociado'
+      );
+      throw new Error('Line item no tiene deal asociado');
+    }
+
+    let dealForGuard;
+    try {
+      dealForGuard = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname']);
+    } catch (err) {
+      logger.error(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, err },
+        'Error obteniendo deal para verificar facturacion_activa'
+      );
+      throw err;
+    }
+
+    const dealGuardProps = dealForGuard?.properties || {};
+    if (!parseBool(dealGuardProps.facturacion_activa)) {
+      const dealName = (dealGuardProps.dealname || dealId).slice(0, 100);
+      const msg = `Falta activar la facturación. Pase el negocio a cierre ganado. Negocio: ${dealName}.`;
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId },
+        'Bloqueado: facturacion_activa del deal no está en true'
+      );
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { of_billing_error: msg, facturar_ahora: 'false' },
+      });
+      return { skipped: true, reason: 'facturacion_activa_false' };
+    }
+    // ─── FIN GUARD DE FACTURACIÓN ACTIVA ──────────────────────────────────────
+
     // ─── GUARD DE MIRROR UY ───────────────────────────────────────────────────
     const pyOrigenLIId = (lineItemProps.of_line_item_py_origen_id || '').trim();
     if (pyOrigenLIId) {
@@ -250,19 +303,10 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       return { skipped: true, reason: 'no_billing_period_date' };
     }
 
-    // 3) Resolver dealId
-    const dealId = await getDealIdForLineItem(lineItemId);
-    if (!dealId) {
-      logger.error(
-        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId },
-        'Line Item no tiene deal asociado'
-      );
-      throw new Error('Line item no tiene deal asociado');
-    }
-
+    // 3) dealId ya resuelto al inicio (guard de facturación activa)
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, billingPeriodDate },
-      'Deal asociado encontrado'
+      'Procediendo con deal asociado'
     );
 
     // 4) Guardar invoice existente para validar después de tener el lik
@@ -306,8 +350,48 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
       lineItemProps.line_item_key = lik;
     }
 
-    if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
+if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail)');
     targetLineItem.line_item_key = lik;
+
+    // 5a) Sanitización de clones — detectar si la key pertenece a otro line item
+    const sanitizeUpdates = sanitizeClonedLineItem(targetLineItem, dealId, { debug: true });
+    if (sanitizeUpdates) {
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, oldLik: lik },
+        'Clone detectado: sanitizando props operativas y regenerando line_item_key'
+      );
+
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: sanitizeUpdates });
+        targetLineItem.properties = { ...targetLineItem.properties, ...sanitizeUpdates };
+        Object.assign(lineItemProps, sanitizeUpdates);
+      } catch (err) {
+        reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error sanitizando clone en urgent billing', err });
+        throw new Error(`Clone sanitize failed: ${err?.message}`);
+      }
+
+      const { key: newLik } = ensureLineItemKey({ dealId: String(dealId), lineItem: targetLineItem, forceNew: true });
+      if (!newLik) throw new Error('Urgent billing: ensureLineItemKey devolvió key vacía tras sanitizar clone');
+
+      try {
+        await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+          properties: { line_item_key: newLik },
+        });
+      } catch (err) {
+        reportIfActionable({ objectType: 'line_item', objectId: String(lineItemId), message: 'Error seteando nueva line_item_key tras sanitizar clone', err });
+        throw new Error(`Clone rekey failed: ${err?.message}`);
+      }
+
+      lik = newLik;
+      targetLineItem.properties = { ...targetLineItem.properties, line_item_key: newLik };
+      targetLineItem.line_item_key = newLik;
+      lineItemProps.line_item_key = newLik;
+
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, newLik },
+        'Clone sanitizado y rekeyed exitosamente'
+      );
+    }
 
     // 5b) Idempotencia
     if (existingInvoiceId) {
@@ -453,9 +537,25 @@ async function _executeUrgentBillingForLineItem(lineItemId) {
         'Ticket actualizado con invoice ID'
       );
     }
-
-    // 8) Evidencia
+ // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
+
+    // 9) Recalc fechas del line item desde tickets reales (post-facturación urgente)
+    try {
+      await recalcFromTickets({
+        lineItemKey: lik,
+        dealId,
+        lineItemId: String(lineItemId),
+        lineItemProps,
+        facturacionActiva: true,
+        applyUpdate: true,
+      });
+    } catch (recalcErr) {
+      logger.warn(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, err: recalcErr },
+        'recalcFromTickets falló post-facturación urgente, no bloquea flujo'
+      );
+    }
 
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, ticketId, invoiceId: invoiceIdFinal, billingPeriodDate },
@@ -559,6 +659,70 @@ export async function processUrgentLineItem(lineItemId) {
     );
     return { skipped: true, reason: 'automated_billing_no_urgent' };
   }
+
+// DESPUÉS
+  // ─── GUARD DE FACTURACIÓN ACTIVA (antes de calcular fechas o entrar al núcleo) ───
+  const dealIdEarly = await getDealIdForLineItem(lineItemId);
+  if (!dealIdEarly) {
+    const msg = 'No se pudo facturar: el ítem no tiene negocio asociado.';
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err: updateErr },
+        'Error escribiendo error de deal no encontrado en line item'
+      );
+    }
+    logger.error(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId },
+      'Bloqueado: line item sin deal asociado'
+    );
+    return { skipped: true, reason: 'no_deal_found' };
+  }
+
+  let dealEarly;
+  try {
+    dealEarly = await hubspotClient.crm.deals.basicApi.getById(dealIdEarly, ['facturacion_activa', 'dealname']);
+  } catch (err) {
+    logger.error(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealIdEarly, err },
+      'Error obteniendo deal para verificar facturacion_activa'
+    );
+    // No bloqueamos — dejamos que _executeUrgentBillingForLineItem maneje el error
+  }
+
+  if (dealEarly && !parseBool(dealEarly.properties?.facturacion_activa)) {
+    const dealName = (dealEarly.properties?.dealname || dealIdEarly).slice(0, 100);
+    const msg = `Falta activar la facturación. Pase el negocio a cierre ganado. Negocio: ${dealName}.`;
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err: updateErr },
+        'Error escribiendo bloqueo facturacion_activa en line item'
+      );
+    }
+    try {
+      await hubspotClient.crm.deals.basicApi.update(String(dealIdEarly), {
+        properties: { of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', dealIdEarly, err: updateErr },
+        'Error escribiendo bloqueo facturacion_activa en deal'
+      );
+    }
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealIdEarly },
+      'Bloqueado: facturacion_activa del deal no está en true'
+    );
+    return { skipped: true, reason: 'facturacion_activa_false' };
+  }
+  // ─── FIN GUARD DE FACTURACIÓN ACTIVA ─────────────────────────────────────────
 
   // Facturar PY — un error aquí sí bloquea (es lo principal)
   const result = await _executeUrgentBillingForLineItem(lineItemId);

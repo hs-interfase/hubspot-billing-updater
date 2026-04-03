@@ -198,7 +198,6 @@ export async function createManualBillingTicket(deal, lineItem, billingDate) {
         descuento_unit_real: descuentoUnitReal,
         of_iva: ivaValue,
         ...(vendedorId ? { of_propietario_secundario: vendedorId } : {}),
-        ...(responsable ? { hubspot_owner_id: responsable } : {}),
       };
 
       if (rubroCandidate) {

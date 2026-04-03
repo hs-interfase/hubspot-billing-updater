@@ -2,7 +2,7 @@
 import { hubspotClient } from './hubspotClient.js';
 import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
 import logger from '../lib/logger.js';
-import { reportHubSpotError } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
+import { reportHubSpotError, reportHubSpotWarn } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
 
 /**
  * Reporta a HubSpot solo errores accionables (4xx excepto 429).
@@ -266,7 +266,7 @@ export function getEffectiveBillingConfig(lineItem) {
 // MIGRACIÓN: Anchor-based. Calendario queda LEGACY comentado (no se usa / no se escribe).
 export async function updateLineItemSchedule(lineItem, dealContext = {}) {
   if (!lineItem || !lineItem.id) {
-    logger.warn({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItem }, 'lineItem inválido recibido');
+    logger.warn({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItem, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, `lineItem inválido recibido | deal=${dealContext?.dealId ?? '?'}`);
     return lineItem;
   }
 
@@ -294,7 +294,7 @@ export async function updateLineItemSchedule(lineItem, dealContext = {}) {
         properties: updates,
       });
     } catch (err) {
-      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: fechas_completas path');
+      logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: fechas_completas path');
       reportIfActionable({
         objectType: 'line_item',
         objectId: lineItem.id,
@@ -372,11 +372,16 @@ const msg = [
   'Setear hs_recurring_billing_start_date (Start date) para calcular próximas fechas.',
 ].filter(Boolean).join(' — ');
 
-    logger.warn({
-      module: 'billingEngine',
-      fn: 'updateLineItemSchedule',
-      lineItemId: lineItem.id,
-    }, 'irregular=true sin fecha puntual (manual no soportado)');
+    logger.warn({ module: 'billingEngine', fn: 'updateLineItemSchedule', lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName },
+`irregular=true sin fecha puntual | deal=${dealContext?.dealId ?? '?'} li=${lineItem.id} freq="${config?.frequency || 'none'}"`);
+  
+if (dealContext?.dealId) {
+      reportHubSpotWarn({
+        objectType: 'deal',
+        objectId: String(dealContext.dealId),
+        message: msg,
+      });
+    }
 
     const updatesError = { billing_error: msg };
 
@@ -385,7 +390,7 @@ const msg = [
         properties: updatesError,
       });
     } catch (err) {
-      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: irregular sin fecha puntual');
+      logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: irregular sin fecha puntual');
       reportIfActionable({
         objectType: 'line_item',
         objectId: lineItem.id,
@@ -431,7 +436,7 @@ const msg = [
           properties: updatesUrgentOneTime,
         });
       } catch (err) {
-        logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: pago único urgente');
+        logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: pago único urgente');
         reportIfActionable({
           objectType: 'line_item',
           objectId: lineItem.id,
@@ -445,16 +450,26 @@ const msg = [
     }
 
     const msg =
-      'Falta fecha de inicio de facturación en el line item. Setear hs_recurring_billing_start_date (Start date) para calcular próximas fechas.';
+     `Falta fecha de inicio en ${p.name || `LI ${lineItem.id}`} LI ${lineItem.id} - no se calcula schedule. Por favor agrega una fecha de inicio`;
 
     logger.warn({
       module: 'billingEngine',
       fn: 'updateLineItemSchedule',
       lineItemId: lineItem.id,
+      dealId: dealContext?.dealId,
+      dealName: dealContext?.dealName,
       isOneTime,
       isFacturarAhora,
       frequency: config?.frequency,
-    }, 'Falta startDate → no se calcula schedule');
+}, `Falta startDate → no se calcula schedule | deal=${dealContext?.dealId ?? '?'} dealName="${dealContext?.dealName ?? '?'}" li=${lineItem.id} freq="${config?.frequency || 'none'}"`);
+
+    if (dealContext?.dealId) {
+      reportHubSpotWarn({
+        objectType: 'deal',
+        objectId: String(dealContext.dealId),
+        message: msg,
+      });
+    }
 
     const updatesError = { billing_error: msg };
 
@@ -463,7 +478,7 @@ const msg = [
         properties: updatesError,
       });
     } catch (err) {
-      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: falta startDate');
+      logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: falta startDate');
       reportIfActionable({
         objectType: 'line_item',
         objectId: lineItem.id,
@@ -524,7 +539,7 @@ const msg = [
         properties: updatesOneTime,
       });
     } catch (err) {
-      logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: pago único con startDate');
+      logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: pago único con startDate');
       reportIfActionable({
         objectType: 'line_item',
         objectId: lineItem.id,
@@ -561,12 +576,7 @@ const msg = [
       }, 'billing_anchor_date inicializada');
     }
   } catch (err) {
-    logger.warn({
-      err,
-      module: 'billingEngine',
-      fn: 'updateLineItemSchedule',
-      lineItemId: lineItem.id,
-    }, 'no se pudo inicializar billing_anchor_date');
+    logger.warn({ err, module: 'billingEngine', fn: 'updateLineItemSchedule', lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'no se pudo inicializar billing_anchor_date');
     reportIfActionable({
       objectType: 'line_item',
       objectId: lineItem.id,
@@ -682,7 +692,7 @@ const msg = [
       properties: updatesRecurring,
     });
   } catch (err) {
-    logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: recurrente anchor-based');
+    logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: recurrente anchor-based');
     reportIfActionable({
       objectType: 'line_item',
       objectId: lineItem.id,

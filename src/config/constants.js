@@ -14,56 +14,39 @@ export const MANUAL_TICKET_LOOKAHEAD_DAYS = 30;
 // Tickets MANUALES (pipeline + stages)
 // ===============================
 export const TICKET_PIPELINE =
-  process.env.BILLING_TICKET_PIPELINE_ID || '875213463';
+  process.env.BILLING_TICKET_PIPELINE_ID || '';
 
 export const TICKET_STAGES = {
-  NEW: process.env.BILLING_TICKET_STAGE_ID || '1311451807', // Nueva orden de facturación
-  READY: process.env.BILLING_TICKET_STAGE_READY || '1311451808', // Lista para facturar (promoción manual)
-  INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '1311451809', // Facturado
-  CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '1311451813', // Pausado/Cancelado
+  NEW: process.env.BILLING_TICKET_STAGE_ID || '',
+  READY: process.env.BILLING_TICKET_STAGE_READY || '',
+  INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '',
+  CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '',
 };
+
+// Alias de entrada para READY manual (compatibilidad)
+export const BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.READY;
 
 // Manual forecast stages por bucket de deal stage
 export const BILLING_TICKET_FORECAST =
-  process.env.BILLING_TICKET_FORECAST || '1311451803';
+  process.env.BILLING_TICKET_FORECAST || '';
 export const BILLING_TICKET_FORECAST_50 =
-  process.env.BILLING_TICKET_FORECAST_50 || '1311451804';
+  process.env.BILLING_TICKET_FORECAST_50 || '';
 export const BILLING_TICKET_FORECAST_75 =
-  process.env.BILLING_TICKET_FORECAST_75 || '1311451805';
+  process.env.BILLING_TICKET_FORECAST_75 || '';
+export const BILLING_TICKET_FORECAST_85 =
+  process.env.BILLING_TICKET_FORECAST_85 || '';
 export const BILLING_TICKET_FORECAST_95 =
-  process.env.BILLING_TICKET_FORECAST_95 || '1311451806';
+  process.env.BILLING_TICKET_FORECAST_95 || '';
 
 export const FORECAST_MANUAL_STAGES = new Set([
   BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
   BILLING_TICKET_FORECAST_75,
+  BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,
 ]);
 
 // ===============================
-// Tickets AUTOMÁTICOS (pipeline + stages)
-// ===============================
-export const AUTOMATED_TICKET_PIPELINE =
-  process.env.BILLING_AUTOMATED_PIPELINE_ID || '875177783';
-
-// READY automático (promoción automática)
-export const BILLING_AUTOMATED_READY =
-  process.env.BILLING_AUTOMATED_READY || '1311404151';
-
-// Auto forecast stages por bucket de deal stage
-export const BILLING_AUTOMATED_FORECAST =
-  process.env.BILLING_AUTOMATED_FORECAST || '1311404147';
-export const BILLING_AUTOMATED_FORECAST_50 =
-  process.env.BILLING_AUTOMATED_FORECAST_50 || '1311404148';
-export const BILLING_AUTOMATED_FORECAST_75 =
-  process.env.BILLING_AUTOMATED_FORECAST_75 || '1311404149';
-export const BILLING_AUTOMATED_FORECAST_95 =
-  process.env.BILLING_AUTOMATED_FORECAST_95 || '1311404150';
-
-export const BILLING_AUTOMATED_CANCELLED =
-  process.env.BILLING_AUTOMATED_CANCELLED || '1311404155';
-
-// ===============================                          ← AGREGAR DESDE AQUÍ
 // Stages post-emisión — MANUALES
 // ===============================
 export const BILLING_TICKET_STAGE_ID_CREATED =
@@ -76,6 +59,31 @@ export const BILLING_TICKET_STAGE_ID_PAID =
   process.env.BILLING_TICKET_PIPELINE_ID_PAID || '';
 
 // ===============================
+// Tickets AUTOMÁTICOS (pipeline + stages)
+// ===============================
+export const AUTOMATED_TICKET_PIPELINE =
+  process.env.BILLING_AUTOMATED_PIPELINE_ID || '';
+
+// READY automático (promoción automática)
+export const BILLING_AUTOMATED_READY =
+  process.env.BILLING_AUTOMATED_READY || '';
+
+// Auto forecast stages por bucket de deal stage
+export const BILLING_AUTOMATED_FORECAST =
+  process.env.BILLING_AUTOMATED_FORECAST || '';
+export const BILLING_AUTOMATED_FORECAST_50 =
+  process.env.BILLING_AUTOMATED_FORECAST_50 || '';
+export const BILLING_AUTOMATED_FORECAST_75 =
+  process.env.BILLING_AUTOMATED_FORECAST_75 || '';
+export const BILLING_AUTOMATED_FORECAST_85 =
+  process.env.BILLING_AUTOMATED_FORECAST_85 || '';
+export const BILLING_AUTOMATED_FORECAST_95 =
+  process.env.BILLING_AUTOMATED_FORECAST_95 || '';
+
+export const BILLING_AUTOMATED_CANCELLED =
+  process.env.BILLING_AUTOMATED_CANCELLED || '';
+
+// ===============================
 // Stages post-emisión — AUTOMÁTICOS
 // ===============================
 export const BILLING_AUTOMATED_CREATED =
@@ -86,12 +94,15 @@ export const BILLING_AUTOMATED_LATE =
 
 export const BILLING_AUTOMATED_PAID =
   process.env.BILLING_AUTOMATED_PAID || '';
-// ===============================                          ← HASTA AQUÍ
 
+// ===============================
+// Sets de stages — FORECAST
+// ===============================
 export const FORECAST_AUTO_STAGES = new Set([
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
   BILLING_AUTOMATED_FORECAST_75,
+  BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
 ]);
 
@@ -104,6 +115,104 @@ export const CANCELLED_STAGE_BY_PIPELINE = {
   [TICKET_PIPELINE]: TICKET_STAGES.CANCELLED,
   [AUTOMATED_TICKET_PIPELINE]: BILLING_AUTOMATED_CANCELLED,
 };
+
+// ===============================
+// Sets semánticos para conteo de facturas_restantes
+// ===============================
+
+/**
+ * PENDING_STAGES: tickets que reservan una obligación pero aún no facturaron.
+ * Incluye todos los forecast + ready de ambos pipelines.
+ */
+export const PENDING_STAGES = new Set([
+  // Manual forecast
+  ...FORECAST_MANUAL_STAGES,
+  // Manual ready
+  TICKET_STAGES.NEW,
+  TICKET_STAGES.READY,
+  // Auto forecast
+  ...FORECAST_AUTO_STAGES,
+  // Auto ready
+  BILLING_AUTOMATED_READY,
+]);
+
+/**
+ * INVOICED_STAGES: tickets que ya generaron factura (se descuentan del total de payments).
+ * Excluye CANCELLED (no cuenta como facturado).
+ */
+export const INVOICED_STAGES = new Set([
+  // Manual post-ready
+  BILLING_TICKET_STAGE_ID_CREATED,
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto post-ready
+  BILLING_AUTOMATED_CREATED,
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
+ * EMITTED_STAGES: tickets con factura confirmada por Nodum.
+ * Usado para promoción de deal 85% → 95%.
+ * Excluye CREATED (factura HubSpot sin confirmación Nodum).
+ */
+export const EMITTED_STAGES = new Set([
+  // Manual
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
+ * COMPLETED_STAGES: tickets completamente pagados.
+ * Usado para short-circuit en line items de 1 solo pago.
+ */
+export const COMPLETED_STAGES = new Set([
+  BILLING_TICKET_STAGE_ID_PAID,
+  BILLING_AUTOMATED_PAID,
+]);
+
+/**
+ * PROMOTED_STAGES: tickets promovidos a READY o más allá.
+ * Usado por recalcFromTickets para last_ticketed_date.
+ * Excluye FORECAST y CANCELLED.
+ */
+export const PROMOTED_STAGES = new Set([
+  // Manual ready
+  TICKET_STAGES.NEW,
+  TICKET_STAGES.READY,
+  // Manual post-ready
+  BILLING_TICKET_STAGE_ID_CREATED,
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto ready
+  BILLING_AUTOMATED_READY,
+  // Auto post-ready
+  BILLING_AUTOMATED_CREATED,
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+// ===============================
+// Deal stages — pipeline de negocio
+// ===============================
+export const DEAL_STAGE_WON          = process.env.DEAL_STAGE_85  || 'closedwon';
+export const DEAL_STAGE_EN_EJECUCION = process.env.DEAL_STAGE_95  || '';
+export const DEAL_STAGE_FINALIZADO   = process.env.DEAL_STAGE_100 || '';
+export const DEAL_STAGE_SUSPENDED    = process.env.DEAL_STAGE_SUSPENDED || '';
+export const DEAL_STAGE_VOIDED       = process.env.DEAL_STAGE_VOIDED   || '';
+
+// Stages activos para billing (bucket 95)
+export const BILLING_ACTIVE_DEAL_STAGES = new Set([
+  DEAL_STAGE_WON,
+  DEAL_STAGE_EN_EJECUCION,
+  DEAL_STAGE_FINALIZADO,
+]);
 
 // ===============================
 // Helpers semánticos
@@ -120,10 +229,36 @@ export function isForecastStage(stageId) {
 }
 
 /**
+ * FORECAST_TICKET_STAGES: unión de todos los stages forecast (manual + auto).
+ * Usado para derivar billing_next_date desde tickets reales.
+ */
+export const FORECAST_TICKET_STAGES = new Set([
+  ...FORECAST_MANUAL_STAGES,
+  ...FORECAST_AUTO_STAGES,
+]);
+
+/**
  * Alias por compatibilidad con lo que veníamos hablando.
  */
 export function isForecastTicketStage(stageId) {
   return isForecastStage(stageId);
+}
+
+/**
+ * Devuelve true si el stage corresponde a un ticket ya facturado
+ * (post-READY, excluyendo CANCELLED).
+ */
+export function isInvoicedStage(stageId) {
+  if (!stageId) return false;
+  return INVOICED_STAGES.has(String(stageId));
+}
+
+/**
+ * Devuelve true si el stage indica pago completado.
+ */
+export function isCompletedStage(stageId) {
+  if (!stageId) return false;
+  return COMPLETED_STAGES.has(String(stageId));
 }
 
 // ===============================
@@ -135,3 +270,6 @@ export const DEFAULT_CURRENCY = 'USD';
 export const isDryRun = () => {
   return (process.env.DRY_RUN || '').toString().toLowerCase() === 'true';
 };
+
+// Lookback para el cron (días hacia atrás en hs_lastmodifieddate)
+export const CRON_LOOKBACK_DAYS = parseInt(process.env.CRON_LOOKBACK_DAYS || '3', 10);

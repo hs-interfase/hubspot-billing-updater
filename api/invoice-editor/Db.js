@@ -1,14 +1,6 @@
-// api/invoice-editor/db.js
-import pg from 'pg'
+// api/invoice-editor/Db.js
+import pool from '../../src/db.js'
 
-const { Pool } = pg
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }, // Railway requiere SSL
-})
-
-// Crea la tabla si no existe al iniciar
 export async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS invoice_audit_logs (

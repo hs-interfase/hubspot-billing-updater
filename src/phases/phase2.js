@@ -1,17 +1,28 @@
-// src/phases/phase2.js
+// deal// src/phases/phase2.js
 
 import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD, parseLocalDate, diffDays, formatDateISO } from '../utils/dateUtils.js';
-import { MANUAL_TICKET_LOOKAHEAD_DAYS, TICKET_STAGES, BILLING_TICKET_FORECAST, BILLING_TICKET_FORECAST_50, BILLING_TICKET_FORECAST_75, BILLING_TICKET_FORECAST_95, FORECAST_MANUAL_STAGES } from '../config/constants.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { withRetry } from '../utils/withRetry.js';
-
+import { 
+  DEAL_STAGE_EN_EJECUCION, 
+  MANUAL_TICKET_LOOKAHEAD_DAYS, 
+  TICKET_STAGES, 
+  BILLING_TICKET_FORECAST, 
+  BILLING_TICKET_FORECAST_50, 
+  BILLING_TICKET_FORECAST_75,   
+  BILLING_TICKET_FORECAST_85,
+  BILLING_TICKET_FORECAST_95,  
+  FORECAST_MANUAL_STAGES,
+  DEAL_STAGE_FINALIZADO 
+} from '../config/constants.js';
 
 /**
  * PHASE 2 (MANUAL):
@@ -43,7 +54,9 @@ function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
   if (s === 'decisionmakerboughtin') return '50';
   if (s === 'contractsent') return '75';
-  if (s === 'closedwon') return '95';
+  if (s === 'closedwon') return '85';
+  if (s === DEAL_STAGE_EN_EJECUCION) return '95';
+  if (s === DEAL_STAGE_FINALIZADO) return '100';
   return '25';
 }
 
@@ -51,6 +64,7 @@ function resolveManualForecastStageForDealStage(dealstage) {
   const b = resolveDealBucket(dealstage);
   if (b === '50') return BILLING_TICKET_FORECAST_50;
   if (b === '75') return BILLING_TICKET_FORECAST_75;
+  if (b === '85') return BILLING_TICKET_FORECAST_85;
   if (b === '95') return BILLING_TICKET_FORECAST_95;
   return BILLING_TICKET_FORECAST;
 }
@@ -164,13 +178,30 @@ async function promoteManualForecastTicketToReady({
     );
   }
 
-  if (moved) {
+if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
       lineItemId,
       lineItemKey,
       expectedYMD: nextBillingDate,
     });
+
+    // Recalc post-promoción (belt-and-suspenders):
+    // syncLineItemAfterPromotion ya actualizó last_ticketed_date y billing_next_date.
+    // recalcFromTickets mira TODOS los tickets para corregir/completar las 4 fechas.
+    try {
+      await recalcFromTickets({
+        lineItemKey,
+        dealId,
+        lineItemId,
+        applyUpdate: true,
+      });
+    } catch (err) {
+      logger.warn(
+        { module: 'phase2', fn: 'promoteManualForecastTicketToReady', dealId, lineItemId, err },
+        'recalcFromTickets falló (no bloquea promoción)'
+      );
+    }
   }
 
   return { moved, ticketId: t.id, reason };
@@ -255,10 +286,6 @@ export async function runPhase2({ deal, lineItems }) {
           { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, nextBillingDate },
           'No se pudo calcular días hasta facturación, saltando'
         );
-        continue;
-      }
-
-      if (daysUntilBilling < 0) {
         continue;
       }
 

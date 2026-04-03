@@ -4,51 +4,32 @@ import { runPhase1 } from './phase1.js';
 import { runPhaseP } from './phasep.js';
 import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
-
-<<<<<<< HEAD
-/**
- * Orquestador de las fases del proceso de facturación.
- * 
- * - Phase 1: Actualizar fechas, calendario, cupo
- * - Phase 2: Generar tickets manuales para line items con facturacion_automatica=false
- * - Phase 3: Emitir facturas automáticas para line items con facturacion_automatica=true
- * 
- * NOTA: La activación de facturacion_activa y cupo_activo se gestiona mediante
- * Workflow de HubSpot cuando el deal llega a "Closed Won".
- * 
- * @param {Object} params
- * @param {Object} params.deal - Deal de HubSpot
- * @param {Array} params.lineItems - Line Items del Deal
- * @returns {Object} Resumen de ejecución
- */
-// src/phases/index.js (función completa)
-
-export async function runPhasesForDeal({
-  deal,
-  lineItems,
-  mode,
-  sourceLineItemId,
-} = {}) {
-  const dealId = String(deal.id || deal.properties?.hs_object_id);
-
-  console.log(`\n🔄 INICIANDO PROCESAMIENTO DE FASES`);
-  console.log(`   Deal ID: ${dealId}`);
-  console.log(`   Line Items: ${lineItems.length}`);
-  console.log(`   Mode: ${mode || "none"}\n`);
-=======
+import { withRetry } from '../utils/withRetry.js';
+import {
+  DEAL_STAGE_LOST,
+  DEAL_STAGE_SUSPENDED,
+  DEAL_STAGE_VOIDED,
+  DEAL_STAGE_WON,
+  DEAL_STAGE_EN_EJECUCION,
+  EMITTED_STAGES,
+} from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
-import { getDealWithLineItems } from '../hubspotClient.js';
+import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
 import * as dateUtils from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
+import { assignTicketOwners } from '../services/tickets/assignTicketOwners.js';
 
-const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
-const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || '';
+
 
 function isDealCancelled(dealProps) {
   const stage = String(dealProps?.dealstage || '');
-  return stage === DEAL_STAGE_LOST || (CANCELLED_STAGE_ID && stage === CANCELLED_STAGE_ID);
+  return (
+    stage === DEAL_STAGE_LOST ||
+    stage === DEAL_STAGE_SUSPENDED ||
+    stage === DEAL_STAGE_VOIDED
+  );
 }
 
 function formatHsLastModified(raw) {
@@ -57,6 +38,81 @@ function formatHsLastModified(raw) {
   if (!d || Number.isNaN(d.getTime())) return '(invalid date)';
   const formatted = dateUtils.formatDateISO ? dateUtils.formatDateISO(d) : d.toISOString();
   return `${raw} (${formatted})`;
+}
+
+/**
+ * Si el deal está en 85% (closedwon) y tiene al menos un ticket
+ * en etapas facturadas (invoiced/paid/late), lo promueve a 95% (En Ejecución).
+ * Retorna true si se promovió.
+ */
+async function promoteToEjecucionIfNeeded(deal) {
+  const dealId = String(deal.id || deal.properties?.hs_object_id);
+  const currentStage = String(deal.properties?.dealstage || '');
+
+  if (currentStage !== 'closedwon' && currentStage !== DEAL_STAGE_WON) {
+    return false;
+  }
+
+  const invoicedStagesArr = [...EMITTED_STAGES];
+
+  // HubSpot Pro: max 5 filterGroups. Partimos en chunks de 5.
+  let hasInvoicedTicket = false;
+  for (let i = 0; i < invoicedStagesArr.length && !hasInvoicedTicket; i += 5) {
+    const chunk = invoicedStagesArr.slice(i, i + 5);
+    const body = {
+      filterGroups: chunk.map(stage => ({
+        filters: [
+          { propertyName: 'of_deal_id', operator: 'EQ', value: dealId },
+          { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stage },
+        ],
+      })),
+      properties: ['hs_pipeline_stage'],
+      limit: 1,
+    };
+
+    const resp = await withRetry(
+      () => hubspotClient.crm.tickets.searchApi.doSearch(body),
+      { module: 'phases/index', fn: 'promoteToEjecucionIfNeeded', dealId }
+    );
+
+    if ((resp?.results || []).length > 0) {
+      hasInvoicedTicket = true;
+    }
+  }
+
+  if (!hasInvoicedTicket) {
+    logger.debug(
+      { module: 'phases/index', fn: 'promoteToEjecucionIfNeeded', dealId },
+      'Deal en 85% sin tickets facturados, no se promueve'
+    );
+    return false;
+  }
+
+  if (!DEAL_STAGE_EN_EJECUCION) {
+    logger.warn(
+      { module: 'phases/index', fn: 'promoteToEjecucionIfNeeded', dealId },
+      'DEAL_STAGE_EN_EJECUCION no configurado, no se puede promover'
+    );
+    return false;
+  }
+
+  try {
+    await hubspotClient.crm.deals.basicApi.update(dealId, {
+      properties: { dealstage: DEAL_STAGE_EN_EJECUCION },
+    });
+
+    logger.info(
+      { module: 'phases/index', fn: 'promoteToEjecucionIfNeeded', dealId, from: currentStage, to: DEAL_STAGE_EN_EJECUCION },
+      'Deal promovido de 85% a 95% (En Ejecución)'
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      { module: 'phases/index', fn: 'promoteToEjecucionIfNeeded', dealId, err },
+      'Error promoviendo deal a 95%'
+    );
+    return false;
+  }
 }
 
 export async function runPhasesForDeal({ deal, lineItems }) {
@@ -237,7 +293,28 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     );
   }
 
+  
+// ========== PROMOCIÓN 85% → 95% ==========
+  try {
+    const promoted = await promoteToEjecucionIfNeeded(currentDeal);
+    if (promoted) {
+      const refreshed = await getDealWithLineItems(dealId);
+      currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
+      currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+        'Refetch post-promoción a 95% completado'
+      );
+    }
+  } catch (err) {
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en promoción a 95%'
+    );
+  }
+
   // ========== PHASE P: Forecast/Promesa ==========
+
   try {
     const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: currentLineItems });
     results.phaseP = phasePResult;
@@ -254,6 +331,26 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       'Error en Phase P'
     );
     results.phaseP.error = err?.message || 'Error desconocido';
+  }
+
+  // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
+  try {
+    const ownerResult = await assignTicketOwners({
+      dealId,
+      lineItems: currentLineItems,
+      dealProps: currentDeal?.properties,
+    });
+    results.ownerAssignment = ownerResult;
+    logger.info(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...ownerResult },
+      'Asignación de owner en tickets completada'
+    );
+  } catch (err) {
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en assignTicketOwners'
+    );
+    results.ownerAssignment = { error: err?.message };
   }
 
   // ========== PHASE 2: Tickets manuales ==========
