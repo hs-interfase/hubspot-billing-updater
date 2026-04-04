@@ -257,6 +257,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       'Error en catch-up de forecasts atrasados'
     );
   }
+  
   // ========== PHASE 2: Tickets manuales ==========
   try {
     console.log(
