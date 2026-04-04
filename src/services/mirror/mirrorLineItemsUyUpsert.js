@@ -1,12 +1,8 @@
 // src/services/mirrorLineItemsUyUpsert.js
 
-<<<<<<< HEAD:src/services/mirror/mirrorLineItemsUyUpsert.js
 import { hubspotClient } from '../../hubspotClient.js';
-=======
-import { hubspotClient } from '../hubspotClient.js';
-import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
->>>>>>> pruebas:src/services/mirrorLineItemsUyUpsert.js
+import logger from '../../../lib/logger.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
 const LINE_ITEM_TO_DEAL_ASSOC_ID = 20; // HUBSPOT_DEFINED
 

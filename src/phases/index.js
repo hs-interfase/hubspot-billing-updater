@@ -202,7 +202,61 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     console.error(`   ❌ Error en Phase 1:`, err?.message || err);
     results.phase1.error = err?.message || "Error desconocido";
   }
+// ========== CATCH-UP: promover forecasts atrasados + recalc fechas ==========
+  // recalcFromTickets (bloque I1) detecta tickets forecast con fecha <= hoy
+  // y los promueve a READY. Esto corrige el caso donde Phase 1 avanzó
+  // billing_next_date y Phase 2/3 nunca encontraría el ticket atrasado.
+  try {
+    const dealFacturacionActiva = parseBool(currentDeal?.properties?.facturacion_activa);
+    if (dealFacturacionActiva) {
+      let catchUpPromoted = 0;
+      for (const li of currentLineItems) {
+        const lp = li?.properties || {};
+        const lineItemKey = String(lp.line_item_key || lp.of_line_item_key || '').trim();
+        if (!lineItemKey) continue;
 
+        const fechasCompletas = String(lp.fechas_completas || '').trim().toLowerCase() === 'true';
+        if (fechasCompletas) continue;
+
+        const isPaused = parseBool(lp.pausa);
+        if (isPaused) continue;
+
+        try {
+          const result = await recalcFromTickets({
+            lineItemKey,
+            dealId,
+            lineItemId: String(li.id || lp.hs_object_id),
+            lineItemProps: lp,
+            facturacionActiva: true,
+            applyUpdate: true,
+          });
+          catchUpPromoted += result?.pastDuePromoted || 0;
+        } catch (err) {
+          logger.warn(
+            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemId: li.id, err },
+            'recalcFromTickets catch-up falló (no bloquea)'
+          );
+        }
+      }
+
+      if (catchUpPromoted > 0) {
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
+          'Catch-up: tickets forecast atrasados promovidos a READY'
+        );
+
+        // Refetch line items para que Phase 2/3 vean las fechas actualizadas
+        const refreshed = await getDealWithLineItems(dealId);
+        currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
+        currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
+      }
+    }
+  } catch (err) {
+    logger.error(
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+      'Error en catch-up de forecasts atrasados'
+    );
+  }
   // ========== PHASE 2: Tickets manuales ==========
   try {
     console.log(

@@ -10,13 +10,8 @@
 // - Empresa y contactos SÍ pueden ser "Mixto" si operan en ambos países
 
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-<<<<<<< HEAD
 import { upsertUyLineItem } from './services/mirror/mirrorLineItemsUyUpsert.js';
-import { propagateAndExecuteMirror } from './services/mirror/mirrorFlagPropagation.js';
-=======
-import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 import logger from '../lib/logger.js';
->>>>>>> pruebas
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
@@ -284,19 +279,6 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   }
 
   const srcProps = deal.properties || {};
-<<<<<<< HEAD
-
-  if (options?.mode && parseBoolFromHubspot(srcProps.es_mirror_de_py)) {
-  console.log('[mirrorDealToUruguay] skip mode propagation: source deal is a mirror', {
-    dealId: String(sourceDealId),
-    mode: options.mode,
-  });
-  options = { ...options, mode: null };
-}
-  
-  // Moneda del negocio origen
-=======
->>>>>>> pruebas
   const sourceCurrency = srcProps.deal_currency_code || null;
 
   logger.info(
@@ -352,18 +334,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
       const updateProps = {
         pais_operativo: 'Uruguay',
-<<<<<<< HEAD
-        // Sincronizar nombre con sufijo - UY
-        dealname: srcProps.dealname
-          ? `${srcProps.dealname} - UY`
-          : 'Negocio UY',
-        // Sincronizar facturacion_activa si existe
-        ...(srcProps.facturacion_activa ? { facturacion_activa: srcProps.facturacion_activa } : {}),
-        // Sincronizar moneda si existe
-        ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
-=======
         dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
->>>>>>> pruebas
       };
 
       if (srcProps.pipeline) updateProps.pipeline = srcProps.pipeline;
@@ -443,23 +414,11 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
     const newDealProps = {
       dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
-<<<<<<< HEAD
-      // Mantener pipeline y etapa del negocio origen (si existen)
-      ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
-      ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
-      // ✅ País operativo Uruguay (no mixto)
-      pais_operativo: 'Uruguay',
-      // ✅ Marcadores de espejo
-      es_mirror_de_py: 'true',
-      deal_py_origen_id: String(sourceDealId),
-      // Moneda del deal original
-=======
       ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
       ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
       pais_operativo: 'Uruguay',
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
->>>>>>> pruebas
       ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
       // Sincronizar facturacion_activa si existe
       ...(srcProps.facturacion_activa ? { facturacion_activa: srcProps.facturacion_activa } : {}),
@@ -489,106 +448,6 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
       },
     });
 
-<<<<<<< HEAD
-    console.log('[mirrorDealToUruguay] Deal PY actualizado: mantiene Paraguay, guardó mirror_id');
-  }
-
-// 4) Upsert en el espejo las líneas UY del negocio PY (siempre desde el estado ACTUAL)
-console.log(`[mirrorDealToUruguay] Upsert de ${uyLineItems.length} líneas UY en espejo`);
-
-
-
-// Variable de entorno para el propietario
-const userAdminMirror = process.env.USER_ADMIN_MIRROR || '83169424';
-let intendedMirrorLineItemId = null;
-
-for (const li of uyLineItems) {
-  const srcPropsLi = li.properties || {};
-  const props = {};
-
-  // copiar SOLO allowlist
-  for (const key of Object.keys(srcPropsLi)) {
-    if (LINE_ITEM_MIRROR_ALLOWLIST.has(key)) {
-      props[key] = srcPropsLi[key];
-    }
-  }
-
-  // obligatorias mirror
-  props.uy = 'true';
-  props.pais_operativo = 'Uruguay';
-  props.hubspot_owner_id = userAdminMirror;
-  props.of_line_item_py_origen_id = String(li.id).trim();
-
-  // costo -> price
-  const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
-  if (isNaN(unitCost) || unitCost <= 0) {
-    props.price = '0';
-    props.hs_cost_of_goods_sold = '0';
-
-    // opcional
-    if ('mirror_missing_cost' in srcPropsLi) {
-      props.mirror_missing_cost = 'true';
-    } else {
-      const existingNote = props.nota || '';
-      props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
-    }
-  } else {
-    props.price = String(unitCost);
-    props.hs_cost_of_goods_sold = '0';
-  }
-
-const { action, id } = await upsertUyLineItem(targetDealId, li, () => props);
-
-if (action === 'created') createdLineItems++;
-
-  // match exacto del LI que disparó el webhook en PY
-  if (options?.sourceLineItemId && String(li.id) === String(options.sourceLineItemId)) {
-    intendedMirrorLineItemId = String(id);
-    console.log('[mirrorDealToUruguay] ✅ Matched sourceLineItemId -> mirrorLineItemId', {
-      sourceLineItemId: String(options.sourceLineItemId),
-      mirrorLineItemId: intendedMirrorLineItemId,
-      mode: options?.mode,
-    });
-  }
-
-  console.log(
-    `[mirrorDealToUruguay] UY line item ${action}: ${id} (py=${props.of_line_item_py_origen_id})`
-  );
-}
-
-
-
-
-
-console.log(`[mirrorDealToUruguay] ${createdLineItems} líneas creadas en espejo`);
-
-// 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
-console.log('[mirrorDealToUruguay] Prune de line items espejo UY');
-let archiveRes;
-let pruneOk = true;
-try {
-  const { prunedCount } = await pruneMirrorUyLineItems(targetDealId, uyLineItems);
-  console.log(`[mirrorDealToUruguay] Prune completado: pruned=${prunedCount}`);
-  archiveRes = await maybeArchiveMirrorDealIfEmpty(sourceDealId, targetDealId);
-  if (archiveRes.archived) {
-    return {
-      mirrored: true,
-      sourceDealId: String(sourceDealId),
-      targetDealId: String(targetDealId),
-      uyLineItemsCount: uyLineItems.length,
-      createdLineItems,
-      mirrorArchivedBecauseEmpty: true,
-    };
-  }
-} catch (err) {
-  pruneOk = false;
-  console.warn('[mirrorDealToUruguay] ⚠️ Prune/archivado falló', err?.response?.body || err);
-}
-
-
-
-  // 5) Asociar explícitamente Interfase PY al espejo PRIMERO
-=======
     logger.info(
       { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId },
       'Deal PY actualizado: mantiene Paraguay, guardó mirror_id'
@@ -750,7 +609,6 @@ const excludedProps = new Set([
   }
 
   // 5) Asociar Interfase PY al espejo
->>>>>>> pruebas
   if (interfaseCompanyId) {
     try {
       await hubspotClient.crm.associations.v4.basicApi.createDefault(
@@ -858,52 +716,12 @@ const excludedProps = new Set([
     }
   }
 
-<<<<<<< HEAD
-
-
-// ✅ Propagar intención solo si prune/archivado fue OK
-if (!pruneOk) {
-  console.log('[mirrorDealToUruguay] skip propagate: prune/archivado falló');
-} else if (options?.mode && typeof options.mode === 'string' && options.mode.startsWith('line_item.')) {
-  if (intendedMirrorLineItemId) {
-    try {
-      await propagateAndExecuteMirror({
-        mode: options.mode,
-        mirrorDealId: String(targetDealId),
-        mirrorLineItemId: String(intendedMirrorLineItemId),
-        logLabel: 'mirrorDealToUruguay',
-      });
-      console.log('[mirrorDealToUruguay] ✅ Intención propagada al espejo', {
-        mode: options.mode,
-        mirrorDealId: String(targetDealId),
-        mirrorLineItemId: String(intendedMirrorLineItemId),
-      });
-    } catch (err) {
-      console.warn('[mirrorDealToUruguay] propagateAndExecuteMirror error:', err?.message || err);
-    }
-  } else {
-    console.warn('[mirrorDealToUruguay] ⚠️ No encontré mirror LI para sourceLineItemId; NO propago intención', {
-      mode: options.mode,
-      sourceLineItemId: String(options?.sourceLineItemId || ''),
-      mirrorDealId: String(targetDealId),
-    });
-  }
-} else {
-  if (options?.mode) {
-    console.log('[mirrorDealToUruguay] skip propagateAndExecuteMirror: mode no es line_item.*', { mode: options.mode });
-  }
-}
-
-  // 8) Devolver resumen
-  console.log('[mirrorDealToUruguay] ✅ Duplicación completada');
-=======
   // 8) Resumen final
   logger.info(
     { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId, createdLineItems },
     'Espejo completado'
   );
 
->>>>>>> pruebas
   return {
     mirrored: true,
     sourceDealId: String(sourceDealId),
