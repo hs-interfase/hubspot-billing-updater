@@ -7,7 +7,11 @@ import actualizarWebhook from './api/actualizar-webhook.js'
 import auditRouter from './api/invoice-editor/audit.js'         
 import { initDB } from './api/invoice-editor/Db.js'
 import { initExchangeRatesTable } from './src/db.js'
-import debugUrgent from './api/debugUrgent.js'                
+import debugUrgent from './api/debugUrgent.js'  
+// ── Nodum Upload ─────────────────────────────────
+import nodumUploadRouter from './api/nodum/nodumUpload.js'
+import { initNodumUploadsTable } from './api/nodum/nodumUpload.js'
+// ─────────────────────────────────────────────────              
 
 // ── Invoice Editor ──────────────────────────────
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
@@ -34,11 +38,15 @@ app.get('/invoice-editor', invoiceEditorAuth, (req, res) => {
 
 app.post('/api/debug-urgent', debugUrgent)
 
+// ── Nodum Upload ──
+app.use('/nodum', nodumUploadRouter)
+
 // ── Static & Health ──
 app.use(express.static(path.join(__dirname, 'public')))
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
 
 await initDB()
-await initExchangeRatesTable()  
+await initExchangeRatesTable() 
+await initNodumUploadsTable() 
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))
