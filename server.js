@@ -40,6 +40,9 @@ app.post('/api/debug-urgent', debugUrgent)
 
 // ── Nodum Upload ──
 app.use('/nodum', nodumUploadRouter)
+app.get('/nodum', nodumUploadRouter, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'nodum-upload.html'))
+})
 
 // ── Static & Health ──
 app.use(express.static(path.join(__dirname, 'public')))
