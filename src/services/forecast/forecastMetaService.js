@@ -79,7 +79,7 @@ export async function ensureForecastMetaOnLineItem(lineItem) {
   // --- Vencimiento contrato: fecha fija para auto-renew, calculada para plan fijo
   const vencimiento = (!autorenew && term && term > 0)
     ? computeContractEndYmd({ startYmd: startRaw, interval, term })
-    : '2099-12-12';
+    : '2099-12-31';
 
   const updates = {};
   if ((p.forecast_signature || '') !== signature) updates.forecast_signature = signature;

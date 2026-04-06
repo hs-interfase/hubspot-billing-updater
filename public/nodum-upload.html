@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nodum Upload · Facturación</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2e3248;
+      --accent:   #ff7a59;
+      --accent-d: #cc5e40;
+      --text:     #e2e4ef;
+      --muted:    #7b7f9e;
+      --green:    #3ecf8e;
+      --red:      #ff6b6b;
+      --yellow:   #f9c84a;
+      --radius:   8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 32px 24px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header h1 span { color: var(--accent); }
+
+    /* ── Upload zone ── */
+    .upload-zone {
+      background: var(--surface);
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 40px 24px;
+      text-align: center;
+      transition: border-color .2s, background .2s;
+      cursor: pointer;
+      margin-bottom: 20px;
+      position: relative;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--accent);
+      background: var(--surface2);
+    }
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    .upload-icon { font-size: 40px; margin-bottom: 12px; }
+    .upload-zone p { color: var(--muted); font-size: 14px; margin-top: 6px; }
+    .upload-zone .file-name {
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--green);
+      font-family: monospace;
+    }
+
+    /* ── Btn ── */
+    .btn {
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background .2s, opacity .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-d); }
+    .btn-primary:disabled { opacity: .4; cursor: default; }
+
+    /* ── Resumen stats ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      text-align: center;
+    }
+    .stat-card .stat-val {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .stat-card .stat-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+    }
+    .stat-card.total   .stat-val { color: var(--text); }
+    .stat-card.match   .stat-val { color: var(--green); }
+    .stat-card.nomatch .stat-val { color: var(--yellow); }
+    .stat-card.dup     .stat-val { color: var(--muted); }
+    .stat-card.error   .stat-val { color: var(--red); }
+
+    /* ── Tabla ── */
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: var(--surface2);
+      padding: 11px 14px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: 11px 14px; vertical-align: middle; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .badge-match   { background: #1a3a2a; color: var(--green); }
+    .badge-nomatch { background: #3a3210; color: var(--yellow); }
+    .badge-dup     { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+    .badge-error   { background: #3a1f1f; color: var(--red); }
+
+    .mono { font-family: monospace; font-size: 13px; color: var(--accent); }
+    .muted { color: var(--muted); font-style: italic; }
+
+    /* ── Loading / Empty ── */
+    .loading { text-align: center; padding: 40px; color: var(--muted); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin-bottom: 10px;
+    }
+    .empty-state { text-align: center; padding: 48px; color: var(--muted); }
+    .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
+
+    /* ── Alert ── */
+    .alert {
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+    .alert-error { background: #3a1f1f; border: 1px solid #6b3030; color: var(--red); }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Nodum Upload · <span>Facturación</span></h1>
+  </div>
+
+  <!-- Zona de subida -->
+  <div class="upload-zone" id="drop-zone">
+    <input type="file" id="file-input" accept=".xlsx" />
+    <div class="upload-icon">📄</div>
+    <strong>Arrastrá el archivo o hacé clic para seleccionar</strong>
+    <p>Solo archivos <code>.xlsx</code> exportados desde Nodum</p>
+    <div class="file-name" id="file-name"></div>
+  </div>
+
+  <div style="margin-bottom:24px">
+    <button class="btn btn-primary" id="btn-upload" disabled>Procesar archivo</button>
+  </div>
+
+  <!-- Error -->
+  <div class="alert alert-error" id="alert-error" style="display:none"></div>
+
+  <!-- Stats -->
+  <div id="stats-section" style="display:none">
+    <div class="stats-grid">
+      <div class="stat-card total">
+        <div class="stat-val" id="s-total">0</div>
+        <div class="stat-label">Total filas</div>
+      </div>
+      <div class="stat-card match">
+        <div class="stat-val" id="s-match">0</div>
+        <div class="stat-label">Matches</div>
+      </div>
+      <div class="stat-card nomatch">
+        <div class="stat-val" id="s-nomatch">0</div>
+        <div class="stat-label">Sin match</div>
+      </div>
+      <div class="stat-card dup">
+        <div class="stat-val" id="s-dup">0</div>
+        <div class="stat-label">Ya facturados</div>
+      </div>
+      <div class="stat-card error">
+        <div class="stat-val" id="s-err">0</div>
+        <div class="stat-label">Errores</div>
+      </div>
+    </div>
+
+    <!-- Tabla completa -->
+    <div class="section-title">Todos los resultados</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nro. Documento</th>
+            <th>Razón Social</th>
+            <th>Fecha Valor</th>
+            <th>Monto</th>
+            <th>Moneda</th>
+            <th>TC</th>
+            <th>Estado</th>
+            <th>Detalle</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-all"></tbody>
+      </table>
+    </div>
+
+    <!-- Para revisión -->
+    <div id="revision-section" style="display:none">
+      <div class="section-title">Para revisión (sin match / errores)</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nro. Documento</th>
+              <th>Razón Social</th>
+              <th>Fecha Valor</th>
+              <th>Monto</th>
+              <th>Moneda</th>
+              <th>Motivo</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-revision"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const dropZone   = document.getElementById('drop-zone')
+  const fileInput  = document.getElementById('file-input')
+  const fileNameEl = document.getElementById('file-name')
+  const btnUpload  = document.getElementById('btn-upload')
+  const alertErr   = document.getElementById('alert-error')
+
+  let selectedFile = null
+
+  // ── Drag & drop ──
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover') })
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'))
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault()
+    dropZone.classList.remove('dragover')
+    const f = e.dataTransfer.files[0]
+    if (f) setFile(f)
+  })
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setFile(fileInput.files[0])
+  })
+
+  function setFile(f) {
+    if (!f.name.endsWith('.xlsx')) {
+      showError('Solo se aceptan archivos .xlsx')
+      return
+    }
+    selectedFile = f
+    fileNameEl.textContent = f.name
+    btnUpload.disabled = false
+    hideError()
+    document.getElementById('stats-section').style.display = 'none'
+  }
+
+  // ── Upload ──
+  btnUpload.addEventListener('click', async () => {
+    if (!selectedFile) return
+    hideError()
+    btnUpload.disabled = true
+    btnUpload.textContent = 'Procesando…'
+    document.getElementById('stats-section').style.display = 'none'
+
+    const fd = new FormData()
+    fd.append('archivo', selectedFile)
+
+    try {
+      const res = await fetch('/nodum/upload', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      render(json)
+    } catch (err) {
+      showError('Error al procesar: ' + err.message)
+    } finally {
+      btnUpload.disabled = false
+      btnUpload.textContent = 'Procesar archivo'
+    }
+  })
+
+  // ── Render ──
+  function render(data) {
+    const { resumen, resultados, para_revision } = data
+
+    document.getElementById('s-total').textContent  = resumen.total       ?? 0
+    document.getElementById('s-match').textContent  = resumen.matches     ?? 0
+    document.getElementById('s-nomatch').textContent= resumen.no_matches  ?? 0
+    document.getElementById('s-dup').textContent    = resumen.ya_facturados?? 0
+    document.getElementById('s-err').textContent    = resumen.errores     ?? 0
+
+    document.getElementById('stats-section').style.display = ''
+
+    // Tabla completa
+    const tbodyAll = document.getElementById('tbody-all')
+    tbodyAll.innerHTML = ''
+    if (!resultados || resultados.length === 0) {
+      tbodyAll.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">📭</div><p>Sin resultados.</p></div></td></tr>`
+    } else {
+      resultados.forEach(r => {
+        const tr = document.createElement('tr')
+        const badgeClass = {
+          match:        'badge-match',
+          no_match:     'badge-nomatch',
+          ya_facturado: 'badge-dup',
+          error:        'badge-error',
+        }[r.estado] || 'badge-dup'
+
+        const estadoLabel = {
+          match:        '✓ Match',
+          no_match:     '? Sin match',
+          ya_facturado: '— Ya facturado',
+          error:        '✕ Error',
+        }[r.estado] || r.estado
+
+        const moneda = r.cod_moneda == 1 ? 'UYU' : r.cod_moneda == 2 ? 'USD' : r.cod_moneda ?? '—'
+        const monto  = r.monto != null ? Number(r.monto).toLocaleString('es-UY', {minimumFractionDigits:2}) : '—'
+        const detalle = r.ticket_id
+          ? `<span class="mono">${r.ticket_id}</span>`
+          : r.motivo ? `<span class="muted">${r.motivo}</span>` : '—'
+
+        tr.innerHTML = `
+          <td><span class="mono">${r.nro_documento ?? '—'}</span></td>
+          <td>${r.razon_social ?? '—'}</td>
+          <td>${r.fecha_valor ?? '—'}</td>
+          <td style="text-align:right">${monto}</td>
+          <td>${moneda}</td>
+          <td>${r.tc_trad ?? '—'}</td>
+          <td><span class="badge ${badgeClass}">${estadoLabel}</span></td>
+          <td>${detalle}</td>
+        `
+        tbodyAll.appendChild(tr)
+      })
+    }
+
+    // Para revisión
+    const revSection = document.getElementById('revision-section')
+    const tbodyRev   = document.getElementById('tbody-revision')
+    tbodyRev.innerHTML = ''
+    if (para_revision && para_revision.length > 0) {
+      revSection.style.display = ''
+      para_revision.forEach(r => {
+        const tr = document.createElement('tr')
+        const moneda = r.cod_moneda == 1 ? 'UYU' : r.cod_moneda == 2 ? 'USD' : r.cod_moneda ?? '—'
+        const monto  = r.monto != null ? Number(r.monto).toLocaleString('es-UY', {minimumFractionDigits:2}) : '—'
+        tr.innerHTML = `
+          <td><span class="mono">${r.nro_documento ?? '—'}</span></td>
+          <td>${r.razon_social ?? '—'}</td>
+          <td>${r.fecha_valor ?? '—'}</td>
+          <td style="text-align:right">${monto}</td>
+          <td>${moneda}</td>
+          <td><span class="muted">${r.motivo ?? '—'}</span></td>
+        `
+        tbodyRev.appendChild(tr)
+      })
+    } else {
+      revSection.style.display = 'none'
+    }
+  }
+
+  function showError(msg) {
+    alertErr.textContent = msg
+    alertErr.style.display = ''
+  }
+  function hideError() {
+    alertErr.style.display = 'none'
+  }
+</script>
+</body>
+</html>
