@@ -163,12 +163,12 @@ export async function runExchangeRatesCron() {
   }
 
   const { usdEnUyu, eurEnUyu, fechaUsada } = bcuResult.value
-  const uyu_usd = round(1 / usdEnUyu, 8)
-  const eur_usd = round(eurEnUyu / usdEnUyu, 6)
+const uyu_usd = round(usdEnUyu, 3)
+const eur_usd = round(usdEnUyu / eurEnUyu, 3)
 
   let pyg_usd = null
   if (bcpResult.status === 'fulfilled') {
-    pyg_usd = round(1 / bcpResult.value, 8)
+    pyg_usd = round(bcpResult.value, 3)
   } else {
     logger.warn({ err: bcpResult.reason?.message }, '[rates] BCP falló — pyg_usd quedará null')
   }
