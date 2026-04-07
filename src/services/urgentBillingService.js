@@ -783,28 +783,16 @@ async function _propagateToMirror(pyLineItemId) {
     return;
   }
 
-  log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
+  log.info({ mirrorLineItemId }, 'PY facturó — notificando deal UY para facturación manual');
 
-  // 4) Facturar el mirror — el guard interno sincroniza de nuevo antes de emitir
-  try {
-    await _executeUrgentBillingForLineItem(mirrorLineItemId);
-    log.info({ mirrorLineItemId }, 'Mirror UY facturado correctamente');
-  } catch (err) {
-    log.error({ err, mirrorLineItemId }, 'Error facturando mirror UY — marcando para reintento');
-
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
-        properties: {
-          facturar_ahora: 'true',
-          of_billing_error: `mirror_propagation_failed: ${String(err?.message || 'unknown').slice(0, 200)}`,
-          of_billing_error_at: String(getTodayMillis()),
-        },
-      });
-      log.info({ mirrorLineItemId }, 'Mirror UY marcado con facturar_ahora=true para reintento');
-    } catch (updateErr) {
-      log.error({ updateErr, mirrorLineItemId }, 'No se pudo marcar el mirror para reintento');
-    }
-  }
+  // 4) Notificar deal UY para que facture manualmente — UY nunca factura automáticamente desde mirror
+  reportHubSpotError({
+    level: 'warn',
+    objectType: 'deal',
+    objectId: mirrorResult.targetDealId,
+    message: `[AVISO MIRROR] Paraguay facturó el ${getTodayYMD()}. Revisar y facturar manualmente el ticket UY correspondiente. Line item espejo: ${mirrorLineItemId}.`,
+  });
+  log.info({ mirrorLineItemId, mirrorDealId: mirrorResult.targetDealId }, 'Aviso enviado al deal UY');
 }
 
 /**

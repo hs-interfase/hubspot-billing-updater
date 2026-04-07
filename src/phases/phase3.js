@@ -256,12 +256,23 @@ export async function runPhase3({ deal, lineItems }) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
 
+// DESPUÉS
     // PAUSA: si el line item está en pausa, skip
     const isPaused = parseBool(lp.pausa);
     if (isPaused) {
       logger.info(
         { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
         'Line item en pausa, saltando Phase 3'
+      );
+      continue;
+    }
+
+    // MIRROR UY: line items espejo nunca se facturan automáticamente
+    const esMirrorUY = (lp.of_line_item_py_origen_id || '').trim();
+    if (esMirrorUY) {
+      logger.info(
+        { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+        'Line item es mirror UY, saltando Phase 3 (facturación manual)'
       );
       continue;
     }
