@@ -13,7 +13,6 @@ import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
-import { TICKET_STAGES, FORECAST_MANUAL_STAGES } from '../config/constants.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -784,68 +783,27 @@ async function _propagateToMirror(pyLineItemId) {
     return;
   }
 
-  log.info({ mirrorLineItemId }, 'PY facturó — notificando deal UY para facturación manual');
+  log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
 
-  // 4) Notificar deal UY — UY nunca factura automáticamente desde mirror
-  reportHubSpotError({
-    level: 'warn',
-    objectType: 'deal',
-    objectId: mirrorResult.targetDealId,
-    message: `[AVISO MIRROR] Paraguay facturó el ${getTodayYMD()}. Revisar y facturar manualmente el ticket UY correspondiente. Line item espejo: ${mirrorLineItemId}.`,
-  });
-  log.info({ mirrorLineItemId, mirrorDealId: mirrorResult.targetDealId }, 'Aviso enviado al deal UY');
-
-  // 5) Buscar ticket UY asociado al mirror line item, notificar y promover a READY
+  // 4) Facturar el mirror — el guard interno sincroniza de nuevo antes de emitir
   try {
-    const ticketAssocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'line_items',
-      String(mirrorLineItemId),
-      'tickets',
-      100
-    );
-    const ticketIds = (ticketAssocResp.results || []).map(r => String(r.toObjectId)).filter(Boolean);
-
-    if (ticketIds.length === 0) {
-      log.info({ mirrorLineItemId }, 'No se encontraron tickets asociados al mirror line item — solo se notificó el deal');
-    } else {
-      for (const ticketId of ticketIds) {
-        // Leer stage actual — solo promover si está en forecast manual
-        let currentStage = '';
-        try {
-          const ticketData = await hubspotClient.crm.tickets.basicApi.getById(
-            String(ticketId),
-            ['hs_pipeline_stage']
-          );
-          currentStage = String(ticketData?.properties?.hs_pipeline_stage || '');
-        } catch (err) {
-          log.warn({ err, ticketId }, 'Error leyendo stage del ticket UY — se intentará promover igual');
-        }
-
-        // Aviso en el ticket
-        reportHubSpotError({
-          level: 'warn',
-          objectType: 'ticket',
-          objectId: ticketId,
-          message: `[AVISO MIRROR] Paraguay facturó el ${getTodayYMD()}. Revisar y facturar manualmente este ticket UY.`,
-        });
-
-        // Promover a READY solo si está en forecast manual
-        if (!currentStage || FORECAST_MANUAL_STAGES.has(currentStage)) {
-          try {
-            await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-              properties: { hs_pipeline_stage: TICKET_STAGES.NEW },
-            });
-            log.info({ ticketId, currentStage }, 'Ticket UY promovido a READY (próximos a facturar)');
-          } catch (err) {
-            log.warn({ err, ticketId }, 'Error promoviendo ticket UY a READY — no bloquea');
-          }
-        } else {
-          log.info({ ticketId, currentStage }, 'Ticket UY no está en forecast manual, no se promueve');
-        }
-      }
-    }
+    await _executeUrgentBillingForLineItem(mirrorLineItemId);
+    log.info({ mirrorLineItemId }, 'Mirror UY facturado correctamente');
   } catch (err) {
-    log.warn({ err, mirrorLineItemId }, 'Error buscando tickets UY — no bloquea');
+    log.error({ err, mirrorLineItemId }, 'Error facturando mirror UY — marcando para reintento');
+
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
+        properties: {
+          facturar_ahora: 'true',
+          of_billing_error: `mirror_propagation_failed: ${String(err?.message || 'unknown').slice(0, 200)}`,
+          of_billing_error_at: String(getTodayMillis()),
+        },
+      });
+      log.info({ mirrorLineItemId }, 'Mirror UY marcado con facturar_ahora=true para reintento');
+    } catch (updateErr) {
+      log.error({ updateErr, mirrorLineItemId }, 'No se pudo marcar el mirror para reintento');
+    }
   }
 }
 
@@ -1067,15 +1025,6 @@ if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
     }
   }
 }
-
-/**
- * Propaga la facturación automática PY al mirror UY.
- * Llamar fire-and-forget desde phase3 después de emitir factura automática.
- */
-export async function propagateMirrorAfterAutoInvoice(pyLineItemId) {
-  return _propagateToMirror(pyLineItemId);
-}
-
 
 /*
  * CATCHES con reportHubSpotError agregados:

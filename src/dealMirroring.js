@@ -428,7 +428,23 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
     const props = {};
 
-
+    /*const excludedProps = new Set([
+      'uy',
+      'pais_operativo',
+      'hubspot_owner_id',
+      'price',
+      'hs_cost_of_goods_sold',
+      'discount',
+      'hs_discount_percentage',
+      'tax',
+      'hs_tax_amount',
+      'of_line_item_py_origen_id',
+      'invoice_id',
+      'invoice_key',
+      'line_item_key',
+      'parte_del_cupo',
+    ]);
+*/
 const excludedProps = new Set([
   'uy',
   'pais_operativo',
@@ -458,7 +474,6 @@ const excludedProps = new Set([
   'last_billing_period',
   'of_billing_error',
   'of_billing_error_at',
-  'facturacion_automatica',
 ]);
 
     for (const key of Object.keys(srcPropsLi)) {
@@ -471,14 +486,6 @@ const excludedProps = new Set([
     props.pais_operativo = 'Uruguay';
     props.hubspot_owner_id = userAdminMirror;
     props.of_line_item_py_origen_id = String(li.id).trim();
-    props.facturacion_automatica = 'false'; // mirror UY siempre manual
-
-       // Copiar explícitamente numberOfPayments del PY para garantizar plan fijo vs autorenew.
-    // No se deja al loop genérico porque HubSpot puede ignorar writes de propiedades
-    // nativas de suscripción en line items que no son de tipo suscripción.
-    const rawPayments = srcPropsLi.hs_recurring_billing_number_of_payments;
-    props.hs_recurring_billing_number_of_payments =
-      rawPayments != null ? String(rawPayments) : ''
 
     const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
 
