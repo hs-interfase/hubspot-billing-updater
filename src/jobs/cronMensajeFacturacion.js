@@ -182,9 +182,95 @@ async function writeMensaje(dealId, html) {
   });
 }
 
+
+// DESPUÉS de la función writeMensaje existente, agregar:
+
 /**
- * Marca un ticket como notificado.
+ * Construye y escribe el mensaje de facturación para un deal específico,
+ * acumulando todos los tickets READY pendientes de aviso.
+ * Sin cooldown — pensado para llamarse inmediatamente tras mover un ticket a READY.
+ * NO marca ticket_emitio_aviso_a_admin — eso lo sigue haciendo el cron.
  */
+export async function refreshMensajeFacturacionParaDeal(dealId) {
+  try {
+    const tickets = await searchReadyTickets(TICKET_PIPELINE, TICKET_STAGES.READY);
+    const pendientes = filterPendientes(tickets).filter(
+      t => String(t?.properties?.of_deal_id || '').trim() === String(dealId)
+    );
+
+    if (pendientes.length === 0) {
+      logger.info(
+        { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId },
+        'Sin tickets READY pendientes de aviso para el deal'
+      );
+      return;
+    }
+
+    const dealName = await getDealName(dealId);
+    const html = buildMensajeFacturacion(pendientes, dealName);
+    if (!html) return;
+
+    await writeMensaje(String(dealId), html);
+
+    logger.info(
+      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketCount: pendientes.length },
+      '✅ mensaje_de_facturacion actualizado (acumulado)'
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, err },
+      'refreshMensajeFacturacionParaDeal falló — no bloquea flujo'
+    );
+  }
+}
+
+/**
+ * Construye y escribe el mensaje de facturación para un deal específico,
+ * acumulando todos sus tickets READY que aún no emitieron aviso.
+ * Sin cooldown. NO marca ticket_emitio_aviso_a_admin — eso lo hace el cron.
+ */
+export async function refreshMensajeFacturacionParaDeal(dealId) {
+  try {
+    const res = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [{
+        filters: [
+          { propertyName: 'hs_pipeline',       operator: 'EQ', value: String(TICKET_PIPELINE) },
+          { propertyName: 'hs_pipeline_stage',  operator: 'EQ', value: String(TICKET_STAGES.READY) },
+          { propertyName: 'of_deal_id',         operator: 'EQ', value: String(dealId) },
+        ],
+      }],
+      properties: TICKET_PROPS,
+      limit: 50,
+    });
+
+    const pendientes = filterPendientes(res?.results || []);
+
+    if (pendientes.length === 0) {
+      logger.info(
+        { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId },
+        'Sin tickets READY pendientes de aviso para el deal'
+      );
+      return;
+    }
+
+    const dealName = await getDealName(String(dealId));
+    const html = buildMensajeFacturacion(pendientes, dealName);
+    if (!html) return;
+
+    await writeMensaje(String(dealId), html);
+
+    logger.info(
+      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketCount: pendientes.length },
+      '✅ mensaje_de_facturacion actualizado (acumulado)'
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, err },
+      'refreshMensajeFacturacionParaDeal falló — no bloquea flujo'
+    );
+  }
+}
+
 async function markTicketNotified(ticketId) {
   await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
     properties: { ticket_emitio_aviso_a_admin: 'true' },

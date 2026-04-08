@@ -13,6 +13,7 @@ import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
+import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -971,6 +972,14 @@ if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
         reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error moviendo ticket a READY (urgent ticket)', err });
         throw err;
       }
+    }
+
+    // Acumular mensaje de facturación del deal con todos los tickets READY pendientes
+    try {
+      const dealIdForMsg = (ticketProps.of_deal_id || '').trim();
+      if (dealIdForMsg) await refreshMensajeFacturacionParaDeal(dealIdForMsg);
+    } catch (err) {
+      logger.warn({ module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err }, 'refreshMensajeFacturacionParaDeal falló — no bloquea');
     }
 
     logger.info(

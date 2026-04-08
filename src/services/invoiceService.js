@@ -371,10 +371,9 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    fecha_resolucion_esperada: tp.fecha_resolucion_esperada,
-    hs_comments: tp.content,                                // era: tp.comments
-    motivo_de_pausa: tp.of_motivo_pausa,                    // era: tp.motivo_pausa
-    id_factura_nodum: tp.numero_de_factura,                 // era: tp.id_factura_nodum
+    hs_comments: tp.content,                               
+    motivo_de_pausa: tp.of_motivo_pausa,                    
+    id_factura_nodum: tp.numero_de_factura,                 
     etapa_de_la_factura: 'Pendiente',
     modo_de_generacion_de_factura: modoGeneracion,
   };
