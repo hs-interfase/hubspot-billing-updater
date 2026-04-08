@@ -13,6 +13,7 @@ import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
+import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -972,6 +973,28 @@ if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
         throw err;
       }
     }
+
+// Acumular mensaje de facturación del deal con todos los tickets READY pendientes
+try {
+  const dealIdForMsg = (ticketProps.of_deal_id || '').trim();
+  logger.info(
+    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealIdForMsg },
+    'refreshMensajeFacturacionParaDeal — intentando'
+  );
+  if (dealIdForMsg) {
+    await refreshMensajeFacturacionParaDeal(dealIdForMsg);
+  } else {
+    logger.warn(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId },
+      'refreshMensajeFacturacionParaDeal — of_deal_id vacío, saltando'
+    );
+  }
+} catch (err) {
+  logger.warn(
+    { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err },
+    'refreshMensajeFacturacionParaDeal falló — no bloquea'
+  );
+}
 
     logger.info(
       { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: invoiceResult.invoiceId },

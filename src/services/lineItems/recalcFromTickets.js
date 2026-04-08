@@ -34,6 +34,8 @@ import {
 } from '../../config/constants.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
+import { createTicketAssociations, getDealCompanies, getDealContacts } from '../tickets/ticketService.js';
+import { syncLineItemAfterPromotion } from './syncAfterPromotion.js';
 
 const MOD = 'recalcFromTickets';
 
@@ -158,7 +160,7 @@ function resolveReadyStage(pipelineId) {
  * Promueve un ticket forecast con fecha pasada a READY.
  * Retorna true si se promovió, false si falló.
  */
-async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId }) {
+async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId, lineItemId }) {
   const readyStage = resolveReadyStage(pipelineId);
   if (!readyStage) {
     logger.warn({ module: MOD, fn: 'promotePastDueForecast', ticketId, pipelineId },
@@ -176,6 +178,41 @@ async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lin
       ticketId, pipelineId, readyStage, fechaEsperada, lineItemKey, dealId,
     }, 'FORECAST_PAST_DUE_PROMOTED: ticket forecast con fecha pasada promovido a READY');
 
+    // Asociar al deal + line item (igual que Phase 2)
+    if (dealId && lineItemId) {
+      try {
+        const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
+        const contactIds = await getDealContacts(String(dealId)).catch(() => []);
+        await createTicketAssociations(
+          String(ticketId),
+          String(dealId),
+          String(lineItemId),
+          companyIds || [],
+          contactIds || []
+        );
+      } catch (assocErr) {
+        logger.warn(
+          { module: MOD, fn: 'promotePastDueForecast', ticketId, dealId, lineItemId, err: assocErr },
+          'Error asociando ticket past-due al deal (no bloquea)'
+        );
+      }
+
+      // Sync fechas en line item
+      try {
+        await syncLineItemAfterPromotion({
+          dealId,
+          lineItemId,
+          lineItemKey,
+          expectedYMD: fechaEsperada,
+        });
+      } catch (syncErr) {
+        logger.warn(
+          { module: MOD, fn: 'promotePastDueForecast', ticketId, lineItemId, err: syncErr },
+          'syncLineItemAfterPromotion falló (no bloquea)'
+        );
+      }
+    }
+
     return true;
   } catch (err) {
     logger.error({
@@ -185,7 +222,6 @@ async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lin
     return false;
   }
 }
-
 // ─────────────────────────────────────────────
 // Función principal
 // ─────────────────────────────────────────────
@@ -274,6 +310,7 @@ export async function recalcFromTickets({
         fechaEsperada: t.fechaEsperada,
         lineItemKey,
         dealId,
+        lineItemId,   // ← nuevo
       });
 
       if (promoted) {
