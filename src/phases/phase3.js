@@ -4,8 +4,7 @@ import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
-import { updateTicket } from '../services/tickets/ticketService.js';
-import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+import { propagateMirrorAfterAutoInvoice } from '../services/urgentBillingService.js';import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
@@ -374,9 +373,11 @@ if (facturarAhora) {
             continue;
           }
         }
-
-        await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
+await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
         invoicesEmitted++;
+
+        // Propagar al mirror UY si corresponde — fire-and-forget, no bloquea Phase 3
+        propagateMirrorAfterAutoInvoice(lineItemId).catch(() => {});
 
         logger.info(
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },

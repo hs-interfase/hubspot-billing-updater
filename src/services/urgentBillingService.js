@@ -1068,6 +1068,15 @@ if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
   }
 }
 
+/**
+ * Propaga la facturación automática PY al mirror UY.
+ * Llamar fire-and-forget desde phase3 después de emitir factura automática.
+ */
+export async function propagateMirrorAfterAutoInvoice(pyLineItemId) {
+  return _propagateToMirror(pyLineItemId);
+}
+
+
 /*
  * CATCHES con reportHubSpotError agregados:
  *   - updateUrgentBillingEvidence: lineItems.basicApi.update() → objectType="line_item", re-throw
