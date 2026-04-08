@@ -4,7 +4,8 @@ import { hubspotClient } from '../hubspotClient.js';
 import { parseBool } from '../utils/parsers.js';
 import { getTodayYMD } from '../utils/dateUtils.js';
 import { resolvePlanYMD } from '../utils/resolvePlanYMD.js';
-import { propagateMirrorAfterAutoInvoice } from '../services/urgentBillingService.js';import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
+import { propagateMirrorAfterAutoInvoice } from '../services/urgentBillingService.js';
+import { updateTicket, createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
@@ -184,7 +185,7 @@ async function promoteAutoForecastTicketToReady({
       contactIds || []
     );
   }
-if (moved) {
+  if (moved) {
     await syncLineItemAfterPromotion({
       dealId,
       lineItemId,
@@ -200,7 +201,7 @@ if (moved) {
         lineItemKey,
         dealId,
         lineItemId,
-        lineItemProps: liProps,
+        lineItemProps: lp,
         facturacionActiva: true, // Phase 3 solo corre si facturacionActiva=true
         applyUpdate: true,
       });
@@ -255,7 +256,6 @@ export async function runPhase3({ deal, lineItems }) {
     const lineItemId = String(li.id || li.properties?.hs_object_id);
     const lp = li.properties || {};
 
-// DESPUÉS
     // PAUSA: si el line item está en pausa, skip
     const isPaused = parseBool(lp.pausa);
     if (isPaused) {
@@ -373,7 +373,7 @@ if (facturarAhora) {
             continue;
           }
         }
-await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
+        await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
         invoicesEmitted++;
 
         // Propagar al mirror UY si corresponde — fire-and-forget, no bloquea Phase 3

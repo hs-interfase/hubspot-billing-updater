@@ -230,6 +230,7 @@ export async function getDealWithLineItems(dealId) {
 
     // --- recurring ---
     "recurringbillingfrequency",
+    "hs_recurring_billing_period",
     "hs_recurring_billing_start_date",
     "hs_recurring_billing_number_of_payments",
     "hs_recurring_billing_terms",

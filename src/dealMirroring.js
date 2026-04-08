@@ -473,6 +473,13 @@ const excludedProps = new Set([
     props.of_line_item_py_origen_id = String(li.id).trim();
     props.facturacion_automatica = 'false'; // mirror UY siempre manual
 
+       // Copiar explícitamente numberOfPayments del PY para garantizar plan fijo vs autorenew.
+    // No se deja al loop genérico porque HubSpot puede ignorar writes de propiedades
+    // nativas de suscripción en line items que no son de tipo suscripción.
+    const rawPayments = srcPropsLi.hs_recurring_billing_number_of_payments;
+    props.hs_recurring_billing_number_of_payments =
+      rawPayments != null ? String(rawPayments) : ''
+
     const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
 
     if (isNaN(unitCost) || unitCost <= 0) {
