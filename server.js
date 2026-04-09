@@ -44,6 +44,11 @@ app.get('/nodum', nodumUploadRouter, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'nodum-upload.html'))
 })
 
+// ── Guía de Facturación ──
+app.get('/guia', invoiceEditorAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'guia-facturacion-interfase.html'))
+})
+
 // ── Static & Health ──
 app.use(express.static(path.join(__dirname, 'public')))
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
