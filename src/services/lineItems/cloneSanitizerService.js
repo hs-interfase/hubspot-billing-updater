@@ -55,6 +55,7 @@ export function sanitizeClonedLineItem(lineItem, dealId, { debug = false } = {})
     "of_invoice_key",
     "of_ticket_id",
     "of_ticket_key",
+    'fecha_vencimiento_contrato',
   ];
 
   const updates = {};
