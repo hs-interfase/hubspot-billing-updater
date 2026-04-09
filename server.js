@@ -39,13 +39,13 @@ app.get('/invoice-editor', invoiceEditorAuth, (req, res) => {
 app.post('/api/debug-urgent', debugUrgent)
 
 // ── Nodum Upload ──
-app.use('/nodum', nodumUploadRouter)
-app.get('/nodum', nodumUploadRouter, (req, res) => {
+app.get('/nodum', (req, res) => {                                      
   res.sendFile(path.join(__dirname, 'public', 'nodum-upload.html'))
 })
+app.use('/nodum', nodumUploadRouter)                                  
 
 // ── Guía de Facturación ──
-app.get('/guia', invoiceEditorAuth, (req, res) => {
+app.get('/guia', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'guia-facturacion-interfase.html'))
 })
 
