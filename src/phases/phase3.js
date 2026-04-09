@@ -342,7 +342,7 @@ if (facturarAhora) {
         lineItemId,
       });
 
-      if (promoted.moved) {
+      if (promoted.moved || promoted.reason === 'already_ready') {
         ticketsEnsured++;
 
         // Leer ticket con todas las props requeridas para evitar re-lectura en invoiceService
