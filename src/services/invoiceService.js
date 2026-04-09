@@ -295,8 +295,16 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       await syncBillingLastBilledDateFromTicket(ticketFull);
       if (lineItemId && lik) {
         await syncBillingState({ hubspotClient, dealId, lineItemId, lineItemKey: lik, dealIsCanceled: false });
-        if (isAutoRenew({ properties: lineItem?.properties || lineItem })) {
-          await ensure24FutureTickets({ hubspotClient, dealId, lineItemId, lineItem, lineItemKey: lik });
+        try {
+          const lineItemForEnsure = await hubspotClient.crm.lineItems.basicApi.getById(
+            String(lineItemId),
+            ['renovacion_automatica', 'recurringbillingfrequency', 'hs_recurring_billing_frequency']
+          );
+          if (isAutoRenew({ properties: lineItemForEnsure?.properties || {} })) {
+            await ensure24FutureTickets({ hubspotClient, dealId, lineItemId, lineItem: lineItemForEnsure, lineItemKey: lik });
+          }
+        } catch (err) {
+          logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', lineItemId, err }, '[invoice] No se pudo leer line item para ensure24FutureTickets (idempotencia)');
         }
       }
       logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceId: tp.of_invoice_id }, '[invoice] Ticket ya tiene factura válida, saliendo (idempotente)');
