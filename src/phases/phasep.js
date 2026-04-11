@@ -674,6 +674,25 @@ for (const t of allTickets) {
 
       if (changed) {
         await updateLineItemLastGeneratedAt(li.id);
+
+        // Si el LI es automático, marcar mantsoft_pendiente para que
+        // el cronMensajeMantsoft genere/actualice el aviso en el deal.
+        if (automated) {
+          try {
+            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+              properties: { mantsoft_pendiente: 'true' },
+            });
+            logger.debug(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id },
+              'mantsoft_pendiente seteado en LI automático'
+            );
+          } catch (err) {
+            logger.warn(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+              'No se pudo setear mantsoft_pendiente — no bloquea'
+            );
+          }
+        }
       }
     } catch (err) {
       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');

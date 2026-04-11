@@ -5,12 +5,11 @@
 // Horario en Railway: 07:10 (America/Montevideo) — una hora antes que cronMensajeFacturacion
 //
 // Lógica:
-//   1. Buscar line items con mantsoft_pendiente = true y facturacion_automatica = true
-//   2. Resolver dealId de cada line item via associations batch API
-//   3. Agrupar por deal
-//   4. Para cada deal: construir HTML con buildMensajeMantsoft(lineItems, dealName)
-//   5. Escribir mensaje_de_facturacion en el deal
-//   6. Resetear mantsoft_pendiente = false en cada line item procesado
+//   1. Buscar line items con mantsoft_pendiente = true
+//   2. Agrupar por deal (of_deal_id o id_deal_origen)
+//   3. Para cada deal: construir HTML con buildMensajeMantsoft(lineItems, dealName)
+//   4. Escribir mensaje_de_facturacion en el deal
+//   5. Resetear mantsoft_pendiente = false en cada line item procesado
 //
 // Ejecución manual:
 //   node src/jobs/cronMensajeMantsoft.js
@@ -30,26 +29,39 @@ import { pathToFileURL } from 'url';
 
 const DEAL_PROPERTY = 'mensaje_de_facturacion';
 
+// Propiedades del line item necesarias para construir el mensaje
 const LI_PROPS = [
   'hs_object_id', 'hs_lastmodifieddate',
+  // Identidad del deal
+  'id_deal_origen',
+  // Producto
   'name', 'description', 'of_rubro', 'rubro', 'unidad_de_negocio',
+  // Precio
   'price', 'quantity', 'amount',
   'hs_discount_percentage', 'of_moneda', 'deal_currency_code',
-  'of_iva', 'of_exonera_irae',
+  'of_iva',
+  // Contrato
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
   'billing_next_date', 'fecha_vencimiento_contrato',
   'hs_recurring_billing_number_of_payments', 'pagos_restantes',
   'renovacion_automatica', 'hs_recurring_billing_terms',
+  // Empresa / contacto
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
+  // Observaciones
   'observaciones_ventas', 'nota',
+  // Control
   'mantsoft_pendiente', 'facturacion_automatica',
 ];
 
 // ────────────────────────────────────────────────────────────
-// Búsqueda de line items
+// Helpers — HubSpot
 // ────────────────────────────────────────────────────────────
 
+/**
+ * Busca TODOS los line items con mantsoft_pendiente = true.
+ * Filtra in-memory porque HAS_PROPERTY es poco fiable para booleans.
+ */
 async function searchLineItemsMantsoft() {
   const allItems = [];
   let after = undefined;
@@ -57,12 +69,14 @@ async function searchLineItemsMantsoft() {
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const searchBody = {
-      filterGroups: [{
-        filters: [
-          { propertyName: 'mantsoft_pendiente', operator: 'EQ', value: 'true' },
-          { propertyName: 'facturacion_automatica', operator: 'EQ', value: 'true' },
-        ],
-      }],
+      filterGroups: [
+        {
+          filters: [
+            { propertyName: 'mantsoft_pendiente', operator: 'EQ', value: 'true' },
+            { propertyName: 'facturacion_automatica', operator: 'EQ', value: 'true' },
+          ],
+        },
+      ],
       properties: LI_PROPS,
       sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'ASCENDING' }],
       limit: 100,
@@ -83,7 +97,7 @@ async function searchLineItemsMantsoft() {
 
     const results = res?.results || [];
 
-    // Filtro in-memory — HAS_PROPERTY / EQ en booleans puede ser poco fiable
+    // Filtro in-memory adicional por si el search operator falla
     for (const li of results) {
       if (parseBool(li?.properties?.mantsoft_pendiente) &&
           parseBool(li?.properties?.facturacion_automatica)) {
@@ -99,64 +113,45 @@ async function searchLineItemsMantsoft() {
   return allItems;
 }
 
-// ────────────────────────────────────────────────────────────
-// Associations batch: line items → deals
-// ────────────────────────────────────────────────────────────
-
 /**
- * Dado un array de line items, resuelve el dealId de cada uno
- * usando la batch associations API (una sola llamada).
- * Retorna Map<lineItemId, dealId>
+ * Obtiene el dealId asociado a un line item via associations API.
+ * Fallback a id_deal_origen si falla.
  */
-async function resolveDealsForLineItems(lineItems) {
-  const result = new Map();
-  if (lineItems.length === 0) return result;
+async function resolveDealIdForLineItem(li) {
+  // Primero intentar via propiedad directa (más rápido, sin API call)
+  const directDealId = String(li?.properties?.id_deal_origen || '').trim();
+  if (directDealId) return directDealId;
 
-  const inputs = lineItems.map(li => ({ id: String(li.id) }));
-
-  let resp;
+  // Fallback: associations API
   try {
-    resp = await hubspotClient.crm.associations.batchApi.read(
-      'line_items',
-      'deals',
-      { inputs }
+    const assocResp = await hubspotClient.crm.lineItems.associationsApi.getAll(
+      String(li.id),
+      'deals'
     );
+    const dealId = assocResp?.results?.[0]?.id;
+    return dealId ? String(dealId) : null;
   } catch (err) {
-    logger.error(
-      { module: 'cronMensajeMantsoft', fn: 'resolveDealsForLineItems', err },
-      'Error en batch associations line_items → deals'
+    logger.warn(
+      { module: 'cronMensajeMantsoft', fn: 'resolveDealIdForLineItem', lineItemId: li.id, err },
+      'No se pudo resolver dealId para line item'
     );
-    return result;
+    return null;
   }
-
-  for (const item of resp?.results || []) {
-    const lineItemId = String(item?.from?.id || '');
-    const dealId = String(item?.to?.[0]?.id || '');
-    if (lineItemId && dealId) {
-      result.set(lineItemId, dealId);
-    }
-  }
-
-  return result;
 }
 
-// ────────────────────────────────────────────────────────────
-// Agrupación por deal
-// ────────────────────────────────────────────────────────────
-
 /**
- * Agrupa line items por dealId usando el mapa de associations.
+ * Agrupa line items por dealId.
  * Retorna Map<dealId, lineItem[]>
  */
-function groupByDeal(lineItems, liToDealMap) {
+async function groupByDeal(lineItems) {
   const map = new Map();
 
   for (const li of lineItems) {
-    const dealId = liToDealMap.get(String(li.id));
+    const dealId = await resolveDealIdForLineItem(li);
     if (!dealId) {
       logger.warn(
         { module: 'cronMensajeMantsoft', lineItemId: li.id },
-        'Line item sin dealId en associations, saltando'
+        'Line item sin dealId resuelto, saltando'
       );
       continue;
     }
@@ -167,10 +162,9 @@ function groupByDeal(lineItems, liToDealMap) {
   return map;
 }
 
-// ────────────────────────────────────────────────────────────
-// Helpers HubSpot
-// ────────────────────────────────────────────────────────────
-
+/**
+ * Obtiene el nombre del deal.
+ */
 async function getDealName(dealId) {
   try {
     const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']);
@@ -184,12 +178,18 @@ async function getDealName(dealId) {
   }
 }
 
+/**
+ * Escribe mensaje_de_facturacion en el deal.
+ */
 async function writeMensaje(dealId, html) {
   await hubspotClient.crm.deals.basicApi.update(String(dealId), {
     properties: { [DEAL_PROPERTY]: html },
   });
 }
 
+/**
+ * Resetea mantsoft_pendiente = false en el line item.
+ */
 async function resetMantoftPendiente(lineItemId) {
   await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
     properties: { mantsoft_pendiente: 'false' },
@@ -220,16 +220,8 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
     return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0 };
   }
 
-  // 2. Resolver dealId de todos los line items en una sola llamada batch
-  const liToDealMap = await resolveDealsForLineItems(lineItems);
-
-  logger.info(
-    { module: 'cronMensajeMantsoft', resolved: liToDealMap.size, total: lineItems.length },
-    'Associations resueltas'
-  );
-
-  // 3. Agrupar por deal
-  let dealGroups = groupByDeal(lineItems, liToDealMap);
+  // 2. Agrupar por deal
+  let dealGroups = await groupByDeal(lineItems);
 
   // Si --deal, filtrar solo ese
   if (onlyDealId) {
@@ -250,7 +242,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
     'Deals con line items Mantsoft pendientes'
   );
 
-  // 4. Procesar cada deal
+  // 3. Procesar cada deal
   let dealsProcessed = 0;
   let lineItemsReset = 0;
   let errors = 0;
