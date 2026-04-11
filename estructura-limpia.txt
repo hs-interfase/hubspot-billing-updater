@@ -1,14 +1,39 @@
-﻿.env
+﻿Get-ChildItem -Recurse -File -Force |
+Where-Object { $_.FullName -notmatch '\\(node_modules|\.git|\.next|dist|build|\.idea|\.vscode)\\' } |     
+ForEach-Object { Resolve-Path -Relative $_.FullName } |     
+ForEach-Object { $_ -replace '^\.\[\\/]', '' } |     
+Set-Content -Encoding UTF8 estructura-limpia.txt 
+
+
+
+
+
+
+
+
+
+
+
+.env
 .env.testing
 .gitignore
+.\check-mensaje-markers.mjs
+.\cleanupMirrorDeal.mjs
+.\cleanupTestDeals.mjs
+.\exportReporte.mjs
 .\FIX_TICKET_IDEMPOTENCY.md
 .\IMPLEMENTATION_SUMMARY.md
 .\LICENSE
+.\mirror-seed-manifest.json
 .\package-lock.json
 .\package.json
 .\README.md
+.\reporte_consolidado_2026-04-04.xlsx
+.\seedMirrorDeal.mjs
+.\seedTestDeals.mjs
 .\server.js
-.\testPropagate.js
+.\test-nodum-upload.mjs
+.\test-seed-manifest.json.bak
 .vercel\project.json
 .vercel\README.txt
 .\api\actualizar-webhook.js
@@ -23,6 +48,7 @@
 .\api\invoice-editor\invoiceFields.config.json
 .\api\invoice-editor\invoices.js
 .\api\invoice-editor\syncInvoiceToTicket.js
+.\api\nodum\nodumUpload.js
 .\data\cron-state-deals.json
 .\data\cron-state-deals.lock
 .\data\cron_failed_deals.json
@@ -37,6 +63,13 @@
 .\data\logs\cron_deals_2026-03-15.log.jsonl
 .\data\logs\cron_deals_2026-03-21.log.jsonl
 .\data\logs\cron_deals_2026-03-23.log.jsonl
+.\data\logs\cron_deals_2026-03-24.log.jsonl
+.\data\logs\cron_deals_2026-03-25.log.jsonl
+.\data\logs\cron_deals_2026-03-27.log.jsonl
+.\data\logs\cron_deals_2026-03-29.log.jsonl
+.\data\logs\cron_deals_2026-03-31.log.jsonl
+.\data\logs\cron_deals_2026-04-08.log.jsonl
+.\data\logs\cron_deals_2026-04-09.log.jsonl
 .\docs\_archive\billing-flow.md
 .\docs\_archive\FLOW_DIAGRAM.md
 .\docs\_archive\HUBSPOT_PROPERTIES_CHECKLIST.md
@@ -49,11 +82,14 @@
 .\logs\warn.log
 .\public\favicon.ico
 .\public\favicon.png
+.\public\guia-facturacion-interfase.html
 .\public\invoice-editor-audit.html
 .\public\invoice-editor.html
+.\public\nodum-upload.html
 .\src\associations.js
 .\src\billingEngine.js
 .\src\cupo.js
+.\src\db.js
 .\src\dealMirroring.js
 .\src\hubspotClient.js
 .\src\invoices.js
@@ -63,6 +99,11 @@
 .\src\config\propertyMapping.js
 .\src\jobs\cronDealsBatch.js
 .\src\jobs\cronExchangeRates.js
+.\src\jobs\cronMensajeFacturacion.js
+.\src\jobs\cronMensajeMantsoft.js
+.\src\maintenance\analyzeInvoices.js
+.\src\maintenance\fixInvoicesNodumStatus.js
+.\src\maintenance\revertInvoices.js
 .\src\phases\index.js
 .\src\phases\phase1.js
 .\src\phases\phase2.js
@@ -77,15 +118,19 @@
 .\src\services\snapshotService.js
 .\src\services\urgentBillingService.js
 .\src\services\alerts\cupoAlert.js
+.\src\services\billing\buildMensajeFacturacion.js
+.\src\services\billing\buildMensajeMantsoft.js
 .\src\services\billing\missedBillingGuard.js
 .\src\services\billing\mode.js
 .\src\services\billing\recalcFacturasRestantes.js
+.\src\services\billing\syncBillingNextDateFromTickets.js
 .\src\services\billing\syncBillingState.js
 .\src\services\cupo\consumeCupo.js
 .\src\services\cupo\cupoUtils.js
 .\src\services\cupo\mirrorTicketsUyUpsert.js
 .\src\services\forecast\forecastMetaService.js
 .\src\services\lineItems\cloneSanitizerService.js
+.\src\services\lineItems\recalcFromTickets.js
 .\src\services\lineItems\syncAfterPromotion.js
 .\src\services\tickets\assignTicketOwners.js
 .\src\services\tickets\manualTicketService.js
@@ -108,6 +153,11 @@
 .\src\utils\ticketKey.js
 .\src\utils\withRetry.js
 .\src\__tests__\buildPagosDisplay.test.js
+.\src\__tests__\checkForecasttick.mjs
+.\src\__tests__\checkLineItem.mjs
+.\src\__tests__\checkLineItems.mjs
+.\src\__tests__\findPastDueForecast.mjs
 .\src\__tests__\invoiceValidation.test.js
 .\src\__tests__\testPropagate.js
 .\src\__tests__\ticketKeyIdempotency.js
+.\src\__tests__\verify-search-finds-forecast.mjs

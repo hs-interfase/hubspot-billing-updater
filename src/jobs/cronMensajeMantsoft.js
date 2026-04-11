@@ -18,7 +18,7 @@
 //   node src/jobs/cronMensajeMantsoft.js --dry
 
 import 'dotenv/config';
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from "../hubspotClient.js";
 import { buildMensajeMantsoft } from '../services/billing/buildMensajeMantsoft.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';

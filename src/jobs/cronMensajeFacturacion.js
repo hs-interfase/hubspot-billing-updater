@@ -20,7 +20,7 @@
 //   node src/jobs/cronMensajeFacturacion.js --dry
 
 import 'dotenv/config';
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from "../hubspotClient.js";
 import { buildMensajeFacturacion } from '../services/billing/buildMensajeFacturacion.js';
 import {
   TICKET_PIPELINE,
