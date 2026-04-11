@@ -13,6 +13,7 @@ import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
+import { promoteMirrorTicketToManualReady } from '../services/mirrorUtils.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
@@ -238,6 +239,11 @@ export async function runPhase3({ deal, lineItems }) {
     return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
   }
 
+  if (parseBool(dp.es_mirror_de_py)) {
+  // skip — mirrors se facturan manualmente
+  return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
+}
+
   let invoicesEmitted = 0;
   let ticketsEnsured = 0;
   const errors = [];
@@ -371,6 +377,8 @@ if (facturarAhora) {
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
           'Ticket promovido a READY (programado) y factura emitida'
         );
+          promoteMirrorTicketToManualReady(lineItemId).catch(() => {});
+
       } else {
         logger.info(
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
@@ -389,7 +397,7 @@ if (facturarAhora) {
       errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
     }
   }
-
+  
   logger.info(
     { module: 'phase3', fn: 'runPhase3', dealId, invoicesEmitted, ticketsEnsured, errors: errors.length },
     'Phase 3 completada'
