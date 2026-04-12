@@ -131,7 +131,7 @@ async function resolveDealsForLineItems(lineItems) {
   }
 
   for (const item of resp?.results || []) {
-    const lineItemId = String(item?.from?.id || '');
+    const lineItemId = String(item?._from?.id || item?.from?.id || '');
     const dealId = String(item?.to?.[0]?.toObjectId || '');
     if (lineItemId && dealId) {
       result.set(lineItemId, dealId);

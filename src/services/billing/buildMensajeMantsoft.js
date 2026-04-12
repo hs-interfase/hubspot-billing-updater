@@ -120,10 +120,13 @@ function buildLineItemDiv(li) {
   const lp = li?.properties || {};
   const frecuencia = resolverFrecuencia(lp);
 
-  // Calcular total: price * quantity si no hay amount
   const price = parseFloat(lp.price);
   const qty   = parseFloat(lp.quantity);
   const total = !isNaN(price) && !isNaN(qty) ? (price * qty).toFixed(2) : fmtNum(lp.amount);
+
+  // Determinar tipo de facturación
+  const fechaVenc = val(lp.fecha_vencimiento_contrato)?.slice(0, 10);
+  const esRenovacionAutomatica = fechaVenc === '2099-12-31';
 
   const rows = [
     `<div style="${STYLES.lineItemDiv}">`,
@@ -138,9 +141,10 @@ function buildLineItemDiv(li) {
     buildRow('IVA', lp.of_iva === 'true' ? 'Sí' : 'No'),
     buildRow('Frecuencia', frecuencia),
     buildRow('Próxima fecha', val(lp.billing_next_date)?.slice(0, 10)),
-    buildRow('Vencimiento contrato', val(lp.fecha_vencimiento_contrato)?.slice(0, 10)),
-    buildRow('Pagos restantes', val(lp.pagos_restantes)),
-    buildRow('Renovación automática', lp.renovacion_automatica === 'true' ? 'Sí' : null),
+    buildRow('Tipo', esRenovacionAutomatica ? 'Renovación automática' : 'Repetitivo'),
+    buildRow('Vencimiento contrato', esRenovacionAutomatica ? null : fechaVenc),
+    buildRow('Total de pagos', esRenovacionAutomatica ? null : val(lp.hs_recurring_billing_number_of_payments)),
+    buildRow('Pagos restantes', esRenovacionAutomatica ? null : val(lp.pagos_restantes)),
     buildRow('Observaciones', val(lp.observaciones_ventas) || val(lp.nota)),
     `</div>`,
   ];
