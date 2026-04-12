@@ -357,10 +357,13 @@ if (facturarAhora) {
           REQUIRED_TICKET_PROPS
         );
 
+        // DESPUÉS
         const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
         const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+
+        const activeCount = await countActivePlanInvoices(lineItemKey);
+
         if (!isAutoRenew) {
-          const activeCount = await countActivePlanInvoices(lineItemKey);
           if (activeCount !== null && activeCount >= totalPayments) {
             logger.info(
               { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
@@ -370,7 +373,19 @@ if (facturarAhora) {
           }
         }
 
+        // Primera factura del plan → notificar a Mantsoft
+        const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
+        if (activeCount === 0 && !isMirrorLI) {
+          hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+            properties: { mansoft_pendiente: 'true' },
+          }).catch(err => logger.warn(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
+            'Error seteando mansoft_pendiente (no bloquea)'
+          ));
+        }
+
         await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
+        
         invoicesEmitted++;
 
         logger.info(
