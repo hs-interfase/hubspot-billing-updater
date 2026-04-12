@@ -258,12 +258,17 @@ function buildDesiredDates(lineItem) {
     }
   }
 
-  let seriesStartYmd = startYmd;
+  const anchorYmd = toYmd(p.billing_anchor_date);
+
+  // Anchor tiene prioridad sobre startDate como base del ritmo
+  let seriesStartYmd = anchorYmd || startYmd;
 
   if (isAutoRenew) {
     seriesStartYmd = effectiveTodayYmd;
     if (billingNextYmd && billingNextYmd > seriesStartYmd) seriesStartYmd = billingNextYmd;
-    if (startYmd && startYmd > seriesStartYmd) seriesStartYmd = startYmd;
+    if ((anchorYmd || startYmd) && (anchorYmd || startYmd) > seriesStartYmd) {
+      seriesStartYmd = anchorYmd || startYmd;
+    }
   }
 
   const startDate = parseLocalDate(seriesStartYmd);
@@ -677,7 +682,7 @@ for (const t of allTickets) {
 
         // Si el LI es automático, marcar mansoft_pendiente para que
         // el cronMensajeMantsoft genere/actualice el aviso en el deal.
-        if (automated) {
+        if (automated && String(p.mansoft_pendiente || '').toLowerCase() !== 'true') {
           try {
             await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
               properties: { mansoft_pendiente: 'true' },

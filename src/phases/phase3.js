@@ -9,7 +9,8 @@ import { createTicketAssociations, getDealCompanies, getDealContacts } from '../
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
-import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { countActivePlanInvoices, invoiceExistsForKey } from '../utils/invoiceUtils.js';
+import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
@@ -272,6 +273,15 @@ export async function runPhase3({ deal, lineItems }) {
       continue;
     }
 
+    const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
+    if (isMirrorLI) {
+      logger.debug(
+        { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+        'Line item espejo UY, saltando Phase 3 (se factura manualmente)'
+      );
+      continue;
+    }
+
     try {
       const facturarAhora = parseBool(lp.facturar_ahora);
 
@@ -374,10 +384,19 @@ if (facturarAhora) {
           }
         }
 
+        const invoiceKey = buildInvoiceKey(dealId, lineItemKey, billingPeriodDate);
+        const alreadyExists = await invoiceExistsForKey(invoiceKey);
+        if (alreadyExists) {
+          logger.info(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, invoiceKey },
+            'Invoice ya existe para esta key (race condition guard), saltando emisión'
+          );
+          continue;
+        }
+
         const { created } = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
         // Primera factura del plan → notificar a Mantsoft
-        const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
         if (created && !isMirrorLI) {
           hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
             properties: { mansoft_pendiente: 'true' },
@@ -393,7 +412,7 @@ if (facturarAhora) {
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
           'Ticket promovido a READY (programado) y factura emitida'
         );
-          promoteMirrorTicketToManualReady(lineItemId).catch(() => {});
+        promoteMirrorTicketToManualReady(lineItemId, billingPeriodDate).catch(() => {});
 
       } else {
         logger.info(

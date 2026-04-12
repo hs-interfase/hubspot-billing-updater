@@ -149,7 +149,7 @@ export async function findMirrorLineItem(pyLineItemId) {
  *
  * @param {string|number} pyLineItemId  ID del line item PY que facturó
  */
-export async function promoteMirrorTicketToManualReady(pyLineItemId) {
+export async function promoteMirrorTicketToManualReady(pyLineItemId, billingYMD) {
   const log = logger.child({
     module: 'mirrorUtils',
     fn: 'promoteMirrorTicketToManualReady',
@@ -177,7 +177,7 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   try {
     mirrorLi = await hubspotClient.crm.lineItems.basicApi.getById(
       String(mirrorLineItemId),
-      ['line_item_key', 'facturacion_automatica', 'name']
+      ['line_item_key', 'facturacion_automatica', 'name', 'hs_recurring_billing_number_of_payments']
     );
   } catch (err) {
     log.warn({ err, mirrorLineItemId }, 'Error leyendo LI UY, abortando');
@@ -202,29 +202,30 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   // 3) Buscar ticket forecast automático del LI UY por of_line_item_key
   let forecastTicket;
   try {
+    if (!billingYMD) {
+      log.warn({ mirrorLik }, 'billingYMD no recibido, no se puede buscar ticket por key exacta');
+      return;
+    }
+
+    const { buildTicketKeyFromLineItemKey } = await import('../utils/ticketKey.js');
+    const ticketKey = buildTicketKeyFromLineItemKey(mirrorDealId, mirrorLik, billingYMD);
+
     const searchBody = {
       filterGroups: [{
         filters: [
-          { propertyName: 'of_line_item_key', operator: 'EQ', value: mirrorLik },
-          { propertyName: 'hs_pipeline', operator: 'EQ', value: AUTOMATED_TICKET_PIPELINE },
+          { propertyName: 'of_ticket_key', operator: 'EQ', value: ticketKey },
         ],
       }],
       properties: ['hs_pipeline_stage', 'hs_pipeline', 'of_ticket_key', 'of_line_item_key'],
-      sorts: [{ propertyName: 'fecha_resolucion_esperada', direction: 'ASCENDING' }],
-      limit: 5,
+      limit: 2,
     };
 
     const resp = await withRetry(
       () => hubspotClient.crm.tickets.searchApi.doSearch(searchBody),
-      { module: 'mirrorUtils', fn: 'promoteMirrorTicketToManualReady', mirrorLik }
+      { module: 'mirrorUtils', fn: 'promoteMirrorTicketToManualReady', ticketKey }
     );
 
-    const results = (resp?.results || []).filter(t =>
-      FORECAST_AUTO_STAGES.has(String(t?.properties?.hs_pipeline_stage || ''))
-    );
-
-    // Tomar el más próximo (ya viene ordenado por fecha)
-    forecastTicket = results[0] || null;
+    forecastTicket = (resp?.results || [])[0] || null;
   } catch (err) {
     log.warn({ err, mirrorLik }, 'Error buscando ticket forecast UY');
     return;
