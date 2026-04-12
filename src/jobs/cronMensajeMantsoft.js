@@ -117,7 +117,7 @@ async function resolveDealsForLineItems(lineItems) {
 
   let resp;
   try {
-    resp = await hubspotClient.crm.associations.v4.batchApi.read(
+    resp = await hubspotClient.crm.associations.v4.batchApi.getPage(
       'line_items',
       'deals',
       { inputs }
