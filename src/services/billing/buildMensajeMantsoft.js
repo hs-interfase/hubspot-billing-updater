@@ -2,7 +2,7 @@
 //
 // Construye el HTML rich-text para la propiedad `mensaje_de_facturacion` del Deal,
 // orientado a line items automáticos de Mantsoft (facturacion_automatica=true,
-// mantsoft_pendiente=true).
+// mansoft_pendiente=true).
 //
 // A diferencia de buildMensajeFacturacion (que recibe tickets),
 // este recibe line items directamente.

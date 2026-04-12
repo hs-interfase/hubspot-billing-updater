@@ -255,7 +255,10 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   // 5) Cambiar LI UY a facturacion_automatica=false
   try {
     await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
-      properties: { facturacion_automatica: 'false' },
+      properties: {
+        facturacion_automatica: 'false',
+        mansoft_pendiente: 'true',
+      },
     });
     log.info({ mirrorLineItemId }, 'LI UY cambiado a facturacion_automatica=false');
   } catch (err) {

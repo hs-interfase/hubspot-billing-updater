@@ -5,12 +5,12 @@
 // Horario en Railway: 07:10 (America/Montevideo) — una hora antes que cronMensajeFacturacion
 //
 // Lógica:
-//   1. Buscar line items con mantsoft_pendiente = true y facturacion_automatica = true
+//   1. Buscar line items con mansoft_pendiente = true y facturacion_automatica = true
 //   2. Resolver dealId de cada line item via associations batch API
 //   3. Agrupar por deal
 //   4. Para cada deal: construir HTML con buildMensajeMantsoft(lineItems, dealName)
 //   5. Escribir mensaje_de_facturacion en el deal
-//   6. Resetear mantsoft_pendiente = false en cada line item procesado
+//   6. Resetear mansoft_pendiente = false en cada line item procesado
 //
 // Ejecución manual:
 //   node src/jobs/cronMensajeMantsoft.js
@@ -43,7 +43,7 @@ const LI_PROPS = [
   'renovacion_automatica', 'hs_recurring_billing_terms',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
   'observaciones_ventas', 'nota',
-  'mantsoft_pendiente', 'facturacion_automatica',
+  'mansoft_pendiente', 'facturacion_automatica',
 ];
 
 // ────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ async function searchLineItemsMantsoft() {
     const searchBody = {
       filterGroups: [{
         filters: [
-          { propertyName: 'mantsoft_pendiente', operator: 'EQ', value: 'true' },
+          { propertyName: 'mansoft_pendiente', operator: 'EQ', value: 'true' },
           { propertyName: 'facturacion_automatica', operator: 'EQ', value: 'true' },
         ],
       }],
@@ -76,7 +76,7 @@ async function searchLineItemsMantsoft() {
     } catch (err) {
       logger.error(
         { module: 'cronMensajeMantsoft', fn: 'searchLineItemsMantsoft', err },
-        'Error buscando line items mantsoft_pendiente'
+        'Error buscando line items mansoft_pendiente'
       );
       return allItems;
     }
@@ -85,7 +85,7 @@ async function searchLineItemsMantsoft() {
 
     // Filtro in-memory — HAS_PROPERTY / EQ en booleans puede ser poco fiable
     for (const li of results) {
-      if (parseBool(li?.properties?.mantsoft_pendiente) &&
+      if (parseBool(li?.properties?.mansoft_pendiente) &&
           parseBool(li?.properties?.facturacion_automatica)) {
         allItems.push(li);
       }
@@ -192,7 +192,7 @@ async function writeMensaje(dealId, html) {
 
 async function resetMantoftPendiente(lineItemId) {
   await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-    properties: { mantsoft_pendiente: 'false' },
+    properties: { mansoft_pendiente: 'false' },
   });
 }
 
@@ -212,7 +212,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
   logger.info(
     { module: 'cronMensajeMantsoft', total: lineItems.length },
-    'Line items mantsoft_pendiente encontrados'
+    'Line items mansoft_pendiente encontrados'
   );
 
   if (lineItems.length === 0) {
@@ -289,7 +289,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
         } catch (err) {
           logger.error(
             { module: 'cronMensajeMantsoft', dealId, lineItemId: li.id, err },
-            'Error reseteando mantsoft_pendiente'
+            'Error reseteando mansoft_pendiente'
           );
           errors++;
         }
