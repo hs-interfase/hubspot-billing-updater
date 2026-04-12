@@ -10,7 +10,7 @@
 //   3. Agrupar por deal
 //   4. Para cada deal: construir HTML con buildMensajeMantsoft(lineItems, dealName)
 //   5. Escribir mensaje_de_facturacion en el deal
-//   6. Resetear mansoft_pendiente = false en cada line item procesado
+//   6. Resetear mantsoft_pendiente = false en cada line item procesado
 //
 // Ejecución manual:
 //   node src/jobs/cronMensajeMantsoft.js
@@ -108,6 +108,7 @@ async function searchLineItemsMantsoft() {
  * usando la batch associations API (una sola llamada).
  * Retorna Map<lineItemId, dealId>
  */
+
 async function resolveDealsForLineItems(lineItems) {
   const result = new Map();
   if (lineItems.length === 0) return result;
@@ -116,7 +117,7 @@ async function resolveDealsForLineItems(lineItems) {
 
   let resp;
   try {
-    resp = await hubspotClient.crm.associations.batchApi.read(
+    resp = await hubspotClient.crm.associations.v4.batchApi.read(
       'line_items',
       'deals',
       { inputs }
@@ -124,14 +125,14 @@ async function resolveDealsForLineItems(lineItems) {
   } catch (err) {
     logger.error(
       { module: 'cronMensajeMantsoft', fn: 'resolveDealsForLineItems', err },
-      'Error en batch associations line_items → deals'
+      'Error en batch associations v4 line_items → deals'
     );
     return result;
   }
 
   for (const item of resp?.results || []) {
     const lineItemId = String(item?.from?.id || '');
-    const dealId = String(item?.to?.[0]?.id || '');
+    const dealId = String(item?.to?.[0]?.toObjectId || '');
     if (lineItemId && dealId) {
       result.set(lineItemId, dealId);
     }
