@@ -30,6 +30,8 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../invoiceService.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+import { invoiceExistsForKey } from '../../utils/invoiceUtils.js';
+import { buildInvoiceKey } from '../../utils/invoiceKey.js';
 import { recalcFromTickets } from '../lineItems/recalcFromTickets.js';
 import {
   FORECAST_AUTO_STAGES,
@@ -282,10 +284,22 @@ export async function checkMissedBillingsForLineItem({
       }
 
       // ── 3b. Obtener ticket completo y emitir factura ─────────────────────
-      const fullTicket = await withHubSpotRetry(
+     const fullTicket = await withHubSpotRetry(
         () => hubspotClient.crm.tickets.basicApi.getById(ticketId, REQUIRED_TICKET_PROPS),
         { label: `getById:${ticketId}` }
       );
+
+      // Guard: verificar por invoice key antes de emitir (race condition vs phase3)
+      const invoiceKeyMissed = buildInvoiceKey(dealId, lineItemKey, ymd);
+      const alreadyExistsMissed = await invoiceExistsForKey(invoiceKeyMissed);
+      if (alreadyExistsMissed) {
+        logger.info(
+          { module: 'missedBillingGuard', dealId, lineItemId, ymd, ticketId, invoiceKey: invoiceKeyMissed },
+          'Invoice ya existe para esta key (guard missedBilling), saltando'
+        );
+        continue;
+      }
+
       await createInvoiceFromTicket(fullTicket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
       // ── 3c. Registrar el evento de reintento exitoso en of_billing_error ─

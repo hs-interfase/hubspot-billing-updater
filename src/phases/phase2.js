@@ -36,8 +36,10 @@ import {
  * - Si ya fue promovido (ya no está en forecast stage), no se toca.
  */
 
-// BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW (primera entrada al flujo real manual)
-const BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.NEW;
+// Stage destino de Phase 2: "Próximos a Facturar".
+// Phase 2 promueve aquí el ticket forecast manual cuando faltan ≤MANUAL_TICKET_LOOKAHEAD_DAYS días.
+// El admin puede editar el ticket en este stage antes de confirmarlo como "Listo para Facturar".
+const PROXIMOS_A_FACTURAR_STAGE = TICKET_STAGES.NEW;
 
 function reportIfActionable({ objectType, objectId, message, err }) {
   const status = err?.response?.status ?? err?.statusCode ?? null;
@@ -129,7 +131,7 @@ async function promoteManualForecastTicketToReady({
 
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
-  if (currentStage === BILLING_TICKET_STAGE_READY_ENTRY) {
+  if (currentStage === PROXIMOS_A_FACTURAR_STAGE) {
     return { moved: false, reason: 'already_ready_entry', ticketId: t.id };
   }
 
@@ -150,7 +152,7 @@ async function promoteManualForecastTicketToReady({
 
   if (currentStage !== expectedForecastStage) {
     try {
-      await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+      await moveTicketToStage(t.id, PROXIMOS_A_FACTURAR_STAGE);
       moved = true;
       reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
     } catch (err) {
@@ -159,7 +161,7 @@ async function promoteManualForecastTicketToReady({
     }
   } else {
     try {
-      await moveTicketToStage(t.id, BILLING_TICKET_STAGE_READY_ENTRY);
+      await moveTicketToStage(t.id, PROXIMOS_A_FACTURAR_STAGE);
       moved = true;
       reason = 'moved';
     } catch (err) {

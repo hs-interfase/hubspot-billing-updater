@@ -141,8 +141,10 @@ export async function findMirrorLineItem(pyLineItemId) {
 /**
  * Dado el ID de un line item PY automático que acaba de facturar,
  * encuentra su ticket forecast automático en el mirror UY y lo promueve
- * al pipeline manual en stage READY, cambiando además facturacion_automatica=false
- * en el LI UY para que quede operando como manual de ahí en adelante.
+ * al pipeline manual en stage "Próximos a Facturar" (TICKET_STAGES.NEW),
+ * cambiando además facturacion_automatica=false en el LI UY para que quede
+ * operando como manual de ahí en adelante.
+ * El admin luego lo mueve a "Listo para Facturar" (TICKET_STAGES.READY) para emitir.
  *
  * Diseñado para llamarse fire-and-forget desde phase3 y urgentBillingService.
  * Nunca lanza — todos los errores son capturados y logueados.
@@ -237,17 +239,18 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   }
 
   const ticketId = String(forecastTicket.id);
-  log.info({ ticketId, mirrorLik }, 'Ticket forecast UY encontrado, promoviendo a manual READY');
+  log.info({ ticketId, mirrorLik }, 'Ticket forecast UY encontrado, promoviendo a "Próximos a Facturar"');
 
-  // 4) Mover ticket al pipeline manual en stage READY
+  // 4) Mover ticket al pipeline manual en stage "Próximos a Facturar" (TICKET_STAGES.NEW).
+  //    NO va a TICKET_STAGES.READY ("Listo para Facturar"): el admin debe revisarlo primero.
   try {
     await hubspotClient.crm.tickets.basicApi.update(ticketId, {
       properties: {
         hs_pipeline: TICKET_PIPELINE,
-        hs_pipeline_stage: TICKET_STAGES.READY,
+        hs_pipeline_stage: TICKET_STAGES.NEW,
       },
     });
-    log.info({ ticketId }, 'Ticket UY movido a pipeline manual READY');
+    log.info({ ticketId }, 'Ticket UY movido a "Próximos a Facturar" (pipeline manual)');
   } catch (err) {
     log.error({ err, ticketId }, 'Error moviendo ticket UY a manual READY');
     return;

@@ -409,8 +409,31 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   }, '[invoice] Props validadas — listas para crear invoice');
 
   try {
-    // 7) Crear factura
-    const createResp = await createInvoiceDirect(validatedProps);
+ // 7) Re-read fresco del ticket para detectar si otra ejecución concurrente ya creó la factura
+  try {
+    const freshTicket = await hubspotClient.crm.tickets.basicApi.getById(
+      String(ticketId),
+      ['of_invoice_id', 'of_invoice_key', 'of_invoice_status']
+    );
+    const freshInvoiceId = (freshTicket?.properties?.of_invoice_id || '').trim();
+    const freshInvoiceStatus = (freshTicket?.properties?.of_invoice_status || '').trim();
+    if (freshInvoiceId && freshInvoiceStatus !== 'Cancelada') {
+      logger.info(
+        { module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, existingInvoiceId: freshInvoiceId },
+        '[invoice] Re-read fresco: ticket ya tiene factura, abortando (concurrencia)'
+      );
+      return { invoiceId: freshInvoiceId, created: false };
+    }
+  } catch (err) {
+    // fail open: si el re-read falla, continuamos (el guard de of_invoice_key ya cubrió lo que pudo)
+    logger.warn(
+      { module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, err },
+      '[invoice] Re-read fresco falló, continuando con creación'
+    );
+  }
+
+  // 7) Crear factura
+  const createResp = await createInvoiceDirect(validatedProps);
     const invoiceId = createResp.id;
 
     logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceId, invoiceKey }, '[invoice] ✅ Factura creada');
