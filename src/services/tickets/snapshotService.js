@@ -104,7 +104,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
   descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
-    of_margen: parseNumber(lp.porcentaje_margen, 0),
+    of_margen: parseNumber(lp.hs_margin, 0),
     of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente

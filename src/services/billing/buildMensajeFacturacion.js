@@ -91,7 +91,7 @@ function buildRow(label, value) {
 /**
  * Construye el encabezado del mensaje usando datos del primer ticket.
  */
-function buildHeader(firstTicket, dealName) {
+function buildHeader(firstTicket, dealName, dealMeta = {}) {
   const tp = firstTicket?.properties || {};
   const hoy = todayYMD();
 
@@ -101,14 +101,10 @@ function buildHeader(firstTicket, dealName) {
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
     buildRow('Negocio', dealName || '-'),
-    buildRow('Cliente principal', val(tp.nombre_empresa)),
-    buildRow('Empresa que factura', val(tp.empresa_que_factura)),
-    buildRow('Persona que factura', val(tp.persona_que_factura)),
-
-    `<div style="${STYLES.sectionTitle}">🔹 Datos de facturación</div>`,
-    buildRow('Moneda', val(tp.of_moneda)),
+    buildRow('Cliente', val(tp.nombre_empresa)),
+    buildRow('Empresa que factura', val(dealMeta.empresa_que_factura)),
+    buildRow('Persona que factura', val(dealMeta.persona_que_factura)),
     buildRow('Fecha de factura', hoy),
-    buildRow('IRAE', val(tp.of_exonera_irae) || 'No'),
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
@@ -130,16 +126,11 @@ function buildLineItemDiv(ticket) {
     buildRow('Descripción', val(tp.of_descripcion_producto)),
     buildRow('Rubro', val(tp.of_rubro)),
     buildRow('Unidad de negocio', val(tp.unidad_de_negocio)),
-    buildRow('Monto unitario', fmtNum(tp.monto_unitario_real)),
+    buildRow('Moneda', val(tp.of_moneda)),
     buildRow('Cantidad', fmtNum(tp.cantidad_real)),
     buildRow('Subtotal', fmtNum(tp.subtotal_real)),
-    buildRow('IVA', tp.of_iva === 'true' ? 'Sí' : 'No'),
-    buildRow('Descuento (%)', fmtNum(tp.descuento_en_porcentaje)),
-    buildRow('Descuento (monto unitario)', fmtNum(tp.descuento_por_unidad_real)),
     buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
     buildRow('Frecuencia', frecuencia),
-    buildRow('Cantidad de pagos', val(tp.of_cantidad_de_pagos)),
-    buildRow('Fecha de vencimiento', val(tp.fecha_resolucion_esperada)?.slice(0, 10)),
     buildRow('Observaciones', val(tp.observaciones_ventas)),
     `</div>`,
   ];
@@ -168,10 +159,11 @@ function buildFooter(ticketIds) {
  * @param {string}   dealName - Nombre del deal (para el encabezado)
  * @returns {string}          - HTML completo
  */
-export function buildMensajeFacturacion(tickets, dealName) {
+
+export function buildMensajeFacturacion(tickets, dealName, dealMeta = {}) {
   if (!tickets || tickets.length === 0) return '';
 
-  const header = buildHeader(tickets[0], dealName);
+  const header = buildHeader(tickets[0], dealName, dealMeta);
   const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
   const ticketIds = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
   const footer = buildFooter(ticketIds);

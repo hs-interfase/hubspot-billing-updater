@@ -513,6 +513,7 @@ export async function buildTicketFullProps({
     subject,
     fecha_resolucion_esperada: String(expectedYMD),
     observaciones_ventas: safeString(lp.mensaje_para_responsable),
+    hs_product_id: safeString(lp.hs_product_id) || undefined,
     ...snapshots,
   };
 

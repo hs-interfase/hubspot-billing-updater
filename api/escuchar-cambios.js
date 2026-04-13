@@ -59,6 +59,15 @@ async function processRecalculation(lineItemId, propertyName) {
 
   logger.info({ module: MODULE, fn: 'processRecalculation', dealId, dealName }, 'Deal resuelto');
 
+  // Delay defensivo: da tiempo a que corridas concurrentes (webhooks simultáneos
+  // por facturacion_activa + hs_billing_start_delay_type) terminen de escribir
+  // of_invoice_id en el ticket antes de que esta corrida pase los guards.
+  const RECALC_DELAY_MS = Number(process.env.RECALC_DELAY_MS ?? 5000);
+  if (RECALC_DELAY_MS > 0) {
+    logger.info({ module: MODULE, fn: 'processRecalculation', dealId, delayMs: RECALC_DELAY_MS }, 'Delay defensivo pre-runPhases');
+    await new Promise(r => setTimeout(r, RECALC_DELAY_MS));
+  }
+
   const dealWithLineItems = await getDealWithLineItems(dealId);
   const billingResult = await runPhasesForDeal(dealWithLineItems);
 

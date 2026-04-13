@@ -257,7 +257,7 @@ export async function getDealWithLineItems(dealId) {
     "reventa",
     "billing_error",
 
-    // --- referencias ---
+    // --- referencias --
     "invoice_id",
     "invoice_key",
     "id_deal_origen",
