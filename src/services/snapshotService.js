@@ -113,14 +113,14 @@ export function extractLineItemSnapshots(lineItem, deal) {
 
   // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
   const baseSnapshots = {
+    of_cantidad_de_pagos: parseNumber(lp.hs_recurring_billing_number_of_payments, null),
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
     of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
     of_subrubro: safeString(lp.subrubro),
-    observaciones_ventas: safeString(lp.mensaje_para_responsable),
+    observaciones: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
-    //FALTA UNIDAD DE NEGOCIO QUE ES PROPIEDAD DL
-    of_pais_operativo: safeString(lp.pais_operativo), //esto DEBE SACARSE DEL DEAL
+    of_pais_operativo: safeString(deal?.properties?.pais_operativo || lp.pais_operativo),
     monto_unitario_real: precioUnitario,
     cantidad_real: cantidad,
     descuento_en_porcentaje: descuentoPorcentaje,

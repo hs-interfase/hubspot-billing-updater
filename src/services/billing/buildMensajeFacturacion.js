@@ -2,15 +2,38 @@
 //
 // Construye el HTML rich-text para la propiedad `mensaje_de_facturacion` del Deal.
 //
-// v2 — Batch: recibe un array de tickets y construye el mensaje completo
-// de una sola pasada. Elimina toda la lógica de acumulación incremental,
-// race conditions y optimistic locking.
-//
-// Llamado exclusivamente por cronMensajeFacturacion.js después de agrupar
-// todos los tickets READY de un deal.
+// v3 — Empresa emisora por product_id, nuevo header con cliente final + cliente que factura,
+//       orden de campos según requerimiento de Victoria.
 
 import { TICKET_PIPELINE } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
+
+// ────────────────────────────────────────────────────────────
+// Mapeo product_id → empresa emisora
+// ────────────────────────────────────────────────────────────
+
+const EMPRESA_EMISORA_MAP = {
+  '33688819739': 'ISA',       // iGdoc
+  '33695807329': 'ISA',       // Portal
+  '33695559578': 'ISA',       // Flota
+  '33688695870': 'ISA',       // iJServ
+  '33688695865': 'Interfase', // PayRoll
+  '33688819740': 'Interfase', // iSCert
+  '33695559590': 'ISA PY',    // i2
+  '33688695889': 'ISA PY',    // MiRecibo
+  '33695559589': 'ISA PY',    // MiFactura
+  '33688943634': 'ISA PY',    // Proyectos
+};
+
+/**
+ * Determina la empresa emisora según el product_id del ticket.
+ * Usa `producto_id` (snapshotteado desde hs_product_id del line item).
+ */
+function resolverEmpresaEmisora(ticket) {
+  const tp = ticket?.properties || {};
+  const productId = String(tp.producto_id || '').trim();
+  return EMPRESA_EMISORA_MAP[productId] || '-';
+}
 
 // ────────────────────────────────────────────────────────────
 // Helpers
@@ -89,22 +112,48 @@ function buildRow(label, value) {
 }
 
 /**
- * Construye el encabezado del mensaje usando datos del primer ticket.
+ * Construye el encabezado del mensaje.
+ *
+ * - Empresa emisora: resuelta por product_id del primer ticket
+ *   (si todos los tickets son del mismo producto; si hay mix, se toma el primero)
+ * - Cliente final: nombre_empresa + empresa_id del ticket (beneficiario)
+ * - Cliente que factura: company typeId=9 del deal (quien paga)
+ * - Moneda: del deal (todos los tickets de un deal tienen la misma moneda)
  */
 function buildHeader(firstTicket, dealName, dealMeta = {}) {
   const tp = firstTicket?.properties || {};
   const hoy = todayYMD();
+
+  const empresaEmisora = resolverEmpresaEmisora(firstTicket);
+
+  // Cliente final (beneficiario): viene snapshotteado en el ticket
+  const clienteFinalNombre = val(tp.nombre_empresa);
+  const clienteFinalId     = val(tp.empresa_id);
+  const clienteFinalLabel  = clienteFinalNombre
+    ? `${clienteFinalNombre}${clienteFinalId ? ` (ID: ${clienteFinalId})` : ''}`
+    : null;
+
+  // Cliente que factura (quien paga): viene del dealMeta resuelto por typeId=9
+  const clienteFacturaNombre = val(dealMeta.empresa_que_factura);
+  const clienteFacturaId     = val(dealMeta.empresa_que_factura_id);
+  const clienteFacturaLabel  = clienteFacturaNombre
+    ? `${clienteFacturaNombre}${clienteFacturaId ? ` (ID: ${clienteFacturaId})` : ''}`
+    : null;
+
+  // Moneda del deal (tomada del primer ticket, todos deben ser iguales)
+  const moneda = val(tp.of_moneda);
 
   const rows = [
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRow('Negocio', dealName || '-'),
-    buildRow('Cliente', val(tp.nombre_empresa)),
-    buildRow('Empresa que factura', val(dealMeta.empresa_que_factura)),
-    buildRow('Persona que factura', val(dealMeta.persona_que_factura)),
-    buildRow('Fecha de factura', hoy),
+    buildRow('Empresa emisora',    empresaEmisora),
+    buildRow('Nombre del negocio', dealName || '-'),
+    buildRow('Cliente final',      clienteFinalLabel),
+    buildRow('Cliente que factura', clienteFacturaLabel),
+    buildRow('Fecha de factura',   hoy),
+    buildRow('Moneda',             moneda),
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
@@ -115,6 +164,9 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
 
 /**
  * Construye el div de un line item individual.
+ * Orden según requerimiento de Victoria:
+ * nombre → descripción → rubro → unidad de negocio →
+ * cantidad → subtotal → total → frecuencia → observaciones
  */
 function buildLineItemDiv(ticket) {
   const tp = ticket?.properties || {};
@@ -123,15 +175,14 @@ function buildLineItemDiv(ticket) {
   const rows = [
     `<div style="${STYLES.lineItemDiv}">`,
     `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}</div>`,
-    buildRow('Descripción', val(tp.of_descripcion_producto)),
-    buildRow('Rubro', val(tp.of_rubro)),
-    buildRow('Unidad de negocio', val(tp.unidad_de_negocio)),
-    buildRow('Moneda', val(tp.of_moneda)),
-    buildRow('Cantidad', fmtNum(tp.cantidad_real)),
-    buildRow('Subtotal', fmtNum(tp.subtotal_real)),
-    buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
-    buildRow('Frecuencia', frecuencia),
-    buildRow('Observaciones', val(tp.observaciones_ventas)),
+    buildRow('Descripción',          val(tp.of_descripcion_producto)),
+    buildRow('Rubro',                val(tp.of_rubro)),
+    buildRow('Unidad de negocio',    val(tp.unidad_de_negocio)),
+    buildRow('Cantidad',             fmtNum(tp.cantidad_real)),
+    buildRow('Subtotal',             fmtNum(tp.subtotal_real)),
+    buildRow('Total a facturar',     fmtNum(tp.total_real_a_facturar)),
+    buildRow('Frecuencia',           frecuencia),
+    buildRow('Observaciones',        val(tp.observaciones_ventas)),
     `</div>`,
   ];
 
@@ -142,7 +193,8 @@ function buildFooter(ticketIds) {
   const hoy = todayYMD();
   return [
     `<div style="${STYLES.footer}">`,
-`Generado automáticamente — ${hoy} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,    `</div>`,
+    `Generado automáticamente — ${hoy} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,
+    `</div>`,
     `</div>`,
   ].join('\n');
 }
@@ -157,22 +209,21 @@ function buildFooter(ticketIds) {
  *
  * @param {Object[]} tickets  - Array de tickets (con properties)
  * @param {string}   dealName - Nombre del deal (para el encabezado)
+ * @param {Object}   dealMeta - { empresa_que_factura, empresa_que_factura_id, persona_que_factura }
  * @returns {string}          - HTML completo
  */
-
 export function buildMensajeFacturacion(tickets, dealName, dealMeta = {}) {
   if (!tickets || tickets.length === 0) return '';
 
-  const header = buildHeader(tickets[0], dealName, dealMeta);
+  const header       = buildHeader(tickets[0], dealName, dealMeta);
   const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
-  const ticketIds = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
-  const footer = buildFooter(ticketIds);
+  const ticketIds    = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
+  const footer       = buildFooter(ticketIds);
 
   return header + '\n' + lineItemDivs + '\n' + footer;
 }
 
 // ── Legacy export (mantener compatibilidad temporal) ──
-// Si alguien todavía llama actualizarMensajeFacturacion, loguea warning
 export async function actualizarMensajeFacturacion(ticket, dealId) {
   logger.warn(
     {
