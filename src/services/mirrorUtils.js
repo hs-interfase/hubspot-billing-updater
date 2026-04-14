@@ -6,6 +6,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { getAllAssociatedIds } from '../utils/hubspotAssociations.js';
 import { withRetry } from '../utils/withRetry.js';
 import {
   TICKET_PIPELINE,
@@ -83,21 +84,14 @@ export async function findMirrorLineItem(pyLineItemId) {
     return null;
   }
 
-  // 3) Obtener IDs de line items del deal UY espejo
-  let mirrorLiAssocResp;
+  // 3) Obtener IDs de line items del deal UY espejo (con paginación completa)
+  let mirrorLiIds;
   try {
-    mirrorLiAssocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'deals',
-      mirrorDealId,
-      'line_items',
-      100
-    );
+    mirrorLiIds = await getAllAssociatedIds(hubspotClient, 'deals', mirrorDealId, 'line_items');
   } catch (err) {
     log.warn({ err, mirrorDealId }, 'No se pudo obtener line items del deal UY');
     return null;
   }
-
-  const mirrorLiIds = (mirrorLiAssocResp.results || []).map(r => String(r.toObjectId));
   if (!mirrorLiIds.length) {
     log.debug({ mirrorDealId }, 'Deal UY sin line items asociados');
     return null;

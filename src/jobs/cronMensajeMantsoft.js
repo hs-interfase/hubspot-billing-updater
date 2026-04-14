@@ -42,7 +42,7 @@ const LI_PROPS = [
   'hs_recurring_billing_number_of_payments', 'pagos_restantes',
   'renovacion_automatica', 'hs_recurring_billing_terms',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
-  'observaciones_ventas', 'nota',
+  'observaciones', 'nota',
   'mansoft_pendiente', 'facturacion_automatica',
 ];
 

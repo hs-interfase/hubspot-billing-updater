@@ -10,7 +10,7 @@ import { buildTicketFullProps } from '../services/tickets/ticketService.js';
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import {
   AUTOMATED_TICKET_PIPELINE,
@@ -50,13 +50,6 @@ const STAGE = {
 };
 
 // Unión de stages forecast manuales + automáticos
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function nowMontevideoYmd() {
   return new Intl.DateTimeFormat('en-CA', {

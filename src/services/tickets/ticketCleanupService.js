@@ -4,25 +4,9 @@ import { hubspotClient } from "../../hubspotClient.js";
 import { syncBillingState } from '../billing/syncBillingState.js';
 import { isDryRun } from "../../config/constants.js";
 import logger from "../../../lib/logger.js";
-import { reportHubSpotError } from "../../utils/hubspotErrorCollector.js";
+import { reportIfActionable } from '../../utils/errorReporting.js';
 
 const CANCELLED_STAGE_ID = process.env.BILLING_TICKET_STAGE_CANCELLED;
-
-/**
- * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
- * 429 y 5xx son transitorios → solo logger.error, sin reporte.
- */
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) {
-    reportHubSpotError({ objectType, objectId, message });
-    return;
-  }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) {
-    reportHubSpotError({ objectType, objectId, message });
-  }
-}
 
 // Props que leemos (INCLUIR source_type para detectar CLONE_OBJECTS)
 const READ_PROPS = [

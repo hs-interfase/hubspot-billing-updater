@@ -133,6 +133,7 @@ function buildLineItemDiv(li) {
     `<div style="${STYLES.lineItemTitle}">${val(lp.name) || 'Producto'}</div>`,
     buildRow('Descripción', val(lp.description)),
     buildRow('Rubro', val(lp.of_rubro) || val(lp.rubro)),
+    buildRow('Nota', val(lp.nota)),
     buildRow('Unidad de negocio', val(lp.unidad_de_negocio)),
     buildRow('Precio unitario', fmtNum(lp.price)),
     buildRow('Cantidad', fmtNum(lp.quantity)),
@@ -145,7 +146,7 @@ function buildLineItemDiv(li) {
     buildRow('Vencimiento contrato', esRenovacionAutomatica ? null : fechaVenc),
     buildRow('Total de pagos', esRenovacionAutomatica ? null : val(lp.hs_recurring_billing_number_of_payments)),
     buildRow('Pagos restantes', esRenovacionAutomatica ? null : val(lp.pagos_restantes)),
-    buildRow('Observaciones', val(lp.observaciones_ventas) || val(lp.nota)),
+    buildRow('Observaciones', val(lp.observaciones)),
     `</div>`,
   ];
 

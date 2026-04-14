@@ -9,18 +9,11 @@ import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { findMirrorLineItem, promoteMirrorTicketToManualReady } from './mirrorUtils.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)

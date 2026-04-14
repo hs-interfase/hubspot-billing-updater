@@ -12,7 +12,7 @@ import { isAutoRenew } from './billing/mode.js';
 import { ensure24FutureTickets } from './tickets/ticketService.js';
 import { buildValidatedUpdateProps } from '../utils/propertyHelpers.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
@@ -39,22 +39,6 @@ export const REQUIRED_TICKET_PROPS = [
   'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
   'facturar_ahora', 'repetitivo', 'nombre_empresa', 'hs_pipeline_stage',
 ];
-
-/**
- * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
- * 429 y 5xx son transitorios → solo logger.error, sin reporte.
- */
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) {
-    reportHubSpotError({ objectType, objectId, message });
-    return;
-  }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) {
-    reportHubSpotError({ objectType, objectId, message });
-  }
-}
 
 // Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)
 function extractBillDateFromTicketKey(ticketKey) {

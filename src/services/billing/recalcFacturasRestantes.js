@@ -2,16 +2,9 @@
 
 import { isAutoRenew } from './mode.js';
 import logger from '../../../lib/logger.js';
-import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../../utils/errorReporting.js';
 
 const INVOICE_LIK_PROP = 'line_item_key';
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealId }) {
   const id = String(lineItemId);

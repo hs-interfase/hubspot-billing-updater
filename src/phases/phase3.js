@@ -15,7 +15,7 @@ import { checkMissedBillingsForLineItem } from '../services/billing/missedBillin
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { promoteMirrorTicketToManualReady } from '../services/mirrorUtils.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
   BILLING_AUTOMATED_READY,
@@ -47,13 +47,6 @@ import {
  * - Ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
  * - Si no existe el ticket forecast, se loggea error (Phase P debería haberlo creado).
  */
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');

@@ -4,14 +4,7 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
-import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
+import { reportIfActionable } from '../../utils/errorReporting.js';
 
 /**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
