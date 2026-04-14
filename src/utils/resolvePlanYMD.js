@@ -25,10 +25,21 @@ export function resolvePlanYMD({ lineItemProps = {}, ticketProps = {}, context =
   const fromTicketYMD =
     fromTicketRaw ? (toYMDInBillingTZ(fromTicketRaw) || normalizeToYMD(fromTicketRaw)) : null;
 
+// Después:
   const fromNextYMD = normalizeToYMD(lineItemProps?.billing_next_date);
   const fromStartYMD = normalizeToYMD(lineItemProps?.hs_recurring_billing_start_date);
 
-  const planYMD = fromTicketYMD || fromNextYMD || fromStartYMD || null;
+  const fromLastTicketedYMD =
+    context?.flow === 'PHASE3'
+      ? normalizeToYMD(lineItemProps?.last_ticketed_date)
+      : null;
+
+  const resolvedNext =
+    fromLastTicketedYMD && fromNextYMD && fromNextYMD > fromLastTicketedYMD
+      ? fromLastTicketedYMD
+      : fromNextYMD;
+
+  const planYMD = fromTicketYMD || resolvedNext || fromStartYMD || null;
 
   if (process.env.DBG_PHASE1 === 'true') {
     const log = logger.child({ module: 'resolvePlanYMD', ...(context || {}) });

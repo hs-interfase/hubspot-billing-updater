@@ -6,7 +6,7 @@ import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatD
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
-import { findMirrorLineItem } from './mirrorUtils.js';
+import { findMirrorLineItem, promoteMirrorTicketToManualReady } from './mirrorUtils.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
@@ -786,13 +786,22 @@ async function _propagateToMirror(pyLineItemId) {
 
   log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
 
-  // 4) Facturar el mirror — el guard interno sincroniza de nuevo antes de emitir
+// DESPUÉS
+// 4) Si el LI PY es automático → promover ticket UY a manual READY
+//    Si el LI PY es manual → facturar el mirror directamente (comportamiento previo)
+const pyLiProps = await hubspotClient.crm.lineItems.basicApi.getById(
+  String(pyLineItemId), ['facturacion_automatica']
+).then(r => r?.properties || {}).catch(() => ({}));
+
+if (parseBool(pyLiProps.facturacion_automatica)) {
+  await promoteMirrorTicketToManualReady(pyLineItemId);
+  log.info({ mirrorLineItemId }, 'Mirror UY promovido a manual READY (PY era automático)');
+} else {
   try {
     await _executeUrgentBillingForLineItem(mirrorLineItemId);
-    log.info({ mirrorLineItemId }, 'Mirror UY facturado correctamente');
+    log.info({ mirrorLineItemId }, 'Mirror UY facturado directamente (PY era manual)');
   } catch (err) {
     log.error({ err, mirrorLineItemId }, 'Error facturando mirror UY — marcando para reintento');
-
     try {
       await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
         properties: {
@@ -801,11 +810,11 @@ async function _propagateToMirror(pyLineItemId) {
           of_billing_error_at: String(getTodayMillis()),
         },
       });
-      log.info({ mirrorLineItemId }, 'Mirror UY marcado con facturar_ahora=true para reintento');
     } catch (updateErr) {
       log.error({ updateErr, mirrorLineItemId }, 'No se pudo marcar el mirror para reintento');
     }
   }
+}
 }
 
 /**

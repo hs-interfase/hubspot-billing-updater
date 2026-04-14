@@ -15,11 +15,27 @@ const hubspot = new Client({ accessToken: TOKEN });
 
 // Association type IDs (deal → company)
 const ASSOC_PRIMARY_COMPANY = 5;   // HUBSPOT_DEFINED deal→company (primary)
-const ASSOC_EMPRESA_FACTURA = 10;  // USER_DEFINED empresa_factura
+const ASSOC_EMPRESA_FACTURA = 9;   // FIX #2: era 10, correcto es 9
 const ASSOC_PARTNER = 1;           // USER_DEFINED partner_internacional
 
 // Probabilidad de corte para separar hojas
-const PROB_CORTE = 85;
+const PROB_CORTE = 0.85;
+
+// ── Stage sets para clasificación de tickets (leídos desde .env igual que constants.js) ──
+const LISTO_STAGES = new Set([
+  process.env.BILLING_TICKET_STAGE_READY,       // "Listo para Facturar" manual
+  process.env.BILLING_AUTOMATED_READY,           // "Listo para Facturar" automático
+].filter(Boolean));
+
+const INVOICED_STAGES = new Set([
+  process.env.BILLING_TICKET_STAGE_ID_BILLED,   // Emitido manual
+  process.env.BILLING_TICKET_STAGE_ID_CREATED,  // Creado manual
+  process.env.BILLING_TICKET_STAGE_ID_LATE,     // Atrasado manual
+  process.env.BILLING_TICKET_PIPELINE_ID_PAID,  // Pagado manual
+  process.env.BILLING_AUTOMATED_CREATED,        // Creado auto
+  process.env.BILLING_AUTOMATED_LATE,           // Atrasado auto
+  process.env.BILLING_AUTOMATED_PAID,           // Pagado auto
+].filter(Boolean));
 
 // ── Helpers ──
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -65,11 +81,13 @@ const DEAL_PROPS = [
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
   'discount', 'hs_discount_percentage',
+  'hs_margin',                          // FIX #3: agregado
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
   'fecha_vencimiento_contrato', 'billing_anchor_date',
   'hs_recurring_billing_number_of_payments', 'number_of_payments',
+  'hs_product_id',
   'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo',
@@ -172,19 +190,40 @@ async function fetchCompany(companyId) {
   }
 }
 
-// Fetch owner name
+// FIX #1: fetchOwnerName vía hubspot.apiRequest (raw HTTP) en lugar del SDK defaultApi
 const ownerCache = new Map();
 async function fetchOwnerName(ownerId) {
   if (!ownerId) return '';
   if (ownerCache.has(ownerId)) return ownerCache.get(ownerId);
   await rateLimit();
   try {
-    const resp = await hubspot.crm.owners.defaultApi.getById(parseInt(ownerId));
-    const name = `${resp.firstName || ''} ${resp.lastName || ''}`.trim() || resp.email || '';
+    const resp = await hubspot.apiRequest({
+      method: 'GET',
+      path: `/crm/v3/owners/${ownerId}`,
+    });
+    const data = await resp.json();
+    const name = `${data.firstName || ''} ${data.lastName || ''}`.trim() || data.email || '';
     ownerCache.set(ownerId, name);
     return name;
   } catch {
     ownerCache.set(ownerId, '');
+    return '';
+  }
+}
+
+// Fetch product name by product ID
+const productCache = new Map();
+async function fetchProductName(productId) {
+  if (!productId) return '';
+  if (productCache.has(productId)) return productCache.get(productId);
+  await rateLimit();
+  try {
+    const p = await hubspot.crm.products.basicApi.getById(String(productId), ['name']);
+    const name = p?.properties?.name || '';
+    productCache.set(productId, name);
+    return name;
+  } catch {
+    productCache.set(productId, '');
     return '';
   }
 }
@@ -297,7 +336,7 @@ function buildDealBase(deal, companies, ownerName) {
   };
 }
 
-function buildLineItemRow(li, dealBase, deal) {
+function buildLineItemRow(li, dealBase, deal, productName) {
   const lp = li.properties || {};
   const freq = safe(lp.recurringbillingfrequency || lp.hs_recurring_billing_frequency);
   const fechaInicio = ymd(lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion);
@@ -306,13 +345,17 @@ function buildLineItemRow(li, dealBase, deal) {
   const esAuto = safe(lp.facturacion_automatica).toLowerCase() === 'true';
   const incluyeUY = safe(lp.uy).toLowerCase() === 'true';
 
-  // Para automáticos, fecha fact estimada = próxima según frecuencia (usamos fecha inicio como ref)
-  const fechaFact = fechaInicio; // en automáticos se pone la fecha de inicio como referencia
+  const fechaFact = fechaInicio;
   const { mes, anio } = mesAnio(fechaFact);
+
+  // FIX #3: Margen % calculado desde hs_margin / amount
+  const margenPct = safeNum(lp.amount) > 0
+    ? Math.round((safeNum(lp.hs_margin) / safeNum(lp.amount)) * 10000) / 100
+    : null;
 
   return {
     ...dealBase,
-    'Área de Negocio': safe(lp.name),
+    'Área de Negocio': productName || safe(lp.name),
     'Descripción': safe(lp.description),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': fechaFact,
@@ -322,7 +365,7 @@ function buildLineItemRow(li, dealBase, deal) {
     'Costo': safeNum(lp.hs_cost_of_goods_sold) != null
       ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
       : null,
-    'Margen %': safeNum(lp.porcentaje_margen),
+    'Margen %': margenPct,
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
@@ -337,7 +380,7 @@ function buildLineItemRow(li, dealBase, deal) {
   };
 }
 
-function buildTicketRow(ticket, dealBase, lineItemMap) {
+function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap) {
   const tp = ticket.properties || {};
   const lik = safe(tp.of_line_item_key);
   const li = lineItemMap.get(lik);
@@ -355,7 +398,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap) {
 
   return {
     ...dealBase,
-    'Área de Negocio': safe(tp.of_producto_nombres || lp?.name || ''),
+    'Área de Negocio': productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
     'Descripción': safe(tp.of_descripcion_producto || lp?.description || ''),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': fechaFact,
@@ -383,11 +426,6 @@ function isValidTicket(ticket) {
   const tp = ticket.properties || {};
   const estado = safe(tp.of_estado).toUpperCase();
   if (['DUPLICADO_UI', 'DEPRECATED'].includes(estado)) return false;
-
-  const stage = safe(tp.hs_pipeline_stage);
-  // Excluir cancelled stages — identificaremos por nombre/patrón
-  // Los stages cancelled contienen "cancelled" o "cancelado" pero no tenemos los IDs
-  // Incluimos todos y confiamos en of_estado
   return true;
 }
 
@@ -409,8 +447,10 @@ async function main() {
   await resolveStageLabel('', '');
 
   // 3) Process each deal
-  const pipelineRows = []; // prob < 85%
-  const facturacionRows = []; // prob >= 85%
+  const pipelineRows  = []; // prob < 85%
+  const forecastRows  = []; // prob >= 85%, stages forecast + próximos a facturar
+  const listoRows     = []; // prob >= 85%, stages Listo para Facturar
+  const facturadoRows = []; // prob >= 85%, stages post-emisión o con numero_de_factura
 
   for (let i = 0; i < allDeals.length; i++) {
     const deal = allDeals[i];
@@ -446,48 +486,48 @@ async function main() {
       if (lik) liKeyMap.set(lik, li);
     }
 
+    // Resolve product names para todos los line items del deal
+    const productNameMap = new Map();
+    await Promise.all(lineItems.map(async (li) => {
+      const productId = safe(li.properties?.hs_product_id);
+      if (productId) {
+        const name = await fetchProductName(productId);
+        productNameMap.set(productId, name);
+      }
+    }));
+
     if (prob < PROB_CORTE) {
       // ── PIPELINE: filas desde line items ──
       for (const li of lineItems) {
-        pipelineRows.push(buildLineItemRow(li, dealBase, deal));
+        const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
+        pipelineRows.push(buildLineItemRow(li, dealBase, deal, productName));
       }
     } else {
-      // ── FACTURACIÓN: automáticos desde LI, manuales desde tickets ──
-      const autoLIs = lineItems.filter(li =>
-        safe(li.properties?.facturacion_automatica).toLowerCase() === 'true'
-      );
-      const manualLIs = lineItems.filter(li =>
-        safe(li.properties?.facturacion_automatica).toLowerCase() !== 'true'
-      );
+      // ── >= 85%: una fila por ticket (automáticos y manuales) ──
+      const tickets = await fetchTicketsForDeal(dealId);
+      const validTickets = tickets.filter(isValidTicket);
 
-      // Automáticos → una fila por line item
-      for (const li of autoLIs) {
-        facturacionRows.push(buildLineItemRow(li, dealBase, deal));
-      }
+      for (const ticket of validTickets) {
+        const tp = ticket.properties || {};
+        const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap);
+        const stage = safe(tp.hs_pipeline_stage);
+        const tieneFactura = safe(tp.numero_de_factura) !== '';
 
-      // Manuales → una fila por ticket
-      if (manualLIs.length > 0) {
-        const tickets = await fetchTicketsForDeal(dealId);
-        const validTickets = tickets.filter(isValidTicket);
-
-        // Solo tickets que pertenecen a LIs manuales
-        const manualLiKeys = new Set(
-          manualLIs.map(li => safe(li.properties?.line_item_key || li.properties?.of_line_item_key))
-        );
-
-        for (const ticket of validTickets) {
-          const lik = safe(ticket.properties?.of_line_item_key);
-          // Si el ticket corresponde a un LI manual, o no encontramos su LI (incluir igual)
-          if (manualLiKeys.has(lik) || !lik) {
-            facturacionRows.push(buildTicketRow(ticket, dealBase, liKeyMap));
-          }
+        if (tieneFactura || INVOICED_STAGES.has(stage)) {
+          facturadoRows.push(row);
+        } else if (LISTO_STAGES.has(stage)) {
+          listoRows.push(row);
+        } else {
+          forecastRows.push(row);
         }
       }
     }
   }
 
-  console.log(`\n  Pipeline rows: ${pipelineRows.length}`);
-  console.log(`  Facturación rows: ${facturacionRows.length}`);
+  console.log(`\n  Pipeline rows : ${pipelineRows.length}`);
+  console.log(`  Forecast rows : ${forecastRows.length}`);
+  console.log(`  Listo rows    : ${listoRows.length}`);
+  console.log(`  Facturado rows: ${facturadoRows.length}`);
 
   // 4) Build Excel
   console.log('\n4. Generando Excel...');
@@ -555,14 +595,18 @@ async function main() {
   }
 
   addSheet('Pipeline (< 85%)', pipelineRows);
-  addSheet('Facturación (>= 85%)', facturacionRows);
+  addSheet('Forecast (pendiente)', forecastRows);
+  addSheet('Listo para Facturar', listoRows);
+  addSheet('Facturado', facturadoRows);
 
   const outPath = `reporte_consolidado_${new Date().toISOString().slice(0, 10)}.xlsx`;
   await wb.xlsx.writeFile(outPath);
 
   console.log(`\n✅ Reporte generado: ${outPath}`);
-  console.log(`   Pipeline: ${pipelineRows.length} filas`);
-  console.log(`   Facturación: ${facturacionRows.length} filas`);
+  console.log(`   Pipeline          : ${pipelineRows.length} filas`);
+  console.log(`   Forecast          : ${forecastRows.length} filas`);
+  console.log(`   Listo para Facturar: ${listoRows.length} filas`);
+  console.log(`   Facturado         : ${facturadoRows.length} filas`);
 }
 
 main().catch(err => {

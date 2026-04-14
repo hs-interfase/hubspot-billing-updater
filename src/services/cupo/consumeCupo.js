@@ -138,7 +138,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
       consumo = parseNumber(tp.cantidad_real, 0);
     }
   } else if (tipoCupo === 'Por Monto') {
-    consumo = parseNumber(tp.total_real_a_facturar, 0);
+    consumo = parseNumber(tp.subtotal_real, 0);
   } else {
     const reason = `tipo_de_cupo desconocido: "${tipoCupo}"`;
     logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, reason }, 'SKIP consumo de cupo');

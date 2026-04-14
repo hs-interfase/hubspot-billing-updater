@@ -3,6 +3,62 @@
 /**
  * Constantes globales para el proyecto de facturación.
  * (stages/pipelines + helpers de semántica)
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * MAPA DE STAGES Y SU SEMÁNTICA (leer antes de modificar)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PIPELINE MANUAL (TICKET_PIPELINE / BILLING_TICKET_PIPELINE_ID)
+ * ──────────────────────────────────────────────────────────────
+ * FORECAST stages (BILLING_TICKET_FORECAST / _50 / _75 / _85 / _95)
+ *   → "Promesas de facturación". Uno por cada bucket de probabilidad del deal.
+ *     Se crean en Phase P. No se tocan hasta que Phase 2 los promueve.
+ *
+ * TICKET_STAGES.NEW  (env: BILLING_TICKET_STAGE_ID)
+ *   → "PRÓXIMOS A FACTURAR" (manual).
+ *     Phase 2 promueve el ticket forecast aquí cuando faltan ≤30 días para facturar.
+ *     Queda EDITABLE por el equipo de administración durante esa ventana.
+ *     ⚠️  En phase2.js se llama localmente BILLING_TICKET_STAGE_READY_ENTRY
+ *         pero apunta a TICKET_STAGES.NEW — no confundir con TICKET_STAGES.READY.
+ *
+ * TICKET_STAGES.READY  (env: BILLING_TICKET_STAGE_READY)
+ *   → "LISTO PARA FACTURAR" (manual).
+ *     El admin mueve el ticket aquí cuando está confirmado para emitir factura.
+ *     La función legacy emitInvoicesForReadyTickets() (invoices.js) busca tickets
+ *     en este stage para crear la factura ficticia en HubSpot.
+ *     Exportado también como TICKET_STAGE_LISTO_MANUAL (alias explícito).
+ *
+ * TICKET_STAGES.INVOICED  (env: BILLING_TICKET_STAGE_ID_BILLED)
+ *   → "EMITIDO" (manual). Admin confirma que Nodum emitió la factura real.
+ *
+ * TICKET_STAGES.CANCELLED  (env: BILLING_TICKET_STAGE_CANCELLED)
+ *   → "CANCELADO" (manual).
+ *
+ * PIPELINE AUTOMÁTICO (AUTOMATED_TICKET_PIPELINE / BILLING_AUTOMATED_PIPELINE_ID)
+ * ────────────────────────────────────────────────────────────────────────────────
+ * FORECAST stages (BILLING_AUTOMATED_FORECAST / _50 / _75 / _85 / _95)
+ *   → Equivalentes a los manuales pero en el pipeline automático.
+ *
+ * BILLING_AUTOMATED_READY  (env: BILLING_AUTOMATED_READY)
+ *   → "LISTO PARA FACTURAR" (automático).
+ *     Phase 3 promueve aquí cuando planYMD ≤ HOY y emite la factura ficticia
+ *     en el mismo paso. No hay etapa intermedia editable.
+ *     ⚠️  A diferencia del pipeline manual, aquí no existe el concepto de
+ *         "próximos a facturar" separado: el ticket pasa directo de forecast a
+ *         ready+factura en una sola operación.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PUNTOS DE MEZCLA CONOCIDOS
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 1. El término "READY" en el código puede referirse a dos cosas distintas:
+ *    - TICKET_STAGES.NEW: "Próximos a Facturar" — Phase 2 promueve aquí
+ *    - TICKET_STAGES.READY / TICKET_STAGE_LISTO_MANUAL: "Listo para Facturar" — admin confirma
+ *    Usar siempre los alias explícitos (PROXIMOS_A_FACTURAR_STAGE, TICKET_STAGE_LISTO_MANUAL)
+ *    en lugar de TICKET_STAGES.NEW / TICKET_STAGES.READY directamente.
+ *
+ * 2. El pipeline automático NO tiene etapa "Próximos a Facturar": Phase 3 promueve
+ *    directo a BILLING_AUTOMATED_READY y emite la factura en el mismo paso.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
@@ -17,14 +73,26 @@ export const TICKET_PIPELINE =
   process.env.BILLING_TICKET_PIPELINE_ID || '';
 
 export const TICKET_STAGES = {
+  // "Próximos a Facturar": Phase 2 promueve aquí cuando faltan ≤30 días.
+  // Editable por administración durante esa ventana.
+  // Usar el alias PROXIMOS_A_FACTURAR_STAGE para mayor claridad.
   NEW: process.env.BILLING_TICKET_STAGE_ID || '',
+
+  // "Listo para Facturar": el admin mueve el ticket aquí cuando confirma emisión.
+  // La función emitInvoicesForReadyTickets() (invoices.js, legacy) lee este stage.
+  // Usar el alias TICKET_STAGE_LISTO_MANUAL para mayor claridad.
   READY: process.env.BILLING_TICKET_STAGE_READY || '',
+
+  // "Emitido": Nodum confirmó la factura real. Cuenta en EMITTED_STAGES.
   INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '',
+
   CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '',
 };
 
-// Alias de entrada para READY manual (compatibilidad)
-export const BILLING_TICKET_STAGE_READY_ENTRY = TICKET_STAGES.READY;
+// Alias explícitos para eliminar ambigüedad en el código:
+// Usar estos en lugar de TICKET_STAGES.NEW / TICKET_STAGES.READY directamente.
+export const PROXIMOS_A_FACTURAR_STAGE = TICKET_STAGES.NEW;    // Phase 2 promueve aquí
+export const TICKET_STAGE_LISTO_MANUAL = TICKET_STAGES.READY;  // Admin confirma, emitInvoicesForReadyTickets lee aquí
 
 // Manual forecast stages por bucket de deal stage
 export const BILLING_TICKET_FORECAST =
@@ -64,7 +132,10 @@ export const BILLING_TICKET_STAGE_ID_PAID =
 export const AUTOMATED_TICKET_PIPELINE =
   process.env.BILLING_AUTOMATED_PIPELINE_ID || '';
 
-// READY automático (promoción automática)
+// "Listo para Facturar" automático.
+// Phase 3 promueve aquí y emite la factura ficticia en el mismo paso.
+// ⚠️  A diferencia del pipeline manual, NO existe una etapa intermedia
+//     de "Próximos a Facturar": el ticket pasa directo de forecast a ready+factura.
 export const BILLING_AUTOMATED_READY =
   process.env.BILLING_AUTOMATED_READY || '';
 
@@ -122,17 +193,18 @@ export const CANCELLED_STAGE_BY_PIPELINE = {
 
 /**
  * PENDING_STAGES: tickets que reservan una obligación pero aún no facturaron.
- * Incluye todos los forecast + ready de ambos pipelines.
+ * Incluye todos los stages pre-factura de ambos pipelines.
  */
 export const PENDING_STAGES = new Set([
-  // Manual forecast
+  // Manual — promesas (forecast)
   ...FORECAST_MANUAL_STAGES,
-  // Manual ready
+  // Manual — "Próximos a Facturar" (Phase 2 promueve aquí ≤30 días antes)
   TICKET_STAGES.NEW,
+  // Manual — "Listo para Facturar" (admin confirma, espera emisión)
   TICKET_STAGES.READY,
-  // Auto forecast
+  // Auto — promesas (forecast)
   ...FORECAST_AUTO_STAGES,
-  // Auto ready
+  // Auto — "Listo para Facturar" auto (Phase 3 promueve aquí y emite de inmediato)
   BILLING_AUTOMATED_READY,
 ]);
 
@@ -177,22 +249,23 @@ export const COMPLETED_STAGES = new Set([
 ]);
 
 /**
- * PROMOTED_STAGES: tickets promovidos a READY o más allá.
- * Usado por recalcFromTickets para last_ticketed_date.
- * Excluye FORECAST y CANCELLED.
+ * PROMOTED_STAGES: tickets que ya salieron del forecast (promovidos o más allá).
+ * Usado por recalcFromTickets para calcular last_ticketed_date.
+ * Excluye stages FORECAST y CANCELLED.
  */
 export const PROMOTED_STAGES = new Set([
-  // Manual ready
+  // Manual — "Próximos a Facturar" (Phase 2 promovió desde forecast)
   TICKET_STAGES.NEW,
+  // Manual — "Listo para Facturar" (admin confirmó)
   TICKET_STAGES.READY,
-  // Manual post-ready
+  // Manual — post-emisión
   BILLING_TICKET_STAGE_ID_CREATED,
   TICKET_STAGES.INVOICED,
   BILLING_TICKET_STAGE_ID_LATE,
   BILLING_TICKET_STAGE_ID_PAID,
-  // Auto ready
+  // Auto — "Listo para Facturar" auto (Phase 3 promovió y emitió)
   BILLING_AUTOMATED_READY,
-  // Auto post-ready
+  // Auto — post-emisión
   BILLING_AUTOMATED_CREATED,
   BILLING_AUTOMATED_LATE,
   BILLING_AUTOMATED_PAID,

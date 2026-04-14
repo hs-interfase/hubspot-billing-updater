@@ -235,35 +235,48 @@ function buildDesiredDates(lineItem) {
   const termRaw = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
   const term = safeInt(termRaw);
 
-  const hardMax = 24;
-  const maxCount = term && term > 0 ? Math.min(term, hardMax) : hardMax;
-
-  const todayYmd = nowMontevideoYmd();
-  const lastTicketedYmd = toYmd(p.last_ticketed_date);
-  const billingNextYmd = toYmd(p.billing_next_date);
-
   const isAutoRenew =
     cfg?.isAutoRenew === true ||
     cfg?.autorenew === true ||
     String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
-    !(safeInt(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null) > 0);
+    !(term > 0);
 
-  let effectiveTodayYmd = todayYmd;
-  if (lastTicketedYmd) {
-    const d0 = parseLocalDate(lastTicketedYmd);
-    if (d0 && Number.isFinite(d0.getTime())) {
-      d0.setDate(d0.getDate() + 1);
-      const plusOne = formatDateISO(d0);
-      if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
-    }
+  const hardMax = 24;
+
+  // CAMBIO: descontar pagos ya emitidos para plan fijo
+  let maxCount;
+  if (!isAutoRenew && term > 0) {
+    const pagosEmitidos = safeInt(p.pagos_emitidos) ?? 0;
+    maxCount = Math.min(Math.max(0, term - pagosEmitidos), hardMax);
+  } else {
+    maxCount = hardMax;
   }
 
-  let seriesStartYmd = startYmd;
+  if (maxCount === 0) return { desiredCount: 0, dates: [] };
+
+  const todayYmd = nowMontevideoYmd();
+  const lastTicketedYmd = toYmd(p.last_ticketed_date);
+  const billingNextYmd = toYmd(p.billing_next_date);
+  const anchorYmd = toYmd(p.billing_anchor_date);
+
+  // Anchor tiene prioridad; para autorenew arranca desde hoy
+  let seriesStartYmd = anchorYmd || startYmd;
 
   if (isAutoRenew) {
+    let effectiveTodayYmd = todayYmd;
+    if (lastTicketedYmd) {
+      const d0 = parseLocalDate(lastTicketedYmd);
+      if (d0 && Number.isFinite(d0.getTime())) {
+        d0.setDate(d0.getDate() + 1);
+        const plusOne = formatDateISO(d0);
+        if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
+      }
+    }
     seriesStartYmd = effectiveTodayYmd;
     if (billingNextYmd && billingNextYmd > seriesStartYmd) seriesStartYmd = billingNextYmd;
-    if (startYmd && startYmd > seriesStartYmd) seriesStartYmd = startYmd;
+    if ((anchorYmd || startYmd) && (anchorYmd || startYmd) > seriesStartYmd) {
+      seriesStartYmd = anchorYmd || startYmd;
+    }
   }
 
   const startDate = parseLocalDate(seriesStartYmd);
@@ -674,6 +687,25 @@ for (const t of allTickets) {
 
       if (changed) {
         await updateLineItemLastGeneratedAt(li.id);
+
+        // Si el LI es automático, marcar mansoft_pendiente para que
+        // el cronMensajeMantsoft genere/actualice el aviso en el deal.
+        if (automated && String(p.mansoft_pendiente || '').toLowerCase() !== 'true') {
+          try {
+            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+              properties: { mansoft_pendiente: 'true' },
+            });
+            logger.debug(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id },
+              'mansoft_pendiente seteado en LI automático'
+            );
+          } catch (err) {
+            logger.warn(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+              'No se pudo setear mansoft_pendiente — no bloquea'
+            );
+          }
+        }
       }
     } catch (err) {
       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');

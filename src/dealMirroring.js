@@ -428,23 +428,6 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
     const props = {};
 
-    /*const excludedProps = new Set([
-      'uy',
-      'pais_operativo',
-      'hubspot_owner_id',
-      'price',
-      'hs_cost_of_goods_sold',
-      'discount',
-      'hs_discount_percentage',
-      'tax',
-      'hs_tax_amount',
-      'of_line_item_py_origen_id',
-      'invoice_id',
-      'invoice_key',
-      'line_item_key',
-      'parte_del_cupo',
-    ]);
-*/
 const excludedProps = new Set([
   'uy',
   'pais_operativo',

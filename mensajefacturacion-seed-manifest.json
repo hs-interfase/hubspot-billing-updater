@@ -1,0 +1,24 @@
+{
+  "prefix": "[MSG-SEED]",
+  "createdAt": "2026-04-14T02:06:29.636Z",
+  "today": "2026-04-13",
+  "dryRun": false,
+  "deal": {
+    "dealId": "59156290142",
+    "dealName": "[MSG-SEED] Mensaje Facturación Test — 2026-04-13"
+  },
+  "lineItems": [
+    {
+      "id": "54274659255",
+      "name": "LI1 Portal ISA"
+    },
+    {
+      "id": "54274796301",
+      "name": "LI2 PayRoll"
+    },
+    {
+      "id": "54275238050",
+      "name": "LI3 ISA Proyectos"
+    }
+  ]
+}

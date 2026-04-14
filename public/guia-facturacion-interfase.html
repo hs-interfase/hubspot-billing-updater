@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="es" style="background:#0b0d14!important;color-scheme:dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d14">
+<title>Guía de Facturación · Interfase</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{background:#0b0d14!important;color-scheme:dark!important}
+:root{
+  --bg:#0b0d14;--s1:#12151f;--s2:#181c28;--bd:#222738;
+  --a:#4f7cff;--a2:#a78bfa;--a3:#34d399;--a4:#fb923c;--a5:#f472b6;
+  --tx:#e8eaf2;--td:#8891aa;--tdm:#44506a;--r:12px;--rs:9px;
+}
+body{
+  background:#0b0d14!important;background-color:#0b0d14!important;
+  color:#e8eaf2!important;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;
+  font-weight:400;min-height:100vh;-webkit-text-size-adjust:100%;
+}
+body::before{content:'';position:fixed;inset:0;background:#0b0d14;z-index:-999;pointer-events:none}
+
+header{background:#0b0d14;border-bottom:1px solid #222738;padding:14px 16px;position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:12px}
+.lm{width:30px;height:30px;background:linear-gradient(135deg,#4f7cff,#a78bfa);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#fff;flex-shrink:0}
+header h1{font-size:14px;font-weight:700;color:#e8eaf2}
+header p{font-size:11px;color:#8891aa;font-family:'SF Mono','Courier New',monospace}
+
+.wrap{max-width:680px;margin:0 auto;padding:0 16px 90px}
+
+/* ── INTRO ── */
+#intro{min-height:calc(100dvh - 58px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 16px;background:#0b0d14}
+
+/* ── BUDDY ── */
+.buddy-scene{position:relative;margin-bottom:28px;display:inline-block}
+.buddy{width:90px;height:100px;position:relative;display:inline-block;animation:float 3s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+.bhead{width:48px;height:48px;border-radius:50%;background:#1a1f30;border:2.5px solid #4f7cff;margin:0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;box-shadow:0 0 20px rgba(79,124,255,.35);position:relative;z-index:2}
+.beyes{display:flex;gap:8px;margin-bottom:3px}
+.beye{width:8px;height:8px;background:#4f7cff;border-radius:50%;animation:blink 4.5s ease-in-out infinite}
+.beye.r{animation-delay:.15s}
+@keyframes blink{0%,88%,100%{transform:scaleY(1)}93%{transform:scaleY(.1)}}
+.bmouth{width:16px;height:7px;border:2px solid #34d399;border-top:none;border-radius:0 0 9px 9px;transition:height .2s}
+.bmouth.talk{animation:talking .28s ease-in-out infinite alternate}
+@keyframes talking{from{height:5px}to{height:12px}}
+.bbody{width:54px;height:58px;background:linear-gradient(160deg,#4f7cff,#a78bfa);border-radius:27px 27px 22px 22px;margin:-5px auto 0;position:relative;box-shadow:0 8px 30px rgba(79,124,255,.36)}
+.barm{width:12px;height:30px;background:linear-gradient(160deg,#4f7cff,#a78bfa);border-radius:6px;position:absolute;top:8px}
+.barm.l{left:-11px;transform:rotate(14deg);transform-origin:top center;animation:wave 2.2s ease-in-out infinite}
+.barm.r{right:-11px;transform:rotate(-14deg)}
+@keyframes wave{0%,100%{transform:rotate(14deg)}50%{transform:rotate(-22deg)}}
+.bubble{position:absolute;left:96px;top:-4px;background:#181c28;border:1.5px solid #4f7cff;border-radius:11px 11px 11px 3px;padding:9px 12px;font-size:12px;color:#e8eaf2;line-height:1.45;min-width:170px;max-width:240px;box-shadow:0 4px 18px rgba(79,124,255,.2);opacity:0;transform:scale(.85) translateX(-5px);transition:opacity .25s,transform .25s;font-style:italic;text-align:left;pointer-events:none}
+.bubble.on{opacity:1;transform:scale(1) translateX(0)}
+.bubble::before{content:'';position:absolute;left:-7px;top:14px;border-top:5px solid transparent;border-bottom:5px solid transparent;border-right:7px solid #4f7cff}
+@media(max-width:400px){.bubble{display:none}}
+
+.ititle{font-size:clamp(22px,5vw,30px);font-weight:800;line-height:1.2;margin-bottom:8px;color:#e8eaf2}
+.isub{color:#8891aa;font-size:13px;margin-bottom:30px;max-width:380px;line-height:1.5}
+.iq{font-family:'SF Mono','Courier New',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.15em;color:#4f7cff;margin-bottom:16px}
+
+/* ── TARJETAS PRINCIPALES ── */
+.mcards{display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:480px;width:100%}
+@media(max-width:380px){.mcards{grid-template-columns:1fr}}
+.mc{background:#12151f;border:1px solid #222738;border-radius:var(--r);padding:18px 16px;cursor:pointer;text-align:left;position:relative;overflow:hidden;opacity:0;transform:translateY(16px);transition:border-color .22s,transform .18s,box-shadow .22s;-webkit-tap-highlight-color:transparent}
+.mc.vis{animation:cardIn .42s ease forwards}
+.mc:nth-child(1).vis{animation-delay:.05s}.mc:nth-child(2).vis{animation-delay:.13s}
+.mc:nth-child(3).vis{animation-delay:.21s}.mc:nth-child(4).vis{animation-delay:.29s}
+@keyframes cardIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.mc::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px;opacity:0;transition:opacity .22s}
+.mc:active{transform:scale(.97)}.mc:active::before,.mc:hover::before{opacity:1}
+.mc:hover{border-color:rgba(79,124,255,.38);box-shadow:0 6px 24px rgba(0,0,0,.3)}
+.mc1::before{background:linear-gradient(90deg,#34d399,#4f7cff)}
+.mc2::before{background:linear-gradient(90deg,#fb923c,#f472b6)}
+.mc3::before{background:linear-gradient(90deg,#a78bfa,#4f7cff)}
+.mc4::before{background:linear-gradient(90deg,#f87171,#f472b6)}
+.mc-ic{font-size:22px;margin-bottom:8px}
+.mc-tt{font-size:13.5px;font-weight:700;color:#e8eaf2;margin-bottom:2px}
+.mc-sb{font-size:11px;color:#8891aa;line-height:1.4}
+
+/* ── PANEL PRINCIPAL ── */
+#mpanel{display:none;padding-top:24px;background:#0b0d14}
+.bc-nav{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:'SF Mono','Courier New',monospace;color:#44506a;margin-bottom:18px}
+.bc-nav span{color:#8891aa;cursor:pointer}.bc-nav span:hover{color:#4f7cff}
+
+.shero{background:#12151f;border:1px solid #222738;border-radius:var(--r);padding:20px;margin-bottom:14px;position:relative;overflow:hidden}
+.shero::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px}
+.sg::before{background:linear-gradient(90deg,#34d399,#4f7cff)}
+.so::before{background:linear-gradient(90deg,#fb923c,#f472b6)}
+.sp::before{background:linear-gradient(90deg,#a78bfa,#4f7cff)}
+.sr::before{background:linear-gradient(90deg,#f87171,#f472b6)}
+.sh-ic{font-size:24px;margin-bottom:7px}
+.sh-tt{font-size:17px;font-weight:800;color:#e8eaf2;margin-bottom:2px}
+.sh-sb{font-size:12px;color:#8891aa}
+
+/* ── SUBOPCIONES ── */
+.scards{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.sc{background:#12151f;border:1px solid #222738;border-radius:var(--rs);padding:12px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:border-color .18s,background .18s,transform .14s;opacity:0;transform:translateX(-10px);-webkit-tap-highlight-color:transparent}
+.sc.vis{animation:slideR .3s ease forwards}
+.sc:nth-child(1).vis{animation-delay:.04s}.sc:nth-child(2).vis{animation-delay:.1s}
+.sc:nth-child(3).vis{animation-delay:.16s}.sc:nth-child(4).vis{animation-delay:.22s}
+.sc:nth-child(5).vis{animation-delay:.28s}.sc:nth-child(6).vis{animation-delay:.34s}
+@keyframes slideR{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+.sc:active,.sc:hover{border-color:rgba(79,124,255,.38);background:#181c28}
+.sc.active{border-color:rgba(79,124,255,.55);background:#181c28}
+.sc-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.sc-tt{font-size:12.5px;font-weight:600;color:#e8eaf2}
+.sc-sb{font-size:10.5px;color:#8891aa;margin-top:1px}
+.sc-ar{color:#44506a;font-size:11px;margin-left:auto;flex-shrink:0;transition:transform .16s,color .16s}
+.sc:hover .sc-ar,.sc.active .sc-ar{transform:translateX(3px);color:#4f7cff}
+
+/* ── CONTENIDO ── */
+#cpanel{display:none;animation:fadeU .25s ease}
+@keyframes fadeU{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.ct-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:16px;background:#12151f;border:1px solid #222738;border-radius:var(--rs)}
+.ct-ic{font-size:22px;flex-shrink:0}
+.ct-tt{font-size:16px;font-weight:800;color:#e8eaf2}
+.ct-sb{font-size:11.5px;color:#8891aa;margin-top:2px}
+
+/* comentario del muñeco */
+.bco{display:flex;align-items:flex-start;gap:10px;margin:12px 0;padding:10px 12px;background:rgba(79,124,255,.07);border:1px solid rgba(79,124,255,.15);border-radius:var(--rs)}
+.bco-em{font-size:18px;flex-shrink:0}
+.bco-tx{font-size:11.5px;color:#8891aa;font-style:italic;line-height:1.5}
+.bco-tx strong{color:#e8eaf2;font-style:normal}
+
+/* etiqueta de sección */
+.sl{font-family:'SF Mono','Courier New',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:#44506a;margin:16px 0 8px;display:flex;align-items:center;gap:8px}
+.sl::after{content:'';flex:1;height:1px;background:#222738}
+
+/* cajita de inicio */
+.inicio-box{background:rgba(52,211,153,.07);border:1px solid rgba(52,211,153,.2);border-radius:var(--rs);padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#a0e8d0;line-height:1.6}
+.inicio-box strong{color:#34d399}
+
+/* ── TABLA DE PROPIEDADES ── */
+.pb{border:1px solid #222738;border-radius:var(--rs);overflow:hidden;margin-bottom:10px}
+.pbh{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;background:rgba(79,124,255,.08);border-bottom:1px solid #222738;padding:7px 12px;font-family:'SF Mono','Courier New',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#44506a}
+.pbr{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;padding:10px 12px;border-bottom:1px solid #222738;transition:background .12s;align-items:start}
+.pbr:last-child{border-bottom:none}
+.pbr:hover,.pbr:active{background:rgba(255,255,255,.02)}
+.p-tt{font-size:12.5px;font-weight:600;color:#e8eaf2;margin-bottom:3px;line-height:1.35}
+.p-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.p-desc{font-size:11.5px;color:#8891aa;line-height:1.55}
+
+/* badges de tipo y autor */
+.badge{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:9px;padding:2px 6px;border-radius:99px;border:1px solid}
+.tb{border-color:rgba(52,211,153,.35);color:#6ee8c0}
+.td2{border-color:rgba(251,146,60,.35);color:#fdb27c}
+.tt2{border-color:rgba(79,124,255,.35);color:#7fa8ff}
+.te{border-color:rgba(167,139,250,.35);color:#c4b0fd}
+.tn{border-color:rgba(244,114,182,.35);color:#f9a8d4}
+.tc{border-color:rgba(148,163,184,.3);color:#94a3b8}
+.wu{background:rgba(52,211,153,.07);color:#6ee8c0;border-color:rgba(52,211,153,.22)}
+.ws{background:rgba(79,124,255,.07);color:#7fa8ff;border-color:rgba(79,124,255,.22)}
+.wa{background:rgba(167,139,250,.07);color:#c4b0fd;border-color:rgba(167,139,250,.22)}
+
+/* etiquetas de objeto */
+.tag{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:9px;padding:2px 7px;border-radius:99px;border:1px solid;margin-left:6px}
+.tng{background:rgba(167,139,250,.1);color:#c4b0fd;border-color:rgba(167,139,250,.28)}
+.tlp{background:rgba(251,146,60,.1);color:#fdb27c;border-color:rgba(251,146,60,.28)}
+.ttk{background:rgba(244,114,182,.1);color:#f9a8d4;border-color:rgba(244,114,182,.28)}
+.tin{background:rgba(52,211,153,.1);color:#6ee8c0;border-color:rgba(52,211,153,.28)}
+
+/* ── PASOS ── */
+.steps{display:flex;flex-direction:column;margin:10px 0}
+.step{display:flex;gap:12px;align-items:flex-start;position:relative}
+.step:not(:last-child)::after{content:'';position:absolute;left:13px;top:28px;bottom:-10px;width:2px;background:#222738}
+.sn{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#4f7cff,#a78bfa);display:flex;align-items:center;justify-content:center;font-family:'SF Mono','Courier New',monospace;font-size:10px;color:#fff;flex-shrink:0;z-index:1}
+.sb2{padding:3px 0 14px;flex:1}
+.st{font-size:12.5px;font-weight:600;color:#e8eaf2;margin-bottom:2px}
+.sd{font-size:11.5px;color:#8891aa;line-height:1.55}
+
+/* ── NOTAS ── */
+.note{border-radius:var(--rs);padding:10px 12px;font-size:11.5px;margin:10px 0;line-height:1.55;border-left:3px solid}
+.nw{background:rgba(251,146,60,.08);border-color:#fb923c;color:#e8c4a0}
+.ni{background:rgba(79,124,255,.08);border-color:#4f7cff;color:#a0b4e8}
+.nok{background:rgba(52,211,153,.08);border-color:#34d399;color:#a0e8d0}
+.ne{background:rgba(248,113,113,.08);border-color:#f87171;color:#e8a0a0}
+
+code{font-family:'SF Mono','Courier New',monospace;font-size:11px;background:rgba(79,124,255,.13);color:#4f7cff;padding:1px 5px;border-radius:3px}
+
+/* ── VOLVER ── */
+.back{display:inline-flex;align-items:center;gap:7px;background:#181c28;border:1px solid #222738;color:#8891aa;border-radius:var(--rs);padding:8px 14px;font-size:12.5px;cursor:pointer;transition:all .18s;margin-bottom:18px;-webkit-tap-highlight-color:transparent}
+.back:active,.back:hover{background:#4f7cff;color:#fff;border-color:#4f7cff}
+
+#topbtn{position:fixed;bottom:20px;right:16px;background:#181c28;border:1px solid #222738;color:#8891aa;border-radius:50%;width:36px;height:36px;font-size:14px;cursor:pointer;display:none;align-items:center;justify-content:center;transition:all .18s;z-index:300}
+#topbtn:active{background:#4f7cff;color:#fff;border-color:#4f7cff}
+#topbtn.on{display:flex}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="lm">IF</div>
+  <div>
+    <h1>Guía de Facturación</h1>
+    <p>Interfase Billing Engine</p>
+  </div>
+</header>
+
+<div id="intro" class="wrap">
+  <div class="buddy-scene">
+    <div class="buddy">
+      <div class="bhead">
+        <div class="beyes"><div class="beye"></div><div class="beye r"></div></div>
+        <div class="bmouth" id="mouth"></div>
+      </div>
+      <div class="bbody">
+        <div class="barm l"></div>
+        <div class="barm r"></div>
+      </div>
+    </div>
+    <div class="bubble" id="bubble">¡Hola! Soy tu guía de facturación 👋</div>
+  </div>
+
+  <div class="ititle">¿En qué te ayudo?</div>
+  <p class="isub">Todo sobre el motor de facturación de Interfase. Elegí una categoría.</p>
+  <div class="iq">¿Qué querés hacer?</div>
+
+  <div class="mcards">
+    <div class="mc mc1" onclick="goSection('basicos')">
+      <div class="mc-ic">⚙️</div>
+      <div class="mc-tt">Procesos Básicos</div>
+      <div class="mc-sb">Automático, manual, cupo, mirror</div>
+    </div>
+    <div class="mc mc2" onclick="goSection('urgentes')">
+      <div class="mc-ic">🚀</div>
+      <div class="mc-tt">Urgentes</div>
+      <div class="mc-sb">Facturar ahora, los 3 casos</div>
+    </div>
+    <div class="mc mc3" onclick="goSection('ediciones')">
+      <div class="mc-ic">✏️</div>
+      <div class="mc-tt">Ediciones</div>
+      <div class="mc-sb">Fechas, tickets, facturas</div>
+    </div>
+    <div class="mc mc4" onclick="goSection('cancelaciones')">
+      <div class="mc-ic">🛑</div>
+      <div class="mc-tt">Cancelaciones</div>
+      <div class="mc-sb">Negocio, ticket, factura, línea</div>
+    </div>
+  </div>
+</div>
+
+<div id="mpanel" class="wrap">
+  <button class="back" onclick="goHome()">← Inicio</button>
+  <div class="bc-nav">
+    <span onclick="goHome()">Inicio</span>
+    <span style="color:#44506a">›</span>
+    <span id="bc-sec" style="color:#e8eaf2">—</span>
+  </div>
+  <div id="shero" class="shero"></div>
+  <div id="scards" class="scards"></div>
+  <div id="cpanel"></div>
+</div>
+
+<button id="topbtn" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+/* ─── AYUDANTES ─── */
+function badge(tipo){
+  const m={
+    'Sí/No':['tb','Sí/No'],
+    'Fecha':['td2','Fecha'],
+    'Texto':['tt2','Texto'],
+    'Opción':['te','Opción'],
+    'Número':['tn','Número'],
+    'Calculado':['tc','Calculado'],
+  };
+  const[cls,lbl]=m[tipo]||['tt2','Texto'];
+  return `<span class="badge ${cls}">${lbl}</span>`;
+}
+function quien(w){
+  const m={
+    'usuario':['wu','El usuario'],
+    'sistema':['ws','El sistema'],
+    'ambos':  ['wa','Ambos'],
+  };
+  const[cls,lbl]=m[w]||['ws','El sistema'];
+  return `<span class="badge ${cls}">${lbl}</span>`;
+}
+function fila(nombre, tipo, autor, desc){
+  return `<div class="pbr">
+    <div>
+      <div class="p-tt">${nombre}</div>
+      <div class="p-tags">${badge(tipo)} ${quien(autor)}</div>
+    </div>
+    <div class="p-desc">${desc}</div>
+  </div>`;
+}
+function fila2(nombre, desc){
+  return `<div class="pbr"><div class="p-tt">${nombre}</div><div class="p-desc">${desc}</div></div>`;
+}
+const CAB = `<div class="pbh"><span>Propiedad</span><span>¿Para qué sirve?</span></div>`;
+
+/* ─── CONTENIDOS ─── */
+const C = {
+
+'auto': `
+  <div class="inicio-box">
+    <strong>¿Cómo se activa?</strong> Hay que pasar el negocio a la etapa <strong>Cierre Ganado</strong> o <strong>En Ejecución</strong>. El sistema activa la facturación solo.
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Facturación Automática','Sí/No','usuario','Ponerlo en <strong>Sí</strong>. El sistema emite la factura solo en la fecha que corresponde, sin que nadie tenga que hacer nada.')}
+    ${fila('Fecha de Inicio','Fecha','usuario','¿Cuándo arranca? Es la fecha del primer cobro. A partir de acá el sistema calcula todas las demás.')}
+    ${fila('Frecuencia','Opción','usuario','¿Cada cuánto se cobra? Mensual, trimestral, semestral, anual, etc.')}
+    ${fila('Cantidad de pagos','Número','usuario','¿Cuántos cobros tiene el contrato? Por ejemplo: <code>12</code> para un año mensual. Si se deja vacío o en <code>0</code>, el sistema renueva solo indefinidamente.')}
+    ${fila('Renovación automática','Sí/No','sistema','<strong>Sí</strong> = el contrato no tiene fecha de fin, sigue facturando para siempre.')}
+    ${fila('Fecha Ancla','Fecha','sistema','El sistema la inicializa solo desde la fecha de inicio. Es la referencia que usa para calcular todos los vencimientos futuros. Si se cambia, todas las fechas se recalculan.')}
+    ${fila('Servicio (Rubro)','Opción','usuario','Categoría del servicio. Aparece en el ticket de facturación.')}
+    ${fila('Mensaje para el responsable','Texto','usuario','Lo que el vendedor quiere aclararle al equipo de facturación. Aparece en el ticket.')}
+    ${fila('¿Parte del cupo?','Sí/No','usuario','<strong>Sí</strong> si esta línea consume del cupo del negocio (horas o monto).')}
+    ${fila('Precio unitario','Número','usuario','El precio por unidad.')}
+    ${fila('Cantidad','Número','usuario','Cuántas unidades. Si es cupo por horas, acá van las horas.')}
+  </div>
+  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Ojo:</strong> el botón "Facturar ahora" no funciona en líneas automáticas. El sistema lo ignora y anota un error. Las automáticas solo responden al calendario. 📅</div></div>
+  <div class="sl">¿Cómo funciona por dentro?</div>
+  <div class="steps">
+    <div class="step"><div class="sn">P</div><div class="sb2"><div class="st">Se crea un ticket de promesa</div><div class="sd">No aparece todavía en el negocio. Solo existe como registro de que esa factura viene.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Llega la fecha</div><div class="sd">El sistema corre todas las noches. Cuando llega el día del cobro, lo detecta.</div></div></div>
+    <div class="step"><div class="sn">✓</div><div class="sb2"><div class="st">Emite la factura solo</div><div class="sd">Sin que nadie toque nada. El ticket queda como emitido.</div></div></div>
+  </div>`,
+
+'manual': `
+  <div class="inicio-box">
+    <strong>¿Cómo se activa?</strong> Hay que pasar el negocio a la etapa <strong>Cierre Ganado</strong> o <strong>En Ejecución</strong>. El sistema activa la facturación solo.
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Facturación Automática','Sí/No','usuario','Dejarlo en <strong>No</strong>. El sistema crea un ticket de revisión 30 días antes del cobro para que el responsable lo revise.')}
+    ${fila('Fecha de Inicio','Fecha','usuario','¿Cuándo es el cobro? El sistema avisa 30 días antes.')}
+    ${fila('Frecuencia','Opción','usuario','Para cobros repetidos: mensual, trimestral, etc. Para pago único, dejarlo vacío.')}
+    ${fila('Cantidad de pagos','Número','usuario','<code>1</code> para pago único. Más para cobros repetidos.')}
+    ${fila('Responsable (dueño de la línea)','Texto','usuario','La persona que va a recibir y procesar el ticket de facturación. <strong>No se toma del negocio, se toma de la línea.</strong>')}
+    ${fila('Mensaje para el responsable','Texto','usuario','Aclaración para quien va a revisar el ticket antes de facturar.')}
+  </div>
+  <div class="sl">¿Cómo funciona?</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">30 días antes del cobro, aparece un ticket</div><div class="sd">El responsable lo recibe y puede revisar los montos y detalles.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El responsable revisa y edita si hace falta</div><div class="sd">Puede cambiar el monto, la cantidad o el descuento directo en el ticket.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">El responsable toca <strong>Facturar Ahora</strong></div><div class="sd">Eso es lo que dispara la factura. Sin ese paso, no se emite nada.</div></div></div>
+  </div>
+  <div class="note nw">⚠️ La factura <strong>no sale sola</strong>. Alguien tiene que tocar <strong>Facturar Ahora</strong> en el ticket para que se emita.</div>
+  <div class="sl">Qué se puede editar en el ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Monto unitario','Número','ambos','Precio por unidad. Se puede cambiar antes de facturar.')}
+    ${fila('Cantidad','Número','ambos','Cantidad. En cupo por horas = horas a cobrar. Se puede cambiar.')}
+    ${fila('Descuento %','Número','ambos','Descuento en porcentaje. Editable.')}
+    ${fila('Total a facturar','Calculado','sistema','El sistema lo calcula solo. No se edita directamente.')}
+    ${fila('Fecha de cobro esperada','Fecha','ambos','Cuándo se planificó el cobro. Editable si se necesita mover.')}
+    ${fila('Responsable asignado','Texto','ambos','Quién procesa el ticket. Se puede reasignar. El sistema no lo pisa.')}
+  </div>`,
+
+'pago-unico': `
+  <div class="inicio-box">
+    <strong>¿Cómo se activa?</strong> Hay que pasar el negocio a la etapa <strong>Cierre Ganado</strong> o <strong>En Ejecución</strong>.
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Fecha de Inicio','Fecha','usuario','La fecha del cobro. Solo hay una.')}
+    ${fila('Cantidad de pagos','Número','usuario','Poner <code>1</code>. Así el sistema sabe que es un único cobro y no genera más.')}
+    ${fila('Frecuencia','Opción','usuario','Dejar vacío. Sin frecuencia, no hay recurrencia.')}
+    ${fila('Facturación Automática','Sí/No','usuario','<strong>Sí</strong> = el sistema lo emite solo cuando llega la fecha. <strong>No</strong> = alguien tiene que tocar Facturar Ahora.')}
+    ${fila('Precio unitario','Número','usuario','El monto del cobro.')}
+    ${fila('Cantidad','Número','usuario','Generalmente <code>1</code>.')}
+  </div>
+  <div class="note nw">⚠️ Si la fecha ya pasó y todavía no se facturó: el sistema igual lo detecta. Si es manual, hay que tocar <strong>Facturar Ahora</strong> en el ticket para que salga.</div>`,
+
+'cupo-horas': `
+  <div class="sl">Negocio <span class="tag tng">Negocio</span></div>
+  <div class="pb">${CAB}
+    ${fila('Cupo activo','Sí/No','usuario','<strong>Sí</strong> para activar el control de cupo en este negocio.')}
+    ${fila('Tipo de cupo','Opción','usuario','Elegir <strong>Por Horas</strong>.')}
+    ${fila('Total de horas','Número','usuario','Las horas totales contratadas. Por ejemplo: <code>100</code>.')}
+    ${fila('Horas consumidas','Número','sistema','El sistema lo actualiza solo después de cada factura. No tocar.')}
+    ${fila('Horas restantes','Número','sistema','Total menos consumido. Solo para consulta.')}
+    ${fila('Umbral de alerta','Número','usuario','A partir de qué porcentaje o cantidad avisar que se está acabando el cupo.')}
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('¿Parte del cupo?','Sí/No','usuario','<strong>Sí</strong> = esta línea descuenta horas del cupo al facturar.')}
+    ${fila('Cantidad','Número','usuario','Las horas que se descuentan cuando se emite esta factura.')}
+    ${fila('Precio unitario','Número','usuario','El precio por hora.')}
+  </div>
+  <div class="note nok">✅ El cupo solo se descuenta cuando la factura se emite de verdad. Nunca antes. Y si el sistema corre dos veces, no descuenta doble.</div>`,
+
+'cupo-monto': `
+  <div class="sl">Negocio <span class="tag tng">Negocio</span></div>
+  <div class="pb">${CAB}
+    ${fila('Cupo activo','Sí/No','usuario','<strong>Sí</strong> para activar.')}
+    ${fila('Tipo de cupo','Opción','usuario','Elegir <strong>Por Monto</strong>.')}
+    ${fila('Monto total del cupo','Número','usuario','El presupuesto total contratado.')}
+    ${fila('Monto consumido','Número','sistema','El sistema lo actualiza solo después de cada factura. No tocar.')}
+    ${fila('Monto restante','Número','sistema','Lo que queda disponible. Solo para consulta.')}
+    ${fila('Umbral de alerta','Número','usuario','A partir de qué monto avisar que se está acabando.')}
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('¿Parte del cupo?','Sí/No','usuario','<strong>Sí</strong> = el monto de esta factura se deduce del cupo.')}
+    ${fila('Importe total','Calculado','sistema','El sistema calcula <code>cantidad × precio − descuentos</code>. Ese monto se deduce del cupo.')}
+  </div>
+  <div class="note nw">⚠️ Si el cupo tiene fechas irregulares (no son todas el mismo día), hay que completar las fechas manualmente en cada línea. El sistema no las adivina.</div>`,
+
+'mirror': `
+  <div class="sl">Línea de pedido PY <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('¿Incluye Uruguay?','Sí/No','usuario','<strong>Sí</strong> = esta línea se duplica automáticamente en el negocio espejo de Uruguay. El precio en Uruguay es igual al costo de esta línea.')}
+    ${fila('Costo (COGS)','Número','usuario','El costo del servicio. Se convierte en el precio de la línea espejo en Uruguay.')}
+    ${fila('País operativo (línea)','Opción','usuario','Poner <strong>PY</strong> en el negocio original.')}
+  </div>
+  <div class="sl">Negocio <span class="tag tng">Negocio</span></div>
+  <div class="pb">${CAB}
+    ${fila('País operativo','Opción','usuario','<strong>PY</strong> en el negocio original. El espejo se crea con <strong>UY</strong> automáticamente.')}
+    ${fila('ID del negocio espejo UY','Texto','sistema','El sistema escribe acá el ID del negocio espejo que creó en Uruguay.')}
+    ${fila('ID del negocio original PY','Texto','sistema','En el negocio espejo UY, el sistema guarda acá el ID del negocio original de Paraguay.')}
+    ${fila('¿Es espejo de PY?','Sí/No','sistema','<strong>Sí</strong> en el negocio espejo. Así el sistema sabe que no tiene que volver a espejarlo.')}
+  </div>
+  <div class="note ni">ℹ️ Si se eliminan todas las líneas marcadas con "Incluye Uruguay", el negocio espejo de Uruguay se archiva solo.</div>`,
+
+'urgente-forecast': `
+  <div class="note nw">⚠️ Esta opción es solo para <strong>líneas manuales</strong>. El ticket todavía está en modo promesa, no fue promovido todavía.</div>
+  <div class="sl">Opción A — Disparar la factura ahora mismo <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Facturar Ahora','Sí/No','usuario','Poner en <strong>Sí</strong>. El sistema genera el ticket y emite la factura de forma inmediata. Después vuelve solo a <strong>No</strong>.')}
+  </div>
+  <div class="sl">Opción B — Mover la fecha para que el cron lo tome esta noche <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Fecha Ancla','Fecha','sistema','Cambiarla a la fecha deseada. El sistema recalcula todo esa noche y emite si la fecha ya llegó.')}
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Activar <strong>Facturar Ahora</strong> en la línea de pedido</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema actúa de inmediato</div><div class="sd">Crea el ticket si no existía y emite la factura.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Facturar Ahora vuelve a No solo</div><div class="sd">No hay que tocarlo de nuevo.</div></div></div>
+  </div>`,
+
+'urgente-ready': `
+  <div class="note nok">✅ El ticket ya está listo para facturar. No hace falta tocar propiedades — el responsable lo gestiona directo desde HubSpot.</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Ir al ticket en HubSpot</div><div class="sd">Está en el pipeline manual, etapa "Listo para facturar".</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Revisar y ajustar montos si hace falta</div><div class="sd">Monto unitario, cantidad y descuento se pueden editar.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Tocar <strong>Facturar Ahora</strong> en el ticket</div><div class="sd">Eso dispara la emisión de la factura.</div></div></div>
+  </div>
+  <div class="sl">Qué se puede editar en el ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Monto unitario','Número','ambos','Editable antes de facturar.')}
+    ${fila('Cantidad','Número','ambos','Editable. En cupo por horas = horas.')}
+    ${fila('Descuento %','Número','ambos','Editable.')}
+    ${fila('Total a facturar','Calculado','sistema','Se recalcula automáticamente. Solo para consulta.')}
+  </div>`,
+
+'urgente-auto': `
+  <div class="note ne">🔴 <strong>No usar Facturar Ahora</strong> en líneas automáticas. El sistema lo ignora, lo vuelve a <strong>No</strong> y anota un error. Las líneas automáticas solo responden a fechas.</div>
+  <div class="sl">La solución: cambiar la Fecha Ancla <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Fecha Ancla','Fecha','sistema','Cambiarla a la fecha deseada. El sistema recalcula la próxima fecha de cobro. Si ya llegó o pasó, emite la factura esa noche.')}
+    ${fila('Próxima fecha de cobro','Fecha','sistema','La calcula el sistema solo. No editar directamente.')}
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Cambiar la Fecha Ancla en la línea de pedido</div><div class="sd">Con la fecha a la que querés adelantar el cobro.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema recalcula esa noche</div><div class="sd">La próxima fecha de cobro se actualiza.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Si la fecha ya llegó, emite la factura</div><div class="sd">En el mismo ciclo nocturno, sin que nadie haga nada más.</div></div></div>
+  </div>`,
+
+'editar-fecha': `
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Fecha Ancla','Fecha','sistema','<strong>La propiedad clave.</strong> Al cambiarla, el sistema recalcula todas las fechas futuras desde ese punto. Se puede cambiar tantas veces como se necesite.')}
+    ${fila('Próxima fecha de cobro','Fecha','sistema','La calcula el sistema solo, no editar directamente.')}
+    ${fila('Último período facturado','Fecha','sistema','El último cobro que ya se emitió. El sistema nunca genera facturas para fechas anteriores a esta.')}
+    ${fila('Último ticket emitido','Fecha','sistema','La última fecha para la que se creó un ticket. El sistema lo usa para no crear duplicados.')}
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Cambiar la Fecha Ancla en la línea de pedido</div><div class="sd">Con la nueva fecha desde la que querés que arranquen los cobros.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema recalcula esa noche</div><div class="sd">La próxima fecha de cobro se actualiza sola.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Si querés mover de nuevo, repetís el paso 1</div><div class="sd">Sin límite de cambios.</div></div></div>
+  </div>
+  <div class="note ni">ℹ️ Si el ticket de la fecha anterior ya estaba en "Listo para facturar", ese no se modifica. La Fecha Ancla solo afecta los cobros futuros que todavía son promesas.</div>`,
+
+'editar-ticket': `
+  <div class="sl">Qué se puede editar <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Monto unitario','Número','ambos','Precio por unidad. El responsable puede cambiarlo antes de facturar.')}
+    ${fila('Cantidad','Número','ambos','Cuántas unidades. En cupo por horas = horas. Se puede cambiar.')}
+    ${fila('Descuento %','Número','ambos','Porcentaje de descuento. Editable.')}
+    ${fila('Descuento por unidad','Número','ambos','Descuento en monto fijo por unidad. Editable.')}
+    ${fila('Total a facturar','Calculado','sistema','Lo calcula HubSpot solo. Solo para consulta.')}
+    ${fila('Fecha de cobro esperada','Fecha','ambos','Cuándo se planificó el cobro. Se puede mover.')}
+    ${fila('Responsable asignado','Texto','ambos','Quién procesa el ticket. Se puede reasignar manualmente. El sistema no lo cambia.')}
+    ${fila('Observaciones ventas','Texto','ambos','El mensaje que dejó el vendedor cuando configuró la línea.')}
+    ${fila('Facturar Ahora','Sí/No','ambos','Tocar <strong>Sí</strong> para disparar la factura desde el ticket (solo líneas manuales).')}
+  </div>
+  <div class="sl">Solo para consulta — no editar <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Número de factura Nodum','Texto','sistema','El número de factura en el sistema Nodum. Clave para rastrear la factura en el ERP.')}
+    ${fila('Etapa de la factura','Opción','sistema','Pendiente, Emitida, Enviada, Pagada, Cancelada. Se actualiza solo.')}
+    ${fila('Fecha real de facturación','Fecha','sistema','Cuándo se emitió la factura de verdad.')}
+    ${fila('Error de facturación','Texto','sistema','Si algo salió mal, el sistema explica acá qué pasó. Primer lugar donde mirar cuando hay problemas.')}
+    ${fila('Moneda','Opción','sistema','La moneda del cobro: pesos uruguayos, dólares, guaraníes o euros.')}
+  </div>
+  <div class="bco"><div class="bco-em">📸</div><div class="bco-tx">El ticket es una <strong>foto del momento en que se configuró la línea</strong>. Si querés cambiar los próximos cobros, editá la línea de pedido. Si querés cambiar solo este, editá el ticket.</div></div>`,
+
+'editar-factura': `
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Ir al editor de facturas</div><div class="sd">La dirección es <code>/invoice-editor</code>. Va a pedir usuario y contraseña.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Escribir el ID numérico de la factura</div><div class="sd">El sistema carga todos los datos actuales de esa factura.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Editar lo que necesitás y guardar</div><div class="sd">Ver los campos disponibles abajo.</div></div></div>
+    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">El sistema actualiza el ticket automáticamente</div><div class="sd">La etapa y el número de Nodum se propagan solos al ticket correspondiente.</div></div></div>
+  </div>
+  <div class="sl">Qué se puede editar <span class="tag tin">Factura</span></div>
+  <div class="pb">${CAB}
+    ${fila('ID Factura Nodum','Texto','ambos','⭐ El más importante. Al cargarlo, la etapa pasa a "Emitida" sola y se actualiza el ticket. También avanza el negocio a "En Ejecución" si corresponde.')}
+    ${fila('Etapa de la factura','Opción','ambos','Pendiente / Emitida / Enviada / Pagada / Cancelada / Atrasada. Se propaga al ticket.')}
+    ${fila('Fecha de emisión','Fecha','ambos','Cuándo se emitió la factura.')}
+    ${fila('Fecha de vencimiento','Fecha','ambos','Hasta cuándo puede pagar el cliente.')}
+    ${fila('Motivo de cancelación','Texto','ambos','Si se cancela, explicar por qué.')}
+    ${fila('Descripción','Texto','ambos','Descripción libre de la factura.')}
+    ${fila('Descripción del producto','Texto','ambos','Descripción del servicio o producto facturado.')}
+    ${fila('Monto a facturar','Número','ambos','El total de la factura.')}
+    ${fila('Monto unitario','Número','ambos','Precio por unidad.')}
+    ${fila('Cantidad','Número','ambos','Cuántas unidades.')}
+    ${fila('Descuento %','Texto','ambos','Porcentaje de descuento aplicado.')}
+    ${fila('Nombre de la empresa','Texto','ambos','Nombre visible del cliente.')}
+    ${fila('Nombre del producto','Texto','ambos','Nombre del producto o servicio.')}
+    ${fila('¿Aplica IVA?','Sí/No','ambos','Si la factura incluye IVA.')}
+    ${fila('¿Exonera IRAE?','Opción','ambos','Si el cliente está exonerado de IRAE.')}
+    ${fila('¿Es reventa?','Opción','ambos','Si es una reventa de un servicio de terceros.')}
+    ${fila('País operativo','Opción','ambos','Uruguay o Paraguay.')}
+    ${fila('Unidad de negocio','Opción','ambos','A qué unidad de negocio corresponde esta factura.')}
+  </div>
+  <div class="note nok">✅ Al cargar el ID de Nodum, todo se propaga solo: el ticket se actualiza, el negocio avanza de etapa y se registra la fecha real de facturación.</div>`,
+
+'cancelar-deal': `
+  <div class="sl">¿Cómo se cancela un negocio? <span class="tag tng">Negocio</span></div>
+  <div class="pb">${CAB}
+    ${fila2('Perdido','El negocio no se cerró. Cancela toda la facturación. Si hay un motivo de pérdida cargado, se copia a los tickets cancelados.')}
+    ${fila2('Suspendido','Se pausa la facturación temporalmente. Se puede reactivar después pasando el negocio a otra etapa.')}
+    ${fila2('Anulado / Voided','Se anula el negocio definitivamente.')}
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Mover el negocio a Perdido, Suspendido o Anulado</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema lo detecta esa noche</div><div class="sd">Desactiva la facturación del negocio automáticamente.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Cancela los tickets que todavía son promesas</div><div class="sd">Los tickets que ya estaban listos para facturar o emitidos no se tocan.</div></div></div>
+  </div>
+  <div class="note ne">🔴 Los tickets que ya estaban <strong>listos para facturar o emitidos</strong> no se cancelan solos. Hay que gestionarlos manualmente.</div>`,
+
+'cancelar-ticket': `
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Ir al ticket en HubSpot</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Moverlo a la etapa <strong>Cancelado</strong></div><div class="sd">El sistema lo excluye de todos los procesos futuros.</div></div></div>
+  </div>
+  <div class="sl">Propiedades del ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Etapa del pipeline','Opción','sistema','Cambiar a la etapa Cancelado del pipeline correspondiente.')}
+    ${fila('Motivo de cancelación','Texto','sistema','El sistema escribe acá el motivo cuando se cancela desde un negocio cancelado.')}
+  </div>
+  <div class="note ni">ℹ️ Si el ticket cancelado era el único para esa fecha, el sistema creará uno nuevo la próxima vez que corra. Para evitarlo, pausá la línea de pedido o cancelá el negocio.</div>`,
+
+'cancelar-factura': `
+  <div class="steps">
+    <div class="step"><div class="sn">A</div><div class="sb2"><div class="st">Desde el editor de facturas (recomendado)</div><div class="sd">Ir a <code>/invoice-editor</code>, buscar por ID y usar el botón "Cancelar". El sistema propaga al ticket y registra la fecha sola.</div></div></div>
+    <div class="step"><div class="sn">B</div><div class="sb2"><div class="st">Desde HubSpot directamente</div><div class="sd">Cambiar la Etapa de la factura a "Cancelada". Si no tiene fecha de cancelación, el sistema pone la de hoy.</div></div></div>
+  </div>
+  <div class="sl">Propiedades de la factura <span class="tag tin">Factura</span></div>
+  <div class="pb">${CAB}
+    ${fila('Etapa de la factura','Opción','ambos','Cambiar a <strong>Cancelada</strong>. Se propaga al ticket automáticamente.')}
+    ${fila('Fecha de cancelación','Fecha','sistema','Si no hay ninguna, el sistema pone la fecha de hoy.')}
+    ${fila('Motivo de cancelación','Texto','usuario','Para dejar un registro claro de por qué se canceló.')}
+  </div>
+  <div class="note nw">⚠️ Cancelar una factura no cancela el ticket. Si corresponde, hay que cancelarlo por separado.</div>`,
+
+'pausar-li': `
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('Pausa','Sí/No','usuario','⭐ La forma más limpia. Poner en <strong>Sí</strong> y ninguna parte del sistema procesa esta línea. Para reactivar, volver a <strong>No</strong>.')}
+    ${fila('Motivo de la pausa','Texto','usuario','Para dejar registro de por qué se pausó. Solo informativo.')}
+    ${fila('Fecha de Inicio','Fecha','usuario','Alternativa: mover la fecha a un futuro lejano. El sistema no genera nada hasta que llegue esa fecha.')}
+    ${fila('Facturas restantes','Número','sistema','Cuando llega a 0, el sistema no genera más tickets para esta línea. Se calcula solo.')}
+  </div>
+  <div class="note nw">⚠️ Si querés pausar <strong>todo el negocio</strong>, es más limpio moverlo a la etapa Suspendido que pausar línea por línea.</div>
+  <div class="note ni">ℹ️ Para reactivar: poner Pausa en <strong>No</strong> y verificar que la próxima fecha de cobro sea válida y futura.</div>`,
+
+};
+
+/* ─── SECCIONES ─── */
+const SECS = {
+  basicos:{icon:'⚙️',title:'Procesos Básicos',hc:'sg',sub:[
+    {k:'auto',       ic:'⚡',bg:'rgba(79,124,255,.13)',  tt:'Facturación Automática',  sb:'El sistema factura solo en la fecha programada'},
+    {k:'manual',     ic:'📝',bg:'rgba(52,211,153,.13)',  tt:'Facturación Manual',       sb:'Genera un ticket para que el responsable lo revise y dispare'},
+    {k:'pago-unico', ic:'1️⃣',bg:'rgba(251,146,60,.13)', tt:'Pago Único',              sb:'Un solo cobro, sin recurrencia'},
+    {k:'cupo-horas', ic:'⏱️',bg:'rgba(167,139,250,.13)',tt:'Cupo por Horas',          sb:'Bolsa de horas prepaga que se descuenta al facturar'},
+    {k:'cupo-monto', ic:'💰',bg:'rgba(167,139,250,.13)',tt:'Cupo por Monto',          sb:'Presupuesto prepago que se deduce al facturar'},
+    {k:'mirror',     ic:'🪞',bg:'rgba(244,114,182,.13)', tt:'Mirror Paraguay → Uruguay',sb:'Un negocio de Paraguay que se duplica en Uruguay'},
+  ]},
+  urgentes:{icon:'🚀',title:'Facturación Urgente',hc:'so',sub:[
+    {k:'urgente-forecast',ic:'📋',bg:'rgba(251,146,60,.13)',tt:'El ticket todavía no fue promovido',sb:'Está en modo promesa — usá Facturar Ahora o cambiá la fecha'},
+    {k:'urgente-ready',   ic:'🔔',bg:'rgba(251,146,60,.13)',tt:'El ticket ya está listo',           sb:'El responsable lo toca y listo'},
+    {k:'urgente-auto',    ic:'⚡',bg:'rgba(251,146,60,.13)',tt:'Línea automática',                 sb:'No usar Facturar Ahora — hay que cambiar la Fecha Ancla'},
+  ]},
+  ediciones:{icon:'✏️',title:'Ediciones',hc:'sp',sub:[
+    {k:'editar-fecha',   ic:'📅',bg:'rgba(167,139,250,.13)',tt:'Cambiar las fechas de cobro',sb:'Cómo mover el ciclo desde la Fecha Ancla'},
+    {k:'editar-ticket',  ic:'🎫',bg:'rgba(167,139,250,.13)',tt:'Editar un ticket',          sb:'Qué campos se pueden cambiar en un ticket'},
+    {k:'editar-factura', ic:'🧾',bg:'rgba(167,139,250,.13)',tt:'Editar una factura',        sb:'El editor de facturas: cargar ID Nodum, cambiar etapa, cancelar'},
+  ]},
+  cancelaciones:{icon:'🛑',title:'Cancelaciones y Pausas',hc:'sr',sub:[
+    {k:'cancelar-deal',    ic:'❌',bg:'rgba(248,113,113,.13)',tt:'Cancelar un negocio',         sb:'Perdido, Suspendido o Anulado'},
+    {k:'cancelar-ticket',  ic:'🎫',bg:'rgba(248,113,113,.13)',tt:'Cancelar un ticket',          sb:'Sin afectar el negocio ni otras líneas'},
+    {k:'cancelar-factura', ic:'🧾',bg:'rgba(248,113,113,.13)',tt:'Cancelar una factura',        sb:'Desde el editor o directamente en HubSpot'},
+    {k:'pausar-li',        ic:'⏸️',bg:'rgba(248,113,113,.13)',tt:'Pausar una línea de pedido', sb:'Sin cancelar el negocio'},
+  ]},
+};
+
+const BUDS = [
+  'Si algo falla, mirá <strong>Error de facturación</strong> en el ticket. El sistema siempre explica qué pasó. 📝',
+  'El sistema corre todas las noches. Como los vampiros, pero más útil. 🧛',
+  'Podés cambiar la Fecha Ancla cuantas veces quieras. El sistema recalcula todo solo. 💪',
+  '¿Todo bien? Estoy acá si me necesitás. 🤙',
+  'La Fecha Ancla es la clave para mover fechas. Cambiala y el futuro se reordena solo. ⏳',
+];
+
+const SUBCOMS = {
+  'auto':'Configurá esto y olvidate. El sistema hace todo mientras dormís. 😴',
+  'manual':'Alguien tiene que tocar Facturar Ahora para que salga la factura. Sin ese paso, nada. 👀',
+  'pago-unico':'Una vez y listo. Simple pero noble. 🎯',
+  'cupo-horas':'El cupo solo se descuenta cuando la factura se emite de verdad. 💸',
+  'cupo-monto':'Mismo mecanismo que el de horas pero en plata. Al final del cupo, se acabó la fiesta. 🎉',
+  'mirror':'¿Dos países, un negocio? El sistema lo espeja solo. Como un clon, pero legal. 🤝',
+  'urgente-forecast':'Hay que despertar al ticket que estaba durmiendo. ¡Emergencia activada! ⏰',
+  'urgente-ready':'¡Ya está listo! El responsable solo tiene que tocar Facturar Ahora. 🍽️',
+  'urgente-auto':'Las líneas automáticas solo escuchan al calendario. Hay que hablarles con la Fecha Ancla. 📅',
+  'editar-fecha':'La Fecha Ancla es el corazón del calendario. Movela y todo el futuro se reordena. ⏳',
+  'editar-ticket':'Este cobro puntual lo editás acá. Los próximos, en la línea de pedido. 📸',
+  'editar-factura':'Ponés el ID, editás, y el sistema actualiza el ticket solo. 🎛️',
+  'cancelar-deal':'El sistema limpia lo que todavía no salió. Lo que ya se facturó, eso ya fue. 😔',
+  'cancelar-ticket':'El ticket se cancela, el negocio sigue vivo. Quirúrgico. 🔪',
+  'cancelar-factura':'Las facturas no se borran, se cancelan. El sistema guarda el rastro de todo. 📋',
+  'pausar-li':'Congelar una línea sin afectar el resto del negocio. ❄️',
+};
+
+/* ─── NAVEGACIÓN ─── */
+function goHome(){
+  document.getElementById('intro').style.display='flex';
+  document.getElementById('mpanel').style.display='none';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function goSection(key){
+  const sec=SECS[key];
+  document.getElementById('intro').style.display='none';
+  document.getElementById('mpanel').style.display='block';
+  document.getElementById('cpanel').style.display='none';
+  document.getElementById('bc-sec').textContent=sec.title;
+
+  document.getElementById('shero').className=`shero ${sec.hc}`;
+  document.getElementById('shero').innerHTML=`
+    <div class="sh-ic">${sec.icon}</div>
+    <div class="sh-tt">${sec.title}</div>
+    <div class="sh-sb">Elegí una opción para ver las propiedades y el procedimiento</div>`;
+
+  const wrap=document.getElementById('scards');
+  wrap.innerHTML='';
+  sec.sub.forEach((s,i)=>{
+    const el=document.createElement('div');
+    el.className='sc';
+    el.innerHTML=`<div class="sc-ic" style="background:${s.bg}">${s.ic}</div>
+      <div style="flex:1"><div class="sc-tt">${s.tt}</div><div class="sc-sb">${s.sb}</div></div>
+      <div class="sc-ar">›</div>`;
+    el.onclick=()=>goSub(s.k,el);
+    wrap.appendChild(el);
+    setTimeout(()=>el.classList.add('vis'),30+i*60);
+  });
+
+  setTimeout(()=>sayR(),700);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function goSub(key,cardEl){
+  document.querySelectorAll('.sc').forEach(c=>c.classList.remove('active'));
+  if(cardEl)cardEl.classList.add('active');
+  const sec=Object.values(SECS).find(s=>s.sub.find(x=>x.k===key));
+  const meta=sec?.sub.find(x=>x.k===key)||{ic:'📄',tt:key,sb:''};
+  const panel=document.getElementById('cpanel');
+  panel.style.display='block';
+  panel.innerHTML=`<div class="ct-head">
+    <div class="ct-ic">${meta.ic}</div>
+    <div><div class="ct-tt">${meta.tt}</div><div class="ct-sb">${meta.sb}</div></div>
+  </div>${C[key]||'<p style="color:#8891aa;padding:16px">Contenido no disponible.</p>'}`;
+  if(SUBCOMS[key])say(SUBCOMS[key]);else sayR();
+  setTimeout(()=>panel.scrollIntoView({behavior:'smooth',block:'start'}),80);
+}
+
+/* ─── MUÑECO ─── */
+let bTimer;
+function say(text){
+  const b=document.getElementById('bubble');
+  const m=document.getElementById('mouth');
+  b.innerHTML=text;b.classList.add('on');
+  m.classList.add('talk');
+  clearTimeout(bTimer);
+  bTimer=setTimeout(()=>{b.classList.remove('on');m.classList.remove('talk');},5200);
+}
+function sayR(){say(BUDS[Math.floor(Math.random()*BUDS.length)]);}
+
+/* ─── INICIO ─── */
+window.addEventListener('load',()=>{
+  document.querySelectorAll('.mc').forEach((c,i)=>
+    setTimeout(()=>c.classList.add('vis'),350+i*90));
+  setTimeout(()=>say('¡Hola! Soy tu guía de facturación. ¿En qué te ayudo? 👋'),700);
+  setTimeout(()=>say('Elegí una de las 4 categorías y te explico todo con detalle. 📖'),6400);
+});
+window.addEventListener('scroll',()=>{
+  document.getElementById('topbtn').classList.toggle('on',window.scrollY>300);
+});
+</script>
+</body>
+</html>

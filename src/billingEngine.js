@@ -768,74 +768,62 @@ function collectAllBillingDatesFromLineItem(lineItem) {
 export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const p = lineItem?.properties || {};
 
-  // 1) Respetar contadores: si ya se hicieron todos los pagos, no hay próxima fecha
+  // 1) Respetar contadores
   const total = Number(p.hs_recurring_billing_number_of_payments) || 0;
   const emitidos = Number(p.pagos_emitidos) || 0;
+  if (total > 0 && emitidos >= total) return null;
 
-  if (total > 0 && emitidos >= total) {
-    return null;
-  }
-
-  // todayYmd respetando el "today" recibido
   let todayYmd = getTodayYMD();
   if (today instanceof Date && !Number.isNaN(today.getTime())) {
     todayYmd = formatDateISO(today);
   }
 
-  // 2) Fuente de verdad: billing_next_date (si es >= hoy, devolvemos eso)
-  const persisted = (p.billing_next_date ?? "").toString().slice(0, 10);
-  if (persisted && persisted >= todayYmd) {
-    return parseLocalDate(persisted);
-  }
-
-  // 3) Irregular: SOLO si hay fecha_irregular_puntual futura
-  const irregularRaw = (p.irregular ?? "").toString().trim().toLowerCase();
-  const isIrregular =
-    irregularRaw === "true" ||
-    irregularRaw === "1" ||
-    irregularRaw === "sí" ||
-    irregularRaw === "si" ||
-    irregularRaw === "yes";
-
+  // 2) Irregular
+  const irregularRaw = (p.irregular ?? '').toString().trim().toLowerCase();
+  const isIrregular = ['true', '1', 'sí', 'si', 'yes'].includes(irregularRaw);
   if (isIrregular) {
-    const puntual = (p.fecha_irregular_puntual ?? "").toString().slice(0, 10);
+    const puntual = (p.fecha_irregular_puntual ?? '').toString().slice(0, 10);
     if (puntual && puntual >= todayYmd) return parseLocalDate(puntual);
     return null;
   }
 
-  // 4) Configuración efectiva (interval / startDate)
+  // 3) Config efectiva
   const config = getEffectiveBillingConfig(lineItem);
   const interval = config?.interval ?? null;
   const startDate = config?.startDate ?? null;
 
-  // 5) effectiveTodayYmd: frontera dura — NUNCA ir antes del último ticket emitido
-  const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
-  let effectiveTodayYmd = todayYmd;
-
-  // 6) Pago único
-  if (!interval) {
-    if (!startDate) return null;
-    if (lastTicketedYmd) return null;
-
-    const iso = formatDateISO(startDate);
-    return iso >= effectiveTodayYmd ? parseLocalDate(iso) : null;
+  // 4) Floor: max(hoy, lastTicketed+1)
+  // Nota: >= hoy permite facturar hoy si el anchor cae hoy
+  const lastTicketedYmd = (p.last_ticketed_date || '').toString().slice(0, 10);
+  let floorYmd = todayYmd;
+  if (lastTicketedYmd) {
+    const d = parseLocalDate(lastTicketedYmd);
+    if (d && !Number.isNaN(d.getTime())) {
+      d.setDate(d.getDate() + 1);
+      const plusOne = formatDateISO(d);
+      if (plusOne > floorYmd) floorYmd = plusOne;
+    }
   }
 
-  // 7) Recurrente anchor-based
+  // 5) Pago único
+  if (!interval) {
+    if (!startDate || lastTicketedYmd) return null;
+    const iso = formatDateISO(startDate);
+    return iso >= floorYmd ? parseLocalDate(iso) : null;
+  }
+
+  // 6) Recurrente anchor-based
+  const startYmd = startDate ? formatDateISO(startDate) : null;
+  if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
+
   const anchorStartRaw =
-    (p.billing_anchor_date || "").toString().slice(0, 10) ||
-    (p.hs_recurring_billing_start_date || "").toString().slice(0, 10) ||
-    (p.recurringbillingstartdate || "").toString().slice(0, 10) ||
-    (p.fecha_inicio_de_facturacion || "").toString().slice(0, 10) ||
+    (p.billing_anchor_date || '').toString().slice(0, 10) ||
+    (p.hs_recurring_billing_start_date || '').toString().slice(0, 10) ||
+    (p.recurringbillingstartdate || '').toString().slice(0, 10) ||
+    (p.fecha_inicio_de_facturacion || '').toString().slice(0, 10) ||
     (startDate ? formatDateISO(startDate) : null);
 
   if (!anchorStartRaw) return null;
-
-  // Piso duro: nunca antes del startDate real
-  const startYmd = startDate ? formatDateISO(startDate) : null;
-
-  let floorYmd = effectiveTodayYmd;
-  if (startYmd && startYmd > floorYmd) floorYmd = startYmd;
 
   const nextYmd = computeNextFromInterval({
     startRaw: anchorStartRaw,
@@ -847,10 +835,6 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   });
 
   return nextYmd ? parseLocalDate(nextYmd) : null;
-
-  // ---------------------------------------------------------
-  // LEGACY (calendario + resolveNextBillingDate) - NO SE USA
-  // ---------------------------------------------------------
 }
 
 export function computeNextBillingDateFromLineItems(lineItems, today = new Date()) {

@@ -130,19 +130,23 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
     addInterval,
   });
 
-  // 7. Persistir solo los campos que cambiaron (batch PATCH)
-  const propsToUpdate = {};
+// 7. Persistir solo los campos que cambiaron (batch PATCH)
+const propsToUpdate = {};
 
-  const nextStr  = nextYmd ? String(nextYmd) : '';
-  const curStr   = String(properties.billing_next_date ?? '').trim();
+// billing_next_date: solo AUTO_RENEW lo calcula aquí.
+// PLAN_FIJO: lo gestiona recalcFromTickets/syncBillingNextDateFromTickets (fuente de verdad: tickets).
+if (autoRenew) {
+  const nextStr = nextYmd ? String(nextYmd) : '';
+  const curStr  = String(properties.billing_next_date ?? '').trim();
   if (curStr !== nextStr) {
     propsToUpdate.billing_next_date = nextStr;
   }
+}
 
-  const curProgreso = String(properties.progreso_pagos ?? '').trim();
-  if (curProgreso !== nextProgreso) {
-    propsToUpdate.progreso_pagos = nextProgreso;
-  }
+const curProgreso = String(properties.progreso_pagos ?? '').trim();
+if (curProgreso !== nextProgreso) {
+  propsToUpdate.progreso_pagos = nextProgreso;
+}
 
   if (Object.keys(propsToUpdate).length > 0) {
     await hubspotClient.crm.lineItems.basicApi.update(String(id), {

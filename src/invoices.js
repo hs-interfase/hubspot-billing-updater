@@ -223,10 +223,19 @@ const invoiceKey = buildInvoiceKey(dealId, lineItemId, invoiceDate);
 }
 
 /**
- * Procesa tickets listos para facturar. Busca tickets en etapa READY sin factura,
- * crea la factura y actualiza el ticket. Se puede ejecutar periódicamente.
+ * [LEGACY / MANUAL] Procesa tickets del pipeline MANUAL en stage "Listo para Facturar"
+ * (BILLING_TICKET_STAGE_READY = TICKET_STAGES.READY) sin factura emitida,
+ * crea la factura ficticia en HubSpot y actualiza el ticket.
+ *
+ * ⚠️  Este stage es DISTINTO a "Próximos a Facturar" (TICKET_STAGES.NEW):
+ *   - "Próximos a Facturar" (NEW): Phase 2 promueve aquí ≤30 días antes. Admin edita.
+ *   - "Listo para Facturar" (READY): admin mueve aquí para confirmar emisión. Esta función lo lee.
+ *
+ * Solo aplica al pipeline MANUAL. El pipeline AUTOMÁTICO emite facturas directamente
+ * en Phase 3 sin pasar por este flujo.
  */
 export async function emitInvoicesForReadyTickets() {
+  // TICKET_STAGES.READY = "Listo para Facturar" (manual) — NO confundir con TICKET_STAGES.NEW
   const readyStage =
     process.env.BILLING_TICKET_STAGE_READY;
   const pipelineId = process.env.BILLING_TICKET_PIPELINE_ID;

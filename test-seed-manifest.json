@@ -1,43 +1,42 @@
 {
   "prefix": "[TEST-SEED]",
-  "createdAt": "2026-04-08T17:20:24.804Z",
-  "today": "2026-04-08",
+  "createdAt": "2026-04-13T12:17:19.638Z",
+  "today": "2026-04-13",
   "deals": [
     {
-      "dealId": "58960047742",
+      "dealId": "59145383327",
       "dealName": "A — Manual / Plan Fijo / UY",
       "lineItemIds": [
-        "54099755803",
-        "54097900303",
-        "54128664735",
-        "54138907730"
+        "54236046670",
+        "54235919154",
+        "54268414859",
+        "54268390445"
       ]
     },
     {
-      "dealId": "59003297028",
-      "dealName": "B — Automático / Plan Fijo + Auto-Renew",
+      "dealId": "59140751617",
+      "dealName": "B — Automático / Plan Fijo + Auto-Renew / UY",
       "lineItemIds": [
-        "54095110245",
-        "54082110016",
-        "54096185959"
+        "54213794716",
+        "54268404281",
+        "54238770271"
       ]
     },
     {
-      "dealId": "58950289972",
-      "dealName": "C — Paraguay / Mirror UY / Cupo Horas",
+      "dealId": "59144976958",
+      "dealName": "C — Cupo Monto / Bug Subtotal / UY",
       "lineItemIds": [
-        "54091325965",
-        "54079210774",
-        "54134373809"
+        "54268490144",
+        "54268503970"
       ]
     },
     {
-      "dealId": "59002368317",
-      "dealName": "D — Cupo Monto / Fecha Ancla / Bordes",
+      "dealId": "59145478053",
+      "dealName": "D — Mirror PY→UY (motor crea espejo)",
       "lineItemIds": [
-        "54095886475",
-        "54109729367",
-        "54099598112"
+        "54234043034",
+        "54219860027",
+        "54268518572"
       ]
     }
   ]

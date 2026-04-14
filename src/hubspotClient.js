@@ -204,6 +204,7 @@ export async function getDealWithLineItems(dealId) {
     "hs_post_tax_amount",
     "hubspot_owner_id",
     "createdate",
+    'mansoft_pendiente',
 
     // --- facturación ---
     "facturacion_activa",
@@ -256,7 +257,7 @@ export async function getDealWithLineItems(dealId) {
     "reventa",
     "billing_error",
 
-    // --- referencias ---
+    // --- referencias --
     "invoice_id",
     "invoice_key",
     "id_deal_origen",

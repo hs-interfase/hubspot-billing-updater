@@ -20,7 +20,7 @@
 //   node src/jobs/cronMensajeFacturacion.js --dry
 
 import 'dotenv/config';
-import { hubspotClient } from '../hubspotClient.js';
+import { hubspotClient } from "../hubspotClient.js";
 import { buildMensajeFacturacion } from '../services/billing/buildMensajeFacturacion.js';
 import {
   TICKET_PIPELINE,
@@ -42,7 +42,7 @@ const TICKET_PROPS = [
   'hs_object_id', 'hs_pipeline', 'hs_pipeline_stage', 'hs_lastmodifieddate',
   'of_deal_id', 'of_producto_nombres', 'of_descripcion_producto', 'of_rubro',
   'of_moneda', 'of_exonera_irae', 'of_iva', 'of_frecuencia_de_facturacion',
-  'of_cantidad_de_pagos',
+  'of_cantidad_de_pagos', 'producto_id',
   'monto_unitario_real', 'cantidad_real', 'subtotal_real',
   'descuento_en_porcentaje', 'descuento_por_unidad_real', 'total_real_a_facturar',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
@@ -160,16 +160,52 @@ function isDealHot(tickets) {
 /**
  * Obtiene el nombre del deal.
  */
-async function getDealName(dealId) {
+const ASSOC_LABEL_EMPRESA_FACTURA  = 9;  // deals→companies "Empresa Factura"
+const ASSOC_LABEL_PERSONA_FACTURA  = 7;  // deals→contacts  "Persona Factura"
+
+async function getDealInfo(dealId) {
   try {
-    const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']);
-    return deal?.properties?.dealname || `Deal ${dealId}`;
+    const [deal, compAssoc, contAssoc] = await Promise.all([
+      hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']),
+      hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'companies', 100),
+      hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'contacts', 100),
+    ]);
+
+    // Empresa con label "Empresa Factura" (typeId=9)
+    const empresaId = (compAssoc?.results || [])
+      .find(r => r.associationTypes?.some(t => t.typeId === ASSOC_LABEL_EMPRESA_FACTURA))
+      ?.toObjectId;
+
+    // Contacto con label "Persona Factura" (typeId=7)
+    const personaId = (contAssoc?.results || [])
+      .find(r => r.associationTypes?.some(t => t.typeId === ASSOC_LABEL_PERSONA_FACTURA))
+      ?.toObjectId;
+
+    const [empresaName, personaName] = await Promise.all([
+      empresaId
+        ? hubspotClient.crm.companies.basicApi.getById(String(empresaId), ['name'])
+            .then(r => r?.properties?.name || null).catch(() => null)
+        : Promise.resolve(null),
+      personaId
+        ? hubspotClient.crm.contacts.basicApi.getById(String(personaId), ['firstname', 'lastname'])
+            .then(r => {
+              const p = r?.properties || {};
+              return [p.firstname, p.lastname].filter(Boolean).join(' ') || null;
+            }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      dealName:              deal?.properties?.dealname || `Deal ${dealId}`,
+      empresa_que_factura:   empresaName,
+      persona_que_factura:   personaName,
+    };
   } catch (err) {
     logger.warn(
-      { module: 'cronMensajeFacturacion', fn: 'getDealName', dealId, err },
-      'No se pudo obtener nombre del deal'
+      { module: 'cronMensajeFacturacion', fn: 'getDealInfo', dealId, err },
+      'No se pudo obtener info del deal'
     );
-    return `Deal ${dealId}`;
+    return { dealName: `Deal ${dealId}`, empresa_que_factura: null, persona_que_factura: null };
   }
 }
 
@@ -180,48 +216,6 @@ async function writeMensaje(dealId, html) {
   await hubspotClient.crm.deals.basicApi.update(dealId, {
     properties: { [DEAL_PROPERTY]: html },
   });
-}
-
-
-// DESPUÉS de la función writeMensaje existente, agregar:
-
-/**
- * Construye y escribe el mensaje de facturación para un deal específico,
- * acumulando todos los tickets READY pendientes de aviso.
- * Sin cooldown — pensado para llamarse inmediatamente tras mover un ticket a READY.
- * NO marca ticket_emitio_aviso_a_admin — eso lo sigue haciendo el cron.
- */
-export async function refreshMensajeFacturacionParaDeal(dealId) {
-  try {
-    const tickets = await searchReadyTickets(TICKET_PIPELINE, TICKET_STAGES.READY);
-    const pendientes = filterPendientes(tickets).filter(
-      t => String(t?.properties?.of_deal_id || '').trim() === String(dealId)
-    );
-
-    if (pendientes.length === 0) {
-      logger.info(
-        { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId },
-        'Sin tickets READY pendientes de aviso para el deal'
-      );
-      return;
-    }
-
-    const dealName = await getDealName(dealId);
-    const html = buildMensajeFacturacion(pendientes, dealName);
-    if (!html) return;
-
-    await writeMensaje(String(dealId), html);
-
-    logger.info(
-      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketCount: pendientes.length },
-      '✅ mensaje_de_facturacion actualizado (acumulado)'
-    );
-  } catch (err) {
-    logger.warn(
-      { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, err },
-      'refreshMensajeFacturacionParaDeal falló — no bloquea flujo'
-    );
-  }
 }
 
 /**
@@ -253,8 +247,8 @@ export async function refreshMensajeFacturacionParaDeal(dealId) {
       return;
     }
 
-    const dealName = await getDealName(String(dealId));
-    const html = buildMensajeFacturacion(pendientes, dealName);
+    const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(String(dealId));
+    const html = buildMensajeFacturacion(pendientes, dealName, { empresa_que_factura, persona_que_factura });
     if (!html) return;
 
     await writeMensaje(String(dealId), html);
@@ -352,11 +346,8 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
         continue;
       }
 
-      // Obtener nombre del deal
-      const dealName = await getDealName(dealId);
-
-      // Construir HTML
-      const html = buildMensajeFacturacion(tickets, dealName);
+      const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
+      const html = buildMensajeFacturacion(tickets, dealName, { empresa_que_factura, persona_que_factura });
 
       if (!html) {
         logger.warn(

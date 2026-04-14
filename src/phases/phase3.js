@@ -9,10 +9,12 @@ import { createTicketAssociations, getDealCompanies, getDealContacts } from '../
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
-import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
+import { countActivePlanInvoices, invoiceExistsForKey } from '../utils/invoiceUtils.js';
+import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
+import { promoteMirrorTicketToManualReady } from '../services/mirrorUtils.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
@@ -238,6 +240,11 @@ export async function runPhase3({ deal, lineItems }) {
     return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
   }
 
+  if (parseBool(dp.es_mirror_de_py)) {
+  // skip — mirrors se facturan manualmente
+  return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
+}
+
   let invoicesEmitted = 0;
   let ticketsEnsured = 0;
   const errors = [];
@@ -262,6 +269,15 @@ export async function runPhase3({ deal, lineItems }) {
       logger.info(
         { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
         'Line item en pausa, saltando Phase 3'
+      );
+      continue;
+    }
+
+    const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
+    if (isMirrorLI) {
+      logger.debug(
+        { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
+        'Line item espejo UY, saltando Phase 3 (se factura manualmente)'
       );
       continue;
     }
@@ -342,7 +358,7 @@ if (facturarAhora) {
         lineItemId,
       });
 
-      if (promoted.moved) {
+      if (promoted.moved || promoted.reason === 'already_ready') {
         ticketsEnsured++;
 
         // Leer ticket con todas las props requeridas para evitar re-lectura en invoiceService
@@ -351,26 +367,53 @@ if (facturarAhora) {
           REQUIRED_TICKET_PROPS
         );
 
+        // DESPUÉS
         const totalPayments = Number(lp.hs_recurring_billing_number_of_payments);
         const isAutoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+
+
+        const activeCount = await countActivePlanInvoices(lineItemKey);
+
         if (!isAutoRenew) {
-          const activeCount = await countActivePlanInvoices(lineItemKey);
           if (activeCount !== null && activeCount >= totalPayments) {
-            logger.info(
-              { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
-              'Plan completado, no se emite factura'
-            );
+           logger.info(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+            'Plan completado, no se emite factura'
+          );
             continue;
           }
         }
 
-        await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
+        const invoiceKey = buildInvoiceKey(dealId, lineItemKey, billingPeriodDate);
+        const alreadyExists = await invoiceExistsForKey(invoiceKey);
+        if (alreadyExists) {
+          logger.info(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, invoiceKey },
+            'Invoice ya existe para esta key (race condition guard), saltando emisión'
+          );
+          continue;
+        }
+
+        const { created } = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
+
+        // Primera factura del plan → notificar a Mantsoft
+        if (created && !isMirrorLI) {
+          hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+            properties: { mansoft_pendiente: 'true' },
+          }).catch(err => logger.warn(
+            { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
+            'Error seteando mansoft_pendiente (no bloquea)'
+          ));
+        }
+        
         invoicesEmitted++;
 
         logger.info(
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
           'Ticket promovido a READY (programado) y factura emitida'
         );
+        promoteMirrorTicketToManualReady(lineItemId, billingPeriodDate).catch(() => {});
+
       } else {
         logger.info(
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, reason: promoted.reason, ticketId: promoted.ticketId, ticketKey: promoted.ticketKey },
@@ -389,7 +432,7 @@ if (facturarAhora) {
       errors.push({ dealId, lineItemId, error: err?.message || 'Unknown error' });
     }
   }
-
+  
   logger.info(
     { module: 'phase3', fn: 'runPhase3', dealId, invoicesEmitted, ticketsEnsured, errors: errors.length },
     'Phase 3 completada'
