@@ -294,7 +294,27 @@ function buildDesiredDates(lineItem) {
     d = next;
   }
 
+// DESPUÉS
+  // PLAN_FIJO: filtrar fechas ya cubiertas por tickets promovidos y fechas pasadas.
+  // Solo se generan forecasts para fechas futuras > lastTicketedYmd y > todayYmd.
+  if (!isAutoRenew) {
+    const filtered = dates.filter(d => d > todayYmd && (!lastTicketedYmd || d > lastTicketedYmd));
+    logger.debug(
+      {
+        module: 'phaseP',
+        fn: 'buildDesiredDates',
+        lastTicketedYmd,
+        todayYmd,
+        beforeFilter: dates.length,
+        afterFilter: filtered.length,
+      },
+      '[buildDesiredDates] PLAN_FIJO: fechas filtradas por lastTicketedYmd y today'
+    );
+    return { desiredCount: filtered.length, dates: filtered };
+  }
+
   return { desiredCount: dates.length, dates };
+
 }
 
 /**
