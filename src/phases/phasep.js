@@ -294,7 +294,13 @@ if (maxCount === 0) return { desiredCount: 0, dates: [] };
 
   // ── PLAN FIJO ───────────────────────────────────────────
   // floorYmd = max(todayYmd, lastTicketedYmd + 1 día)
-  let floorYmd = todayYmd;
+// anchor manual = existe Y es distinto de startDate
+const anchorEsManual = anchorYmd && anchorYmd !== startYmd;
+
+let floorYmd;
+if (anchorEsManual) {
+  // anchor puesto a mano → respetar hoy como piso
+  floorYmd = todayYmd;
   if (lastTicketedYmd) {
     const d0 = parseLocalDate(lastTicketedYmd);
     if (d0 && Number.isFinite(d0.getTime())) {
@@ -303,21 +309,32 @@ if (maxCount === 0) return { desiredCount: 0, dates: [] };
       if (plusOne > floorYmd) floorYmd = plusOne;
     }
   }
+} else {
+  // sin anchor manual → piso es lastTicketed+1, o startDate si no hay historial
+  floorYmd = lastTicketedYmd
+    ? (() => {
+        const d0 = parseLocalDate(lastTicketedYmd);
+        d0.setDate(d0.getDate() + 1);
+        return formatDateISO(d0);
+      })()
+    : startYmd;
+}
 
-  const seriesStartYmd = anchorYmd || startYmd;
-  const startDate = parseLocalDate(seriesStartYmd);
-  if (!startDate) return { desiredCount: 0, dates: [] };
+const seriesStartYmd = anchorYmd || startYmd;
+const startDate = parseLocalDate(seriesStartYmd);
+if (!startDate) return { desiredCount: 0, dates: [] };
 
-  // Avanzar por la serie hasta encontrar primera fecha >= floorYmd
-  let d = new Date(startDate.getTime());
-  let safety = 0;
-  while (formatDateISO(d) < floorYmd) {
-    const next = addInterval(d, interval);
-    if (!next || !Number.isFinite(next.getTime())) break;
-    if (next.getTime() === d.getTime()) break;
-    d = next;
-    if (++safety > 1200) break; // ~100 años en meses
-  }
+// Avanzar por la serie hasta encontrar primera fecha >= floorYmd
+let d = new Date(startDate.getTime());
+let safety = 0;
+while (formatDateISO(d) < floorYmd) {
+  const next = addInterval(d, interval);
+  if (!next || !Number.isFinite(next.getTime())) break;
+  if (next.getTime() === d.getTime()) break;
+  d = next;
+  if (++safety > 1200) break;
+}
+
 
   // Desde la primera fecha válida, generar exactamente maxCount fechas
   const dates = [];

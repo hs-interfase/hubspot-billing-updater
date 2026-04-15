@@ -54,6 +54,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
       'total_de_horas_consumidas',
       'cantidad_real',
       'total_real_a_facturar',
+      'subtotal_real',
       'cupo_consumo_invoice_id',
       'of_cupo_consumido',
       'of_invoice_id',
