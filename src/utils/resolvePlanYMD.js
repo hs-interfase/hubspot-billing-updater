@@ -39,7 +39,7 @@ export function resolvePlanYMD({ lineItemProps = {}, ticketProps = {}, context =
       ? fromLastTicketedYMD
       : fromNextYMD;
 
-  const planYMD = fromTicketYMD || resolvedNext || fromStartYMD || null;
+  const planYMD = fromTicketYMD || resolvedNext || (context?.flow === 'PHASE3' ? fromLastTicketedYMD : null) || fromStartYMD || null;
 
   if (process.env.DBG_PHASE1 === 'true') {
     const log = logger.child({ module: 'resolvePlanYMD', ...(context || {}) });
