@@ -32,7 +32,9 @@ export function verifyHubSpotSignature(req, res, next) {
     return res.status(401).json({ error: 'Request timestamp expired' });
   }
 
-  const fullUrl = req.protocol + '://' + req.get('host') + req.originalUrl;
+  const proto = req.headers['x-forwarded-proto'] || req.protocol;
+  const host = req.headers['x-forwarded-host'] || req.headers['host'] || req.get('host');
+  const fullUrl = proto + '://' + host + req.originalUrl;
   const rawBody = req.rawBody ?? '';
   const source = 'POST' + fullUrl + rawBody + timestamp;
 

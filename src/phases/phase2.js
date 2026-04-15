@@ -256,6 +256,23 @@ export async function runPhase2({ deal, lineItems }) {
       );
       continue;
     }
+
+    // Si es mirror UY, verificar si el PY origen es automático → skip
+    const pyOrigenId = String(lp.of_line_item_py_origen_id || '').trim();
+    if (pyOrigenId) {
+      let pyEsAutomatico = false;
+      try {
+        const pyLi = await hubspotClient.crm.lineItems.basicApi.getById(pyOrigenId, ['facturacion_automatica']);
+        pyEsAutomatico = parseBool(pyLi?.properties?.facturacion_automatica);
+      } catch (err) {
+        logger.warn({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId, err }, 'Error leyendo LI PY origen, asumiendo manual');
+      }
+      if (pyEsAutomatico) {
+        logger.info({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId }, 'LI mirror UY con PY automático, saltando Phase 2');
+        continue;
+      }
+    }
+
     try {
       const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
 

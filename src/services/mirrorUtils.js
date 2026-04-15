@@ -131,14 +131,14 @@ export async function findMirrorLineItem(pyLineItemId) {
   };
 }
 
-
 /**
  * Dado el ID de un line item PY automático que acaba de facturar,
- * encuentra su ticket forecast automático en el mirror UY y lo promueve
- * al pipeline manual en stage "Próximos a Facturar" (TICKET_STAGES.NEW),
- * cambiando además facturacion_automatica=false en el LI UY para que quede
- * operando como manual de ahí en adelante.
+ * encuentra su ticket forecast en el mirror UY y lo promueve al pipeline
+ * manual en stage "Próximos a Facturar" (TICKET_STAGES.NEW).
  * El admin luego lo mueve a "Listo para Facturar" (TICKET_STAGES.READY) para emitir.
+ *
+ * Solo debe llamarse cuando el LI PY es automático.
+ * Para PY manuales usar notifyMirrorDealOnManualEmission.
  *
  * Diseñado para llamarse fire-and-forget desde phase3 y urgentBillingService.
  * Nunca lanza — todos los errores son capturados y logueados.
@@ -182,13 +182,6 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
 
   const mirrorProps = mirrorLi?.properties || {};
   const mirrorLik = String(mirrorProps.line_item_key || '').trim();
-
-  // Solo aplica si el LI UY es automático (heredó facturacion_automatica=true del PY)
-  const esAutomatico = String(mirrorProps.facturacion_automatica || '').toLowerCase() === 'true';
-  if (!esAutomatico) {
-    log.debug({ mirrorLineItemId }, 'LI UY ya es manual, no requiere promoción');
-    return;
-  }
 
   if (!mirrorLik) {
     log.warn({ mirrorLineItemId }, 'LI UY sin line_item_key, no se puede buscar ticket');
@@ -250,20 +243,6 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
     return;
   }
 
-  // 5) Cambiar LI UY a facturacion_automatica=false
-  try {
-    await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
-      properties: {
-        facturacion_automatica: 'false',
-        mansoft_pendiente: 'true',
-      },
-    });
-    log.info({ mirrorLineItemId }, 'LI UY cambiado a facturacion_automatica=false');
-  } catch (err) {
-    // No crítico — el ticket ya está en manual, el LI puede corregirse después
-    log.warn({ err, mirrorLineItemId }, 'Error cambiando facturacion_automatica en LI UY (no crítico)');
-  }
-
   // 6) Notificar al deal UY que PY facturó y hay que facturar manualmente
   const productName = String(mirrorProps.name || '').trim() || 'Producto desconocido';
   const aviso = `Factura PY emitida. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId}. Revisar y facturar manualmente en UY.`;
@@ -276,4 +255,64 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   });
 
   log.info({ mirrorDealId, aviso }, 'Aviso de factura PY escrito en deal UY');
+}
+
+
+/**
+ * Cuando un LI PY manual emite factura, escribe un aviso en el deal UY espejo
+ * para que el equipo sepa que debe facturar manualmente.
+ * No promueve ticket — Phase 2 ya lo hizo dentro de la ventana de 30 días.
+ *
+ * Diseñado para llamarse fire-and-forget desde phase3.
+ * Nunca lanza — todos los errores son capturados y logueados.
+ *
+ * @param {string|number} pyLineItemId  ID del line item PY que facturó
+ * @param {string} billingYMD           Fecha de facturación YYYY-MM-DD
+ */
+export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD) {
+  const log = logger.child({
+    module: 'mirrorUtils',
+    fn: 'notifyMirrorDealOnManualEmission',
+    pyLineItemId: String(pyLineItemId),
+  });
+
+  // 1) Encontrar el LI UY espejo
+  let mirrorInfo;
+  try {
+    mirrorInfo = await findMirrorLineItem(pyLineItemId);
+  } catch (err) {
+    log.warn({ err }, 'Error buscando mirror line item, abortando aviso');
+    return;
+  }
+
+  if (!mirrorInfo) {
+    log.debug('Sin mirror UY para este LI PY, nada que notificar');
+    return;
+  }
+
+  const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
+
+  // 2) Leer LI UY: solo necesitamos name
+  let mirrorLi;
+  try {
+    mirrorLi = await hubspotClient.crm.lineItems.basicApi.getById(
+      String(mirrorLineItemId),
+      ['name']
+    );
+  } catch (err) {
+    log.warn({ err, mirrorLineItemId }, 'Error leyendo LI UY, abortando aviso');
+    return;
+  }
+
+  const productName = String(mirrorLi?.properties?.name || '').trim() || 'Producto desconocido';
+  const aviso = `Factura PY emitida (manual). Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
+
+  reportHubSpotError({
+    level: 'warn',
+    objectType: 'deal',
+    objectId: mirrorDealId,
+    message: aviso,
+  });
+
+  log.info({ mirrorDealId, aviso }, 'Aviso de factura PY manual escrito en deal UY');
 }

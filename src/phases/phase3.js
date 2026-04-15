@@ -14,7 +14,7 @@ import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
-import { promoteMirrorTicketToManualReady } from '../services/mirrorUtils.js';
+import { promoteMirrorTicketToManualReady, notifyMirrorDealOnManualEmission } from '../services/mirrorUtils.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
@@ -405,7 +405,10 @@ if (facturarAhora) {
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
           'Ticket promovido a READY (programado) y factura emitida'
         );
+        // PY automático: promover ticket UY + aviso
+        // PY manual: solo aviso (el ticket UY ya fue promovido por Phase 2)
         promoteMirrorTicketToManualReady(lineItemId, billingPeriodDate).catch(() => {});
+        notifyMirrorDealOnManualEmission(lineItemId, billingPeriodDate).catch(() => {});
 
       } else {
         logger.info(

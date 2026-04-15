@@ -469,6 +469,7 @@ const excludedProps = new Set([
     props.pais_operativo = 'Uruguay';
     props.hubspot_owner_id = userAdminMirror;
     props.of_line_item_py_origen_id = String(li.id).trim();
+    props.facturacion_automatica = 'false'; // mirrors UY siempre manuales
 
     const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
 
