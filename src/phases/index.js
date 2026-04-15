@@ -345,17 +345,21 @@ export async function runPhasesForDeal({ deal, lineItems }) {
         }
       }
 
+// DESPUÉS
       if (catchUpPromoted > 0) {
         logger.info(
           { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
           'Catch-up: tickets forecast atrasados promovidos a READY'
         );
-
-        // Refetch line items para que Phase 2/3 vean las fechas actualizadas
-        const refreshed = await getDealWithLineItems(dealId);
-        currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
-        currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
       }
+
+      // Refetch incondicional: Phase P y recalcFromTickets pueden actualizar
+      // billing_next_date en HubSpot sin reflejar el cambio en currentLineItems.
+      // Phase 2/3 necesitan leer el valor fresco para resolvePlanYMD.
+      const refreshedAfterCatchUp = await getDealWithLineItems(dealId);
+      currentDeal = refreshedAfterCatchUp?.deal || refreshedAfterCatchUp?.Deal || currentDeal;
+      currentLineItems = Array.isArray(refreshedAfterCatchUp?.lineItems)
+        ? refreshedAfterCatchUp.lineItems : currentLineItems;
     }
   } catch (err) {
     logger.error(

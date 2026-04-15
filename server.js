@@ -2,6 +2,10 @@
 import express from 'express'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import rateLimit from 'express-rate-limit'
+import logger from './lib/logger.js'
+import { validateEnv } from './src/config/validateEnv.js'
+import { verifyHubSpotSignature } from './api/hubspotSignature.js'
 import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
 import auditRouter from './api/invoice-editor/audit.js'         
@@ -18,13 +22,27 @@ import invoiceEditorRouter from './api/invoice-editor/invoices.js'
 import { invoiceEditorAuth } from './api/invoice-editor/auth.js'
 // ────────────────────────────────────────────────
 
+validateEnv();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
-app.use(express.json())
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); },
+}))
+
+// Rate limit para webhooks de HubSpot: máx 120 requests/minuto
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+})
 
 // ── Rutas existentes ──
-app.post('/api/escuchar-cambios', escucharCambios)
-app.post('/api/actualizar-webhook', actualizarWebhook)
+app.post('/api/escuchar-cambios', webhookLimiter, verifyHubSpotSignature, escucharCambios)
+app.post('/api/actualizar-webhook', webhookLimiter, verifyHubSpotSignature, actualizarWebhook)
 
 // ── Invoice Editor (con auth propio) ──
 app.use('/invoice-editor/api/audit', invoiceEditorAuth, auditRouter)   // ← ANTES ✅
@@ -57,4 +75,4 @@ await initDB()
 await initExchangeRatesTable() 
 await initNodumUploadsTable() 
 const PORT = process.env.PORT || 8080
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`))
+app.listen(PORT, '0.0.0.0', () => logger.info({ port: PORT }, 'Server running'))

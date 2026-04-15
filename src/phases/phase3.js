@@ -14,8 +14,8 @@ import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
-import { promoteMirrorTicketToManualReady } from '../services/mirrorUtils.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { promoteMirrorTicketToManualReady, notifyMirrorDealOnManualEmission } from '../services/mirrorUtils.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
   BILLING_AUTOMATED_READY,
@@ -47,13 +47,6 @@ import {
  * - Ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
  * - Si no existe el ticket forecast, se loggea error (Phase P debería haberlo creado).
  */
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function resolveDealBucket(dealstage) {
   const s = String(dealstage || '');
@@ -412,7 +405,10 @@ if (facturarAhora) {
           { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, ticketId: promoted.ticketId },
           'Ticket promovido a READY (programado) y factura emitida'
         );
+        // PY automático: promover ticket UY + aviso
+        // PY manual: solo aviso (el ticket UY ya fue promovido por Phase 2)
         promoteMirrorTicketToManualReady(lineItemId, billingPeriodDate).catch(() => {});
+        notifyMirrorDealOnManualEmission(lineItemId, billingPeriodDate).catch(() => {});
 
       } else {
         logger.info(

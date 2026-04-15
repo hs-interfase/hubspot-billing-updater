@@ -10,7 +10,7 @@ import { buildTicketFullProps } from '../services/tickets/ticketService.js';
 import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import {
   AUTOMATED_TICKET_PIPELINE,
@@ -50,13 +50,6 @@ const STAGE = {
 };
 
 // Unión de stages forecast manuales + automáticos
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function nowMontevideoYmd() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -194,7 +187,7 @@ function resolveForecastStage({ dealStage, automated }) {
 /**
  * Construye fechas deseadas según contrato.
  */
-function buildDesiredDates(lineItem) {
+function buildDesiredDates(lineItem, allTickets = []) {
   const p = lineItem?.properties || {};
   const cfg = getEffectiveBillingConfig(lineItem);
 
@@ -246,23 +239,22 @@ function buildDesiredDates(lineItem) {
   // CAMBIO: descontar pagos ya emitidos para plan fijo
   let maxCount;
   if (!isAutoRenew && term > 0) {
-    const pagosEmitidos = safeInt(p.pagos_emitidos) ?? 0;
-    maxCount = Math.min(Math.max(0, term - pagosEmitidos), hardMax);
+    const consumidos = allTickets.filter(t => !isForecastTicket(t)).length;
+    maxCount = Math.min(Math.max(0, term - consumidos), hardMax);
   } else {
     maxCount = hardMax;
   }
-
-  if (maxCount === 0) return { desiredCount: 0, dates: [] };
+if (maxCount === 0) return { desiredCount: 0, dates: [] };
 
   const todayYmd = nowMontevideoYmd();
   const lastTicketedYmd = toYmd(p.last_ticketed_date);
   const billingNextYmd = toYmd(p.billing_next_date);
   const anchorYmd = toYmd(p.billing_anchor_date);
 
-  // Anchor tiene prioridad; para autorenew arranca desde hoy
-  let seriesStartYmd = anchorYmd || startYmd;
-
+  // ── AUTO RENEW ──────────────────────────────────────────
   if (isAutoRenew) {
+    let seriesStartYmd = anchorYmd || startYmd;
+
     let effectiveTodayYmd = todayYmd;
     if (lastTicketedYmd) {
       const d0 = parseLocalDate(lastTicketedYmd);
@@ -277,29 +269,99 @@ function buildDesiredDates(lineItem) {
     if ((anchorYmd || startYmd) && (anchorYmd || startYmd) > seriesStartYmd) {
       seriesStartYmd = anchorYmd || startYmd;
     }
+
+    const startDate = parseLocalDate(seriesStartYmd);
+    if (!startDate) return { desiredCount: 0, dates: [] };
+
+    const horizonDate = new Date(startDate.getTime());
+    horizonDate.setFullYear(horizonDate.getFullYear() + 2);
+
+    const dates = [];
+    let d = new Date(startDate.getTime());
+
+    while (dates.length < maxCount) {
+      if (!d || !Number.isFinite(d.getTime())) break;
+      if (d.getTime() > horizonDate.getTime()) break;
+      dates.push(formatDateISO(d));
+      const next = addInterval(d, interval);
+      if (!next || !Number.isFinite(next.getTime())) break;
+      if (next.getTime() === d.getTime()) break;
+      d = next;
+    }
+
+    return { desiredCount: dates.length, dates };
   }
 
-  const startDate = parseLocalDate(seriesStartYmd);
-  if (!startDate) return { desiredCount: 0, dates: [] };
+  // ── PLAN FIJO ───────────────────────────────────────────
+  // floorYmd = max(todayYmd, lastTicketedYmd + 1 día)
+// anchor manual = existe Y es distinto de startDate
+const anchorEsManual = anchorYmd && anchorYmd !== startYmd;
 
-  const horizonDate = new Date(startDate.getTime());
-  horizonDate.setFullYear(horizonDate.getFullYear() + 2);
+let floorYmd;
+if (anchorEsManual) {
+  // anchor puesto a mano → respetar hoy como piso
+  floorYmd = todayYmd;
+  if (lastTicketedYmd) {
+    const d0 = parseLocalDate(lastTicketedYmd);
+    if (d0 && Number.isFinite(d0.getTime())) {
+      d0.setDate(d0.getDate() + 1);
+      const plusOne = formatDateISO(d0);
+      if (plusOne > floorYmd) floorYmd = plusOne;
+    }
+  }
+} else {
+  // sin anchor manual → piso es lastTicketed+1, o startDate si no hay historial
+  floorYmd = lastTicketedYmd
+    ? (() => {
+        const d0 = parseLocalDate(lastTicketedYmd);
+        d0.setDate(d0.getDate() + 1);
+        return formatDateISO(d0);
+      })()
+    : startYmd;
+}
 
+const seriesStartYmd = anchorYmd || startYmd;
+const startDate = parseLocalDate(seriesStartYmd);
+if (!startDate) return { desiredCount: 0, dates: [] };
+
+// Avanzar por la serie hasta encontrar primera fecha >= floorYmd
+let d = new Date(startDate.getTime());
+let safety = 0;
+while (formatDateISO(d) < floorYmd) {
+  const next = addInterval(d, interval);
+  if (!next || !Number.isFinite(next.getTime())) break;
+  if (next.getTime() === d.getTime()) break;
+  d = next;
+  if (++safety > 1200) break;
+}
+
+
+  // Desde la primera fecha válida, generar exactamente maxCount fechas
   const dates = [];
-  let d = new Date(startDate.getTime());
-
   while (dates.length < maxCount) {
     if (!d || !Number.isFinite(d.getTime())) break;
-    if (d.getTime() > horizonDate.getTime()) break;
-
-    dates.push(formatDateISO(d));
-
+    const ymd = formatDateISO(d);
+    dates.push(ymd);
     const next = addInterval(d, interval);
     if (!next || !Number.isFinite(next.getTime())) break;
     if (next.getTime() === d.getTime()) break;
-
     d = next;
   }
+
+  logger.debug(
+    {
+      module: 'phaseP',
+      fn: 'buildDesiredDates',
+      todayYmd,
+      lastTicketedYmd,
+      floorYmd,
+      firstValidYmd: dates[0] ?? null,
+      maxCount,
+      afterFilter: dates.length,
+      seriesStartYmd,
+    },
+    '[buildDesiredDates] PLAN_FIJO: fechas generadas'
+  );
 
   return { desiredCount: dates.length, dates };
 }
@@ -446,16 +508,13 @@ export async function runPhaseP({ deal, lineItems }) {
       }
 
       // 1) Fechas deseadas
-      const { desiredCount, dates } = buildDesiredDates(li);
+      const allTickets = await findTicketsByLineItemKey(lineItemKey);
+      const { desiredCount, dates } = buildDesiredDates(li, allTickets);
 
       logger.debug(
         { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lik: lineItemKey, desiredCount, count: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null },
         'Fechas deseadas para line item'
       );
-
-      // 2) Traer existentes
-      
-      const allTickets = await findTicketsByLineItemKey(lineItemKey);
       const forecastTickets = allTickets.filter(isForecastTicket);
 
       // 3) Si desiredCount=0 → borrar SOLO forecast existentes

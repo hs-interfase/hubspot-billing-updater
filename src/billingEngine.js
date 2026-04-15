@@ -2,28 +2,8 @@
 import { hubspotClient } from './hubspotClient.js';
 import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
 import logger from '../lib/logger.js';
-import { reportHubSpotError, reportHubSpotWarn } from "./utils/hubspotErrorCollector.js"; // src/ → mismo nivel
-
-/**
- * Reporta a HubSpot solo errores accionables (4xx excepto 429).
- * 429 y 5xx son transitorios → solo logger.error, sin reporte al objeto.
- */
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) {
-    // Sin status conocido → reportar por precaución
-    reportHubSpotError({ objectType, objectId, message });
-    return;
-  }
-  if (status === 429 || status >= 500) {
-    // Transitorio (rate-limit o error de servidor) → no spamear HubSpot
-    return;
-  }
-  if (status >= 400 && status < 500) {
-    // Accionable: configuración inválida, objeto no existe, permisos, etc.
-    reportHubSpotError({ objectType, objectId, message });
-  }
-}
+import { reportHubSpotWarn } from "./utils/hubspotErrorCollector.js";
+import { reportIfActionable } from "./utils/errorReporting.js";
 
 /**
  * =============================================================================

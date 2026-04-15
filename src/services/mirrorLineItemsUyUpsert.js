@@ -2,27 +2,10 @@
 
 import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
+import { getAllAssociatedIds } from '../utils/hubspotAssociations.js';
 
 const LINE_ITEM_TO_DEAL_ASSOC_ID = 20; // HUBSPOT_DEFINED
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-
-  // Si no hay status, preferimos reportar (puede ser error lógico/no HTTP)
-  if (status === null) {
-    reportHubSpotError({ objectType, objectId, message });
-    return;
-  }
-
-  // Evitar spam: rate limit / transitorios
-  if (status === 429 || status >= 500) return;
-
-  // Accionables: 4xx (excepto 429)
-  if (status >= 400 && status < 500) {
-    reportHubSpotError({ objectType, objectId, message });
-  }
-}
 
 /**
  * Upsert de un line item UY en el deal espejo.
@@ -42,15 +25,10 @@ export async function upsertUyLineItem(mirrorDealId, pyLineItem, buildUyProps) {
     pyLineItemId: pyId,
   });
 
-  // 1) Listar line items del deal espejo
-  let assocResp;
+  // 1) Listar line items del deal espejo (con paginación completa)
+  let uyLineItemIds;
   try {
-    assocResp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'deals',
-      String(mirrorDealId),
-      'line_items',
-      100
-    );
+    uyLineItemIds = await getAllAssociatedIds(hubspotClient, 'deals', String(mirrorDealId), 'line_items');
   } catch (err) {
     log.error({ err }, 'deal_line_items_assoc_list_failed');
     reportIfActionable({
@@ -59,10 +37,8 @@ export async function upsertUyLineItem(mirrorDealId, pyLineItem, buildUyProps) {
       message: `deal_line_items_assoc_list_failed: ${err?.message || err}`,
       err,
     });
-    throw err; // no cambiar flujo: esto antes habría explotado igual
+    throw err;
   }
-
-  const uyLineItemIds = (assocResp.results || []).map((r) => String(r.toObjectId));
 
   if (uyLineItemIds.length === 0) {
  // No hay line items asociados al deal espejo: es el primer sync.

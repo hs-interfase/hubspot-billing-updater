@@ -3,23 +3,7 @@
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
-
-/**
- * Helper anti-spam: reporta a HubSpot solo errores 4xx accionables (≠ 429).
- * 429 y 5xx son transitorios → solo logger.error, sin reporte.
- */
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) {
-    reportHubSpotError({ objectType, objectId, message });
-    return;
-  }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) {
-    reportHubSpotError({ objectType, objectId, message });
-  }
-}
+import { reportIfActionable } from '../utils/errorReporting.js';
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.

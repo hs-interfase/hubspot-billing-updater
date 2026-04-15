@@ -18,14 +18,7 @@ import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateU
 import { parseBool, safeString } from '../../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import logger from '../../../lib/logger.js';
-import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
+import { reportIfActionable } from '../../utils/errorReporting.js';
 
 /**
  * Garantiza que existan 24 tickets futuros para un line item en modo AUTO_RENEW.
@@ -356,7 +349,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_line_item_ids: lineItemId,
           of_line_item_key: lineItemKey,
           of_ticket_key: expectedKey,
-          observaciones_ventas: lineItem?.properties?.mensaje_para_responsable || '',
+          observaciones: lineItem?.properties?.mensaje_para_responsable || '',
           unidad_de_negocio: lineItem?.properties?.unidad_de_negocio || '',
           ...snapshots,
         };
@@ -512,7 +505,7 @@ export async function buildTicketFullProps({
     of_rubro: servicio,
     subject,
     fecha_resolucion_esperada: String(expectedYMD),
-    observaciones_ventas: safeString(lp.mensaje_para_responsable),
+    observaciones: safeString(lp.mensaje_para_responsable),
     hs_product_id: safeString(lp.hs_product_id) || undefined,
     ...snapshots,
   };

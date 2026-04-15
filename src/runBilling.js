@@ -5,6 +5,9 @@ import { emitInvoicesForReadyTickets } from "./invoices.js";
 import { fileURLToPath } from 'url';
 import { resolve } from 'path';
 import logger from "../lib/logger.js";
+import { validateEnv } from "./config/validateEnv.js";
+
+validateEnv();
 
 /**
  * Modo de ejecución:

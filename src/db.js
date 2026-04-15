@@ -1,8 +1,11 @@
 // src/db.js
 import pg from 'pg'
+import logger from '../lib/logger.js'
 
 const { Pool } = pg
 
+// rejectUnauthorized: false es necesario para Railway (TLS interno con cert self-signed).
+// Si migrás a una DB externa con cert válido, cambiar a rejectUnauthorized: true.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -18,7 +21,7 @@ export async function initExchangeRatesTable() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
-  console.log('[DB] Tabla exchange_rates lista.')
+  logger.info('[DB] Tabla exchange_rates lista.')
 }
 
 export default pool

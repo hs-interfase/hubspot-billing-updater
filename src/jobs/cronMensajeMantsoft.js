@@ -41,8 +41,9 @@ const LI_PROPS = [
   'billing_next_date', 'fecha_vencimiento_contrato',
   'hs_recurring_billing_number_of_payments', 'pagos_restantes',
   'renovacion_automatica', 'hs_recurring_billing_terms',
+  'hs_product_id', 'pagos_emitidos', 'billing_anchor_date',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
-  'observaciones_ventas', 'nota',
+  'observaciones', 'nota',
   'mansoft_pendiente', 'facturacion_automatica',
 ];
 
@@ -172,16 +173,50 @@ function groupByDeal(lineItems, liToDealMap) {
 // Helpers HubSpot
 // ────────────────────────────────────────────────────────────
 
-async function getDealName(dealId) {
+const ASSOC_LABEL_EMPRESA_FACTURA = 9;
+const ASSOC_LABEL_PERSONA_FACTURA = 7;
+
+async function getDealInfo(dealId) {
   try {
-    const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']);
-    return deal?.properties?.dealname || `Deal ${dealId}`;
+    const [deal, compAssoc, contAssoc] = await Promise.all([
+      hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']),
+      hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'companies', 100),
+      hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'contacts', 100),
+    ]);
+
+    const empresaId = (compAssoc?.results || [])
+      .find(r => r.associationTypes?.some(t => t.typeId === ASSOC_LABEL_EMPRESA_FACTURA))
+      ?.toObjectId;
+
+    const personaId = (contAssoc?.results || [])
+      .find(r => r.associationTypes?.some(t => t.typeId === ASSOC_LABEL_PERSONA_FACTURA))
+      ?.toObjectId;
+
+    const [empresaName, personaName] = await Promise.all([
+      empresaId
+        ? hubspotClient.crm.companies.basicApi.getById(String(empresaId), ['name'])
+            .then(r => r?.properties?.name || null).catch(() => null)
+        : Promise.resolve(null),
+      personaId
+        ? hubspotClient.crm.contacts.basicApi.getById(String(personaId), ['firstname', 'lastname'])
+            .then(r => {
+              const p = r?.properties || {};
+              return [p.firstname, p.lastname].filter(Boolean).join(' ') || null;
+            }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      dealName:            deal?.properties?.dealname || `Deal ${dealId}`,
+      empresa_que_factura: empresaName,
+      persona_que_factura: personaName,
+    };
   } catch (err) {
     logger.warn(
-      { module: 'cronMensajeMantsoft', fn: 'getDealName', dealId, err },
-      'No se pudo obtener nombre del deal'
+      { module: 'cronMensajeMantsoft', fn: 'getDealInfo', dealId, err },
+      'No se pudo obtener info del deal'
     );
-    return `Deal ${dealId}`;
+    return { dealName: `Deal ${dealId}`, empresa_que_factura: null, persona_que_factura: null };
   }
 }
 
@@ -258,8 +293,9 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
   for (const [dealId, items] of dealGroups) {
     try {
-      const dealName = await getDealName(dealId);
-      const html = buildMensajeMantsoft(items, dealName);
+      const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
+      const dealMeta = { empresa_que_factura, persona_que_factura };
+      const html = buildMensajeMantsoft(items, dealName, dealMeta);
 
       if (!html) {
         logger.warn(

@@ -1,17 +1,10 @@
 // api/actualizar-webhook.js
 import logger from '../lib/logger.js';
-import { reportHubSpotError } from '../src/utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../src/utils/errorReporting.js';
 import { hubspotClient, getDealWithLineItems } from "../src/hubspotClient.js";
 import { runPhasesForDeal } from "../src/phases/index.js";
 
 const MODULE = 'actualizar';
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function parseBool(value) {
   const s = String(value ?? "").trim().toLowerCase();

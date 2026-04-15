@@ -8,7 +8,7 @@ import { createTicketAssociations, getDealCompanies, getDealContacts } from '../
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
 import logger from '../../lib/logger.js';
-import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { withRetry } from '../utils/withRetry.js';
 import { 
@@ -40,13 +40,6 @@ import {
 // Phase 2 promueve aquí el ticket forecast manual cuando faltan ≤MANUAL_TICKET_LOOKAHEAD_DAYS días.
 // El admin puede editar el ticket en este stage antes de confirmarlo como "Listo para Facturar".
 const PROXIMOS_A_FACTURAR_STAGE = TICKET_STAGES.NEW;
-
-function reportIfActionable({ objectType, objectId, message, err }) {
-  const status = err?.response?.status ?? err?.statusCode ?? null;
-  if (status === null) { reportHubSpotError({ objectType, objectId, message }); return; }
-  if (status === 429 || status >= 500) return;
-  if (status >= 400 && status < 500) reportHubSpotError({ objectType, objectId, message });
-}
 
 function buildTicketKey(dealId, lineItemKey, ymd) {
   return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
@@ -263,6 +256,23 @@ export async function runPhase2({ deal, lineItems }) {
       );
       continue;
     }
+
+    // Si es mirror UY, verificar si el PY origen es automático → skip
+    const pyOrigenId = String(lp.of_line_item_py_origen_id || '').trim();
+    if (pyOrigenId) {
+      let pyEsAutomatico = false;
+      try {
+        const pyLi = await hubspotClient.crm.lineItems.basicApi.getById(pyOrigenId, ['facturacion_automatica']);
+        pyEsAutomatico = parseBool(pyLi?.properties?.facturacion_automatica);
+      } catch (err) {
+        logger.warn({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId, err }, 'Error leyendo LI PY origen, asumiendo manual');
+      }
+      if (pyEsAutomatico) {
+        logger.info({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId }, 'LI mirror UY con PY automático, saltando Phase 2');
+        continue;
+      }
+    }
+
     try {
       const persistedNext = (lp.billing_next_date ?? '').toString().slice(0, 10);
 

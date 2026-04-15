@@ -47,7 +47,7 @@ const TICKET_PROPS = [
   // snapshots de line item
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro',
-  'observaciones_ventas', 'nota',
+  'observaciones', 'nota',
   'monto_unitario_real', 'cantidad_real',
   'descuento_en_porcentaje', 'descuento_por_unidad_real',
   'of_aplica_para_cupo', 'of_costo', 'of_margen', 'of_iva',
@@ -72,7 +72,7 @@ const SNAPSHOT_MAP = [
   { from: 'description',              to: 'of_descripcion_producto',      source: 'lineItem' },
   { from: 'servicio',                 to: 'of_rubro',                     source: 'lineItem' },
   { from: 'subrubro',                 to: 'of_subrubro',                  source: 'lineItem' },
-  { from: 'mensaje_para_responsable', to: 'observaciones_ventas',         source: 'lineItem' },
+  { from: 'mensaje_para_responsable', to: 'observaciones',         source: 'lineItem' },
   { from: 'nota',                     to: 'nota',                         source: 'lineItem' },
   { from: 'pais_operativo',           to: 'of_pais_operativo',            source: 'lineItem', note: 'debería venir del deal' },
   { from: 'price',                    to: 'monto_unitario_real',          source: 'lineItem' },

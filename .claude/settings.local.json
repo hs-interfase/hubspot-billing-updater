@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l c:/Users/promi/OneDrive/Documentos/GitHub/hubspot-billing-updater/src/**/*.js)",
+      "Bash(wc -l /c/Users/promi/OneDrive/Documentos/GitHub/hubspot-billing-updater/src/services/*.js)",
+      "Bash(node -e \"require\\(''''express-rate-limit''''\\)\")"
+    ]
+  }
+}
