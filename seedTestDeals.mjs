@@ -34,7 +34,7 @@ import fs from 'fs';
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const PREFIX     = '[TEST-SEED]';
-const COMPANY_ID = '43833570850';
+const COMPANY_ID = '52069639218';
 const DEAL_STAGE = 'closedwon';   // 85%
 const DRY_RUN    = process.argv.includes('--dry');
 
@@ -274,7 +274,7 @@ async function main() {
         price:                           '1000',
         quantity:                        '2',
         hs_discount_percentage:          '10',
-        hs_tax_rate_group_id:            '16912720', // IVA Uruguay
+        hs_tax_rate_group_id:            '17287244', // IVA Uruguay
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: TODAY,
         hs_recurring_billing_period:     'P2M',   // 2 pagos mensuales

@@ -36,12 +36,12 @@ export function determineTicketFrequency(lineItem) {
 
 /**
  * Detecta si el line item tiene IVA según hs_tax_rate_group_id.
- * ID 16912720 = IVA Uruguay → "true"
+ * ID 17287244 = IVA Uruguay → "true"
  * Cualquier otro valor → "false"
  */
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
-  const result = raw === '16912720' ? 'true' : 'false';
+  const result = raw === '17287244' ? 'true' : 'false';
   logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result }, '[SNAPSHOT][IVA][A] detectIVA()');
   return result;
 }
