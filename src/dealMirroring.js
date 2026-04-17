@@ -420,7 +420,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   }
 
   // 4) Upsert en el espejo las líneas UY del negocio PY
-  const userAdminMirror = process.env.USER_ADMIN_MIRROR || '65820526';
+  const userAdminMirror = process.env.USER_ADMIN_MIRROR || '89701984';
 
   for (const li of uyLineItems) {
      try {
