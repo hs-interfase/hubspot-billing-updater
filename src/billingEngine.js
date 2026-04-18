@@ -544,16 +544,28 @@ if (dealContext?.dealId) {
     const currentAnchor = (p.billing_anchor_date ?? '').toString().slice(0, 10) || '';
     const startFromHS = (p.hs_recurring_billing_start_date ?? '').toString().slice(0, 10) || '';
     const startFallback = startDate ? formatDateISO(startDate) : '';
+    const newAnchor = startFromHS || startFallback;
 
-    if (!currentAnchor && (startFromHS || startFallback)) {
-      updatesRecurring.billing_anchor_date = startFromHS || startFallback;
+    const pagosEmitidos = Number(p.pagos_emitidos || 0);
+    const noHaIniciado = !lastTicketedYmd && pagosEmitidos === 0;
 
+    if (!currentAnchor && newAnchor) {
+      updatesRecurring.billing_anchor_date = newAnchor;
       logger.debug({
         module: 'billingEngine',
         fn: 'updateLineItemSchedule',
         lineItemId: lineItem.id,
         billing_anchor_date: updatesRecurring.billing_anchor_date,
       }, 'billing_anchor_date inicializada');
+    } else if (currentAnchor && newAnchor && noHaIniciado && currentAnchor !== newAnchor) {
+      updatesRecurring.billing_anchor_date = newAnchor;
+      logger.debug({
+        module: 'billingEngine',
+        fn: 'updateLineItemSchedule',
+        lineItemId: lineItem.id,
+        anchorAnterior: currentAnchor,
+        anchorNuevo: newAnchor,
+      }, 'billing_anchor_date actualizada: fecha de inicio cambió antes del primer ticket');
     }
   } catch (err) {
     logger.warn({ err, module: 'billingEngine', fn: 'updateLineItemSchedule', lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'no se pudo inicializar billing_anchor_date');

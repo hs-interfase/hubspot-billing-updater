@@ -6,7 +6,7 @@
     "after_s4": null
   },
   "weekend": {
-    "after_full": null
+    "after_full": "200"
   },
   "lastRun": {}
 }

@@ -264,7 +264,7 @@ return [
 function weekendFilters_full() {
 return [
   ...baseFiltersCancelled(),
-  ...baseFiltersNoMirrors(),
+  // ...baseFiltersNoMirrors(),
 ];
 }
 

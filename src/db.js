@@ -11,6 +11,35 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 })
 
+export async function initCronStateTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cron_state (
+      key        TEXT        PRIMARY KEY,
+      value      TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `)
+  logger.info('[DB] Tabla cron_state lista.')
+}
+
+export async function getCronState(key) {
+  const res = await pool.query(
+    `SELECT value FROM cron_state WHERE key = $1`,
+    [key]
+  )
+  return res.rows[0]?.value ?? null
+}
+
+export async function setCronState(key, value) {
+  await pool.query(
+    `INSERT INTO cron_state (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE
+       SET value      = EXCLUDED.value,
+           updated_at = now()`,
+    [key, value === null ? null : String(value)]
+  )
+}
 export async function initExchangeRatesTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS exchange_rates (

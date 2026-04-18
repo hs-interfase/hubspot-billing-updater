@@ -41,7 +41,8 @@ export function determineTicketFrequency(lineItem) {
  */
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
-  const result = raw === '17287244' ? 'true' : 'false';
+const ivaId = process.env.IVA_UY_TAX_GROUP_ID || '';
+const result = ivaId && raw === ivaId ? 'true' : 'false';
   logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result }, '[SNAPSHOT][IVA][A] detectIVA()');
   return result;
 }
