@@ -3,6 +3,7 @@
 import { isAutoRenew } from './mode.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
+import { INVOICED_TICKET_STAGES } from '../../config/constants.js';
 
 const INVOICE_LIK_PROP = 'line_item_key';
 

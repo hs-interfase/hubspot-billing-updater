@@ -173,7 +173,7 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
   try {
     mirrorLi = await hubspotClient.crm.lineItems.basicApi.getById(
       String(mirrorLineItemId),
-      ['line_item_key', 'facturacion_automatica', 'name', 'hs_recurring_billing_number_of_payments']
+    ['line_item_key', 'facturacion_automatica', 'name', 'hs_recurring_billing_number_of_payments', 'hs_recurring_billing_period']
     );
   } catch (err) {
     log.warn({ err, mirrorLineItemId }, 'Error leyendo LI UY, abortando');
