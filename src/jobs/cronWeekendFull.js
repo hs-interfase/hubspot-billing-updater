@@ -293,7 +293,6 @@ export async function runWeekendFullCron({ onlyDealId = null, once = false, dry 
     }
 
     // ---- Generator: full scan + overdue forecasts ----
-// ---- Generator: full scan + overdue forecasts ----
     const seen = new Set();
     let lastIdFull = await getCronState('weekend_last_id_full');
     let afterS4    = await getCronState('weekend_after_s4');
@@ -335,6 +334,7 @@ while (Date.now() < deadline) {
   if (deals.length === 0) {
     lastIdFull = null;
     await setCronState('weekend_last_id_full', null);
+    logger.info({ totalSeenAfterFullScan: seen.size }, "[cronWeekend] full_scan_done"); // ← acá
     break;
   }
 
