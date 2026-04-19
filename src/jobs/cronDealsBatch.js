@@ -5,6 +5,8 @@ import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
+import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
+import { initCronFailuresTable, insertCronFailure } from '../db.js'
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
 import {
@@ -138,14 +140,23 @@ function appendAudit(event) {
   }
 }
 
-function addFailed(dealId, reason) {
-  const today = getTodayYMD();
-  const data = readJson(FAILED_PATH, { date: today, items: [] });
-  if (data.date !== today) writeJson(FAILED_PATH, { date: today, items: [] });
-
-  const fresh = readJson(FAILED_PATH, { date: today, items: [] });
-  fresh.items.push({ dealId: String(dealId), reason: String(reason), at: new Date().toISOString() });
-  writeJson(FAILED_PATH, fresh);
+async function addFailed(dealId, reason, context = {}) {
+  try {
+    const today = getTodayYMD()
+    const data = readJson(FAILED_PATH, { date: today, items: [] })
+    if (data.date !== today) writeJson(FAILED_PATH, { date: today, items: [] })
+    const fresh = readJson(FAILED_PATH, { date: today, items: [] })
+    fresh.items.push({ dealId: String(dealId), reason: String(reason), at: new Date().toISOString() })
+    writeJson(FAILED_PATH, fresh)
+  } catch (e) {
+    logger.warn({ err: e?.message }, '[cron] addFailed: escritura en archivo falló')
+  }
+  await insertCronFailure({
+    jobName: 'cronDealsBatch',
+    dealId: String(dealId),
+    errorMsg: String(reason),
+    context,
+  })
 }
 
 // JS: 0=Sun..6=Sat
@@ -323,6 +334,8 @@ if (!acquireLock()) {
   });
 
   try {
+    await initCronFailuresTable();
+    
     if (!CANCELLED_STAGE_ID) {
     logger.warn(
             "[cron] CANCELLED_STAGE_ID not set -> NO excluirá cancelados"
@@ -637,7 +650,7 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
           failed++;
           processed++;
           const msg = e2?.message || String(e2);
-          addFailed(dealId, msg);
+          await addFailed(dealId, msg, { where: lastCtx?.where, mode });
           appendAudit({ at: new Date().toISOString(), type: "error", where: "deal_failed_twice", dealId, dealname: name, msg, mode });
         }
       }
@@ -670,9 +683,26 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
     );
   }
 
-  releaseLock();
+releaseLock();
   logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
   logger.info({ jobRunId }, "Cron finished");
+
+  const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
+  const failedDeals = failedItems.map(i => ({ dealId: i.dealId, error: i.reason }))
+
+  sendSummary({
+    jobName: 'cronDealsBatch',
+    mode,
+    processed,
+    ok,
+    failed,
+    skippedMirror,
+    skippedNoLI,
+    elapsedMs: Date.now() - start,
+    failedDeals,
+  }).catch(() => {})
+
+  pingHeartbeat().catch(() => {})
 }
 
   lastCtx = { where: ".start", dealId: null, ticketId: null, lineItemId: null, lineItemKey: null };

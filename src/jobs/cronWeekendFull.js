@@ -6,8 +6,9 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
+import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
 import logger from "../../lib/logger.js";
-import pool, { initCronStateTable, getCronState, setCronState } from "../db.js";
+import pool, { initCronStateTable, getCronState, setCronState, initCronFailuresTable, insertCronFailure } from "../db.js";
 import {
   FORECAST_MANUAL_STAGES,
 } from '../config/constants.js';
@@ -125,14 +126,23 @@ function appendAudit(event) {
   }
 }
 
-function addFailed(dealId, reason) {
-  const today = getTodayYMD();
-  const data = readJson(FAILED_PATH, { date: today, items: [] });
-  if (data.date !== today) writeJson(FAILED_PATH, { date: today, items: [] });
-
-  const fresh = readJson(FAILED_PATH, { date: today, items: [] });
-  fresh.items.push({ dealId: String(dealId), reason: String(reason), at: new Date().toISOString() });
-  writeJson(FAILED_PATH, fresh);
+async function addFailed(dealId, reason, context = {}) {
+  try {
+    const today = getTodayYMD()
+    const data = readJson(FAILED_PATH, { date: today, items: [] })
+    if (data.date !== today) writeJson(FAILED_PATH, { date: today, items: [] })
+    const fresh = readJson(FAILED_PATH, { date: today, items: [] })
+    fresh.items.push({ dealId: String(dealId), reason: String(reason), at: new Date().toISOString() })
+    writeJson(FAILED_PATH, fresh)
+  } catch (e) {
+    logger.warn({ err: e?.message }, '[cronWeekend] addFailed: escritura en archivo falló')
+  }
+  await insertCronFailure({
+    jobName: 'cronWeekendFull',
+    dealId: String(dealId),
+    errorMsg: String(reason),
+    context,
+  })
 }
 
 function parseBoolLoose(v) {
@@ -229,7 +239,8 @@ export async function runWeekendFullCron({ onlyDealId = null, once = false, dry 
 
   let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
-  await initCronStateTable();
+ await initCronStateTable();
+await initCronFailuresTable();
 
   appendAudit({
     at: new Date().toISOString(),
@@ -471,7 +482,7 @@ while (Date.now() < deadline) {
           failed++;
           processed++;
           const msg = e2?.message || String(e2);
-          addFailed(dealId, msg);
+          await addFailed(dealId, msg, { where: lastCtx?.where, mode });
           appendAudit({ at: new Date().toISOString(), type: "error", where: "deal_failed_twice", dealId, dealname: name, msg, mode });
         }
       }
@@ -510,6 +521,23 @@ while (Date.now() < deadline) {
     releaseLock();
     logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
     logger.info({ jobRunId }, "[cronWeekend] Cron finished");
+
+    const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
+    const failedDeals = failedItems.map(i => ({ dealId: i.dealId, error: i.reason }))
+
+    sendSummary({
+      jobName: 'cronWeekendFull',
+      mode,
+      processed,
+      ok,
+      failed,
+      skippedMirror,
+      skippedNoLI,
+      elapsedMs: Date.now() - start,
+      failedDeals,
+    }).catch(() => {})
+
+    pingHeartbeat().catch(() => {})
   }
 }
 
