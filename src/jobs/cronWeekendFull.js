@@ -191,9 +191,10 @@ function baseFiltersCancelled() {
 
 // Sin baseFiltersNoMirrors() — NEQ no funciona con campos vacíos en HubSpot.
 // Los mirrors se skipean en memoria via isMirrorDealFromDeal().
-function weekendFilters_full() {
+function weekendFilters_full({ afterId = null } = {}) {
   return [
     ...baseFiltersCancelled(),
+    ...(afterId ? [{ propertyName: "hs_object_id", operator: "GT", value: String(afterId) }] : []),
   ];
 }
 
@@ -294,43 +295,53 @@ export async function runWeekendFullCron({ onlyDealId = null, once = false, dry 
     // ---- Generator: full scan + overdue forecasts ----
 // ---- Generator: full scan + overdue forecasts ----
     const seen = new Set();
-    let afterFull = await getCronState('weekend_after_full');
-    let afterS4   = await getCronState('weekend_after_s4');
+    let lastIdFull = await getCronState('weekend_last_id_full');
+    let afterS4    = await getCronState('weekend_after_s4');
+
 
     async function* candidateDealsGenerator() {
       const props = dealPropsForSearch();
 
       // Full scan de deals
-      while (Date.now() < deadline) {
-        const resp = await searchDeals({
-          after: afterFull,
-          limit: PAGE_LIMIT,
-          filters: weekendFilters_full(),
-          properties: props,
-          sorts: SORTS,
-        });
+while (Date.now() < deadline) {
+  const resp = await searchDeals({
+    after: undefined,
+    limit: PAGE_LIMIT,
+    filters: weekendFilters_full({ afterId: lastIdFull }),
+    properties: props,
+    sorts: SORTS,
+  });
 
-        logger.info({ total: resp?.total, results: resp?.results?.length, nextAfter: resp?.paging?.next?.after || null }, "[cronWeekend] search_page");
+  const deals = resp?.results || [];
+  const pageLastId = deals.length > 0
+    ? String(Math.max(...deals.map(d => Number(d.id || d.properties?.hs_object_id))))
+    : null;
 
-        const deals = resp?.results || [];
-        const nextAfter = resp?.paging?.next?.after || null;
+  logger.info({
+    total: resp?.total,
+    results: deals.length,
+    lastIdFull,
+    pageLastId,
+  }, "[cronWeekend] search_page");
 
-        for (const d of deals) {
-          const id = String(d.id || d.properties?.hs_object_id);
-          if (!seen.has(id)) {
-            seen.add(id);
-            yield { id, summary: d };
-          }
-        }
+  for (const d of deals) {
+    const id = String(d.id || d.properties?.hs_object_id);
+    if (!seen.has(id)) {
+      seen.add(id);
+      yield { id, summary: d };
+    }
+  }
 
-        afterFull = nextAfter;
-        await sleep(500); // pausa entre páginas para reducir carga y evitar rate limits
-        if (!nextAfter || deals.length === 0) {
-          afterFull = null;
-          await setCronState('weekend_after_full', null);
-          break;
-        }
-      }
+  if (deals.length === 0) {
+    lastIdFull = null;
+    await setCronState('weekend_last_id_full', null);
+    break;
+  }
+
+  lastIdFull = pageLastId;
+  await setCronState('weekend_last_id_full', lastIdFull);
+  await sleep(500);
+}
 
       // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
       while (Date.now() < deadline) {
