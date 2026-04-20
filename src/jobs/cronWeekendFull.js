@@ -306,6 +306,7 @@ await initCronFailuresTable();
     // ---- Generator: full scan + overdue forecasts ----
     const seen = new Set();
     let lastIdFull = await getCronState('weekend_last_id_full');
+    const fullScanDoneDate = await getCronState('weekend_full_scan_done_date');
     if (fullScanDoneDate === today) {
       logger.info({ today }, "[cronWeekend] full_scan already done today, skipping");
       appendAudit({ at: new Date().toISOString(), type: "skip", reason: "full_scan_already_done_today", today });
