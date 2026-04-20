@@ -306,6 +306,11 @@ await initCronFailuresTable();
     // ---- Generator: full scan + overdue forecasts ----
     const seen = new Set();
     let lastIdFull = await getCronState('weekend_last_id_full');
+    if (fullScanDoneDate === today) {
+      logger.info({ today }, "[cronWeekend] full_scan already done today, skipping");
+      appendAudit({ at: new Date().toISOString(), type: "skip", reason: "full_scan_already_done_today", today });
+      return { mode, processed: 0, ok: 0, failed: 0, skippedMirror: 0, skippedNoLI: 0 };
+    }
     let afterS4    = await getCronState('weekend_after_s4');
 
 
@@ -345,6 +350,7 @@ while (Date.now() < deadline) {
   if (deals.length === 0) {
     lastIdFull = null;
     await setCronState('weekend_last_id_full', null);
+    await setCronState('weekend_full_scan_done_date', today); 
     logger.info({ totalSeenAfterFullScan: seen.size }, "[cronWeekend] full_scan_done"); // ← acá
     break;
   }
