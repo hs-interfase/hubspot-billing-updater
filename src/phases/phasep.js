@@ -13,6 +13,12 @@ import { withRetry } from '../utils/withRetry.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import {
+  buildMansoftSnapshot,
+  parseMansoftSnapshot,
+  diffMansoftSnapshots,
+  hasPreviousSnapshot,
+} from '../services/billing/mansoftSnapshot.js';
+import {
   AUTOMATED_TICKET_PIPELINE,
   BILLING_TICKET_FORECAST,
   BILLING_TICKET_FORECAST_50,
@@ -480,6 +486,65 @@ export async function runPhaseP({ deal, lineItems }) {
       const targetStage = resolveForecastStage({ dealStage, automated });
       const cfg = getEffectiveBillingConfig(li);
 
+       // ── Guard Mantsoft: detectar edición de LI automático ──
+      // Si el LI ya tiene snapshot previo Y alguna watched prop cambió,
+      // marcar mansoft_pendiente=true + tipo 'edicion' para que el cron
+      // lo tome esta noche. La 'alta' la maneja phase3 al emitir la
+      // primera factura.
+      if (automated && hasPreviousSnapshot(li)) {
+        try {
+          const prevSnap = parseMansoftSnapshot(p.mansoft_ultimo_snapshot);
+          const currSnap = buildMansoftSnapshot(li);
+          const diffs = diffMansoftSnapshots(prevSnap, currSnap);
+ 
+// DESPUÉS
+          if (diffs.length > 0) {
+            const currentTipo = String(p.mansoft_tipo_aviso || '').trim().toLowerCase();
+
+            // Detectar transición de pausa false → true
+            const pausaDiff = diffs.find(d => d.prop === 'pausa');
+            const transicionAPausa =
+              pausaDiff &&
+              parseBool(pausaDiff.after) === true &&
+              parseBool(pausaDiff.before) !== true;
+
+            // Regla de prioridad: baja > alta > edicion
+            let tipoFinal;
+            if (currentTipo === 'baja' || transicionAPausa) {
+              tipoFinal = 'baja';
+            } else if (currentTipo === 'alta') {
+              tipoFinal = 'alta';
+            } else {
+              tipoFinal = 'edicion';
+            }
+
+            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+              properties: {
+                mansoft_pendiente: 'true',
+                mansoft_tipo_aviso: tipoFinal,
+              },
+            });
+            logger.info(
+              {
+                module: 'phaseP',
+                fn: 'runPhaseP',
+                dealId,
+                lineItemId: li.id,
+                changedProps: diffs.map(d => d.prop),
+                tipo: tipoFinal,
+                transicionAPausa: !!transicionAPausa,
+              },
+              'Mantsoft: cambio detectado en LI automático'
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+            'Error detectando edición Mantsoft — no bloquea'
+          );
+        }
+      }
+ 
       logger.debug(
         {
           module: 'phaseP',
@@ -744,28 +809,10 @@ for (const t of allTickets) {
         );
       }
 
-      if (changed) {
+ if (changed) {
         await updateLineItemLastGeneratedAt(li.id);
-
-        // Si el LI es automático, marcar mansoft_pendiente para que
-        // el cronMensajeMantsoft genere/actualice el aviso en el deal.
-        if (automated && String(p.mansoft_pendiente || '').toLowerCase() !== 'true') {
-          try {
-            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-              properties: { mansoft_pendiente: 'true' },
-            });
-            logger.debug(
-              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id },
-              'mansoft_pendiente seteado en LI automático'
-            );
-          } catch (err) {
-            logger.warn(
-              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
-              'No se pudo setear mansoft_pendiente — no bloquea'
-            );
-          }
-        }
       }
+ 
     } catch (err) {
       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');
     }

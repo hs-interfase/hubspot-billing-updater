@@ -167,6 +167,8 @@ export async function getDealWithLineItems(dealId) {
     "facturacion_ultima_fecha",
     "facturacion_mensaje_proximo_aviso",
     "mensaje_de_facturacion",
+    'mansoft_ultimo_aviso',
+    'mensaje_mansoft',
 
     // --- cancelación ---
     "closed_lost_reason",
@@ -205,6 +207,7 @@ export async function getDealWithLineItems(dealId) {
     "hubspot_owner_id",
     "createdate",
     'mansoft_pendiente',
+    'mansoft_ultimo_snapshot',
 
     // --- facturación ---
     "facturacion_activa",
@@ -257,6 +260,9 @@ export async function getDealWithLineItems(dealId) {
     "subrubro",
     "reventa",
     "billing_error",
+
+    // --- mirror --
+    'of_line_item_py_origen_id',
 
     // --- referencias --
     "invoice_id",

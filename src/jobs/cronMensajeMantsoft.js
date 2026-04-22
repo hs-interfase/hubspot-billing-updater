@@ -9,8 +9,12 @@
 //   2. Resolver dealId de cada line item via associations batch API
 //   3. Agrupar por deal
 //   4. Para cada deal: construir HTML con buildMensajeMantsoft(lineItems, dealName)
-//   5. Escribir mensaje_de_facturacion en el deal
-//   6. Resetear mantsoft_pendiente = false en cada line item procesado
+//      Se mezclan altas y ediciones en el mismo mensaje.
+//   5. Escribir `mensaje_mansoft` en el deal
+//   6. Para cada LI procesado:
+//      - guardar snapshot actualizado en `mansoft_ultimo_snapshot`
+//      - resetear `mansoft_pendiente = false`
+//      - limpiar `mansoft_tipo_aviso = ''`
 //
 // Ejecución manual:
 //   node src/jobs/cronMensajeMantsoft.js
@@ -20,6 +24,10 @@
 import 'dotenv/config';
 import { hubspotClient } from "../hubspotClient.js";
 import { buildMensajeMantsoft } from '../services/billing/buildMensajeMantsoft.js';
+import {
+  buildMansoftSnapshot,
+  serializeMansoftSnapshot,
+} from '../services/billing/mansoftSnapshot.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
@@ -28,7 +36,7 @@ import { pathToFileURL } from 'url';
 // Config
 // ────────────────────────────────────────────────────────────
 
-const DEAL_PROPERTY = 'mensaje_de_facturacion';
+const DEAL_PROPERTY = 'mensaje_mansoft';
 
 const LI_PROPS = [
   'hs_object_id', 'hs_lastmodifieddate',
@@ -45,6 +53,8 @@ const LI_PROPS = [
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
   'observaciones', 'nota',
   'mansoft_pendiente', 'facturacion_automatica',
+  // Nuevas props para el sistema alta/edición
+  'mansoft_tipo_aviso', 'mansoft_ultimo_snapshot',
 ];
 
 // ────────────────────────────────────────────────────────────
@@ -104,12 +114,6 @@ async function searchLineItemsMantsoft() {
 // Associations batch: line items → deals
 // ────────────────────────────────────────────────────────────
 
-/**
- * Dado un array de line items, resuelve el dealId de cada uno
- * usando la batch associations API (una sola llamada).
- * Retorna Map<lineItemId, dealId>
- */
-
 async function resolveDealsForLineItems(lineItems) {
   const result = new Map();
   if (lineItems.length === 0) return result;
@@ -146,10 +150,6 @@ async function resolveDealsForLineItems(lineItems) {
 // Agrupación por deal
 // ────────────────────────────────────────────────────────────
 
-/**
- * Agrupa line items por dealId usando el mapa de associations.
- * Retorna Map<dealId, lineItem[]>
- */
 function groupByDeal(lineItems, liToDealMap) {
   const map = new Map();
 
@@ -226,9 +226,20 @@ async function writeMensaje(dealId, html) {
   });
 }
 
-async function resetMantoftPendiente(lineItemId) {
-  await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-    properties: { mansoft_pendiente: 'false' },
+/**
+ * Al terminar de avisar sobre un LI:
+ *  - guarda snapshot nuevo (refleja el estado ya notificado)
+ *  - resetea mansoft_pendiente a false
+ *  - limpia mansoft_tipo_aviso
+ */
+async function finalizeLineItemAfterNotify(li) {
+  const snap = buildMansoftSnapshot(li);
+  await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+    properties: {
+      mansoft_pendiente: 'false',
+      mansoft_tipo_aviso: '',
+      mansoft_ultimo_snapshot: serializeMansoftSnapshot(snap),
+    },
   });
 }
 
@@ -256,7 +267,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
     return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0 };
   }
 
-  // 2. Resolver dealId de todos los line items en una sola llamada batch
+  // 2. Resolver dealId via associations batch
   const liToDealMap = await resolveDealsForLineItems(lineItems);
 
   logger.info(
@@ -267,7 +278,6 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
   // 3. Agrupar por deal
   let dealGroups = groupByDeal(lineItems, liToDealMap);
 
-  // Si --deal, filtrar solo ese
   if (onlyDealId) {
     const targetId = String(onlyDealId);
     if (dealGroups.has(targetId)) {
@@ -318,15 +328,15 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
       // Escribir mensaje en el deal
       await writeMensaje(dealId, html);
 
-      // Resetear flag en cada line item
+      // Por cada LI: guardar snapshot + resetear flag + limpiar tipo
       for (const li of items) {
         try {
-          await resetMantoftPendiente(li.id);
+          await finalizeLineItemAfterNotify(li);
           lineItemsReset++;
         } catch (err) {
           logger.error(
             { module: 'cronMensajeMantsoft', dealId, lineItemId: li.id, err },
-            'Error reseteando mansoft_pendiente'
+            'Error finalizando line item (snapshot/flag/tipo)'
           );
           errors++;
         }
@@ -335,7 +345,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
       dealsProcessed++;
       logger.info(
         { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: items.length },
-        '✅ Mensaje Mantsoft escrito y line items reseteados'
+        '✅ Mensaje Mantsoft escrito y line items finalizados'
       );
 
     } catch (err) {

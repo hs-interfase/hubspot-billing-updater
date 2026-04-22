@@ -1,6 +1,8 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { cancelForecastTickets } from '../tickets/cancelForecastTickets.js';
 import logger from '../../../lib/logger.js';
+import { markMansoftBaja } from '../../services/billing/mansoftSnapshot.js';
+import { parseBool } from '../../utils/parsers.js';
 // En cancelDeal.js, agregar import de las constantes
 import {
   DEAL_STAGE_LOST,
@@ -71,5 +73,29 @@ export async function propagateDealCancellation({ dealId, dealProps, lineItems }
       { module: 'cancelDeal', dealId, err },
       'Error en cancelForecastTickets'
     );
+  }
+  // 3) Marcar line items automáticos como baja Mantsoft
+  const automaticos = (lineItems || []).filter(li =>
+    parseBool(li?.properties?.facturacion_automatica)
+  );
+
+  if (automaticos.length > 0) {
+    logger.info(
+      { module: 'cancelDeal', dealId, count: automaticos.length },
+      'Marcando LIs automáticos como baja Mantsoft'
+    );
+
+    for (const li of automaticos) {
+      try {
+        await markMansoftBaja(li.id, {
+          tipoActual: li?.properties?.mansoft_tipo_aviso,
+        });
+      } catch (err) {
+        logger.error(
+          { module: 'cancelDeal', dealId, lineItemId: li?.id, err },
+          'Error marcando baja Mantsoft en LI — no bloquea'
+        );
+      }
+    }
   }
 }

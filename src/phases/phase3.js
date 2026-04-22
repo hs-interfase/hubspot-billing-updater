@@ -389,13 +389,16 @@ if (facturarAhora) {
 
         const { created } = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });
 
-        // Primera factura del plan → notificar a Mantsoft
+        // Primera factura del plan → notificar a Mantsoft como ALTA
         if (created && !isMirrorLI) {
           hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-            properties: { mansoft_pendiente: 'true' },
+            properties: {
+              mansoft_pendiente: 'true',
+              mansoft_tipo_aviso: 'alta',
+            },
           }).catch(err => logger.warn(
             { module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err },
-            'Error seteando mansoft_pendiente (no bloquea)'
+            'Error seteando mansoft_pendiente/tipo (no bloquea)'
           ));
         }
         
