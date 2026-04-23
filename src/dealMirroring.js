@@ -489,12 +489,14 @@ const excludedProps = new Set([
         props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
       }
     } else {
-      props.price = String(unitCost);
+      const qty = parseFloat(srcPropsLi.quantity) || 1;
+      const unitPrice = unitCost / qty;
+      props.price = String(unitPrice);
       props.hs_cost_of_goods_sold = '0';
-
+    
       logger.debug(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, price: unitCost },
-        'Línea UY espejada: price desde hs_cost_of_goods_sold'
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, unitCost, qty, unitPrice },
+        'Línea UY espejada: price = hs_cost_of_goods_sold / quantity'
       );
     }
 
