@@ -7,7 +7,7 @@ const { Pool } = pg
 // rejectUnauthorized: false es necesario para Railway (TLS interno con cert self-signed).
 // Si migrás a una DB externa con cert válido, cambiar a rejectUnauthorized: true.
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+connectionString: process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 })
 
@@ -95,6 +95,15 @@ export async function insertCronFailure({ jobName, dealId, errorMsg, context = {
     // No romper el cron si falla la escritura en DB
     logger.error({ err: err?.message, jobName, dealId }, '[DB] insertCronFailure falló')
   }
+}
+
+export async function getCronStateWithTimestamp(key) {
+  const res = await pool.query(
+    `SELECT value, updated_at FROM cron_state WHERE key = $1`,
+    [key]
+  )
+  if (!res.rows[0]) return null
+  return { value: res.rows[0].value, updatedAt: res.rows[0].updated_at }
 }
 
 /**

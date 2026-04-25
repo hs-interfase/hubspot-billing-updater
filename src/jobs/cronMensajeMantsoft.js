@@ -31,6 +31,8 @@ import {
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
+import { setCronState } from '../db.js';
+
 
 // ────────────────────────────────────────────────────────────
 // Config
@@ -370,6 +372,11 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
     { module: 'cronMensajeMantsoft', ...summary },
     '⚙️ Cron mensaje Mantsoft — fin'
   );
+  try {
+    await setCronState('mensaje_mantsoft_last_run', JSON.stringify(summary));
+  } catch (err) {
+    logger.warn({ module: 'cronMensajeMantsoft', err: err?.message }, 'No se pudo guardar cron state');
+  }
 
   return summary;
 }

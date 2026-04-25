@@ -235,3 +235,245 @@ export async function actualizarMensajeFacturacion(ticket, dealId) {
     '⚠️ actualizarMensajeFacturacion LEGACY llamada — esta función ya no se usa, el cron se encarga'
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+
+
+// src/services/billing/buildMensajeFacturacion.js
+//
+// Construye el HTML rich-text para la propiedad `mensaje_de_facturacion` del Deal.
+//
+// v3 — Batch: recibe un array de tickets y construye el mensaje completo
+// de una sola pasada.
+//
+// Llamado exclusivamente por cronMensajeFacturacion.js después de agrupar
+// todos los tickets READY de un deal.
+
+import { TICKET_PIPELINE } from '../../config/constants.js';
+import logger from '../../../lib/logger.js';
+
+// ────────────────────────────────────────────────────────────
+// Mapa producto_id → empresa facturante
+// ────────────────────────────────────────────────────────────
+
+const EMPRESA_POR_PRODUCTO = {
+  '33688819740': 'Interfase',     // iSCert
+  '33688695865': 'Interfase',     // PayRoll
+  '33695559578': 'ISA',           // Flota
+  '33688695870': 'ISA',           // iJServ
+  '33688819739': 'ISA',           // iGDoc
+  '33695807329': 'ISA',           // Portal
+  '33688695889': 'ISA PY',        // MiRecibo
+  '33695559589': 'ISA PY',        // MiFactura
+  '33695559590': 'ISA PY',        // i2
+  '33688943634': 'ISA Proyectos', // Proyectos
+};
+
+function resolverEmpresa(ticket) {
+  const productoId = val(ticket?.properties?.producto_id);
+  if (!productoId) return 'ISA PY';
+  return EMPRESA_POR_PRODUCTO[productoId] ?? 'ISA PY';
+}
+
+// ────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────
+
+function todayYMD() {
+  const tz = process.env.BILLING_TZ || 'America/Montevideo';
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = dtf.formatToParts(new Date());
+  const y = parts.find(p => p.type === 'year')?.value;
+  const m = parts.find(p => p.type === 'month')?.value;
+  const d = parts.find(p => p.type === 'day')?.value;
+  return `${y}-${m}-${d}`;
+}
+
+function horaActual() {
+  const tz = process.env.BILLING_TZ || 'America/Montevideo';
+  return new Date().toLocaleTimeString('es-UY', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+}
+
+function val(v) {
+  if (v === null || v === undefined || v === '') return null;
+  return String(v).trim();
+}
+
+function fmtNum(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? '-' : n.toFixed(2);
+}
+
+function resolverFrecuencia(ticket) {
+  const tp = ticket?.properties || {};
+  const frecuencia = val(tp.of_frecuencia_de_facturacion);
+  const pipeline = val(tp.hs_pipeline);
+
+  if (frecuencia === 'Irregular' || frecuencia === 'Único') return frecuencia;
+
+  if (pipeline === TICKET_PIPELINE && frecuencia !== 'Único') {
+    return 'Irregular';
+  }
+
+  return frecuencia || '-';
+}
+
+// ────────────────────────────────────────────────────────────
+// Estilos inline
+// ────────────────────────────────────────────────────────────
+
+const STYLES = {
+  container:      'font-family:Arial,sans-serif;font-size:14px;color:#333;',
+  header:         'font-size:16px;font-weight:bold;color:#1a1a1a;margin-bottom:12px;',
+  sectionTitle:   'font-size:14px;font-weight:bold;color:#0056b3;margin:16px 0 8px 0;',
+  row:            'margin:4px 0;padding:2px 0;',
+  label:          'font-weight:bold;color:#555;',
+  lineItemDiv:    'background:#f7f9fc;border:1px solid #dde3eb;border-radius:6px;padding:12px;margin:10px 0;',
+  lineItemTitle:  'font-size:14px;font-weight:bold;color:#0056b3;margin-bottom:8px;border-bottom:1px solid #dde3eb;padding-bottom:6px;',
+  empresaISA:     'color:#0056b3;font-weight:bold;',
+  empresaInterfase: 'color:#6a0dad;font-weight:bold;',
+  empresaISAPY:   'color:#e07b00;font-weight:bold;',
+  separator:      'border:0;border-top:1px solid #eee;margin:12px 0;',
+  footer:         'margin-top:16px;padding-top:8px;border-top:1px solid #dde3eb;font-size:12px;color:#888;',
+};
+
+function empresaStyle(empresa) {
+  if (empresa === 'Interfase') return STYLES.empresaInterfase;
+  if (empresa === 'ISA PY' || empresa === 'ISA Proyectos') return STYLES.empresaISAPY;
+  return STYLES.empresaISA;
+}
+
+// ────────────────────────────────────────────────────────────
+// Builders
+// ────────────────────────────────────────────────────────────
+
+function buildRow(label, value) {
+  if (value === null || value === undefined || value === '') return '';
+  return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${value}</div>`;
+}
+
+function buildHeader(firstTicket, dealName) {
+  const tp = firstTicket?.properties || {};
+  const hoy = todayYMD();
+
+  return [
+    `<div style="${STYLES.container}">`,
+    `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
+
+    `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
+    buildRow('Nombre del Negocio', dealName || '-'),
+    buildRow('Cliente', val(tp.nombre_empresa)),
+    buildRow('Moneda', val(tp.of_moneda)),
+
+    `<hr style="${STYLES.separator}">`,
+    `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
+  ].filter(r => r !== '').join('\n');
+}
+
+function buildLineItemDiv(ticket) {
+  const tp = ticket?.properties || {};
+  const frecuencia = resolverFrecuencia(ticket);
+  const empresa = resolverEmpresa(ticket);
+  const esUnico = frecuencia === 'Único';
+
+  // Contacto factura: primero empresa, luego persona, sino vacío
+  const contactoLabel = val(tp.empresa_que_factura)
+    ? buildRow('Empresa que factura', val(tp.empresa_que_factura))
+    : val(tp.persona_que_factura)
+      ? buildRow('Persona que factura', val(tp.persona_que_factura))
+      : '';
+
+  return [
+    `<div style="${STYLES.lineItemDiv}">`,
+    `<div style="${STYLES.lineItemTitle}">`,
+    `  ${val(tp.of_producto_nombres) || 'Producto'}`,
+    `  — <span style="${empresaStyle(empresa)}">${empresa}</span>`,
+    `</div>`,
+
+    buildRow('Fecha de factura', todayYMD()),
+    contactoLabel,
+    buildRow('Descripción', val(tp.of_descripcion_producto)),
+    buildRow('Rubro', val(tp.of_rubro)),
+    buildRow('Unidad de Negocio', val(tp.unidad_de_negocio)),
+    buildRow('Cantidad', fmtNum(tp.cantidad_real)),
+    buildRow('Subtotal', fmtNum(tp.subtotal_real)),
+    buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
+    buildRow('Frecuencia de Facturación', frecuencia),
+    buildRow('Observaciones', val(tp.observaciones_ventas)),
+
+    !esUnico
+      ? buildRow(
+          'Fecha de vencimiento del contrato',
+          val(tp.fecha_resolucion_esperada)?.slice(0, 10)
+        )
+      : '',
+
+    `</div>`,
+  ].filter(r => r !== '').join('\n');
+}
+
+function buildFooter(ticketIds) {
+  const hoy = todayYMD();
+  return [
+    `<div style="${STYLES.footer}">`,
+    `Generado automáticamente — ${hoy} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,
+    `</div>`,
+    `</div>`,
+  ].join('\n');
+}
+
+// ────────────────────────────────────────────────────────────
+// Función principal (batch)
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Construye el HTML completo del mensaje de facturación a partir de
+ * un array de tickets.
+ *
+ * @param {Object[]} tickets  - Array de tickets (con properties)
+ * @param {string}   dealName - Nombre del deal (para el encabezado)
+ * @returns {string}          - HTML completo
+ */
+/*
+export function buildMensajeFacturacion(tickets, dealName) {
+  if (!tickets || tickets.length === 0) return '';
+
+  const header = buildHeader(tickets[0], dealName);
+  const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
+  const ticketIds = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
+  const footer = buildFooter(ticketIds);
+
+  return header + '\n' + lineItemDivs + '\n' + footer;
+}
+
+// ── Legacy export ──
+export async function actualizarMensajeFacturacion(ticket, dealId) {
+  logger.warn(
+    {
+      module: 'buildMensajeFacturacion',
+      fn: 'actualizarMensajeFacturacion',
+      dealId,
+      ticketId: ticket?.id,
+    },
+    '⚠️ actualizarMensajeFacturacion LEGACY llamada — esta función ya no se usa, el cron se encarga'
+  );
+}
+*/

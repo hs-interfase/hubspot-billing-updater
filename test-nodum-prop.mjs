@@ -1,38 +1,23 @@
-// test-nodum-prop.mjs
-import { hubspotClient } from './src/hubspotClient.js'
+// getTaxGroups.mjs
+import 'dotenv/config';
+import { Client } from '@hubspot/api-client';
 
-// Probar con los primeros 5 IDs de la lista
-const ids = [
-  '004D16F3C7B4DF8A03258CFC0066EA41',
-  '015283E172EA00DB03258C0C006DD2EC',
-  '01FB698A3BC26EF703258CA80057FFC3',
-  '0248ACD766DEE5B603258B46006D7A3C',
-  '0272FBE61D1B855203258CCB00051423',
-]
+const hubspot = new Client({ accessToken: process.env.HUBSPOT_PRIVATE_TOKEN });
 
-// Primero: ¿hay algún deal con id_crm_origen poblado?
-const check = await hubspotClient.crm.deals.searchApi.doSearch({
-  filterGroups: [{
-    filters: [{ propertyName: 'id_crm_origen', operator: 'HAS_PROPERTY' }]
-  }],
-  properties: ['dealname', 'id_crm_origen'],
-  limit: 3
-})
-console.log('Deals con id_crm_origen poblado:', check.total)
-for (const d of (check.results || [])) {
-  console.log(`  ${d.id} | ${d.properties.id_crm_origen} | ${d.properties.dealname}`)
-}
+const assocs = await hubspot.crm.associations.v4.basicApi.getPage('deals', '59418974382', 'line_items', 100);
+const liIds = (assocs.results || []).map(r => String(r.toObjectId));
 
-// Luego buscar los IDs específicos
-console.log('\n--- Buscando IDs específicos ---')
-for (const id of ids) {
-  const resp = await hubspotClient.crm.deals.searchApi.doSearch({
-    filterGroups: [{
-      filters: [{ propertyName: 'id_crm_origen', operator: 'EQ', value: id }]
-    }],
-    properties: ['dealname', 'id_crm_origen', 'amount', 'deal_currency_code'],
-    limit: 1
-  })
-  const deal = resp.results?.[0]
-  console.log(`${id} -> ${deal ? `${deal.properties.dealname} (${deal.properties.deal_currency_code} ${deal.properties.amount})` : 'NO ENCONTRADO'}`)
+console.log(`\nLine items del deal 59418974382: ${liIds.length}\n`);
+
+for (const id of liIds) {
+  const li = await hubspot.crm.lineItems.basicApi.getById(id, [
+    'name', 'hs_tax_rate_group_id', 'hs_tax_rate', 'hs_tax_category',
+  ]);
+  const p = li.properties;
+  console.log(`  ID: ${id}`);
+  console.log(`    Nombre:            ${p.name || '(sin nombre)'}`);
+  console.log(`    tax_rate_group_id: ${p.hs_tax_rate_group_id || '(vacío)'}`);
+  console.log(`    tax_rate:          ${p.hs_tax_rate ?? '(vacío)'}`);
+  console.log(`    tax_category:      ${p.hs_tax_category || '(vacío)'}`);
+  console.log('');
 }

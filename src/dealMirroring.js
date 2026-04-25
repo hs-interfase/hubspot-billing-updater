@@ -12,6 +12,7 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 import logger from '../lib/logger.js';
+import { PROMOTED_STAGES } from './config/constants.js';
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
@@ -64,8 +65,52 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
 
     const origenExists = uyOrigenIdsSet.has(origenId);
 
-    // Caso 1: huérfano -> desasociar
+// Caso 1: huérfano -> guard de tickets promovidos antes de eliminar
     if (!origenExists) {
+      // Verificar si el LI mirror tiene tickets en stages promovidos/emitidos
+      let hasPromoted = false;
+      try {
+        const ticketIds = await getAssocIdsV4('line_items', String(li.id), 'tickets', 500);
+        if (ticketIds.length) {
+          const ticketBatch = await hubspotClient.crm.tickets.batchApi.read({
+            inputs: ticketIds.map((id) => ({ id: String(id) })),
+            properties: ['hs_pipeline_stage'],
+          });
+          hasPromoted = (ticketBatch.results || []).some((t) =>
+            PROMOTED_STAGES.has(String(t.properties?.hs_pipeline_stage || ''))
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, err },
+          'Prune: error al verificar tickets promovidos, tratando como protegido'
+        );
+        hasPromoted = true; // fail-safe: no borrar si no pudimos verificar
+      }
+
+      if (hasPromoted) {
+        // Pausar en lugar de eliminar
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+            properties: {
+              pausa: 'true',
+              of_billing_error: 'LI pausado: el original PY perdió vínculo UY. Tiene tickets promovidos/emitidos.',
+            },
+          });
+          logger.info(
+            { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, name: p.name },
+            'Prune: huérfano con tickets promovidos — pausado en lugar de eliminado'
+          );
+        } catch (err) {
+          logger.warn(
+            { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, err },
+            'Prune: error al pausar huérfano protegido'
+          );
+        }
+        continue;
+      }
+
+      // Sin tickets promovidos: desasociar + archivar
       try {
         await hubspotClient.crm.associations.v4.basicApi.archive(
           'line_items',
@@ -73,15 +118,16 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
           'deals',
           String(mirrorDealId)
         );
+        await hubspotClient.crm.lineItems.basicApi.archive(String(li.id));
         prunedCount++;
         logger.info(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, name: p.name },
-          'Prune: desasociado huérfano'
+          'Prune: huérfano desasociado y archivado'
         );
       } catch (err) {
         logger.warn(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, err },
-          'Prune: error al desasociar huérfano'
+          'Prune: error al desasociar/archivar huérfano'
         );
       }
       continue;
@@ -480,7 +526,6 @@ const excludedProps = new Set([
       );
 
       props.price = '0';
-      props.hs_cost_of_goods_sold = '0';
 
       if ('mirror_missing_cost' in srcPropsLi) {
         props.mirror_missing_cost = 'true';
@@ -489,14 +534,11 @@ const excludedProps = new Set([
         props.nota = existingNote ? `${existingNote} | MISSING_COST` : 'MISSING_COST';
       }
     } else {
-      const qty = parseFloat(srcPropsLi.quantity) || 1;
-      const unitPrice = unitCost / qty;
-      props.price = String(unitPrice);
-      props.hs_cost_of_goods_sold = '0';
-    
+      props.price = String(unitCost);
+
       logger.debug(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, unitCost, qty, unitPrice },
-        'Línea UY espejada: price = hs_cost_of_goods_sold / quantity'
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, unitCost, unitPrice: unitCost },
+        'Línea UY espejada: price = hs_cost_of_goods_sold (costo directo)'
       );
     }
 
@@ -558,45 +600,38 @@ const excludedProps = new Set([
       'Check de espejo vacío falló'
     );
   }
+  // IDs de labels de asociación deals → companies
+  const ASSOC_LABEL_PRIMARY          = 5; // HUBSPOT_DEFINED
+  const ASSOC_LABEL_EMPRESA_FACTURA  = 2; // USER_DEFINED
 
-  // 5) Asociar Interfase PY al espejo
-  if (interfaseCompanyId) {
-    try {
-      await hubspotClient.crm.associations.v4.basicApi.createDefault(
-        'companies',
-        String(interfaseCompanyId),
-        'deals',
-        String(targetDealId)
-      );
-      logger.info(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId },
-        'Interfase PY asociada al espejo UY'
-      );
-    } catch (err) {
-      logger.warn(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId, err },
-        'No se pudo asociar Interfase al deal UY'
-      );
-    }
-  } else {
-    logger.warn(
-      { module: 'dealMirroring', fn: 'mirrorDealToUruguay' },
-      'INTERFASE_PY_COMPANY_ID no configurado'
-    );
-  }
-
-  // 6) Empresa beneficiaria (primera empresa del negocio PY)
+  // 5) Determinar empresa beneficiaria (primera empresa asociada al deal PY)
   const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
   const beneficiaryCompanyId =
     companyIds && companyIds.length > 0 ? String(companyIds[0]) : null;
 
-  // 7) Actualizar empresa beneficiaria a "Mixto"
+  // 6) Asociar empresa beneficiaria como PRIMARY del mirror UY
   if (beneficiaryCompanyId) {
     logger.info(
-      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', beneficiaryCompanyId },
-      'Procesando empresa beneficiaria'
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, beneficiaryCompanyId },
+      'Asociando empresa beneficiaria como Primary del mirror UY'
     );
 
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.create(
+        'deals',
+        String(targetDealId),
+        'companies',
+        String(beneficiaryCompanyId),
+        [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: ASSOC_LABEL_PRIMARY }]
+      );
+    } catch (err) {
+      logger.warn(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, beneficiaryCompanyId, err },
+        'No se pudo asociar beneficiaria como Primary'
+      );
+    }
+
+    // Setear cliente_beneficiario apuntando a la empresa principal (mantener por ahora, deprecar luego)
     try {
       await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
         properties: { cliente_beneficiario: beneficiaryCompanyId },
@@ -608,6 +643,7 @@ const excludedProps = new Set([
       );
     }
 
+    // Actualizar empresa beneficiaria a Mixto (operativa en ambos países)
     try {
       await hubspotClient.crm.companies.basicApi.update(beneficiaryCompanyId, {
         properties: { pais_operativo: 'Mixto' },
@@ -623,23 +659,8 @@ const excludedProps = new Set([
       );
     }
 
-    try {
-      await hubspotClient.crm.associations.v4.basicApi.createDefault(
-        'companies',
-        beneficiaryCompanyId,
-        'deals',
-        String(targetDealId)
-      );
-    } catch (err) {
-      // Ya estaba asociada — ignorar
-    }
-
-    // Actualizar contactos a "Mixto" y asociarlos al espejo
-    const beneficiaryContactIds = await getAssocIdsV4(
-      'companies',
-      beneficiaryCompanyId,
-      'contacts'
-    );
+    // Actualizar contactos a Mixto y asociarlos al mirror
+    const beneficiaryContactIds = await getAssocIdsV4('companies', beneficiaryCompanyId, 'contacts');
 
     logger.info(
       { module: 'dealMirroring', fn: 'mirrorDealToUruguay', beneficiaryCompanyId, contactsCount: beneficiaryContactIds.length },
@@ -652,7 +673,7 @@ const excludedProps = new Set([
           properties: { pais_operativo: 'Mixto' },
         });
       } catch (err) {
-        // Ignorar errores por contacto
+        // ignorar errores por contacto
       }
       try {
         await hubspotClient.crm.associations.v4.basicApi.createDefault(
@@ -662,9 +683,41 @@ const excludedProps = new Set([
           String(targetDealId)
         );
       } catch (err) {
-        // Ya estaba asociado
+        // ya estaba asociado
       }
     }
+  } else {
+    logger.warn(
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId },
+      'Deal PY sin empresa asociada — mirror UY quedará sin Primary'
+    );
+  }
+
+  // 7) Asociar Interfase PY como EMPRESA FACTURA del mirror UY
+  if (interfaseCompanyId) {
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.create(
+        'deals',
+        String(targetDealId),
+        'companies',
+        String(interfaseCompanyId),
+        [{ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_LABEL_EMPRESA_FACTURA }]
+      );
+      logger.info(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId },
+        'Interfase PY asociada como Empresa Factura del mirror UY'
+      );
+    } catch (err) {
+      logger.warn(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId, err },
+        'No se pudo asociar Interfase como Empresa Factura'
+      );
+    }
+  } else {
+    logger.warn(
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay' },
+      'INTERFASE_PY_COMPANY_ID no configurado'
+    );
   }
 
   // 8) Resumen final

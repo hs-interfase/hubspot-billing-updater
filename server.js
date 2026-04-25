@@ -69,7 +69,9 @@ app.get('/guia', (req, res) => {
 
 // ── Static & Health ──
 app.use(express.static(path.join(__dirname, 'public')))
+
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
+app.use('/health/audit', healthAuditRouter)
 
 await initDB()
 await initExchangeRatesTable() 

@@ -29,6 +29,8 @@ import {
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
+import { setCronState } from '../db.js';
+
 
 // ────────────────────────────────────────────────────────────
 // Config
@@ -413,6 +415,12 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
     { module: 'cronMensajeFacturacion', ...summary },
     '🔔 Cron mensaje facturación — fin'
   );
+
+    try {
+    await setCronState('mensaje_facturacion_last_run', JSON.stringify(summary));
+  } catch (err) {
+    logger.warn({ module: 'cronMensajeFacturacion', err: err?.message }, 'No se pudo guardar cron state');
+  }
 
   return summary;
 }

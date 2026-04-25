@@ -100,7 +100,7 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
         ],
       },
     ],
-    properties: ['hs_pipeline_stage', 'of_ticket_key'],
+    properties: ['hs_pipeline_stage', 'of_ticket_key', 'hs_pipeline'],
     limit: 100,
   };
 
@@ -134,7 +134,30 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
       logger.error({ module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t?.id, err }, 'unit_failed');
     }
   }
+// Cleanup: tickets sin of_ticket_key en pipelines de facturación
+  const BILLING_PIPELINES = new Set([TICKET_PIPELINE, AUTOMATED_TICKET_PIPELINE].filter(Boolean));
 
+  for (const t of allTickets) {
+    const tk = String(t?.properties?.of_ticket_key || '').trim();
+    if (tk) continue;
+
+    const pipeline = String(t?.properties?.hs_pipeline || '').trim();
+    if (!BILLING_PIPELINES.has(pipeline)) continue;
+
+    try {
+      await deleteTicket(t.id);
+      orphanDeleted++;
+      logger.info(
+        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t.id, pipeline },
+        'Ticket sin of_ticket_key en pipeline de facturación eliminado'
+      );
+    } catch (err) {
+      logger.warn(
+        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t.id, err },
+        'Error eliminando ticket sin key'
+      );
+    }
+  }
   logger.info(
     { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, forecastTotal: forecastTickets.length, orphanDeleted },
     'Cleanup de orphans completado'
@@ -245,7 +268,7 @@ function buildDesiredDates(lineItem, allTickets = []) {
   // CAMBIO: descontar pagos ya emitidos para plan fijo
   let maxCount;
   if (!isAutoRenew && term > 0) {
-    const consumidos = allTickets.filter(t => !isForecastTicket(t)).length;
+    const consumidos = allTickets.filter(t => !isForecastTicket(t) && String(t?.properties?.of_ticket_key || '').trim()).length;
     maxCount = Math.min(Math.max(0, term - consumidos), hardMax);
   } else {
     maxCount = hardMax;

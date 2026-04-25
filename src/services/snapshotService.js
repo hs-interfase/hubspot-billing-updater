@@ -36,14 +36,20 @@ export function determineTicketFrequency(lineItem) {
 
 /**
  * Detecta si el line item tiene IVA según hs_tax_rate_group_id.
- * ID 17287244 = IVA Uruguay → "true"
- * Cualquier otro valor → "false"
+ * si es iva = 'true'
+ * si es exento de iva = 'false'
+ * Cualquier otro valor → ""
  */
+const IVA_TAX_GROUP_ID    = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
+const EXENTO_TAX_GROUP_ID = (process.env.IVA_UY_EXENTO_TAX_GROUP_ID || '').trim();
+
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
-const ivaId = process.env.IVA_UY_TAX_GROUP_ID || '';
-const result = ivaId && raw === ivaId ? 'true' : 'false';
-  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result }, '[SNAPSHOT][IVA][A] detectIVA()');
+  let result;
+  if (IVA_TAX_GROUP_ID && raw === IVA_TAX_GROUP_ID)       result = 'true';
+  else if (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID) result = 'false';
+  else                                                     result = '';
+  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result, IVA_TAX_GROUP_ID, EXENTO_TAX_GROUP_ID }, '[SNAPSHOT][IVA][A] detectIVA()');
   return result;
 }
 
@@ -230,7 +236,7 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
 
   // ✅ Garantizar que of_iva siempre sea 'true' o 'false', nunca '' o null
   const ivaRaw = out.of_iva;
-  out.of_iva = String(ivaRaw ?? 'false') === 'true' ? 'true' : 'false';
+  out.of_iva = ivaRaw === 'true' ? 'true' : ivaRaw === 'false' ? 'false' : '';
   logger.info({
     module: 'snapshotService',
     fn: 'createTicketSnapshots',

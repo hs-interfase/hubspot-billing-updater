@@ -117,9 +117,17 @@ async function promoteToEjecucionIfNeeded(deal) {
   }
 }
 
+function filterActiveLineItems(lineItems) {
+  return lineItems.filter(li => {
+    const fc = String(li?.properties?.fechas_completas || '').trim().toLowerCase();
+    return fc !== 'true';
+  });
+}
+
 export async function runPhasesForDeal({ deal, lineItems }) {
   let currentDeal = deal;
   let currentLineItems = Array.isArray(lineItems) ? lineItems : [];
+  let activeLineItems = currentLineItems;
 
   const dealId = String(currentDeal?.id || currentDeal?.properties?.hs_object_id);
 
@@ -196,6 +204,15 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemsCount: currentLineItems.length },
       'Refetch post-Phase1 completado'
     );
+
+    // Filtro: excluir LIs completados de fases P/2/3
+    activeLineItems = filterActiveLineItems(currentLineItems);
+    if (activeLineItems.length < currentLineItems.length) {
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, total: currentLineItems.length, active: activeLineItems.length, skipped: currentLineItems.length - activeLineItems.length },
+        'Line items con fechas_completas=true excluidos de fases P/2/3'
+      );
+    }
   } catch (err) {
     logger.error(
       { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
@@ -271,7 +288,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
   // ========== PHASE P: Forecast/Promesa ==========
 
   try {
-    const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: currentLineItems });
+    const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems });
     results.phaseP = phasePResult;
     results.ticketsCreated += phasePResult?.created || 0;
 
@@ -360,6 +377,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       currentDeal = refreshedAfterCatchUp?.deal || refreshedAfterCatchUp?.Deal || currentDeal;
       currentLineItems = Array.isArray(refreshedAfterCatchUp?.lineItems)
         ? refreshedAfterCatchUp.lineItems : currentLineItems;
+      activeLineItems = filterActiveLineItems(currentLineItems);
     }
   } catch (err) {
     logger.error(
@@ -370,7 +388,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
   // ========== PHASE 2: Tickets manuales ==========
   try {
-    const phase2Result = await runPhase2({ deal: currentDeal, lineItems: currentLineItems });
+    const phase2Result = await runPhase2({ deal: currentDeal, lineItems: activeLineItems });
     results.phase2 = phase2Result;
     results.ticketsCreated = phase2Result?.ticketsCreated || 0;
 
@@ -388,7 +406,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
   // ========== PHASE 3: Facturas automáticas ==========
   try {
-    const phase3Result = await runPhase3({ deal: currentDeal, lineItems: currentLineItems });
+    const phase3Result = await runPhase3({ deal: currentDeal, lineItems: activeLineItems });
     results.phase3 = phase3Result;
     results.autoInvoicesEmitted = phase3Result?.invoicesEmitted || 0;
 

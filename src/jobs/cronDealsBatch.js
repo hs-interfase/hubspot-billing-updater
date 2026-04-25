@@ -6,7 +6,7 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
-import { initCronFailuresTable, insertCronFailure } from '../db.js'
+import { initCronFailuresTable, insertCronFailure, setCronState } from '../db.js'
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
 import {
@@ -670,6 +670,9 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
       skippedNoLI,
       stateSnapshot: state,
     });
+     await setCronState('weekday_last_run', JSON.stringify({
+      at: new Date().toISOString(), processed, ok, failed, skippedMirror, skippedNoLI,
+    }));
 
    return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
 } finally {

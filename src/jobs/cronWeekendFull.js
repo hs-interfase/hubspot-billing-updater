@@ -221,6 +221,86 @@ function dealPropsForSearch() {
     PROP_ORIGINAL_ID,
   ];
 }
+// -------------------- Layer 2: Billing Audit --------------------
+const PROP_TOTAL_PAGOS = process.env.PROP_TOTAL_PAGOS || "total_de_pagos";
+const PROP_LI_KEY = process.env.PROP_LI_KEY || "of_line_item_key";
+const AUDIT_FORECAST_HORIZON_DAYS = 730; // 2 años
+
+const billingAuditResults = { mismatches: [], missingForecast: [] };
+
+async function auditLineItemTickets(deal, lineItems) {
+  const dealId = String(deal.id || deal.properties?.hs_object_id);
+  const dealname = deal.properties?.dealname || dealId;
+
+  // Buscar todos los tickets asociados al deal
+  let allTickets = [];
+  try {
+    const assoc = await withRetry(() =>
+      hubspotClient.crm.deals.associationsApi.getAll(dealId, 'tickets')
+    );
+    const ticketIds = (assoc?.results || []).map(a => String(a.id || a.toObjectId));
+    if (ticketIds.length > 0) {
+      // Traer propiedades de cada ticket en batch
+      const batchResp = await withRetry(() =>
+        hubspotClient.crm.tickets.batchApi.read({
+          inputs: ticketIds.map(id => ({ id })),
+          properties: ['of_line_item_key', 'hs_pipeline_stage'],
+        })
+      );
+      allTickets = batchResp?.results || [];
+    }
+  } catch (e) {
+    logger.warn({ dealId, err: e?.message }, '[cronWeekend] auditLineItemTickets: no se pudieron obtener tickets');
+    return;
+  }
+
+  const today = new Date();
+  const horizonDate = new Date(today);
+  horizonDate.setDate(horizonDate.getDate() + AUDIT_FORECAST_HORIZON_DAYS);
+
+  for (const li of lineItems) {
+    const liProps = li.properties || {};
+    const lik = liProps[PROP_LI_KEY] || liProps.of_line_item_key || '';
+    if (!lik) continue;
+
+    const liTickets = allTickets.filter(t =>
+      String(t.properties?.of_line_item_key || '') === lik
+    );
+
+    const totalPagos = Number(liProps[PROP_TOTAL_PAGOS] || 0);
+
+    if (totalPagos > 0) {
+      // Check A: count vs total_de_pagos
+      if (liTickets.length !== totalPagos) {
+        billingAuditResults.mismatches.push({
+          dealId,
+          dealname,
+          lineItemId: li.id,
+          lik,
+          totalPagos,
+          ticketCount: liTickets.length,
+          diff: liTickets.length - totalPagos,
+        });
+      }
+    } else {
+      // Check B (auto-renew): verificar forecast futuro a 2 años
+      const forecastStages = new Set(FORECAST_MANUAL_STAGES);
+      const hasFutureForecast = liTickets.some(t => {
+        return forecastStages.has(t.properties?.hs_pipeline_stage);
+      });
+
+      if (!hasFutureForecast) {
+        billingAuditResults.missingForecast.push({
+          dealId,
+          dealname,
+          lineItemId: li.id,
+          lik,
+          reason: 'auto_renew_sin_forecast_futuro',
+        });
+      }
+    }
+  }
+}
 
 // -------------------- Main Runner --------------------
 export async function runWeekendFullCron({ onlyDealId = null, once = false, dry = false } = {}) {
@@ -433,9 +513,18 @@ while (Date.now() < deadline) {
         appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
         lastCtx = { ...lastCtx, where: "batch.runPhasesForDeal", dealId };
         if (!dry) await runPhasesForDeal({ deal, lineItems });
-        ok++;
-        processed++;
-        appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
+         ok++;
+         processed++;
+         appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
+
+         // Layer 2: auditar tickets vs total_de_pagos / forecast futuro
+         if (!dry) {
+           try {
+             await auditLineItemTickets(deal, lineItems);
+           } catch (eAudit) {
+             logger.warn({ dealId, err: eAudit?.message }, '[cronWeekend] billing audit failed for deal');
+           }
+          } 
 
         // Mirror inmediato
         const mirrorId = getMirrorIdFromOriginalDeal(deal);
@@ -529,10 +618,29 @@ while (Date.now() < deadline) {
     logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
     logger.info({ jobRunId }, "[cronWeekend] Cron finished");
 
-    const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
+const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
     const failedDeals = failedItems.map(i => ({ dealId: i.dealId, error: i.reason }))
 
-    sendSummary({
+    // Layer 2: log audit results
+    if (billingAuditResults.mismatches.length > 0 || billingAuditResults.missingForecast.length > 0) {
+      logger.warn({
+        mismatches: billingAuditResults.mismatches.length,
+        missingForecast: billingAuditResults.missingForecast.length,
+        details: {
+          mismatches: billingAuditResults.mismatches.slice(0, 20),
+          missingForecast: billingAuditResults.missingForecast.slice(0, 20),
+        },
+      }, '[cronWeekend] BILLING_AUDIT: discrepancias detectadas');
+
+      appendAudit({
+        at: new Date().toISOString(),
+        type: 'billing_audit',
+        mismatches: billingAuditResults.mismatches,
+        missingForecast: billingAuditResults.missingForecast,
+      });
+    }
+
+sendSummary({
       jobName: 'cronWeekendFull',
       mode,
       processed,
@@ -542,6 +650,12 @@ while (Date.now() < deadline) {
       skippedNoLI,
       elapsedMs: Date.now() - start,
       failedDeals,
+      billingAudit: (billingAuditResults.mismatches.length > 0 || billingAuditResults.missingForecast.length > 0)
+        ? {
+            mismatches: billingAuditResults.mismatches,
+            missingForecast: billingAuditResults.missingForecast,
+          }
+        : null,
     }).catch(() => {})
 
     pingHeartbeat().catch(() => {})

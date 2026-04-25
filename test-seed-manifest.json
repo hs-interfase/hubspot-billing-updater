@@ -1,42 +1,14 @@
 {
   "prefix": "[TEST-SEED]",
-  "createdAt": "2026-04-16T11:07:00.998Z",
-  "today": "2026-04-16",
+  "createdAt": "2026-04-25T19:46:45.746Z",
+  "today": "2026-04-25",
   "deals": [
     {
-      "dealId": "59227146164",
-      "dealName": "A — Manual / Plan Fijo / UY",
+      "dealId": "59678596392",
+      "dealName": "E — Mirror PY→UY Verificación Completa",
       "lineItemIds": [
-        "54331640359",
-        "54341250207",
-        "54351075587",
-        "54343573945"
-      ]
-    },
-    {
-      "dealId": "59243669164",
-      "dealName": "B — Automático / Plan Fijo + Auto-Renew / UY",
-      "lineItemIds": [
-        "54335237179",
-        "54334770958",
-        "54339391630"
-      ]
-    },
-    {
-      "dealId": "59219570607",
-      "dealName": "C — Cupo Monto / Bug Subtotal / UY",
-      "lineItemIds": [
-        "54343574017",
-        "54351075588"
-      ]
-    },
-    {
-      "dealId": "59235234337",
-      "dealName": "D — Mirror PY→UY (motor crea espejo)",
-      "lineItemIds": [
-        "54349048948",
-        "54340769946",
-        "54332881270"
+        "54778488142",
+        "54770423185"
       ]
     }
   ]

@@ -305,7 +305,7 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD)
   }
 
   const productName = String(mirrorLi?.properties?.name || '').trim() || 'Producto desconocido';
-  const aviso = `Factura PY emitida (manual). Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
+  const aviso = `Factura PY original ha sido enviada a facturar. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
 
   reportHubSpotError({
     level: 'warn',
