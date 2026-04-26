@@ -12,6 +12,7 @@ import auditRouter from './api/invoice-editor/audit.js'
 import { initDB } from './api/invoice-editor/Db.js'
 import { initExchangeRatesTable } from './src/db.js'
 import debugUrgent from './api/debugUrgent.js'  
+import healthAuditRouter from './api/healthAudit.js'
 // ── Nodum Upload ─────────────────────────────────
 import nodumUploadRouter from './api/nodum/nodumUpload.js'
 import { initNodumUploadsTable } from './api/nodum/nodumUpload.js'

@@ -31,7 +31,7 @@ import fs from 'fs';
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const PREFIX     = '[TEST-SEED]';
-const COMPANY_ID = process.env.TEST_COMPANY_ID || '52069639218';
+const COMPANY_ID = process.env.TEST_COMPANY_ID || '43833570850';
 const DEAL_STAGE = 'closedwon';   // 85%
 const DRY_RUN    = process.argv.includes('--dry');
 
