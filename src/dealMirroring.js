@@ -607,7 +607,7 @@ const excludedProps = new Set([
   }
   // IDs de labels de asociación deals → companies
   const ASSOC_LABEL_PRIMARY          = 5; // HUBSPOT_DEFINED
-  const ASSOC_LABEL_EMPRESA_FACTURA  = 2; // USER_DEFINED
+  const ASSOC_LABEL_EMPRESA_FACTURA  = 9; // USER_DEFINED
 
   // 5) Determinar empresa beneficiaria (primera empresa asociada al deal PY)
   const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
