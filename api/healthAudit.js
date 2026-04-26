@@ -1,6 +1,6 @@
 // src/routes/healthAudit.js
 import { Router } from 'express'
-import pool, { getCronStateWithTimestamp } from '../db.js'
+import pool, { getCronStateWithTimestamp } from '../src/db.js'
 import logger from '../../lib/logger.js'
 import { hubspotClient } from '../hubspotClient.js'
 import { TICKET_PIPELINE, TICKET_STAGES } from '../config/constants.js'
