@@ -48,7 +48,7 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
 
   const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
     inputs: mirrorLineItemIds.map((id) => ({ id: String(id) })),
-    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name', 'hs_lastmodifieddate', 'createdate'],
+    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name', 'line_item_key', 'hs_lastmodifieddate', 'createdate'],
   });
 
   let prunedCount = 0;
@@ -68,15 +68,20 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
 // Caso 1: huérfano -> guard de tickets promovidos antes de eliminar
     if (!origenExists) {
       // Verificar si el LI mirror tiene tickets en stages promovidos/emitidos
-      let hasPromoted = false;
+ let hasPromoted = false;
       try {
-        const ticketIds = await getAssocIdsV4('line_items', String(li.id), 'tickets', 500);
-        if (ticketIds.length) {
-          const ticketBatch = await hubspotClient.crm.tickets.batchApi.read({
-            inputs: ticketIds.map((id) => ({ id: String(id) })),
+        const lik = String(p.line_item_key || '').trim();
+        if (lik) {
+          const searchResp = await hubspotClient.crm.tickets.searchApi.doSearch({
+            filterGroups: [{
+              filters: [
+                { propertyName: 'of_line_item_key', operator: 'EQ', value: lik },
+              ],
+            }],
             properties: ['hs_pipeline_stage'],
+            limit: 100,
           });
-          hasPromoted = (ticketBatch.results || []).some((t) =>
+          hasPromoted = (searchResp.results || []).some((t) =>
             PROMOTED_STAGES.has(String(t.properties?.hs_pipeline_stage || ''))
           );
         }

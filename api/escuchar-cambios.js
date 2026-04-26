@@ -7,6 +7,8 @@ import { runPhasesForDeal } from '../src/phases/index.js';
 import { parseBool } from '../src/utils/parsers.js';
 import { processTicketUpdate } from '../src/services/tickets/ticketUpdateService.js';
 
+
+const dealProcessingLocks = new Map()
 const MODULE = 'escuchar-cambios';
 
 async function getDealIdForLineItem(lineItemId) {
@@ -52,9 +54,20 @@ async function processRecalculation(lineItemId, propertyName) {
 
   logger.info({ module: MODULE, fn: 'processRecalculation', dealId, dealName }, 'Deal resuelto');
 
-  // Delay defensivo: da tiempo a que corridas concurrentes (webhooks simultáneos
-  // por facturacion_activa + hs_billing_start_delay_type) terminen de escribir
-  // of_invoice_id en el ticket antes de que esta corrida pase los guards.
+// ── Lock por deal ──
+if (dealProcessingLocks.has(dealId)) {
+  logger.info(
+    { module: MODULE, fn: 'processRecalculation', dealId, lineItemId },
+    'Deal ya en proceso, descartando webhook duplicado'
+  );
+  return { skipped: true, reason: 'deal_already_processing' };
+}
+
+let releaseLock;
+const lockPromise = new Promise(resolve => { releaseLock = resolve; });
+dealProcessingLocks.set(dealId, lockPromise);
+
+try {
   const RECALC_DELAY_MS = Number(process.env.RECALC_DELAY_MS ?? 5000);
   if (RECALC_DELAY_MS > 0) {
     logger.info({ module: MODULE, fn: 'processRecalculation', dealId, delayMs: RECALC_DELAY_MS }, 'Delay defensivo pre-runPhases');
@@ -73,6 +86,10 @@ async function processRecalculation(lineItemId, propertyName) {
   }, 'Recalculación completada');
 
   return { success: true, dealId, dealName, billingResult };
+} finally {
+  dealProcessingLocks.delete(dealId);
+  releaseLock();
+}
 }
 
 export default async function handler(req, res) {

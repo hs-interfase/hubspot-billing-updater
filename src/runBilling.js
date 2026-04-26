@@ -9,6 +9,24 @@ import { validateEnv } from "./config/validateEnv.js";
 
 validateEnv();
 
+// ── Mirror helpers (misma lógica que cronDealsBatch.js) ──
+function parseBoolLoose(v) {
+  if (v === true) return true;
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "si";
+}
+
+function isMirrorDealFromDeal(deal) {
+  const p = deal?.properties || {};
+  if (parseBoolLoose(p.es_mirror_de_py)) return true;
+  return Boolean(String(p.deal_py_origen_id || "").trim());
+}
+
+function getMirrorIdFromOriginalDeal(deal) {
+  const p = deal?.properties || {};
+  return String(p.deal_uy_mirror_id || "").trim();
+}
+
 /**
  * Modo de ejecución:
  *   --deal <ID>     procesa un solo negocio
@@ -113,12 +131,18 @@ export async function runBilling({ dealId, allDeals } = {}) {
   let totalInvoicesAuto = 0;
 
   for (const id of ids) {
-    try {
+ try {
       const { deal, lineItems } = await getDealWithLineItems(id);
       const dealName = deal?.properties?.dealname || 'Sin nombre';
 
       if (lineItems.length === 0) {
         logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, dealName }, '[runBilling] Deal sin line items, saltando');
+        continue;
+      }
+
+      // Skip mirrors sueltos (relevante en --allDeals)
+      if (isMirrorDealFromDeal(deal)) {
+        logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, dealName }, '[runBilling] Mirror suelto, saltando (se procesa desde su original)');
         continue;
       }
 
@@ -137,6 +161,35 @@ export async function runBilling({ dealId, allDeals } = {}) {
         ticketsCreated: res.ticketsCreated || 0,
         autoInvoicesEmitted: res.autoInvoicesEmitted || 0,
       }, `[runBilling] Deal ${id} completado`);
+
+      // ── Mirror: procesar UY inmediatamente después del PY ──
+      const mirrorId = getMirrorIdFromOriginalDeal(deal);
+      if (mirrorId) {
+        try {
+          const { deal: mDeal, lineItems: mLIs } = await getDealWithLineItems(mirrorId);
+          if (isMirrorDealFromDeal(mDeal) && mLIs.length > 0) {
+            logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, mirrorId }, '[runBilling] Procesando mirror UY');
+            const mRes = await runPhasesForDeal({ deal: mDeal, lineItems: mLIs });
+            logger.info({
+              module: 'runBilling',
+              fn: 'runBilling',
+              dealId: id,
+              mirrorId,
+              ticketsCreated: mRes.ticketsCreated || 0,
+            }, '[runBilling] Mirror UY completado');
+          } else {
+            logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, mirrorId }, '[runBilling] Mirror no válido o sin line items, saltando');
+          }
+        } catch (mirrorErr) {
+          logger.error({
+            module: 'runBilling',
+            fn: 'runBilling',
+            dealId: id,
+            mirrorId,
+            err: mirrorErr,
+          }, '[runBilling] Error procesando mirror UY (no bloquea)');
+        }
+      }
 
     } catch (err) {
       logger.error({
