@@ -8,8 +8,8 @@ import { parseBool } from '../src/utils/parsers.js'
 const router = Router()
 
 // Umbral en horas para considerar el cron "stale"
-const WEEKDAY_STALE_HOURS = 27
-const WEEKEND_STALE_HOURS = 27
+const WEEKDAY_STALE_HOURS = 28
+const WEEKEND_STALE_HOURS = 28
 
 // Deals con N+ fallos en los últimos DAYS días = problema recurrente
 const FAILURE_THRESHOLD = 3
