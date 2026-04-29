@@ -40,16 +40,19 @@ export function determineTicketFrequency(lineItem) {
  * si es exento de iva = 'false'
  * Cualquier otro valor → ""
  */
-const IVA_TAX_GROUP_ID    = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
-const EXENTO_TAX_GROUP_ID = (process.env.IVA_UY_EXENTO_TAX_GROUP_ID || '').trim();
+const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
+const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
+const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
+
 
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
   let result;
-  if (IVA_TAX_GROUP_ID && raw === IVA_TAX_GROUP_ID)       result = 'true';
-  else if (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID) result = 'false';
-  else                                                     result = '';
-  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result, IVA_TAX_GROUP_ID, EXENTO_TAX_GROUP_ID }, '[SNAPSHOT][IVA][A] detectIVA()');
+  if (raw && ((IVA_UY_TAX_GROUP_ID && raw === IVA_UY_TAX_GROUP_ID) ||
+              (IVA_PY_TAX_GROUP_ID && raw === IVA_PY_TAX_GROUP_ID)))  result = 'true';
+  else if (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID)        result = 'false';
+  else                                                                 result = '';
+  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result, IVA_UY_TAX_GROUP_ID, IVA_PY_TAX_GROUP_ID, EXENTO_TAX_GROUP_ID }, '[SNAPSHOT][IVA][A] detectIVA()');
   return result;
 }
 

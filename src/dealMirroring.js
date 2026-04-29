@@ -479,39 +479,29 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
     const props = {};
 
-const excludedProps = new Set([
-  'uy',
-  'pais_operativo',
-  'hubspot_owner_id',
-  'price',
-  'hs_cost_of_goods_sold',
-  'discount',
-  'hs_discount_percentage',
-  'tax',
-  'hs_tax_amount',
-  'of_line_item_py_origen_id',
-  'line_item_key',
-  'parte_del_cupo',
-  // ── invoice refs ──
-  'invoice_id',
-  'invoice_key',
-  // ── ticket refs ──
-  'last_ticketed_date',
-  'billing_next_date',
-  'facturas_restantes',
-  'fechas_completas',
-  // ── billing state urgente ──
-  'facturar_ahora',
-  'facturado_con_urgencia',
-  'ultima_fecha_facturacion_urgente',
-  'cantidad_de_facturaciones_urgentes',
-  'last_billing_period',
-  'of_billing_error',
-  'of_billing_error_at',
+const allowedProps = new Set([
+  'name',
+  'description',
+  'quantity',
+  'recurringbillingfrequency',
+  'hs_recurring_billing_frequency',
+  'hs_recurring_billing_start_date',
+  'hs_recurring_billing_number_of_payments',
+  'hs_recurring_billing_period',
+  'billing_anchor_date',
+  'servicio',
+  'subrubro',
+  'unidad_de_negocio',
+  'renovacion_automatica',
+  'facturacion_activa',
+  'pausa',
+  'motivo_de_pausa',
+  'hs_product_id',
+  'hs_sku',
 ]);
 
-    for (const key of Object.keys(srcPropsLi)) {
-      if (!excludedProps.has(key)) {
+    for (const key of allowedProps) {
+      if (key in srcPropsLi) {
         props[key] = srcPropsLi[key];
       }
     }
