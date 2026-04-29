@@ -7,8 +7,8 @@ const hubspot = new Client({ accessToken: process.env.HUBSPOT_PRIVATE_TOKEN });
 // ── 1. Tax groups en line items ──
 
 const deals = [
-  { label: 'PY Original', id: '59668094637' },
-  { label: 'UY Mirror',   id: '59668678006' },
+  { label: 'PY Original', id: '59698770343' },
+  { label: 'UY Mirror',   id: '59672907374' },
 ];
 
 console.log('╔══════════════════════════════════════════╗');
@@ -43,10 +43,10 @@ console.log('║   TICKETS — of_iva por LIK                ║');
 console.log('╚══════════════════════════════════════════╝');
 
 const liks = [
-  { label: 'PY LI1 (IVA PY 17541897)',  lik: '59668094637:54769253184:9c2b05' },
-  { label: 'PY LI2 (vacío)',             lik: '59668094637:54748543579:c07b9f' },
-  { label: 'UY LI1 (IVA UY 17287244)',   lik: '59668678006:54772133027:7fb4d1' },
-  { label: 'UY LI2 (Exento 17524493)',   lik: '59668678006:54758263381:d3c5e8' },
+  { label: 'PY LI1 (Manual)',  lik: '59698770343:54763861670:445277' },
+  { label: 'PY LI2 (Auto)',    lik: '59698770343:54765723718:578242' },
+  { label: 'UY LI1 (Mirror Manual)', lik: '59672907374:54774823268:8ea1b7' },
+  { label: 'UY LI2 (Mirror Auto)',   lik: '59672907374:54768195842:aa84e6' },
 ];
 
 for (const { label, lik } of liks) {
