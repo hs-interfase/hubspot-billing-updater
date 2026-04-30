@@ -245,19 +245,20 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
   }
 
   // 6. Actualizar last_billing_period del line item con fecha REAL de emisión
-  //    (solo cuando la factura está efectivamente emitida y tenemos la fecha)
-  const etapasParaBLP = ['Emitida', 'Enviada', 'Paga'];
-  if (lineItemId && fechaEmisionYMD && (etapasParaBLP.includes(etapa) || nodumId)) {
+  // Fecha real → billing_last_billed_date
+  //    last_billing_period se mantiene con la fecha plan (seteada al crear invoice)
+  const etapasParaFechaReal = ['Emitida', 'Enviada', 'Paga'];
+  if (lineItemId && fechaEmisionYMD && (etapasParaFechaReal.includes(etapa) || nodumId)) {
     try {
       const blp = toHubSpotDateOnly(fechaEmisionYMD);
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
-        properties: { last_billing_period: blp },
+        properties: { billing_last_billed_date: blp },
       });
       logger.info({ module: mod, fn, invoiceId, ticketId, lineItemId, fechaEmisionYMD, blp },
-        '[BLP] last_billing_period actualizado con fecha real de emisión');
+       '[BLBD] billing_last_billed_date actualizado con fecha real de emisión');
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId, lineItemId, err },
-        '[BLP] Error actualizando last_billing_period con fecha real (no bloquea)');
+        '[BLBD] Error actualizando billing_last_billed_date con fecha real (no bloquea)');
     }
   }
 
