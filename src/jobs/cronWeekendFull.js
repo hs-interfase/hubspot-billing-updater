@@ -8,6 +8,7 @@ import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
 import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
 import logger from "../../lib/logger.js";
+import { auditOrphanTickets } from '../services/orphanAuditService.js';
 import pool, { initCronStateTable, getCronState, setCronState, initCronFailuresTable, insertCronFailure } from "../db.js";
 import {
   FORECAST_MANUAL_STAGES,
@@ -659,8 +660,15 @@ sendSummary({
     }).catch(() => {})
 
     pingHeartbeat().catch(() => {})
+    try{
+      const orphanResult = await auditOrphanTickets({ deleteTickets: false });
+      logger.info({ module: 'cronWeekend', ...orphanResult }, 'Audit de huérfanos completado');
+    } catch (e) {
+      logger.warn({ err: e?.message }, '[cronWeekend] auditOrphanTickets falló — no bloquea');
+    }
   }
 }
+
 
 // -------------------- CLI --------------------
 function parseArgs(argv) {

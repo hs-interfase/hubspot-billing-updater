@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel · Facturación Interfase</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2e3248;
+      --accent:   #ff7a59;
+      --accent-d: #cc5e40;
+      --text:     #e2e4ef;
+      --muted:    #7b7f9e;
+      --green:    #3ecf8e;
+      --red:      #ff6b6b;
+      --yellow:   #f9c84a;
+      --radius:   8px;
+    }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; min-height: 100vh;
+    }
+
+    /* ── Nav bar ── */
+    .topnav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex; align-items: center; gap: 0;
+      position: sticky; top: 0; z-index: 100;
+      height: 48px;
+    }
+    .topnav .brand {
+      font-size: 14px; font-weight: 700; color: var(--accent);
+      margin-right: 24px; text-decoration: none;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .topnav .brand .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0;
+    }
+    .topnav a {
+      color: var(--muted); text-decoration: none;
+      font-size: 13px; font-weight: 600;
+      padding: 14px 14px; border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { color: var(--text); border-bottom-color: var(--accent); }
+    .topnav a.ext { margin-left: auto; opacity: .7; }
+    .topnav a.ext:hover { opacity: 1; }
+
+    /* ── Main ── */
+    main {
+      max-width: 800px; margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+
+    /* ── Cards grid ── */
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 36px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px;
+      text-decoration: none; color: var(--text);
+      transition: border-color .2s, transform .1s;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .card .card-icon { font-size: 28px; }
+    .card .card-title { font-size: 15px; font-weight: 700; }
+    .card .card-desc { font-size: 13px; color: var(--muted); line-height: 1.4; }
+
+    /* ── Export section ── */
+    .export-section {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px;
+    }
+    .export-section h2 { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+    .export-info { color: var(--muted); font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+    .btn-export {
+      padding: 10px 20px; border-radius: 6px; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--text);
+      transition: background .2s, border-color .2s, opacity .2s;
+    }
+    .btn-export:hover:not(:disabled) { background: var(--border); border-color: var(--muted); }
+    .btn-export:disabled { opacity: .4; cursor: default; }
+
+    /* ── Health badge ── */
+    .health-row {
+      margin-top: 32px; padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+      color: var(--muted); font-size: 13px;
+    }
+    .health-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--muted);
+    }
+    .health-dot.ok { background: var(--green); }
+    .health-dot.warn { background: var(--yellow); }
+    .health-dot.error { background: var(--red); }
+
+    @media (max-width: 600px) {
+      .cards { grid-template-columns: 1fr; }
+      .topnav { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/admin" class="brand"><span class="dot"></span> Interfase</a>
+  <a href="/admin" class="active">Panel</a>
+  <a href="/invoice-editor">Editor</a>
+  <a href="/invoice-editor/audit">Auditoría</a>
+  <a href="/nodum">Nodum</a>
+  <a href="/guia" target="_blank" class="ext">📖 Guía ↗</a>
+</nav>
+
+<main>
+  <h1>Panel de Facturación</h1>
+  <p class="subtitle">Herramientas de administración · Interfase</p>
+
+  <div class="cards">
+    <a class="card" href="/invoice-editor">
+      <div class="card-icon">📝</div>
+      <div class="card-title">Editor de Facturas</div>
+      <div class="card-desc">Buscar, editar y gestionar facturas de HubSpot. Propagación automática al ticket.</div>
+    </a>
+    <a class="card" href="/invoice-editor/audit">
+      <div class="card-icon">📋</div>
+      <div class="card-title">Auditoría</div>
+      <div class="card-desc">Historial de cambios en facturas. Filtrar por fecha, ID o usuario.</div>
+    </a>
+    <a class="card" href="/nodum">
+      <div class="card-icon">📄</div>
+      <div class="card-title">Nodum Upload</div>
+      <div class="card-desc">Subir extracto de Nodum (.xlsx) para matching automático con tickets.</div>
+    </a>
+    <a class="card" href="/guia" target="_blank">
+      <div class="card-icon">📖</div>
+      <div class="card-title">Guía de Facturación</div>
+      <div class="card-desc">Guía interactiva para el equipo. No requiere usuario ni contraseña.</div>
+    </a>
+  </div>
+
+  <!-- Extracto consolidado -->
+  <div class="export-section">
+    <h2>📊 Extracto Consolidado</h2>
+    <p class="export-info" id="export-info">Cargando información...</p>
+    <button class="btn-export" id="btn-download-export" disabled>⬇ Descargar último extracto</button>
+  </div>
+
+  <!-- Health -->
+  <div class="health-row">
+    <span class="health-dot" id="health-dot"></span>
+    <span id="health-text">Consultando estado del sistema...</span>
+  </div>
+</main>
+
+<script>
+  // ── Extracto ──
+  ;(async function loadExportInfo() {
+    const infoEl = document.getElementById('export-info')
+    const btn    = document.getElementById('btn-download-export')
+    try {
+      const resp = await fetch('/api/export/info')
+      if (!resp.ok) { infoEl.textContent = 'No hay extracto disponible todavía.'; return }
+      const data = await resp.json()
+      if (!data.available) { infoEl.textContent = 'No hay extracto disponible todavía.'; return }
+      const fecha = new Date(data.generatedAt)
+      const fechaStr = fecha.toLocaleDateString('es-UY', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      })
+      const rc = data.rowCounts || {}
+      const totalRows = (rc.pipeline||0) + (rc.forecast||0) + (rc.listo||0) + (rc.facturado||0)
+      infoEl.innerHTML = `<strong>${data.filename}</strong><br>Generado: ${fechaStr} · ${totalRows} filas · ${data.sizeKB} KB`
+      btn.disabled = false
+    } catch (err) {
+      infoEl.textContent = 'Error al consultar el extracto.'
+    }
+  })()
+  document.getElementById('btn-download-export').addEventListener('click', () => {
+    window.location.href = '/api/export/latest'
+  })
+
+  // ── Health check ──
+  ;(async function checkHealth() {
+    const dot  = document.getElementById('health-dot')
+    const text = document.getElementById('health-text')
+    try {
+      const resp = await fetch('/health/audit')
+      const data = await resp.json()
+      dot.className = `health-dot ${data.status || 'ok'}`
+      text.textContent = data.status === 'ok'
+        ? 'Sistema operando normalmente'
+        : data.status === 'warn'
+          ? 'Sistema con advertencias — revisar auditoría'
+          : 'Sistema con errores — revisar logs'
+    } catch {
+      dot.className = 'health-dot error'
+      text.textContent = 'No se pudo consultar el estado del sistema'
+    }
+  })()
+</script>
+</body>
+</html>
