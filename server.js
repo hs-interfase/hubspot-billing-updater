@@ -30,6 +30,8 @@ validateEnv();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
+const app = express()
+app.set('trust proxy', 1)
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); },
