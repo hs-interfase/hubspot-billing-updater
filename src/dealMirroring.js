@@ -102,6 +102,13 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
               of_billing_error: 'LI pausado: el original PY perdió vínculo UY. Tiene tickets promovidos/emitidos.',
             },
           });
+          reportHubSpotError({
+            level: 'warn',
+            objectType: 'deal',
+            objectId: mirrorDealId,
+            message: `LI espejo pausado: "${p.name || li.id}" fue desvinculado de Uruguay en el deal PY. Tickets promovidos/emitidos se mantienen. Futuros pagos NO se generarán para este producto en UY.`,
+          });
+
           logger.info(
             { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, name: p.name },
             'Prune: huérfano con tickets promovidos — pausado en lugar de eliminado'
@@ -166,7 +173,6 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
   return { prunedCount };
 }
 
-
 async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
   const assocIds = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
 
@@ -178,7 +184,7 @@ async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
   } else {
     const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
       inputs: assocIds.map((id) => ({ id: String(id) })),
-      properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name'],
+      properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name', 'pausa'],
     });
 
     const validMirrorItems = (batchResp.results || []).filter((li) => {
@@ -188,6 +194,21 @@ async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
       const isUruguay = String(p.pais_operativo || '').toLowerCase() === 'uruguay';
       return origenId && uyFlag && isUruguay;
     });
+
+    // Proteger deal si hay LIs pausados con tickets promovidos (desvinculados de PY)
+    const pausedProtectedItems = (batchResp.results || []).filter((li) => {
+      const p = li.properties || {};
+      return String(p.pausa || '').toLowerCase() === 'true'
+        && String(p.of_line_item_py_origen_id || '').trim();
+    });
+
+    if (pausedProtectedItems.length > 0) {
+      logger.info(
+        { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, pausedCount: pausedProtectedItems.length },
+        'Post-prune: deal mirror tiene LIs pausados con promovidos, NO se archiva'
+      );
+      return { archived: false, remainingValidCount: validMirrorItems.length, pausedProtectedCount: pausedProtectedItems.length };
+    }
 
     logger.debug(
       { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, validMirrorItemsCount: validMirrorItems.length },
@@ -251,6 +272,137 @@ function parseBoolFromHubspot(raw) {
 }
 
 /**
+ * Cuando el deal PY fue eliminado/archivado, busca su mirror UY
+ * y pausa los LIs que tengan tickets promovidos, dejando aviso.
+ * No archiva el deal mirror ni los tickets promovidos/emitidos.
+ */
+async function handleOrphanedMirrorDeal(sourceDealId) {
+  const log = logger.child({
+    module: 'dealMirroring',
+    fn: 'handleOrphanedMirrorDeal',
+    sourceDealId: String(sourceDealId),
+  });
+
+  // 1) Buscar mirror por deal_py_origen_id
+  let mirrors;
+  try {
+    const resp = await hubspotClient.crm.deals.searchApi.doSearch({
+      filterGroups: [{
+        filters: [
+          { propertyName: 'es_mirror_de_py', operator: 'EQ', value: 'true' },
+          { propertyName: 'deal_py_origen_id', operator: 'EQ', value: String(sourceDealId) },
+        ],
+      }],
+      properties: ['dealname', 'deal_py_origen_id'],
+      limit: 5,
+    });
+    mirrors = resp.results || [];
+  } catch (err) {
+    log.error({ err }, 'Error buscando mirror UY para deal PY eliminado');
+    return;
+  }
+
+  if (!mirrors.length) {
+    log.info('Sin mirror UY encontrado para deal PY eliminado');
+    return;
+  }
+
+  for (const mirror of mirrors) {
+    const mirrorDealId = String(mirror.id);
+    const mirrorName = mirror.properties?.dealname || mirrorDealId;
+
+    // 2) Leer LIs del mirror
+    let mirrorLiIds;
+    try {
+      mirrorLiIds = await getAssocIdsV4('deals', mirrorDealId, 'line_items', 500);
+    } catch (err) {
+      log.warn({ err, mirrorDealId }, 'Error obteniendo LIs del mirror');
+      continue;
+    }
+
+    if (!mirrorLiIds.length) {
+      log.info({ mirrorDealId }, 'Mirror sin LIs, nada que proteger');
+      continue;
+    }
+
+    let batchResp;
+    try {
+      batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+        inputs: mirrorLiIds.map(id => ({ id: String(id) })),
+        properties: ['name', 'line_item_key', 'of_line_item_py_origen_id', 'pausa'],
+      });
+    } catch (err) {
+      log.warn({ err, mirrorDealId }, 'Error leyendo LIs del mirror');
+      continue;
+    }
+
+    let pausedCount = 0;
+
+    for (const li of batchResp.results || []) {
+      const p = li.properties || {};
+      const lik = String(p.line_item_key || '').trim();
+
+      // Verificar si tiene tickets promovidos/emitidos
+      let hasPromoted = false;
+      if (lik) {
+        try {
+          const searchResp = await hubspotClient.crm.tickets.searchApi.doSearch({
+            filterGroups: [{
+              filters: [
+                { propertyName: 'of_line_item_key', operator: 'EQ', value: lik },
+              ],
+            }],
+            properties: ['hs_pipeline_stage'],
+            limit: 100,
+          });
+          hasPromoted = (searchResp.results || []).some(t =>
+            PROMOTED_STAGES.has(String(t.properties?.hs_pipeline_stage || ''))
+          );
+        } catch (err) {
+          log.warn({ err, mirrorDealId, lineItemId: li.id }, 'Error verificando tickets, tratando como protegido');
+          hasPromoted = true; // fail-safe
+        }
+      }
+
+      if (hasPromoted) {
+        try {
+          await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+            properties: {
+              pausa: 'true',
+              of_billing_error: `LI pausado: deal PY origen (${sourceDealId}) fue eliminado/archivado. Tickets promovidos se mantienen. No se generarán futuros pagos UY.`,
+            },
+          });
+          pausedCount++;
+        } catch (err) {
+          log.warn({ err, lineItemId: li.id }, 'Error pausando LI huérfano');
+        }
+      } else {
+        // Sin promovidos: desasociar + archivar
+        try {
+          await hubspotClient.crm.associations.v4.basicApi.archive(
+            'line_items', String(li.id), 'deals', mirrorDealId
+          );
+          await hubspotClient.crm.lineItems.basicApi.archive(String(li.id));
+          log.info({ lineItemId: li.id, name: p.name }, 'LI mirror sin promovidos archivado');
+        } catch (err) {
+          log.warn({ err, lineItemId: li.id }, 'Error archivando LI mirror');
+        }
+      }
+    }
+
+    // 3) Aviso en deal mirror
+    reportHubSpotError({
+      level: 'warn',
+      objectType: 'deal',
+      objectId: mirrorDealId,
+      message: `Deal PY origen (${sourceDealId}) fue eliminado/archivado. ${pausedCount} LI(s) pausado(s) con tickets promovidos. Futuros pagos UY no se generarán.`,
+    });
+
+    log.info({ mirrorDealId, mirrorName, pausedCount }, 'Mirror UY protegido tras eliminación de deal PY');
+  }
+}
+
+/**
  * Determina si un negocio PY debe espejarse: tiene al menos una línea marcada UY
  * y no es ya un espejo.
  */
@@ -293,9 +445,41 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     process.env.DEFAULT_INTERFASE_COMPANY_ID;
 
   // 1) Obtener negocio PY y sus líneas
-  const { deal, lineItems } = await getDealWithLineItems(sourceDealId);
+ let deal, lineItems;
+  try {
+    ({ deal, lineItems } = await getDealWithLineItems(sourceDealId));
+  } catch (err) {
+    // Deal PY eliminado/archivado — verificar si hay mirror con promovidos
+    const isNotFound = err?.response?.status === 404
+      || err?.code === 404
+      || /not found|archived/i.test(err?.message);
+
+    if (!isNotFound) throw err; // error real, relanzar
+
+    logger.warn(
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, err },
+      'Deal PY no encontrado (posiblemente eliminado/archivado), protegiendo mirror UY'
+    );
+
+    await handleOrphanedMirrorDeal(sourceDealId);
+    return {
+      mirrored: false,
+      sourceDealId: String(sourceDealId),
+      reason: 'source_deal_not_found_mirror_protected',
+    };
+  }
+
   if (!deal) {
-    throw new Error(`No se encontró el negocio con ID ${sourceDealId}`);
+    logger.warn(
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId },
+      'Deal PY retornó null, protegiendo mirror UY'
+    );
+    await handleOrphanedMirrorDeal(sourceDealId);
+    return {
+      mirrored: false,
+      sourceDealId: String(sourceDealId),
+      reason: 'source_deal_null_mirror_protected',
+    };
   }
 
   const srcProps = deal.properties || {};

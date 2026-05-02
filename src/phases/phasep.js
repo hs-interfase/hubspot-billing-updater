@@ -30,6 +30,7 @@ import {
   BILLING_AUTOMATED_FORECAST_75,
   BILLING_AUTOMATED_FORECAST_85,
   BILLING_AUTOMATED_FORECAST_95,
+  BILLING_AUTOMATED_READY,
   TICKET_PIPELINE,
   FORECAST_TICKET_STAGES,
   isForecastStage,
@@ -216,8 +217,7 @@ function resolveForecastStage({ dealStage, automated }) {
 /**
  * Construye fechas deseadas según contrato.
  */
-function buildDesiredDates(lineItem, allTickets = []) {
-  const p = lineItem?.properties || {};
+export function buildDesiredDates(lineItem, allTickets = [], { overrideToday } = {}) {  const p = lineItem?.properties || {};
   const cfg = getEffectiveBillingConfig(lineItem);
 
   const startYmd =
@@ -257,11 +257,11 @@ function buildDesiredDates(lineItem, allTickets = []) {
   const termRaw = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
   const term = safeInt(termRaw);
 
-  const isAutoRenew =
-    cfg?.isAutoRenew === true ||
-    cfg?.autorenew === true ||
-    String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
-    !(term > 0);
+const isAutoRenew =
+  cfg?.isAutoRenew === true ||
+  cfg?.autorenew === true ||
+  String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
+  !(term > 0);
 
   const hardMax = 24;
 
@@ -275,48 +275,76 @@ function buildDesiredDates(lineItem, allTickets = []) {
   }
 if (maxCount === 0) return { desiredCount: 0, dates: [] };
 
-  const todayYmd = nowMontevideoYmd();
+  const todayYmd = overrideToday || nowMontevideoYmd();
   const lastTicketedYmd = toYmd(p.last_ticketed_date);
   const billingNextYmd = toYmd(p.billing_next_date);
   const anchorYmd = toYmd(p.billing_anchor_date);
 
-  // ── AUTO RENEW ──────────────────────────────────────────
+// ── AUTO RENEW ──────────────────────────────────────────
   if (isAutoRenew) {
-    let seriesStartYmd = anchorYmd || startYmd;
+  const currentYear = overrideToday
+    ? Number.parseInt(overrideToday.slice(0, 4), 10)
+    : new Date(
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone: BILLING_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date())
+      ).getFullYear();
+    const windowStart = `${currentYear - 1}-01-01`;
+    const windowEnd   = `${currentYear + 1}-12-31`;
+    const todayYmdLocal = overrideToday || nowMontevideoYmd();
 
-    let effectiveTodayYmd = todayYmd;
-    if (lastTicketedYmd) {
-      const d0 = parseLocalDate(lastTicketedYmd);
-      if (d0 && Number.isFinite(d0.getTime())) {
-        d0.setDate(d0.getDate() + 1);
-        const plusOne = formatDateISO(d0);
-        if (plusOne > effectiveTodayYmd) effectiveTodayYmd = plusOne;
-      }
-    }
-    seriesStartYmd = effectiveTodayYmd;
-    if (billingNextYmd && billingNextYmd > seriesStartYmd) seriesStartYmd = billingNextYmd;
-    if ((anchorYmd || startYmd) && (anchorYmd || startYmd) > seriesStartYmd) {
-      seriesStartYmd = anchorYmd || startYmd;
-    }
+    const seriesOrigin = parseLocalDate(anchorYmd || startYmd);
+    if (!seriesOrigin) return { desiredCount: 0, dates: [] };
 
-    const startDate = parseLocalDate(seriesStartYmd);
-    if (!startDate) return { desiredCount: 0, dates: [] };
+    // Generar todas las fechas dentro de la ventana
+    const pastDates = [];
+    const futureDates = [];
+    let d = new Date(seriesOrigin.getTime());
+    let safety = 0;
 
-    const horizonDate = new Date(startDate.getTime());
-    horizonDate.setFullYear(horizonDate.getFullYear() + 2);
-
-    const dates = [];
-    let d = new Date(startDate.getTime());
-
-    while (dates.length < maxCount) {
+    while (safety < 1200) {
+      safety++;
       if (!d || !Number.isFinite(d.getTime())) break;
-      if (d.getTime() > horizonDate.getTime()) break;
-      dates.push(formatDateISO(d));
+      const ymd = formatDateISO(d);
+
+      if (ymd > windowEnd) break;
+
+      if (ymd >= windowStart) {
+        if (ymd < todayYmdLocal) {
+          pastDates.push(ymd);
+        } else {
+          futureDates.push(ymd);
+        }
+      }
+
       const next = addInterval(d, interval);
       if (!next || !Number.isFinite(next.getTime())) break;
       if (next.getTime() === d.getTime()) break;
       d = next;
     }
+
+    // Recortar cada sección a max 24
+    const maxPerSection = 24;
+    const trimmedPast = pastDates.slice(-maxPerSection);   // últimos 24 del pasado
+    const trimmedFuture = futureDates.slice(0, maxPerSection); // primeros 24 del futuro
+
+    const dates = [...trimmedPast, ...trimmedFuture];
+
+    logger.debug(
+      {
+        module: 'phaseP',
+        fn: 'buildDesiredDates',
+        windowStart,
+        windowEnd,
+        seriesOrigin: formatDateISO(seriesOrigin),
+        pastCount: trimmedPast.length,
+        futureCount: trimmedFuture.length,
+        total: dates.length,
+        first: dates[0] || null,
+        last: dates[dates.length - 1] || null,
+      },
+      '[buildDesiredDates] AUTO_RENEW: ventana fija con split pasado/futuro'
+    );
 
     return { desiredCount: dates.length, dates };
   }
@@ -718,6 +746,17 @@ for (const t of allTickets) {
 
           const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;
 
+          // Tickets automáticos del pasado nacen directo en "Listo para facturar"
+          const todayForStage = nowMontevideoYmd();
+          let effectiveStage = targetStage;
+          if (automated && expectedYmd < todayForStage) {
+            effectiveStage = BILLING_AUTOMATED_READY;
+            logger.info(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, expectedYmd, todayForStage },
+              'Ticket automático del pasado → nace en BILLING_AUTOMATED_READY'
+            );
+          }
+
           const fullProps = await buildTicketFullProps({
             deal,
             lineItem: li,
@@ -733,7 +772,7 @@ for (const t of allTickets) {
             properties: {
               ...fullProps,
               hs_pipeline: String(hsPipeline),
-              hs_pipeline_stage: String(targetStage),
+              hs_pipeline_stage: String(effectiveStage),
               of_motivo_pausa: p.pausa === 'true' || p.pausa === true ? (p.motivo_de_pausa || '') : '',
               of_snapshot_source_modified: String(p.hs_lastmodifieddate || ''),
             },
