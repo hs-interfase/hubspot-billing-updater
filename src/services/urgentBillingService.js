@@ -6,7 +6,7 @@ import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatD
 import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
-import { findMirrorLineItem, promoteMirrorTicketToManualReady } from './mirrorUtils.js';
+import { findMirrorLineItem, promoteMirrorTicketToManualReady, notifyMirrorDealOnManualEmission } from './mirrorUtils.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
@@ -997,7 +997,17 @@ try {
     'refreshMensajeFacturacionParaDeal falló — no bloquea'
   );
 }
-
+// Notificar mirror UY si el LI PY tiene espejo
+const pyLineItemId = (ticketProps.of_line_item_ids || '').trim();
+if (pyLineItemId) {
+  const billingYMD = getTodayYMD();
+  notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD).catch(err => {
+    logger.warn(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, pyLineItemId, err },
+      'notifyMirrorDealOnManualEmission falló — no bloquea'
+    );
+  });
+}
     logger.info(
       { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: invoiceResult.invoiceId },
       'Facturación urgente de Ticket completada'
