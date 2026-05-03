@@ -3,7 +3,7 @@
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createInvoiceFromTicket, createAutoInvoiceFromLineItem, REQUIRED_TICKET_PROPS } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
-import { createAutoBillingTicket, updateTicket } from './tickets/ticketService.js';
+import { createAutoBillingTicket, updateTicket, createTicketAssociations, getDealCompanies, getDealContacts } from './tickets/ticketService.js';
 import { isInvoiceIdValidForLineItem } from '../utils/invoiceValidation.js';
 import { ensureLineItemKey } from '../utils/lineItemKey.js';
 import { findMirrorLineItem, promoteMirrorTicketToManualReady, notifyMirrorDealOnManualEmission } from './mirrorUtils.js';
@@ -436,24 +436,29 @@ if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail
     }
 
     logger.info(
-      { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, lik },
-      'Procediendo a facturar'
-    );
-
-    // 7.a) Crear/reutilizar ticket con billingPeriodDate
-    const { ticketId, created } = await createAutoBillingTicket(deal, targetLineItem, billingPeriodDate);
-
-    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-      properties: {
-        last_ticketed_date: billingPeriodDate || today,
-        last_billing_period: billingPeriodDate,
-      },
-    });
-
-    logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, ticketId, created },
       'Ticket creado/reutilizado'
     );
+
+    // 7.a.2) Si se reutilizó un ticket existente, asegurar asociaciones
+    if (!created && ticketId) {
+      try {
+        const [companyIds, contactIds] = await Promise.all([
+          getDealCompanies(dealId),
+          getDealContacts(dealId),
+        ]);
+        await createTicketAssociations(ticketId, dealId, String(lineItemId), companyIds, contactIds);
+        logger.info(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, dealId },
+          'Asociaciones aseguradas en ticket reutilizado'
+        );
+      } catch (assocErr) {
+        logger.warn(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, dealId, err: assocErr },
+          'Error asegurando asociaciones en ticket reutilizado — no bloquea'
+        );
+      }
+    }
 
     // 7.b) Marcar ticket como urgente
     if (ticketId) {
@@ -521,7 +526,29 @@ if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail
         'Ticket actualizado con invoice ID'
       );
     }
- // 8) Evidencia
+// 7.e) Consumir cupo (idempotente)
+    if (ticketId && invoiceIdFinal) {
+      try {
+        const { consumeCupoAfterInvoice } = await import('./cupo/consumeCupo.js');
+        await consumeCupoAfterInvoice({
+          dealId,
+          ticketId: String(ticketId),
+          lineItemId: String(lineItemId),
+          invoiceId: String(invoiceIdFinal),
+        });
+        logger.info(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, invoiceId: invoiceIdFinal },
+          'Cupo consumido post-facturación urgente'
+        );
+      } catch (cupoErr) {
+        logger.warn(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, err: cupoErr },
+          'Error consumiendo cupo post-facturación urgente — no bloquea'
+        );
+      }
+    }
+
+    // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
 
     // 9) Recalc fechas del line item desde tickets reales (post-facturación urgente)

@@ -5,8 +5,7 @@
 //
 // Propiedades recalculadas:
 //   - last_ticketed_date       ← fecha_resolucion_esperada más reciente de tickets PROMOTED (READY+)
-//   - last_billing_period      ← fecha_resolucion_esperada más reciente de tickets EMITTED
-//   - billing_last_billed_date ← fecha_real_de_facturacion más reciente de tickets EMITTED
+//   - last_billing_period      ← fecha_resolucion_esperada más reciente de tickets PROMOTED (derivados)//   - billing_last_billed_date ← fecha_real_de_facturacion más reciente de tickets EMITTED
 //   - billing_next_date        ← fecha_resolucion_esperada más próxima de tickets FORECAST (futuro)
 //
 // Invariantes enforced:
@@ -339,11 +338,15 @@ export async function recalcFromTickets({
       }
     }
 
-    // EMITTED: INVOICED, LATE, PAID (para last_billing_period y billing_last_billed_date)
-    if (EMITTED_STAGES.has(stage)) {
+// PROMOTED: READY + post-READY (para last_billing_period = última cuota derivada)
+    if (PROMOTED_STAGES.has(stage)) {
       if (fechaEsperada && fechaEsperada > lastBillingPeriod) {
         lastBillingPeriod = fechaEsperada;
       }
+    }
+
+    // EMITTED: INVOICED, LATE, PAID (para billing_last_billed_date = última factura real Nodum)
+    if (EMITTED_STAGES.has(stage)) {
       if (fechaReal && fechaReal > billingLastBilledDate) {
         billingLastBilledDate = fechaReal;
       }
