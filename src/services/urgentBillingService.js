@@ -434,7 +434,43 @@ if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail
         return { skipped: true, reason: 'plan_completed', activeCount, totalPayments };
       }
     }
+// 7.a) Crear/reutilizar ticket con billingPeriodDate
+const { ensureTicketCanonical } = await import('./tickets/ticketService.js');
+const { buildTicketKeyFromLineItemKey } = await import('../utils/ticketKey.js');
+const { createTicketSnapshots } = await import('./snapshotService.js');
 
+const ticketResult = await ensureTicketCanonical({
+  dealId,
+  lineItemKey: lik,
+  billDateYMD: billingPeriodDate,
+  lineItemId: String(lineItemId),
+  buildTicketPayload: async ({ dealId, lineItemKey, billDateYMD, expectedKey }) => {
+    const snapshots = await createTicketSnapshots(deal, targetLineItem, billDateYMD, billDateYMD);
+    const dealName = deal?.properties?.dealname || 'Deal';
+    const productName = targetLineItem?.properties?.name || 'Producto';
+    return {
+      properties: {
+        subject: `${dealName} | ${productName} | ${billDateYMD}`,
+        hs_pipeline: process.env.BILLING_TICKET_PIPELINE_ID,
+        hs_pipeline_stage: process.env.BILLING_TICKET_STAGE_READY,
+        of_deal_id: dealId,
+        of_line_item_ids: String(lineItemId),
+        of_line_item_key: lineItemKey,
+        of_ticket_key: expectedKey,
+        ...snapshots,
+      },
+    };
+  },
+});
+
+const ticketId = ticketResult.ticketId;
+const created = ticketResult.created;
+    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+      properties: {
+        last_ticketed_date: billingPeriodDate || today,
+        last_billing_period: billingPeriodDate,
+      },
+    });
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, ticketId, created },
       'Ticket creado/reutilizado'
