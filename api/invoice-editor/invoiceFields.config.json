@@ -160,12 +160,20 @@
     ]
   },
   {
-    "internalName": "monto_a_facturar",
+    "internalName": "monto_real_a_facturar",
     "label": "Monto a Facturar",
     "type": "number",
     "required": false,
     "readOnly": false,
     "helpText": ""
+  },
+  {
+    "internalName": "dolar",
+    "label": "Dólar",
+    "type": "number",
+    "required": false,
+    "readOnly": false,
+    "helpText": "Tipo de cambio USD al momento de facturación"
   },
   {
     "internalName": "monto_unitario",

@@ -301,10 +301,10 @@ let originalValues = {};
 let pendingChanges = {};
 
 const FORM_SECTIONS = [
-  { title: 'Identificación de la factura', fields: ['id_factura_nodum', 'etapa_de_la_factura', 'fecha_de_emision', 'hs_due_date'] },
+  { title: 'Identificación de la factura', fields: ['id_factura_nodum', 'etapa_de_la_factura', 'fecha_de_emision', 'hs_due_date', 'dolar'] },
   { title: 'Datos de emisión', fields: ['pais_operativo', 'iva', 'exonera_irae'] },
   { title: 'Información del producto', fields: ['unidad_de_negocio', 'nombre_producto', 'descripcion', 'descripcion_producto', 'servicio', 'notas'] },
-  { title: 'Datos de facturación', fields: ['monto_unitario', 'cantidad', 'descuento', 'descuento_por_unidad', 'monto_a_facturar'] },
+  { title: 'Datos de facturación', fields: ['monto_unitario', 'cantidad', 'descuento', 'descuento_por_unidad', 'monto_real_a_facturar'] },
   { title: 'Solo lectura', fields: ['nombre_empresa', 'id_empresa', 'of_invoice_key', 'line_item_key', 'ticket_id'], readOnlySection: true },
 ];
 

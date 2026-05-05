@@ -20,6 +20,7 @@ const INVOICE_TO_TICKET_MAP = {
   servicio:            'of_rubro',
   unidad_de_negocio:   'unidad_de_negocio',
   iva:                 'of_iva',
+  dolar:               'dolar',
 }
 
 /**
