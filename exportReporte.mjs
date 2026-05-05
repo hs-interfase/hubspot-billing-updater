@@ -68,34 +68,39 @@ function esRepetitivo(freq) {
  * Devuelve { uyu_usd, pyg_usd, eur_usd, date } o null.
  */
 async function getLatestExchangeRate() {
-  const connStr = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
-  if (!connStr) {
+  const connStrings = [
+    process.env.DATABASE_URL,
+    process.env.DATABASE_PUBLIC_URL,
+  ].filter(Boolean);
+
+  if (!connStrings.length) {
     console.warn('  ⚠ DATABASE_URL y DATABASE_PUBLIC_URL no configuradas — columnas USD quedarán vacías');
     return null;
   }
 
-  const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
-  try {
-    const { rows } = await pool.query(
-      `SELECT date, uyu_usd, eur_usd, pyg_usd
-       FROM exchange_rates
-       ORDER BY date DESC
-       LIMIT 1`
-    );
-    if (!rows.length) return null;
-    const r = rows[0];
-    return {
-      uyu_usd: parseFloat(r.uyu_usd) || null,
-      eur_usd: parseFloat(r.eur_usd) || null,
-      pyg_usd: parseFloat(r.pyg_usd) || null,
-      date: r.date,
-    };
-  } catch (err) {
-    console.warn('  ⚠ Error leyendo exchange_rates:', err.message);
-    return null;
-  } finally {
-    await pool.end();
+  for (const connStr of connStrings) {
+    const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
+    try {
+      const { rows } = await pool.query(
+        `SELECT date, uyu_usd, eur_usd, pyg_usd FROM exchange_rates ORDER BY date DESC LIMIT 1`
+      );
+      await pool.end();
+      if (!rows.length) return null;
+      const r = rows[0];
+      return {
+        uyu_usd: parseFloat(r.uyu_usd) || null,
+        eur_usd: parseFloat(r.eur_usd) || null,
+        pyg_usd: parseFloat(r.pyg_usd) || null,
+        date: r.date,
+      };
+    } catch (err) {
+      console.warn(`  ⚠ Error con ${connStr.split('@')[1]?.split('/')[0] ?? 'host'}: ${err.message}`);
+      await pool.end().catch(() => {});
+    }
   }
+
+  console.warn('  ⚠ Sin TC disponible — columnas USD quedarán vacías');
+  return null;
 }
 
 /**
@@ -518,7 +523,7 @@ async function main() {
   console.log('\n0. Cargando tipo de cambio...');
   const latestRates = await getLatestExchangeRate();
   if (latestRates) {
-    console.log(`   TC último cierre (${latestRates.date}): UYU=${latestRates.uyu_usd} PYG=${latestRates.pyg_usd} EUR=${latestRates.eur_usd}`);
+    console.log(`   TC último cierre (${new Date(latestRates.date).toISOString().slice(0, 10)}): UYU=${latestRates.uyu_usd} PYG=${latestRates.pyg_usd} EUR=${latestRates.eur_usd}`);
   } else {
     console.log('   ⚠ Sin TC disponible — columnas USD quedarán vacías');
   }
