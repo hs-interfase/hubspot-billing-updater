@@ -32,6 +32,8 @@ import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
+import { BILLING_ACTIVE_DEAL_STAGES } from '../config/constants.js';
+
 
 
 // ────────────────────────────────────────────────────────────
@@ -56,6 +58,7 @@ const LI_PROPS = [
   'observaciones', 'nota',
   'mansoft_pendiente', 'facturacion_automatica',
   // Nuevas props para el sistema alta/edición
+    'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo',
   'mansoft_tipo_aviso', 'mansoft_ultimo_snapshot',
 ];
 
@@ -181,7 +184,7 @@ const ASSOC_LABEL_PERSONA_FACTURA = 7;
 async function getDealInfo(dealId) {
   try {
     const [deal, compAssoc, contAssoc] = await Promise.all([
-      hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname']),
+      hubspotClient.crm.deals.basicApi.getById(dealId, ['dealname', 'dealstage']),
       hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'companies', 100),
       hubspotClient.crm.associations.v4.basicApi.getPage('deals', String(dealId), 'contacts', 100),
     ]);
@@ -210,6 +213,7 @@ async function getDealInfo(dealId) {
 
     return {
       dealName:            deal?.properties?.dealname || `Deal ${dealId}`,
+      dealstage:           deal?.properties?.dealstage || '',
       empresa_que_factura: empresaName,
       persona_que_factura: personaName,
     };
@@ -218,7 +222,7 @@ async function getDealInfo(dealId) {
       { module: 'cronMensajeMantsoft', fn: 'getDealInfo', dealId, err },
       'No se pudo obtener info del deal'
     );
-    return { dealName: `Deal ${dealId}`, empresa_que_factura: null, persona_que_factura: null };
+    return { dealName: `Deal ${dealId}`, dealstage: '', empresa_que_factura: null, persona_que_factura: null };
   }
 }
 
@@ -305,9 +309,29 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
   for (const [dealId, items] of dealGroups) {
     try {
-      const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
+const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
       const dealMeta = { empresa_que_factura, persona_que_factura };
-      const html = buildMensajeMantsoft(items, dealName, dealMeta);
+
+      // Altas solo se procesan si el deal está en stage ≥ 85%.
+      // Si no califica, separamos las altas para no resetear su flag.
+      const dealIsActive = BILLING_ACTIVE_DEAL_STAGES.has(dealstage);
+      let itemsToProcess = items;
+
+      if (!dealIsActive) {
+        // Quitar LIs de alta — quedan con mansoft_pendiente=true para el próximo run
+        const { classifyLineItem } = await import('../services/billing/buildMensajeMantsoft.js');
+        const nonAltas = items.filter(li => classifyLineItem(li).tipo !== 'alta');
+        if (nonAltas.length === 0) {
+          logger.info(
+            { module: 'cronMensajeMantsoft', dealId, dealstage },
+            'Deal no está en stage activo — altas pospuestas'
+          );
+          continue;
+        }
+        itemsToProcess = nonAltas;
+      }
+
+      const html = buildMensajeMantsoft(itemsToProcess, dealName, dealMeta);
 
       if (!html) {
         logger.warn(
@@ -319,7 +343,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
       if (dry) {
         logger.info(
-          { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: items.length, htmlLength: html.length },
+        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: itemsToProcess.length, htmlLength: html.length },
           '🏜️ DRY RUN — no se escribe mensaje ni se resetean line items'
         );
         dealsProcessed++;
@@ -331,9 +355,9 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
       await writeMensaje(dealId, html);
 
       // Por cada LI: guardar snapshot + resetear flag + limpiar tipo
-      for (const li of items) {
-        try {
-          await finalizeLineItemAfterNotify(li);
+for (const li of itemsToProcess) {
+  try{
+  await finalizeLineItemAfterNotify(li);
           lineItemsReset++;
         } catch (err) {
           logger.error(
@@ -346,7 +370,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
       dealsProcessed++;
       logger.info(
-        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: items.length },
+        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: itemsToProcess.length },
         '✅ Mensaje Mantsoft escrito y line items finalizados'
       );
 

@@ -237,13 +237,17 @@ function buildLineItemEdicionDiv(li, diffs) {
 /** Bloque para LI de baja */
 function buildLineItemBajaDiv(li) {
   const lp = li?.properties || {};
+  const esDefinitivo = String(lp.es_definitivo || '').toLowerCase() === 'true';
   const rows = [
     `<div style="${STYLES.lineItemDivBaja}">`,
     `<div style="${STYLES.lineItemTitle}">🛑 ${val(lp.name) || 'Producto'}</div>`,
     ...buildLineItemBaseRows(li),
+    buildRow('Fecha de baja',  val(lp.fecha_de_baja)?.slice(0, 10)),
+    buildRow('Motivo',         val(lp.motivo_de_pausa)),
+    buildRow('Tipo de baja',   esDefinitivo ? 'Definitiva' : 'Temporal'),
     `</div>`,
   ];
-  return rows.join('\n');
+  return rows.filter(r => r !== '').join('\n');
 }
 
 function buildFooter(count) {
@@ -269,7 +273,7 @@ function buildFooter(count) {
  * - sin tipo, con snapshot previo   → edicion (fallback defensivo)
  * - sin tipo, sin snapshot previo   → alta (fallback defensivo)
  */
-function classifyLineItem(li) {
+export function classifyLineItem(li) {
   const p = li?.properties || {};
   const tipoRaw = String(p.mansoft_tipo_aviso || '').trim().toLowerCase();
   const prevSnap = parseMansoftSnapshot(p.mansoft_ultimo_snapshot);
@@ -313,7 +317,7 @@ export function buildMensajeMantsoft(lineItems, dealName, dealMeta = {}) {
   const bajas    = [];
   const ediciones = []; // { li, diffs }
 
-  for (const li of lineItems) {
+for (const li of lineItems) {
     const { tipo, diffs } = classifyLineItem(li);
     if (tipo === 'alta') {
       altas.push(li);

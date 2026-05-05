@@ -29,6 +29,7 @@ import {
   FORECAST_AUTO_STAGES,
   EMITTED_STAGES,
   PROMOTED_STAGES,
+  DERIVED_STAGES,
   BILLING_AUTOMATED_CANCELLED,
 } from '../../config/constants.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
@@ -322,7 +323,7 @@ export async function recalcFromTickets({
 
   // 2) Clasificar tickets por grupo de stages
   let lastTicketedDate = '';     // max fecha_resolucion_esperada de PROMOTED
-  let lastBillingPeriod = '';    // max fecha_resolucion_esperada de EMITTED
+  let lastBillingPeriod = '';    // max fecha_resolucion_esperada de DERIVED (Listo para Facturar+)
   let billingLastBilledDate = ''; // max fecha_real_de_facturacion de EMITTED
   let billingNextDate = '';      // min fecha_resolucion_esperada de FORECAST (futuro)
 
@@ -338,8 +339,8 @@ export async function recalcFromTickets({
       }
     }
 
-// PROMOTED: READY + post-READY (para last_billing_period = última cuota derivada)
-    if (PROMOTED_STAGES.has(stage)) {
+// DERIVED: READY + post-READY (para last_billing_period = última cuota derivada)
+    if (DERIVED_STAGES.has(stage)) {
       if (fechaEsperada && fechaEsperada > lastBillingPeriod) {
         lastBillingPeriod = fechaEsperada;
       }

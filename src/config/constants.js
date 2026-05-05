@@ -328,6 +328,28 @@ export function isForecastTicketStage(stageId) {
 }
 
 /**
+ * DERIVED_STAGES: tickets que llegaron a "Listo para Facturar" o más allá.
+ * Usado por recalcFromTickets para calcular last_billing_period.
+ * = PROMOTED_STAGES sin TICKET_STAGES.NEW ("Próximos a Facturar").
+ */
+export const DERIVED_STAGES = new Set([
+  // Manual — "Listo para Facturar" (admin confirmó)
+  TICKET_STAGES.READY,
+  // Manual — post-emisión
+  BILLING_TICKET_STAGE_ID_CREATED,
+  TICKET_STAGES.INVOICED,
+  BILLING_TICKET_STAGE_ID_LATE,
+  BILLING_TICKET_STAGE_ID_PAID,
+  // Auto — "Listo para Facturar" auto (Phase 3 promovió y emitió)
+  BILLING_AUTOMATED_READY,
+  // Auto — post-emisión
+  BILLING_AUTOMATED_CREATED,
+  BILLING_AUTOMATED_LATE,
+  BILLING_AUTOMATED_PAID,
+]);
+
+
+/**
  * Devuelve true si el stage corresponde a un ticket ya facturado
  * (post-READY, excluyendo CANCELLED).
  */
