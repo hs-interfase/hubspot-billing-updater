@@ -68,12 +68,13 @@ function esRepetitivo(freq) {
  * Devuelve { uyu_usd, pyg_usd, eur_usd, date } o null.
  */
 async function getLatestExchangeRate() {
-  if (!process.env.DATABASE_URL) {
-    console.warn('  ⚠ DATABASE_URL no configurada — columnas USD quedarán vacías');
+  const connStr = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  if (!connStr) {
+    console.warn('  ⚠ DATABASE_URL y DATABASE_PUBLIC_URL no configuradas — columnas USD quedarán vacías');
     return null;
   }
 
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
   try {
     const { rows } = await pool.query(
       `SELECT date, uyu_usd, eur_usd, pyg_usd
@@ -172,7 +173,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
-  'monto_a_facturar', 'numero_de_factura', 'dolar',
+  'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda',
 ];
 
@@ -454,16 +455,19 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const ancla = ymd(lp?.billing_anchor_date || '');
   const incluyeUY = safe(lp?.uy || '').toLowerCase() === 'true';
 
-  const monto = safeNum(tp.monto_a_facturar);
+  const monto = safeNum(tp.total_real_a_facturar) ?? safeNum(tp.monto_a_facturar);
   const costo = safeNum(tp.of_costo);
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
 
   const moneda = dealBase['Moneda'];
   const tieneFactura = safe(tp.numero_de_factura) !== '';
   const tcNodum = safeNum(tp.dolar);
-  const tc = tieneFactura && tcNodum
-    ? tcNodum
-    : getTCForCurrency(moneda, latestRates);
+  const monedaUpper = safe(moneda).toUpperCase();
+  const tc = monedaUpper === 'USD'
+    ? 1
+    : (tieneFactura && tcNodum > 0)
+      ? tcNodum
+      : getTCForCurrency(moneda, latestRates);
 
   return {
     ...dealBase,
