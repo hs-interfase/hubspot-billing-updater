@@ -53,7 +53,20 @@ async function checkCronLiveness() {
       ...(stale && { message: `Last weekday run was ${Math.round(age)}h ago (threshold: ${WEEKDAY_STALE_HOURS}h)` }),
     }
   }
+// Verificar si el último scan weekday fue completo
+const weekdayScanDate = await getCronStateWithTimestamp('weekday_scan_complete_date');
+const todayYMD = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Montevideo' });
+const dayOfWeekLocal = new Date().toLocaleDateString('en-US', { timeZone: 'America/Montevideo', weekday: 'short' });
+const isWeekday = !['Sat', 'Sun'].includes(dayOfWeekLocal);
 
+if (isWeekday && weekdayScanDate?.value !== todayYMD) {
+  result.weekday.scanComplete = false;
+  result.weekday.scanCompleteDate = weekdayScanDate?.value || null;
+  if (result.weekday.status === 'ok') result.weekday.status = 'warn';
+  result.weekday.message = (result.weekday.message || '') + ' Scan did not complete today.';
+} else if (isWeekday) {
+  result.weekday.scanComplete = true;
+}
   // Weekend check (relevante sáb-dom)
   if (!weekend) {
     if (dayOfWeek === 0 || dayOfWeek === 6) {

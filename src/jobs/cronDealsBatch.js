@@ -6,7 +6,7 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDeal } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
-import { initCronFailuresTable, insertCronFailure, setCronState } from '../db.js'
+import { initCronStateTable, initCronFailuresTable, insertCronFailure, getCronState, setCronState } from '../db.js'
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
 import {
@@ -15,9 +15,6 @@ import {
 } from '../config/constants.js';
 
 // -------------------- Paths / Config --------------------
-const STATE_PATH =
-  process.env.CRON_STATE_PATH ||
-  path.resolve(process.cwd(), "cron_state_deals.json");
 
 const FAILED_PATH =
   process.env.CRON_FAILED_PATH ||
@@ -272,13 +269,6 @@ return [
 ];
 }
 
-function weekendFilters_full() {
-return [
-  ...baseFiltersCancelled(),
-  // ...baseFiltersNoMirrors(),
-];
-}
-
 function dealPropsForSearch() {
   return [
     "dealname",
@@ -313,12 +303,11 @@ if (!acquireLock()) {
 
   let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
-  // State includes cursors per mode AND per weekday-filter-set
-  const state = readJson(STATE_PATH, {weekday: { after_s1: null, after_s2: null, after_s3: null, after_s4: null },
-    
-    weekend: { after_full: null },
-    lastRun: {},
-  });
+// Cursores weekday desde PostgreSQL (sobrevive redeploys)
+  let afterS1 = await getCronState('weekday_after_s1');
+  let afterS2 = await getCronState('weekday_after_s2');
+  let afterS3 = await getCronState('weekday_after_s3');
+  let afterS4 = await getCronState('weekday_after_s4');
 
   appendAudit({
     at: new Date().toISOString(),
@@ -334,7 +323,19 @@ if (!acquireLock()) {
   });
 
   try {
+    await initCronStateTable();
     await initCronFailuresTable();
+
+    const prevWeekdayScan = await getCronState('weekday_scan_complete_date');
+    if (prevWeekdayScan && prevWeekdayScan !== today) {
+      await setCronState('weekday_after_s1', null);
+      await setCronState('weekday_after_s2', null);
+      await setCronState('weekday_after_s3', null);
+      await setCronState('weekday_after_s4', null);
+      await setCronState('weekday_scan_complete_date', null);
+      afterS1 = null; afterS2 = null; afterS3 = null; afterS4 = null;
+      logger.info({ prevWeekdayScan, today }, '[cronDealsBatch] Cursores reseteados (nuevo día)');
+    }
     
     if (!CANCELLED_STAGE_ID) {
     logger.warn(
@@ -404,48 +405,17 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
     async function* candidateDealsGenerator() {
       const props = dealPropsForSearch();
 
-      if (mode === "weekend") {
-        while (Date.now() < deadline) {
-          const resp = await searchDeals({
-            after: state.weekend.after_full,
-            limit: PAGE_LIMIT,
-            filters: weekendFilters_full(),
-            properties: props,
-            sorts: SORTS,
-          });
-          const deals = resp?.results || [];
-          const nextAfter = resp?.paging?.next?.after || null;
-
-          for (const d of deals) {
-            const id = String(d.id || d.properties?.hs_object_id);
-            if (!seen.has(id)) {
-              seen.add(id);
-              yield { id, summary: d };
-            }
-          }
-          state.weekend.after_full = nextAfter;
-          writeJson(STATE_PATH, state);
-          if (!nextAfter || deals.length === 0) {
-            state.weekend.after_full = null;
-            writeJson(STATE_PATH, state);
-            break;
-          }
-        }
-        return;
-      }
-
       // Weekday: fetch a page from each set, merge-sort by hs_lastmodifieddate (desc), yield.
       while (Date.now() < deadline) {
        let r1, r2, r3;
 
         try {
-          r1 = await searchDeals({ after: state.weekday.after_s1, limit: PAGE_LIMIT, filters: weekdayFilters_set1_todayAutoTrue(today), properties: props, sorts: SORTS });
+          r1 = await searchDeals({ after: afterS1, limit: PAGE_LIMIT, filters: weekdayFilters_set1_todayAutoTrue(today), properties: props, sorts: SORTS });
           await sleep(300);
-          r2 = await searchDeals({ after: state.weekday.after_s2, limit: PAGE_LIMIT, filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30), properties: props, sorts: SORTS });
+          r2 = await searchDeals({ after: afterS2, limit: PAGE_LIMIT, filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30), properties: props, sorts: SORTS });
           await sleep(300);
-          r3 = await searchDeals({ after: state.weekday.after_s3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
+          r3 = await searchDeals({ after: afterS3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
         } catch (e) {
-          // 🔒 NO romper el cron por search 400/429/5xx
           appendAudit({
             at: new Date().toISOString(),
             type: "error",
@@ -454,13 +424,12 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
             status: e?.code || e?.statusCode || e?.response?.status || null,
           });
 
-          // fallback: seguimos SOLO con set3 (lookback por modifieddate)
           r1 = { results: [], paging: {} };
           r2 = { results: [], paging: {} };
 
           try {
             r3 = await searchDeals({
-              after: state.weekday.after_s3,
+              after: afterS3,
               limit: PAGE_LIMIT,
               filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS),
               properties: props,
@@ -474,8 +443,6 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
               msg: e2?.message || String(e2),
               status: e2?.code || e2?.statusCode || e2?.response?.status || null,
             });
-
-            // si hasta s3 falla, cortamos el generator (sin explotar)
             break;
           }
         }
@@ -485,17 +452,17 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
         const a3 = r3?.results || [];
         const merged = [...a1, ...a2, ...a3];
 
-                // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
+        // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
        try {
-         const r4 = await searchOverdueForecasts({ after: state.weekday.after_s4, limit: PAGE_LIMIT });
+         const r4 = await searchOverdueForecasts({ after: afterS4, limit: PAGE_LIMIT });
          for (const t of r4?.results || []) {
            const dealId = String(t?.properties?.of_deal_id || '').trim();
            if (!dealId || seen.has(dealId)) continue;
            seen.add(dealId);
            yield { id: dealId, summary: null };
          }
-         state.weekday.after_s4 = r4?.paging?.next?.after || null;
-         writeJson(STATE_PATH, state);
+         afterS4 = r4?.paging?.next?.after || null;
+         await setCronState('weekday_after_s4', afterS4);
        } catch (e4) {
          appendAudit({
            at: new Date().toISOString(),
@@ -504,15 +471,14 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
            msg: e4?.message || String(e4),
            status: e4?.code || e4?.statusCode || e4?.response?.status || null,
          });
-         // No rompe el generator
        } 
 
         if (merged.length === 0) {
-          state.weekday.after_s1 = null;
-          state.weekday.after_s2 = null;
-          state.weekday.after_s3 = null;
-          state.weekday.after_s4 = null;
-          writeJson(STATE_PATH, state);
+          afterS1 = null; afterS2 = null; afterS3 = null; afterS4 = null;
+          await setCronState('weekday_after_s1', null);
+          await setCronState('weekday_after_s2', null);
+          await setCronState('weekday_after_s3', null);
+          await setCronState('weekday_after_s4', null);
           break;
         }
 
@@ -529,14 +495,15 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
           yield { id, summary: d };
         }
 
-        // advance cursors (si r1/r2 fueron fallback vacíos, quedan null y no rompe)
-        state.weekday.after_s1 = r1?.paging?.next?.after || null;
-        state.weekday.after_s2 = r2?.paging?.next?.after || null;
-        state.weekday.after_s3 = r3?.paging?.next?.after || null;
-        writeJson(STATE_PATH, state);
-        
+        // advance cursors
+        afterS1 = r1?.paging?.next?.after || null;
+        afterS2 = r2?.paging?.next?.after || null;
+        afterS3 = r3?.paging?.next?.after || null;
+        await setCronState('weekday_after_s1', afterS1);
+        await setCronState('weekday_after_s2', afterS2);
+        await setCronState('weekday_after_s3', afterS3);
 
-        if (!state.weekday.after_s1 && !state.weekday.after_s2 && !state.weekday.after_s3 && !state.weekday.after_s4) {
+        if (!afterS1 && !afterS2 && !afterS3 && !afterS4) {
           break;
         }
       }
@@ -659,6 +626,13 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
       if (once) break;
     }
 
+// Si todos los cursores terminaron en null, el scan fue completo
+    const scanComplete = !afterS1 && !afterS2 && !afterS3 && !afterS4;
+    if (scanComplete) {
+      await setCronState('weekday_scan_complete_date', today);
+      logger.info({ today, processed, ok, failed }, '[cronDealsBatch] weekday_scan_complete');
+    }
+
     appendAudit({
       at: new Date().toISOString(),
       type: "cron_done",
@@ -668,7 +642,7 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
       failed,
       skippedMirror,
       skippedNoLI,
-      stateSnapshot: state,
+      scanComplete,
     });
      await setCronState('weekday_last_run', JSON.stringify({
       at: new Date().toISOString(), processed, ok, failed, skippedMirror, skippedNoLI,
@@ -687,7 +661,8 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
   }
 
 releaseLock();
-  logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
+  const cronStatus = failed === 0 ? 'OK' : failed < processed * 0.1 ? 'WARN' : 'ERROR';
+  logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
   logger.info({ jobRunId }, "Cron finished");
 
   const failedItems = readJson(FAILED_PATH, { items: [] }).items || []

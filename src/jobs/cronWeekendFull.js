@@ -313,28 +313,36 @@ export async function runWeekendFullCron({ onlyDealId = null, once = false, dry 
   logger.info({ jobRunId }, "[cronWeekend] Cron started");
   lastCtx = { ...lastCtx, where: "runWeekendFullCron.start", dealId: null, mirrorId: null };
 
-  if (!acquireLock()) {
+if (!acquireLock()) {
     logger.warn({ jobRunId, mode, reason: "lock_present" }, "[cronWeekend] Cron skipped (lock present)");
     return { skipped: true };
   }
 
-  let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
-
- await initCronStateTable();
-await initCronFailuresTable();
-
-  appendAudit({
-    at: new Date().toISOString(),
-    type: "cron_start",
-    mode,
-    today,
-    maxRunMs: MAX_RUN_MS,
-    pageLimit: PAGE_LIMIT,
-    onlyDealId: onlyDealId || null,
-    dry,
-  });
+let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
   try {
+    await initCronStateTable();
+    await initCronFailuresTable();
+
+    const prevScanDate = await getCronState('weekend_full_scan_done_date');
+    if (prevScanDate && prevScanDate !== today) {
+      await setCronState('weekend_last_id_full', null);
+      await setCronState('weekend_after_s4', null);
+      await setCronState('weekend_full_scan_done_date', null);
+      logger.info({ prevScanDate, today }, '[cronWeekend] Cursores reseteados (nuevo día)');
+    }
+
+    appendAudit({
+      at: new Date().toISOString(),
+      type: "cron_start",
+      mode,
+      today,
+      maxRunMs: MAX_RUN_MS,
+      pageLimit: PAGE_LIMIT,
+      onlyDealId: onlyDealId || null,
+      dry,
+    });
+
     if (!CANCELLED_STAGE_ID) {
       logger.warn("[cronWeekend] CANCELLED_STAGE_ID not set -> NO excluirá cancelados");
       appendAudit({ at: new Date().toISOString(), type: "warn", msg: "CANCELLED_STAGE_ID not set" });
@@ -616,7 +624,8 @@ while (Date.now() < deadline) {
     }
 
     releaseLock();
-    logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI }, "cron_done");
+    const cronStatus = failed === 0 ? 'OK' : failed < processed * 0.1 ? 'WARN' : 'ERROR';
+    logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
     logger.info({ jobRunId }, "[cronWeekend] Cron finished");
 
 const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
