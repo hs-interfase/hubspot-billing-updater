@@ -33,26 +33,119 @@ export function determineTicketFrequency(lineItem) {
 
   return 'Frecuente';
 }
-
 /**
- * Detecta si el line item tiene IVA según hs_tax_rate_group_id.
- * si es iva = 'true'
- * si es exento de iva = 'false'
- * Cualquier otro valor → ""
+ * Detecta taxes del line item según hs_tax_rate_group_id y exonera_irae.
+ *
+ * IVA:
+ * - IVA UY => 'true'
+ * - IVA PY => 'true'
+ * - IVA UY + IRAE => 'true'
+ * - Exento IVA => 'false'
+ * - IRAE puro => 'false'
+ * - Cualquier otro valor => ''
+ *
+ * IRAE:
+ * - exonera_irae = false / no => 'true'
+ * - exonera_irae = true / sí => 'false'
+ * - fallback por tax group IRAE / IVA UY + IRAE => 'true'
+ * - Cualquier otro valor => ''
  */
 const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
 const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
 const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
+const IRAE_TAX_GROUP_ID = (process.env.IRAE_TAX_GROUP_ID || '').trim();
+const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_UY_IRAE_TAX_GROUP_ID || '').trim();
 
+function parseYesNoBool(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const raw = String(value).trim().toLowerCase();
+
+  if (['true', '1', 'si', 'sí', 'yes', 'y'].includes(raw)) return true;
+  if (['false', '0', 'no', 'n'].includes(raw)) return false;
+
+  return null;
+}
 
 function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
+
   let result;
-  if (raw && ((IVA_UY_TAX_GROUP_ID && raw === IVA_UY_TAX_GROUP_ID) ||
-              (IVA_PY_TAX_GROUP_ID && raw === IVA_PY_TAX_GROUP_ID)))  result = 'true';
-  else if (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID)        result = 'false';
-  else                                                                 result = '';
-  logger.info({ module: 'snapshotService', fn: 'detectIVA', raw, result, IVA_UY_TAX_GROUP_ID, IVA_PY_TAX_GROUP_ID, EXENTO_TAX_GROUP_ID }, '[SNAPSHOT][IVA][A] detectIVA()');
+
+  if (
+    raw &&
+    (
+      (IVA_UY_TAX_GROUP_ID && raw === IVA_UY_TAX_GROUP_ID) ||
+      (IVA_PY_TAX_GROUP_ID && raw === IVA_PY_TAX_GROUP_ID) ||
+      (IVA_UY_IRAE_TAX_GROUP_ID && raw === IVA_UY_IRAE_TAX_GROUP_ID)
+    )
+  ) {
+    result = 'true';
+  } else if (
+    raw &&
+    (
+      (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID) ||
+      (IRAE_TAX_GROUP_ID && raw === IRAE_TAX_GROUP_ID)
+    )
+  ) {
+    result = 'false';
+  } else {
+    result = '';
+  }
+
+  logger.info({
+    module: 'snapshotService',
+    fn: 'detectIVA',
+    raw,
+    result,
+    IVA_UY_TAX_GROUP_ID,
+    IVA_PY_TAX_GROUP_ID,
+    EXENTO_TAX_GROUP_ID,
+    IRAE_TAX_GROUP_ID,
+    IVA_UY_IRAE_TAX_GROUP_ID,
+  }, '[SNAPSHOT][IVA][A] detectIVA()');
+
+  return result;
+}
+
+function detectIRAE(lineItem) {
+  const lp = lineItem?.properties || {};
+  const rawTaxGroupId = String(lp.hs_tax_rate_group_id ?? '').trim();
+  const exoneraIraeRaw = lp.exonera_irae;
+  const exoneraIrae = parseYesNoBool(exoneraIraeRaw);
+
+  let result;
+
+  // Fuente principal: propiedad explícita del Line Item.
+  // exonera_irae = no / false => aplica IRAE.
+  // exonera_irae = sí / true => no aplica IRAE.
+  if (exoneraIrae === false) {
+    result = 'true';
+  } else if (exoneraIrae === true) {
+    result = 'false';
+  } else if (
+    rawTaxGroupId &&
+    (
+      (IRAE_TAX_GROUP_ID && rawTaxGroupId === IRAE_TAX_GROUP_ID) ||
+      (IVA_UY_IRAE_TAX_GROUP_ID && rawTaxGroupId === IVA_UY_IRAE_TAX_GROUP_ID)
+    )
+  ) {
+    result = 'true';
+  } else {
+    result = '';
+  }
+
+  logger.info({
+    module: 'snapshotService',
+    fn: 'detectIRAE',
+    rawTaxGroupId,
+    exonera_irae: exoneraIraeRaw,
+    exoneraIrae,
+    result,
+    IRAE_TAX_GROUP_ID,
+    IVA_UY_IRAE_TAX_GROUP_ID,
+  }, '[SNAPSHOT][IRAE][A] detectIRAE()');
+
   return result;
 }
 
@@ -67,7 +160,8 @@ export function extractLineItemSnapshots(lineItem, deal) {
   // TAX & DISCOUNT desde Line Item
   const descuentoPorcentaje = parseNumber(lp.hs_discount_percentage, 0) / 100; // ✅ Convertir basis points a %
   const descuentoMonto = parseNumber(lp.discount, 0); // descuento por unidad en moneda del deal
-  const ivaValue = detectIVA(lineItem); // "true" si ID === '16912720'
+  const ivaValue = detectIVA(lineItem);
+  const iraeValue = detectIRAE(lineItem);
 
   // 🐛 DEBUG: Log valores fuente y destino
   logger.info({ module: 'snapshotService', fn: 'extractLineItemSnapshots', lineItemId: lineItem?.id }, `[DBG][SNAPSHOT] Line Item ID: ${lineItem?.id}`);
@@ -78,7 +172,9 @@ export function extractLineItemSnapshots(lineItem, deal) {
     hs_discount_percentage: lp.hs_discount_percentage,
     discount: lp.discount,
     hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
+    exonera_irae: lp.exonera_irae,
   }, '[DBG][SNAPSHOT] Tax/Discount SOURCE');
+
   logger.info({
     module: 'snapshotService',
     fn: 'extractLineItemSnapshots',
@@ -86,6 +182,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
+    of_irae: iraeValue,
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
   // Calcular costo total (unitario × cantidad)
@@ -122,7 +219,8 @@ export function extractLineItemSnapshots(lineItem, deal) {
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.hs_margin, 0),
-    of_iva: ivaValue, // ✅ "true" si hs_tax_rate_group_id === '16912720'
+    of_iva: ivaValue,
+    of_irae: iraeValue,
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
@@ -137,6 +235,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
+    of_irae: iraeValue,
   }, '[SNAPSHOT][CRITICOS][AUTO]');
 
   logger.info({
@@ -144,6 +243,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     fn: 'extractLineItemSnapshots',
     lineItemId: lineItem?.id,
     of_iva: baseSnapshots.of_iva,
+    of_irae: baseSnapshots.of_irae,
   }, '[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return');
 
   return baseSnapshots;
@@ -246,6 +346,17 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     before: ivaRaw,
     after: out.of_iva,
   }, '[SNAPSHOT][IVA][FIX] of_iva normalizado');
+  
+  // ✅ Garantizar que of_irae siempre sea 'true' o 'false', nunca null
+  const iraeRaw = out.of_irae;
+  out.of_irae = iraeRaw === 'true' ? 'true' : iraeRaw === 'false' ? 'false' : '';
+  
+  logger.info({
+    module: 'snapshotService',
+    fn: 'createTicketSnapshots',
+    before: iraeRaw,
+    after: out.of_irae,
+  }, '[SNAPSHOT][IRAE][FIX] of_irae normalizado');
 
   // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
   // Convertir YYYY-MM-DD a timestamp ms

@@ -203,6 +203,7 @@ export async function getDealWithLineItems(dealId) {
     "discount",
     "hs_discount_percentage",
     "hs_tax_rate_group_id",
+    "exonera_irae",
     "hs_post_tax_amount",
     "hubspot_owner_id",
     "createdate",
