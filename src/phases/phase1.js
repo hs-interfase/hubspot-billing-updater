@@ -1,7 +1,14 @@
 // src/phases/phase1.js
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { syncBillingState } from '../services/billing/syncBillingState.js';
-import { DEAL_STAGE_LOST } from '../config/constants.js';
+import {
+  DEAL_STAGE_LOST,
+  IVA_UY_TAX_GROUP_ID,
+  IVA_PY_TAX_GROUP_ID,
+  EXENTO_TAX_GROUP_ID,
+  IRAE_TAX_GROUP_ID,
+  IVA_UY_IRAE_TAX_GROUP_ID,
+} from '../config/constants.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
   updateLineItemSchedule,
@@ -151,6 +158,133 @@ function parseBoolFromHubspot(raw) {
   return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
 }
 
+function parseYesNoBool(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const raw = String(value).trim().toLowerCase();
+
+  if (['true', '1', 'si', 'sí', 'yes', 'y'].includes(raw)) return true;
+  if (['false', '0', 'no', 'n'].includes(raw)) return false;
+
+  return null;
+}
+
+function normalizePaisOperativo(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '');
+}
+
+function detectHasIvaFromTaxGroup(taxGroupId) {
+  const raw = String(taxGroupId ?? '').trim();
+  if (!raw) return null;
+
+  if (
+    raw === IVA_UY_TAX_GROUP_ID ||
+    raw === IVA_PY_TAX_GROUP_ID ||
+    raw === IVA_UY_IRAE_TAX_GROUP_ID
+  ) {
+    return true;
+  }
+
+  if (
+    raw === EXENTO_TAX_GROUP_ID ||
+    raw === IRAE_TAX_GROUP_ID
+  ) {
+    return false;
+  }
+
+  return null;
+}
+
+function resolveTaxRateGroupId(lineItem, dealProps = {}) {
+  const lp = lineItem?.properties || {};
+  const pais = normalizePaisOperativo(dealProps.pais_operativo || lp.pais_operativo);
+
+  const isUruguay = ['uruguay', 'uy'].includes(pais);
+  const isParaguay = ['paraguay', 'py'].includes(pais);
+
+  if (!isUruguay && !isParaguay) return null;
+
+  const currentTaxGroupId = String(lp.hs_tax_rate_group_id ?? '').trim();
+  const hasIva = detectHasIvaFromTaxGroup(currentTaxGroupId);
+  const exoneraIrae = parseYesNoBool(lp.exonera_irae);
+
+  // exonera_irae = no / false => aplica IRAE
+  const aplicaIrae =
+    exoneraIrae === false ||
+    (
+      exoneraIrae === null &&
+      (
+        currentTaxGroupId === IRAE_TAX_GROUP_ID ||
+        currentTaxGroupId === IVA_UY_IRAE_TAX_GROUP_ID
+      )
+    );
+
+  if (hasIva === null && !aplicaIrae) return null;
+
+  // Uruguay: sí permite IVA UY + IRAE
+  if (isUruguay && hasIva === true && aplicaIrae) return IVA_UY_IRAE_TAX_GROUP_ID;
+  if (isUruguay && hasIva === true) return IVA_UY_TAX_GROUP_ID;
+  if (isUruguay && aplicaIrae) return IRAE_TAX_GROUP_ID;
+  if (isUruguay && hasIva === false) return EXENTO_TAX_GROUP_ID;
+
+  // Paraguay: no combinar IVA + IRAE por ahora
+  if (isParaguay && hasIva === true) return IVA_PY_TAX_GROUP_ID;
+  if (isParaguay && aplicaIrae) return IRAE_TAX_GROUP_ID;
+  if (isParaguay && hasIva === false) return EXENTO_TAX_GROUP_ID;
+
+  return null;
+}
+
+async function normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps }) {
+  const currentTaxGroupId = String(li?.properties?.hs_tax_rate_group_id ?? '').trim();
+  const nextTaxGroupId = resolveTaxRateGroupId(li, dealProps);
+
+  if (!nextTaxGroupId || nextTaxGroupId === currentTaxGroupId) return;
+
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+      properties: { hs_tax_rate_group_id: nextTaxGroupId },
+    });
+
+    li.properties = {
+      ...(li.properties || {}),
+      hs_tax_rate_group_id: nextTaxGroupId,
+    };
+
+    logger.info({
+      module: 'phase1',
+      fn: 'normalizeLineItemTaxGroupIfNeeded',
+      dealId,
+      lineItemId: li.id,
+      from: currentTaxGroupId || '(empty)',
+      to: nextTaxGroupId,
+      exonera_irae: li.properties?.exonera_irae,
+      pais_operativo: dealProps?.pais_operativo || li.properties?.pais_operativo,
+    }, '[phase1][tax] hs_tax_rate_group_id normalized');
+  } catch (err) {
+    logger.error({
+      module: 'phase1',
+      fn: 'normalizeLineItemTaxGroupIfNeeded',
+      dealId,
+      lineItemId: li.id,
+      currentTaxGroupId,
+      nextTaxGroupId,
+      err,
+    }, 'line_item_update_failed: normalize tax group');
+
+    reportIfActionable({
+      objectType: 'line_item',
+      objectId: li.id,
+      message: `line_item_update_failed (normalize tax group): ${err?.message || err}`,
+      err,
+    });
+  }
+}
+
 function fmtYMD(date) {
   if (!date) return null;
   const y = date.getFullYear();
@@ -268,6 +402,8 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
         logger.info({ module: 'phase1', fn: 'processLineItemsForPhase1', dealId, lineItemId: li.id, line_item_key: lineItemKey }, '[phase1][line_item_key] created');
       }
 
+      await normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps });
+
       // 0.5) HARD STOP POR PROPERTY: si fechas_completas=true, no recalcular schedule
       const fechasCompletas =
         String(li.properties?.fechas_completas || '').toLowerCase() === 'true';
@@ -365,6 +501,7 @@ export async function runPhase1(dealId) {
           discount: lp.discount,
           hs_discount_percentage: lp.hs_discount_percentage,
           hs_tax_rate_group_id: lp.hs_tax_rate_group_id,
+          exonera_irae: lp.exonera_irae,
           recurringbillingfrequency: lp.recurringbillingfrequency,
           hs_recurring_billing_start_date: lp.hs_recurring_billing_start_date,
           number_of_payments: lp.number_of_payments ?? lp.hs_recurring_billing_number_of_payments,
@@ -555,6 +692,7 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
  * 2. rekey forzado (line_item_key mismatch) → objectType: "line_item"
  * 3. crear line_item_key → objectType: "line_item"
  * 4. limpiar billing_next_date (fechas_completas) → objectType: "line_item"
+ * 
  *    → con continue donde corresponde (loop for...of sobre lineItems)
  *
  * NO reportados (fuera de criterio ticket/line_item):

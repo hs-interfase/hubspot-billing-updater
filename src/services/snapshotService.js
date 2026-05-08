@@ -4,6 +4,13 @@ import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import {
+  IVA_UY_TAX_GROUP_ID,
+  IVA_PY_TAX_GROUP_ID,
+  EXENTO_TAX_GROUP_ID,
+  IRAE_TAX_GROUP_ID,
+  IVA_UY_IRAE_TAX_GROUP_ID,
+} from '../config/constants.js';
 
 /**
  * Determina la frecuencia del ticket según las reglas del negocio.
@@ -50,11 +57,7 @@ export function determineTicketFrequency(lineItem) {
  * - fallback por tax group IRAE / IVA UY + IRAE => 'true'
  * - Cualquier otro valor => ''
  */
-const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
-const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
-const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
-const IRAE_TAX_GROUP_ID = (process.env.IRAE_TAX_GROUP_ID || '').trim();
-const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_UY_IRAE_TAX_GROUP_ID || '').trim();
+
 
 function parseYesNoBool(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -346,7 +349,7 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     before: ivaRaw,
     after: out.of_iva,
   }, '[SNAPSHOT][IVA][FIX] of_iva normalizado');
-  
+
   // ✅ Garantizar que of_irae siempre sea 'true' o 'false', nunca null
   const iraeRaw = out.of_irae;
   out.of_irae = iraeRaw === 'true' ? 'true' : iraeRaw === 'false' ? 'false' : '';
