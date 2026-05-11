@@ -16,12 +16,24 @@ import {
  * Determina la frecuencia del ticket según las reglas del negocio.
  *
  * FUENTE DE VERDAD: Line Item properties
- * - Irregular: si irregular = true (PRIORIDAD MÁXIMA)
- * - Único: si NO es irregular Y frecuencia es null/undefined/"unico"
- * - Frecuente: si tiene frecuencia (mensual, anual, etc.)
+ *
+ * Valores internos esperados en la propiedad del ticket:
+ * - Único
+ * - Irregular
+ * - Frecuente
+ * - Mensual
+ * - Bimestral
+ * - Trimestral
+ * - Semestral
+ * - Anual
+ *
+ * Prioridad:
+ * 1. Irregular: si irregular = true
+ * 2. Único: si no hay frecuencia o si la frecuencia indica pago único
+ * 3. Frecuencias conocidas de HubSpot
+ * 4. Frecuente: cualquier otra frecuencia no reconocida
  *
  * ⚠️ Esta es la ÚNICA función que debe usarse para calcular frecuencia de facturación.
- * NO duplicar esta lógica en otros lugares.
  */
 export function determineTicketFrequency(lineItem) {
   const lp = lineItem?.properties || {};
@@ -29,17 +41,42 @@ export function determineTicketFrequency(lineItem) {
   const isIrregular = parseBool(lp.irregular);
   if (isIrregular) return 'Irregular';
 
-  const freq = (lp.recurringbillingfrequency || lp.hs_recurring_billing_frequency || '')
+  const freq = (
+    lp.recurringbillingfrequency ||
+    lp.hs_recurring_billing_frequency ||
+    ''
+  )
     .toString()
     .trim()
     .toLowerCase();
 
-  if (!freq || freq === 'unico' || freq === 'único' || freq === 'one_time') {
+  if (
+    !freq ||
+    freq === 'unico' ||
+    freq === 'único' ||
+    freq === 'one_time' ||
+    freq === 'one-time' ||
+    freq === 'pago_unico' ||
+    freq === 'pago único'
+  ) {
     return 'Único';
   }
 
-  return 'Frecuente';
+  const frequencyMap = {
+    monthly: 'Mensual',
+    quarterly: 'Trimestral',
+    per_six_months: 'Semestral',
+    annually: 'Anual',
+
+    // Por si HubSpot o tu sistema llega a usar estas variantes
+    bimonthly: 'Bimestral',
+    bi_monthly: 'Bimestral',
+    every_two_months: 'Bimestral',
+  };
+
+  return frequencyMap[freq] || 'Frecuente';
 }
+
 /**
  * Detecta taxes del line item según hs_tax_rate_group_id y exonera_irae.
  *
@@ -203,7 +240,15 @@ export function extractLineItemSnapshots(lineItem, deal) {
     .trim()
     .toLowerCase();
 
-  const repetitivo = !!rawFreq && !['unico', 'único', 'one_time'].includes(rawFreq);
+const repetitivo = !!rawFreq && ![
+  'unico',
+  'único',
+  'one_time',
+  'one-time',
+  'pago_unico',
+  'pago único',
+].includes(rawFreq);
+
 
   // ⚠️  of_rubro: validar antes de incluir (async validation se hará en createTicketSnapshots)
   const baseSnapshots = {

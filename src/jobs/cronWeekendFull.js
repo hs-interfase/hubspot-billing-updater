@@ -236,10 +236,12 @@ async function auditLineItemTickets(deal, lineItems) {
   // Buscar todos los tickets asociados al deal
   let allTickets = [];
   try {
-    const assoc = await withRetry(() =>
-      hubspotClient.crm.deals.associationsApi.getAll(dealId, 'tickets')
-    );
-    const ticketIds = (assoc?.results || []).map(a => String(a.id || a.toObjectId));
+  const assoc = await withRetry(() =>
+    hubspotClient.crm.associations.v4.basicApi.getPage(
+      'deals', dealId, 'tickets', 500
+    )
+  );
+  const ticketIds = (assoc?.results || []).map(a => String(a.toObjectId));
     if (ticketIds.length > 0) {
       // Traer propiedades de cada ticket en batch
       const batchResp = await withRetry(() =>
