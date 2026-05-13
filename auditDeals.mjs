@@ -30,6 +30,7 @@ const hubspot = new Client({ accessToken: TOKEN });
 const args = process.argv.slice(2);
 const pipelineFilter = (() => { const i = args.indexOf('--pipeline'); return i !== -1 ? args[i + 1] : null; })();
 const singleDealId   = (() => { const i = args.indexOf('--deal');     return i !== -1 ? args[i + 1] : null; })();
+const mirrorsOnly    = args.includes('--mirrors');
 
 // ─── Rate limit ───────────────────────────────────────────────────────────────
 
@@ -258,8 +259,9 @@ const TICKET_PROPS = [
 async function fetchAllDeals() {
   const deals = [];
   let after;
-  const filters = [];
-  if (pipelineFilter) filters.push({ propertyName: 'pipeline', operator: 'EQ', value: pipelineFilter });
+const filters = [];
+if (pipelineFilter) filters.push({ propertyName: 'pipeline', operator: 'EQ', value: pipelineFilter });
+if (mirrorsOnly) filters.push({ propertyName: 'es_mirror_de_py', operator: 'EQ', value: 'true' });
 
   while (true) {
     await rateLimit();
@@ -592,6 +594,8 @@ async function main() {
   console.log(`  Fecha (Montevideo): ${today}`);
   if (pipelineFilter) console.log(`  Pipeline:          ${pipelineFilter}`);
   if (singleDealId)   console.log(`  Deal único:        ${singleDealId}`);
+  if (mirrorsOnly)    console.log(`  Filtro:            Solo mirrors UY`);
+
   console.log('═══════════════════════════════════════════════════════════\n');
 
   // 1. Deals

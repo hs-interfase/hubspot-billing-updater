@@ -43,7 +43,7 @@ const DEAL_PROPERTY = 'mensaje_de_facturacion';
 const TICKET_PROPS = [
   'hs_object_id', 'hs_pipeline', 'hs_pipeline_stage', 'hs_lastmodifieddate',
   'of_deal_id', 'of_producto_nombres', 'of_descripcion_producto', 'of_rubro',
-  'of_moneda', 'of_exonera_irae', 'of_iva', 'of_frecuencia_de_facturacion',
+  'of_moneda', 'exonera_irae', 'of_iva', 'of_frecuencia_de_facturacion',
   'of_cantidad_de_pagos', 'producto_id',
   'monto_unitario_real', 'cantidad_real', 'subtotal_real',
   'descuento_en_porcentaje', 'descuento_por_unidad_real', 'total_real_a_facturar',

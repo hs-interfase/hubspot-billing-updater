@@ -222,7 +222,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-    of_irae: iraeValue,
+    exonera_irae: iraeValue,
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
   // Calcular costo total (unitario × cantidad)
@@ -268,7 +268,7 @@ const repetitivo = !!rawFreq && ![
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.hs_margin, 0),
     of_iva: ivaValue,
-    of_irae: iraeValue,
+    exonera_irae: iraeValue,
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
@@ -283,7 +283,7 @@ const repetitivo = !!rawFreq && ![
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-    of_irae: iraeValue,
+    exonera_irae: iraeValue,
   }, '[SNAPSHOT][CRITICOS][AUTO]');
 
   logger.info({
@@ -291,7 +291,7 @@ const repetitivo = !!rawFreq && ![
     fn: 'extractLineItemSnapshots',
     lineItemId: lineItem?.id,
     of_iva: baseSnapshots.of_iva,
-    of_irae: baseSnapshots.of_irae,
+    exonera_irae: baseSnapshots.exonera_irae,
   }, '[SNAPSHOT][IVA][B] extractLineItemSnapshots() before return');
 
   return baseSnapshots;
@@ -395,16 +395,16 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     after: out.of_iva,
   }, '[SNAPSHOT][IVA][FIX] of_iva normalizado');
 
-  // ✅ Garantizar que of_irae siempre sea 'true' o 'false', nunca null
-  const iraeRaw = out.of_irae;
-  out.of_irae = iraeRaw === 'true' ? 'true' : iraeRaw === 'false' ? 'false' : '';
+  // ✅ Garantizar que exonera_irae siempre sea 'true' o 'false', nunca null
+  const iraeRaw = out.exonera_irae;
+  out.exonera_irae = iraeRaw === 'true' ? 'true' : iraeRaw === 'false' ? 'false' : '';
   
   logger.info({
     module: 'snapshotService',
     fn: 'createTicketSnapshots',
     before: iraeRaw,
-    after: out.of_irae,
-  }, '[SNAPSHOT][IRAE][FIX] of_irae normalizado');
+    after: out.exonera_irae,
+  }, '[SNAPSHOT][IRAE][FIX] exonera_irae normalizado');
 
   // ✅ B) FECHA ORDENADA A FACTURAR (solo si aplica, ej: urgente)
   // Convertir YYYY-MM-DD a timestamp ms

@@ -1,157 +1,298 @@
 #!/usr/bin/env node
 /**
  * diagTicketsMirror.mjs
- * Diagnóstico rápido de tickets específicos.
+ * Diagnóstico de deals mirror UY: detecta mirrors sin tickets o con LIs incompletos.
  *
  * Uso:
- *   node diagTicketsMirror.mjs
+ *   node diagTicketsMirror.mjs            # solo muestra mirrors con problemas
+ *   node diagTicketsMirror.mjs --all      # muestra todos los mirrors
+ *   node diagTicketsMirror.mjs --deal ID  # diagnostica un mirror específico
  */
 
 import 'dotenv/config';
 import { hubspotClient } from './src/hubspotClient.js';
 
-const TICKET_IDS = [
-  '44397453845', // UY automático listo para facturar
-  '44375241004', // UY automático listo para facturar
-  '44386461049', // manual próximo a facturar (bien)
-  '44379423501', // manual mandado a facturar (raro)
-  '44372603711', // manual mandado a facturar (raro)
-  '44386318001', // cancelado
-];
+// ── Config ──────────────────────────────────────────────────────────────────────
 
-const PROPS = [
+const SHOW_ALL = process.argv.includes('--all');
+const SINGLE_DEAL_IDX = process.argv.indexOf('--deal');
+const SINGLE_DEAL_ID = SINGLE_DEAL_IDX !== -1 ? process.argv[SINGLE_DEAL_IDX + 1] : null;
+
+const DEAL_PROPS = [
+  'dealname', 'dealstage', 'pais_operativo', 'es_mirror_de_py',
+  'deal_py_origen_id', 'facturacion_activa', 'facturacion_automatica',
   'hs_object_id',
-  'subject',
-  'hs_pipeline',
-  'hs_pipeline_stage',
-  'of_ticket_key',
-  'of_line_item_key',
-  'of_deal_id',
-  'of_invoice_id',
-  'of_invoice_key',
-  'of_invoice_status',
-  'of_estado',
-  'fecha_resolucion_esperada',
-  'of_fecha_de_facturacion',
-  'fecha_real_de_facturacion',
-  'facturar_ahora',
-  'of_facturacion_urgente',
-  'of_pais_operativo',
-  'createdate',
-  'hs_lastmodifieddate',
 ];
 
-// Stage labels conocidos (agregá más si querés)
-const STAGE_LABELS = {
-  // Manual pipeline 832539959
-  '1234282360': 'MANUAL_READY',
-  '1329838706': 'MANUAL_FORECAST_85',
-  // Auto pipeline 829156883
-  '1228755520': 'AUTO_READY',
-  '1329913747': 'AUTO_FORECAST_85',
-  '1228755521': 'AUTO_CREATED',
-  '1228755522': 'AUTO_PAID',
-  '1228755523': 'AUTO_CANCELLED',
-};
+const LI_PROPS = [
+  'name', 'line_item_key', 'facturacion_automatica', 'billing_next_date',
+  'last_ticketed_date', 'of_line_item_py_origen_id', 'pausa',
+  'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
+  'billing_anchor_date', 'fechas_completas',
+  'hs_recurring_billing_number_of_payments', 'recurringbillingfrequency',
+  'price', 'quantity', 'createdate',
+];
 
-const PIPELINE_LABELS = {
-  '832539959': 'MANUAL',
-  '829156883': 'AUTO',
-};
+const BILLING_REQUIRED = ['line_item_key', 'billing_next_date', 'of_line_item_py_origen_id'];
 
-function label(map, val) {
-  return map[val] ? `${val} (${map[val]})` : (val || '—');
+// ── Helpers ─────────────────────────────────────────────────────────────────────
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function getAssocIdsV4(fromType, fromId, toType) {
+  const out = [];
+  let after;
+  do {
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      fromType, String(fromId), toType, 100, after,
+    );
+    for (const r of (resp.results || [])) out.push(String(r.toObjectId));
+    after = resp.paging?.next?.after;
+  } while (after);
+  return out;
 }
+
+async function searchTicketsByLik(lik) {
+  const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
+    filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: lik }] }],
+    properties: ['subject', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_key', 'fecha_resolucion_esperada'],
+    limit: 100,
+  });
+  return resp.results || [];
+}
+
+// ── Fetch all mirror deals (keyset pagination) ─────────────────────────────────
+
+async function fetchAllMirrorDeals() {
+  const deals = [];
+  let lastId = null;
+
+  while (true) {
+    const filters = [
+      { propertyName: 'es_mirror_de_py', operator: 'EQ', value: 'true' },
+    ];
+    if (lastId) {
+      filters.push({ propertyName: 'hs_object_id', operator: 'GT', value: String(lastId) });
+    }
+
+    const resp = await hubspotClient.crm.deals.searchApi.doSearch({
+      filterGroups: [{ filters }],
+      properties: DEAL_PROPS,
+      sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
+      limit: 100,
+    });
+
+    const batch = resp.results || [];
+    if (batch.length === 0) break;
+
+    deals.push(...batch);
+    lastId = batch[batch.length - 1].id;
+    await sleep(250);
+  }
+
+  return deals;
+}
+
+// ── Diagnose a single mirror deal ───────────────────────────────────────────────
+
+async function diagnoseMirrorDeal(deal) {
+  const dp = deal.properties || {};
+  const dealId = String(deal.id);
+
+  // 1) Obtener line items
+  const liIds = await getAssocIdsV4('deals', dealId, 'line_items');
+  let lineItems = [];
+  if (liIds.length > 0) {
+    const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+      inputs: liIds.map(id => ({ id })),
+      properties: LI_PROPS,
+    });
+    lineItems = batchResp.results || [];
+  }
+
+  // 2) Para cada LI con LIK, buscar tickets
+  const liResults = [];
+  for (const li of lineItems) {
+    const lp = li.properties || {};
+    const lik = (lp.line_item_key || '').trim();
+
+    const missingProps = BILLING_REQUIRED.filter(p => !lp[p]?.trim());
+    let tickets = [];
+    if (lik) {
+      tickets = await searchTicketsByLik(lik);
+      await sleep(200);
+    }
+
+    const numPayments = Number(lp.hs_recurring_billing_number_of_payments) || 0;
+    const isSinglePayment = numPayments === 1 || numPayments === 0;
+    // No flaggear billing_next_date faltante si ya se facturó y es pago único
+    const billingNextExempt = !lp.billing_next_date?.trim()
+      && lp.last_ticketed_date?.trim()
+      && isSinglePayment;
+
+    const effectiveMissing = missingProps.filter(p => {
+      if (p === 'billing_next_date' && billingNextExempt) return false;
+      return true;
+    });
+
+    liResults.push({
+      id: li.id,
+      name: lp.name || '—',
+      lik: lik || null,
+      pausa: lp.pausa === 'true',
+      fechas_completas: lp.fechas_completas === 'true',
+      py_origen_id: lp.of_line_item_py_origen_id || null,
+      billing_next_date: lp.billing_next_date || null,
+      last_ticketed_date: lp.last_ticketed_date || null,
+      anchor: lp.billing_anchor_date || null,
+      numPayments,
+      isSinglePayment,
+      billingNextExempt,
+      isLegacy: !lp.of_line_item_py_origen_id?.trim(),
+      createdate: lp.createdate || null,
+      ticketCount: tickets.length,
+      tickets,
+      missingProps: effectiveMissing,
+    });
+  }
+
+  // 3) Determinar problemas
+  const problems = [];
+  const activeLIs = liResults.filter(li => !li.pausa && !li.fechas_completas);
+
+  for (const li of activeLIs) {
+    if (!li.lik) problems.push(`LI ${li.id} (${li.name}): sin line_item_key`);
+    else if (li.ticketCount === 0) problems.push(`LI ${li.id} (${li.name}): 0 tickets para LIK ${li.lik}`);
+    if (li.missingProps.length > 0) problems.push(`LI ${li.id} (${li.name}): faltan props [${li.missingProps.join(', ')}]`);
+    if (li.isLegacy) problems.push(`LI ${li.id} (${li.name}): ⚠️  LEGACY — sin of_line_item_py_origen_id (creado ${li.createdate || '?'})`);
+  }
+
+  return {
+    dealId,
+    dealname: dp.dealname || '—',
+    py_origen_id: dp.deal_py_origen_id || '—',
+    facturacion_activa: dp.facturacion_activa || 'false',
+    totalLIs: lineItems.length,
+    activeLIs: activeLIs.length,
+    liResults,
+    problems,
+    hasProblems: problems.length > 0,
+  };
+}
+
+// ── Print ───────────────────────────────────────────────────────────────────────
+
+function printDeal(result) {
+  console.log(`\n─────────────────────────────────────────`);
+  console.log(`📋 DEAL ${result.dealId}: ${result.dealname}`);
+  console.log(`   PY origen:          ${result.py_origen_id}`);
+  console.log(`   Facturación activa: ${result.facturacion_activa}`);
+  console.log(`   Line items:         ${result.totalLIs} total, ${result.activeLIs} activos`);
+
+  for (const li of result.liResults) {
+    const flags = [];
+    if (li.pausa) flags.push('⏸ PAUSA');
+    if (li.fechas_completas) flags.push('✅ COMPLETO');
+    if (li.isLegacy) flags.push('🏚️  LEGACY');
+    if (li.billingNextExempt) flags.push('💤 PAGO ÚNICO YA FACTURADO');
+    const flagStr = flags.length ? `  ${flags.join(' ')}` : '';
+
+    console.log(`\n   📦 LI ${li.id}: ${li.name}${flagStr}`);
+    console.log(`      LIK:              ${li.lik || '⚠️  SIN KEY'}`);
+    console.log(`      py_origen_id:     ${li.py_origen_id || '⚠️  FALTA'}`);
+    console.log(`      billing_next:     ${li.billing_next_date || '—'}`);
+    console.log(`      last_ticketed:    ${li.last_ticketed_date || '—'}`);
+    console.log(`      anchor:           ${li.anchor || '—'}`);
+    console.log(`      pagos:            ${li.numPayments || 'único/sin definir'}`);
+    console.log(`      creado:           ${li.createdate || '—'}`);
+    console.log(`      tickets:          ${li.ticketCount}`);
+
+    if (li.ticketCount > 0 && SHOW_ALL) {
+      for (const t of li.tickets) {
+        const tp = t.properties || {};
+        console.log(`        🎫 ${t.id}: ${tp.subject || '—'}  |  fecha=${tp.fecha_resolucion_esperada || '—'}  |  stage=${tp.hs_pipeline_stage}`);
+      }
+    }
+  }
+
+  if (result.problems.length > 0) {
+    console.log(`\n   ⚠️  PROBLEMAS:`);
+    for (const p of result.problems) {
+      console.log(`      • ${p}`);
+    }
+  }
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  DIAGNÓSTICO DE TICKETS — MIRROR UY');
-  console.log('═══════════════════════════════════════════════════════════\n');
+  console.log('  DIAGNÓSTICO MIRRORS UY — TICKETS Y BILLING');
+  console.log(`  Modo: ${SHOW_ALL ? 'TODOS' : 'SOLO PROBLEMAS'}${SINGLE_DEAL_ID ? ` (deal ${SINGLE_DEAL_ID})` : ''}`);
+  console.log('═══════════════════════════════════════════════════════════');
 
-  for (const ticketId of TICKET_IDS) {
-    console.log(`─────────────────────────────────────────`);
-    console.log(`🎫 TICKET ${ticketId}`);
-
+  // Fetch deals
+  let deals;
+  if (SINGLE_DEAL_ID) {
     try {
-      const t = await hubspotClient.crm.tickets.basicApi.getById(ticketId, PROPS);
-      const p = t.properties || {};
-
-      console.log(`   subject:              ${p.subject || '—'}`);
-      console.log(`   pipeline:             ${label(PIPELINE_LABELS, p.hs_pipeline)}`);
-      console.log(`   stage:                ${label(STAGE_LABELS, p.hs_pipeline_stage)}`);
-      console.log(`   of_ticket_key:        ${p.of_ticket_key || '—'}`);
-      console.log(`   of_line_item_key:     ${p.of_line_item_key || '—'}`);
-      console.log(`   of_deal_id:           ${p.of_deal_id || '—'}`);
-      console.log(`   of_invoice_id:        ${p.of_invoice_id || '—'}`);
-      console.log(`   of_invoice_status:    ${p.of_invoice_status || '—'}`);
-      console.log(`   of_estado:            ${p.of_estado || '—'}`);
-      console.log(`   fecha_esperada:       ${p.fecha_resolucion_esperada || '—'}`);
-      console.log(`   fecha_facturacion:    ${p.of_fecha_de_facturacion || '—'}`);
-      console.log(`   fecha_real:           ${p.fecha_real_de_facturacion || '—'}`);
-      console.log(`   facturar_ahora:       ${p.facturar_ahora || '—'}`);
-      console.log(`   urgente:              ${p.of_facturacion_urgente || '—'}`);
-      console.log(`   pais_operativo:       ${p.of_pais_operativo || '—'}`);
-      console.log(`   createdate:           ${p.createdate || '—'}`);
-      console.log(`   lastmodified:         ${p.hs_lastmodifieddate || '—'}`);
-
-      // Verificar si tiene invoice asociada
-      if (p.of_invoice_id) {
-        try {
-          const inv = await hubspotClient.crm.objects.basicApi.getById(
-            'invoices', p.of_invoice_id,
-            ['of_invoice_key', 'etapa_de_la_factura', 'monto_a_facturar', 'hs_createdate']
-          );
-          const ip = inv.properties || {};
-          console.log(`   → INVOICE ${p.of_invoice_id}:`);
-          console.log(`       etapa:    ${ip.etapa_de_la_factura || '—'}`);
-          console.log(`       monto:    ${ip.monto_a_facturar || '—'}`);
-          console.log(`       key:      ${ip.of_invoice_key || '—'}`);
-          console.log(`       created:  ${ip.hs_createdate || '—'}`);
-        } catch {
-          console.log(`   → INVOICE ${p.of_invoice_id}: no encontrada o error al leer`);
-        }
-      }
-
-      // Ver LI asociado
-      const lik = p.of_line_item_key;
-      if (lik) {
-        try {
-          const liResp = await hubspotClient.crm.objects.searchApi.doSearch('line_items', {
-            filterGroups: [{ filters: [{ propertyName: 'line_item_key', operator: 'EQ', value: lik }] }],
-            properties: ['name', 'facturacion_automatica', 'facturar_ahora', 'billing_next_date', 'of_line_item_py_origen_id'],
-            limit: 1,
-          });
-          const li = liResp?.results?.[0];
-          if (li) {
-            const lp = li.properties || {};
-            console.log(`   → LINE ITEM ${li.id}:`);
-            console.log(`       name:           ${lp.name || '—'}`);
-            console.log(`       automatica:     ${lp.facturacion_automatica || '—'}`);
-            console.log(`       facturar_ahora: ${lp.facturar_ahora || '—'}`);
-            console.log(`       billing_next:   ${lp.billing_next_date || '—'}`);
-            console.log(`       py_origen_id:   ${lp.of_line_item_py_origen_id || '—'}`);
-          } else {
-            console.log(`   → LINE ITEM: no encontrado para lik ${lik}`);
-          }
-        } catch (err) {
-          console.log(`   → LINE ITEM: error buscando por lik: ${err.message}`);
-        }
-      }
-
+      const d = await hubspotClient.crm.deals.basicApi.getById(SINGLE_DEAL_ID, DEAL_PROPS);
+      deals = [d];
     } catch (err) {
-      const status = err?.response?.status ?? err?.statusCode;
-      if (status === 404) {
-        console.log(`   ❌ No encontrado (404)`);
-      } else {
-        console.log(`   ❌ Error: ${err.message}`);
-      }
+      console.error(`\n❌ No se pudo leer deal ${SINGLE_DEAL_ID}: ${err.message}`);
+      process.exit(1);
     }
-
-    console.log();
+  } else {
+    console.log('\n🔍 Buscando deals mirror UY...');
+    deals = await fetchAllMirrorDeals();
+    console.log(`   Encontrados: ${deals.length} mirrors`);
   }
 
+  // Diagnose each
+  const results = [];
+  for (let i = 0; i < deals.length; i++) {
+    if (!SINGLE_DEAL_ID && i % 10 === 0 && i > 0) {
+      console.log(`   ... procesando ${i}/${deals.length}`);
+    }
+    const result = await diagnoseMirrorDeal(deals[i]);
+    results.push(result);
+    await sleep(100);
+  }
+
+  // Print
+  const withProblems = results.filter(r => r.hasProblems);
+  const toPrint = SHOW_ALL ? results : withProblems;
+
+  for (const r of toPrint) {
+    printDeal(r);
+  }
+
+  // Summary
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log('  RESUMEN');
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  FIN DIAGNÓSTICO');
+  console.log(`  Total mirrors:       ${results.length}`);
+  console.log(`  Con problemas:       ${withProblems.length}`);
+  console.log(`  Sin problemas:       ${results.length - withProblems.length}`);
+
+  // Contar LIs legacy globalmente
+  const allLegacyLIs = results.flatMap(r => r.liResults.filter(li => li.isLegacy && !li.pausa && !li.fechas_completas));
+  if (allLegacyLIs.length > 0) {
+    console.log(`\n  🏚️  LIs LEGACY (sin py_origen_id): ${allLegacyLIs.length}`);
+    for (const li of allLegacyLIs) {
+      const dealResult = results.find(r => r.liResults.includes(li));
+      console.log(`    LI ${li.id} en deal ${dealResult?.dealId}: ${li.name.substring(0, 60)}... (creado ${li.createdate || '?'})`);
+    }
+  }
+
+  if (withProblems.length > 0) {
+    console.log(`\n  Deals con problemas:`);
+    for (const r of withProblems) {
+      console.log(`    ${r.dealId}: ${r.dealname} — ${r.problems.length} problema(s)`);
+    }
+  } else {
+    console.log('\n  ✅ Todos los mirrors están OK');
+  }
+
   console.log('═══════════════════════════════════════════════════════════');
 }
 

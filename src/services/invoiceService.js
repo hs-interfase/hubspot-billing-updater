@@ -351,7 +351,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     descuento: descuentoPct,
     descuento_por_unidad: descuentoUnit,
     iva: hasIVA ? 'true' : 'false',
-    exonera_irae: tp.of_exonera_irae,
+    exonera_irae: tp.exonera_irae,
     responsable_asignado: toNumericOwnerOrNull(tp.hubspot_owner_id || tp.responsable_asignado),
     vendedor_factura: tp.of_propietario_secundario,
     frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || (tp.repetitivo ? 'Mensual' : undefined),

@@ -6,10 +6,102 @@ const { Pool } = pg
 
 // rejectUnauthorized: false es necesario para Railway (TLS interno con cert self-signed).
 // Si migrás a una DB externa con cert válido, cambiar a rejectUnauthorized: true.
+// DESPUÉS
+function resolveDatabaseConnectionString() {
+  const mode = String(process.env.DB_CONNECTION_MODE || '').trim().toLowerCase()
+
+  const isRailwayRuntime = Boolean(
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_SERVICE_ID ||
+    process.env.RAILWAY_PROJECT_ID
+  )
+
+  const privateUrl = process.env.DATABASE_URL
+  const publicUrl = process.env.DATABASE_PUBLIC_URL
+
+  if (mode && !['private', 'public', 'auto'].includes(mode)) {
+    throw new Error(
+      `[DB] DB_CONNECTION_MODE inválido: "${mode}". Usar: private, public o auto`
+    )
+  }
+
+  if (mode === 'private') {
+    if (!privateUrl) {
+      throw new Error('[DB] DB_CONNECTION_MODE=private pero DATABASE_URL no está configurada')
+    }
+
+    return {
+      connectionString: privateUrl,
+      mode: 'private',
+      isRailwayRuntime,
+    }
+  }
+
+  if (mode === 'public') {
+    if (!publicUrl) {
+      throw new Error('[DB] DB_CONNECTION_MODE=public pero DATABASE_PUBLIC_URL no está configurada')
+    }
+
+    return {
+      connectionString: publicUrl,
+      mode: 'public',
+      isRailwayRuntime,
+    }
+  }
+
+  // AUTO:
+  // - Dentro de Railway usa DATABASE_URL.
+  // - Fuera de Railway prioriza DATABASE_PUBLIC_URL,
+  //   porque DATABASE_URL puede existir pero apuntar a red privada Railway.
+  if (isRailwayRuntime && privateUrl) {
+    return {
+      connectionString: privateUrl,
+      mode: 'private-auto',
+      isRailwayRuntime,
+    }
+  }
+
+  if (!isRailwayRuntime && publicUrl) {
+    return {
+      connectionString: publicUrl,
+      mode: 'public-auto',
+      isRailwayRuntime,
+    }
+  }
+
+  if (privateUrl) {
+    return {
+      connectionString: privateUrl,
+      mode: 'private-fallback',
+      isRailwayRuntime,
+    }
+  }
+
+  if (publicUrl) {
+    return {
+      connectionString: publicUrl,
+      mode: 'public-fallback',
+      isRailwayRuntime,
+    }
+  }
+
+  throw new Error('[DB] No hay DATABASE_URL ni DATABASE_PUBLIC_URL configurada')
+}
+
+const { connectionString, mode, isRailwayRuntime } = resolveDatabaseConnectionString()
+
 const pool = new Pool({
-connectionString: process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL,
+  connectionString,
   ssl: { rejectUnauthorized: false },
 })
+
+logger.info(
+  {
+    dbConnectionMode: mode,
+    isRailwayRuntime,
+  },
+  '[DB] Pool PostgreSQL inicializado'
+)
 
 export async function initCronStateTable() {
   await pool.query(`

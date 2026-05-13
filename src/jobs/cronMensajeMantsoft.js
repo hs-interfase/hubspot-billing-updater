@@ -47,7 +47,7 @@ const LI_PROPS = [
   'name', 'description', 'of_rubro', 'rubro', 'unidad_de_negocio',
   'price', 'quantity', 'amount',
   'hs_discount_percentage', 'of_moneda', 'deal_currency_code',
-  'of_iva', 'of_exonera_irae',
+  'of_iva', 'exonera_irae',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
   'billing_next_date', 'fecha_vencimiento_contrato',

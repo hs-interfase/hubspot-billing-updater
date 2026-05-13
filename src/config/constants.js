@@ -65,8 +65,8 @@
 export const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
 export const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
 export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
-export const IRAE_TAX_GROUP_ID = (process.env.IRAE_TAX_GROUP_ID || '').trim();
-export const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_UY_IRAE_TAX_GROUP_ID || '').trim();
+export const IRAE_TAX_GROUP_ID = (process.env.IRAE_UY_TAX_GROUP_ID || '').trim();
+export const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_IRAE_UY_TAX_GROUP_ID || '').trim();
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
 

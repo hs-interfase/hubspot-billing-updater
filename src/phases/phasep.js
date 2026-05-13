@@ -56,6 +56,34 @@ const STAGE = {
   AUTO_FORECAST_95:   BILLING_AUTOMATED_FORECAST_95,
 };
 
+
+function isMirrorLineItem(p = {}) {
+  return String(p.of_line_item_py_origen_id || '').trim().length > 0;
+}
+
+function isMantsoftAltaStage(dealStage) {
+  const bucket = resolveBucketFromDealStage(dealStage);
+  return bucket === '85' || bucket === '95' || bucket === '100';
+}
+
+function shouldMarkMantsoftAlta({ li, automated, dealStage, desiredCount }) {
+  const p = li?.properties || {};
+  const currentTipo = String(p.mansoft_tipo_aviso || '').trim().toLowerCase();
+
+  if (!automated) return false;
+  if (isMirrorLineItem(p)) return false;
+  if (!isMantsoftAltaStage(dealStage)) return false;
+  if (desiredCount <= 0) return false;
+
+  // Si ya fue notificado alguna vez, no es alta.
+  if (hasPreviousSnapshot(li)) return false;
+
+  // No pisar baja ni pendiente ya existente.
+  if (currentTipo === 'baja') return false;
+  if (parseBool(p.mansoft_pendiente)) return false;
+
+  return true;
+}
 // Unión de stages forecast manuales + automáticos
 
 function nowMontevideoYmd() {
@@ -539,10 +567,11 @@ export async function runPhaseP({ deal, lineItems }) {
       const cfg = getEffectiveBillingConfig(li);
 
        // ── Guard Mantsoft: detectar edición de LI automático ──
-      // Si el LI ya tiene snapshot previo Y alguna watched prop cambió,
-      // marcar mansoft_pendiente=true + tipo 'edicion' para que el cron
-      // lo tome esta noche. La 'alta' la maneja phase3 al emitir la
-      // primera factura.
+// Si el LI ya tiene snapshot previo Y alguna watched prop cambió,
+// marcar mansoft_pendiente=true + tipo 'edicion' para que el cron
+// lo tome esta noche.
+// Las altas también se marcan en Phase P, cuando el deal ya está
+// en stage activo y existen fechas deseadas.
       if (automated && hasPreviousSnapshot(li)) {
         try {
           const prevSnap = parseMansoftSnapshot(p.mansoft_ultimo_snapshot);
@@ -627,6 +656,42 @@ export async function runPhaseP({ deal, lineItems }) {
       // 1) Fechas deseadas
       const allTickets = await findTicketsByLineItemKey(lineItemKey);
       const { desiredCount, dates } = buildDesiredDates(li, allTickets);
+
+      if (shouldMarkMantsoftAlta({ li, automated, dealStage, desiredCount })) {
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+      properties: {
+        mansoft_pendiente: 'true',
+        mansoft_tipo_aviso: 'alta',
+      },
+    });
+
+    li.properties = {
+      ...(li.properties || {}),
+      mansoft_pendiente: 'true',
+      mansoft_tipo_aviso: 'alta',
+    };
+
+    logger.info(
+      {
+        module: 'phaseP',
+        fn: 'runPhaseP',
+        dealId,
+        lineItemId: li.id,
+        lik: lineItemKey,
+        dealStage,
+        desiredCount,
+        firstDate: dates[0] || null,
+      },
+      'Mantsoft: alta marcada en Phase P'
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+      'Error marcando alta Mantsoft en Phase P — no bloquea forecast'
+    );
+  }
+}
 
       logger.debug(
         { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lik: lineItemKey, desiredCount, count: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null },
