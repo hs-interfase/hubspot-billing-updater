@@ -305,6 +305,7 @@ try {
           lineItemId,
           lineItemKey,
           today,
+          startDate: (lp.hs_recurring_billing_start_date || '').trim().slice(0, 10),
         });
       } catch (err) {
         // Best-effort: error en el guard no detiene la facturación de hoy

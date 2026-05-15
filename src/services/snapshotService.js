@@ -222,7 +222,7 @@ export function extractLineItemSnapshots(lineItem, deal) {
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-    exonera_irae: iraeValue,
+    exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
   // Calcular costo total (unitario × cantidad)
@@ -268,7 +268,7 @@ const repetitivo = !!rawFreq && ![
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: parseNumber(lp.hs_margin, 0),
     of_iva: ivaValue,
-    exonera_irae: iraeValue,
+    exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     repetitivo,
@@ -283,7 +283,7 @@ const repetitivo = !!rawFreq && ![
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_iva: ivaValue,
-    exonera_irae: iraeValue,
+    exonera_irae: baseSnapshots.exonera_irae,
   }, '[SNAPSHOT][CRITICOS][AUTO]');
 
   logger.info({

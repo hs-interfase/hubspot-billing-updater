@@ -84,15 +84,12 @@ export const TICKET_STAGES = {
   // Editable por administración durante esa ventana.
   // Usar el alias PROXIMOS_A_FACTURAR_STAGE para mayor claridad.
   NEW: process.env.BILLING_TICKET_STAGE_ID || '',
-
   // "Listo para Facturar": el admin mueve el ticket aquí cuando confirma emisión.
   // La función emitInvoicesForReadyTickets() (invoices.js, legacy) lee este stage.
   // Usar el alias TICKET_STAGE_LISTO_MANUAL para mayor claridad.
   READY: process.env.BILLING_TICKET_STAGE_READY || '',
-
   // "Emitido": Nodum confirmó la factura real. Cuenta en EMITTED_STAGES.
   INVOICED: process.env.BILLING_TICKET_STAGE_ID_BILLED || '',
-
   CANCELLED: process.env.BILLING_TICKET_STAGE_CANCELLED || '',
 };
 
@@ -238,10 +235,12 @@ export const INVOICED_STAGES = new Set([
  */
 export const EMITTED_STAGES = new Set([
   // Manual
+  BILLING_TICKET_STAGE_ID_CREATED,  // ← NUEVO
   TICKET_STAGES.INVOICED,
   BILLING_TICKET_STAGE_ID_LATE,
   BILLING_TICKET_STAGE_ID_PAID,
   // Auto
+  BILLING_AUTOMATED_CREATED,        // ← NUEVO
   BILLING_AUTOMATED_LATE,
   BILLING_AUTOMATED_PAID,
 ]);

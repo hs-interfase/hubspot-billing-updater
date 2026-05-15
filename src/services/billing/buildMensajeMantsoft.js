@@ -21,6 +21,26 @@ import {
   buildMansoftSnapshot,
   diffMansoftSnapshots,
 } from './mansoftSnapshot.js';
+import {
+  IVA_UY_TAX_GROUP_ID,
+  IVA_PY_TAX_GROUP_ID,
+  EXENTO_TAX_GROUP_ID,
+  IRAE_TAX_GROUP_ID,
+  IVA_UY_IRAE_TAX_GROUP_ID,
+} from '../../config/constants.js';
+
+const TAX_GROUP_LABELS = {
+  [IVA_UY_TAX_GROUP_ID]:      'IVA 22% (UY)',
+  [IVA_PY_TAX_GROUP_ID]:      'IVA (PY)',
+  [EXENTO_TAX_GROUP_ID]:      'Exento',
+  [IRAE_TAX_GROUP_ID]:        'IRAE',
+  [IVA_UY_IRAE_TAX_GROUP_ID]: 'IVA 22% + IRAE',
+};
+
+function resolveTaxLabel(taxGroupId) {
+  const raw = String(taxGroupId ?? '').trim();
+  return TAX_GROUP_LABELS[raw] || raw || '-';
+}
 
 // ────────────────────────────────────────────────────────────
 // Mapeo hs_product_id → empresa emisora
@@ -182,7 +202,7 @@ function buildLineItemBaseRows(li) {
     buildRow('Cantidad',              fmtNum(lp.quantity)),
     buildRow('Descuento (%)',         fmtNum(lp.hs_discount_percentage)),
     buildRow('Total',                 total),
-    buildRow('IVA',                   lp.of_iva === 'true' ? 'Sí' : 'No'),
+    buildRow('Impuestos', resolveTaxLabel(lp.hs_tax_rate_group_id)),
     buildRow('Moneda',                val(lp.of_moneda)),
     buildRow('Frecuencia',            frecuencia),
     buildRow('Inicio de facturación', fechaInicio),

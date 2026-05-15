@@ -3,7 +3,7 @@
 import { isAutoRenew } from './mode.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
-import { INVOICED_TICKET_STAGES } from '../../config/constants.js';
+import { INVOICED_STAGES } from '../../config/constants.js';
 
 const INVOICE_LIK_PROP = 'line_item_key';
 
@@ -174,7 +174,7 @@ async function countTicketsByLIK({ hubspotClient, lik }) {
 
   const tickets = resp?.results ?? [];
   const count = tickets.filter(t =>
-    INVOICED_TICKET_STAGES.has(String(t.properties?.hs_pipeline_stage))
+  INVOICED_STAGES.has(String(t.properties?.hs_pipeline_stage))
   ).length;
 
   logger.debug(

@@ -94,6 +94,13 @@ function subtractDays(ymd, days) {
   return dt.toISOString().slice(0, 10);
 }
 
+function addDays(ymd, days) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 /**
  * Busca un ticket por su of_ticket_key. Devuelve el primer resultado o null.
  * Recupera las propiedades mínimas necesarias para el guard.
@@ -212,6 +219,7 @@ export async function checkMissedBillingsForLineItem({
   lineItemId,
   lineItemKey,
   today,
+  startDate,
   lookbackDays = DEFAULT_LOOKBACK_DAYS,
 }) {
   const stats = { checked: 0, retried: 0, recovered: 0, failed: 0 };
@@ -224,8 +232,27 @@ export async function checkMissedBillingsForLineItem({
     return stats;
   }
 
+  // No buscar missed billings si no han pasado al menos lookbackDays desde el inicio
+  if (startDate && today < addDays(startDate, lookbackDays)) {
+    logger.debug(
+      { module: 'missedBillingGuard', dealId, lineItemId, startDate, today, lookbackDays },
+      'Menos de lookbackDays días desde startDate, saltando guard'
+    );
+    return stats;
+  }
+
   for (let i = 1; i <= lookbackDays; i++) {
     const ymd = subtractDays(today, i);
+
+    // No buscar antes del inicio de facturación
+    if (startDate && ymd < startDate) {
+      logger.debug(
+        { module: 'missedBillingGuard', dealId, lineItemId, ymd, startDate },
+        'Fecha anterior a startDate, cortando lookback'
+      );
+      break;
+    }
+
     stats.checked++;
 
     const ticketKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
