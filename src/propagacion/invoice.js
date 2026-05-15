@@ -6,9 +6,10 @@
  * Responsabilidades:
  *   1. Mapear etapa_de_la_factura → stage del ticket (manual o automático)
  *   2. Sincronizar of_invoice_status en el ticket
- *   3. Escribir fecha_real_de_facturacion en el ticket (desde fecha_de_emision)
- *   4. Actualizar last_billing_period en el line item con la fecha REAL de emisión
- *   5. Mover ticket a CREATED cuando se setea id_factura_nodum (si no hay etapa posterior)
+ *   3. Escribir fecha_de_facturacion en el ticket (desde hs_createdate de la invoice)
+*   4. Escribir fecha_real_de_facturacion en el ticket (desde fecha_de_emision)
+*   5. Actualizar last_billing_period en el line item con la fecha REAL de emisión
+*   6. Mover ticket a CREATED cuando se setea id_factura_nodum (si no hay etapa posterior)
  *
  * Punto de entrada principal: propagateInvoiceStateToTicket(invoiceId)
  * Llamado desde: api/invoice-editor/invoices.js (PATCH y /cancelar)
@@ -129,7 +130,8 @@ function resolveTargetStage({ etapa, nodumId, currentStage, isAutomated }) {
  * Actualiza en el ticket:
  *   - hs_pipeline_stage      → según mapeo de etapa y nodum_id
  *   - of_invoice_status      → espejo de etapa_de_la_factura
- *   - fecha_real_de_facturacion → desde fecha_de_emision (si aplica)
+ *   - fecha_de_facturacion    → desde hs_createdate de la invoice
+ * - fecha_real_de_facturacion → desde fecha_de_emision (si aplica)
  *
  * Actualiza en el line item:
  *   - last_billing_period    → fecha real de emisión (si aplica)
@@ -147,8 +149,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     invoice = await hubspotClient.crm.objects.basicApi.getById(
       INVOICE_OBJECT_TYPE,
       invoiceId,
-      ['etapa_de_la_factura', 'of_invoice_key', 'ticket_id', 'id_factura_nodum', 'fecha_de_emision']
-    );
+      ['etapa_de_la_factura', 'of_invoice_key', 'ticket_id', 'id_factura_nodum', 'fecha_de_emision', 'hs_createdate']    );
   } catch (err) {
     logger.error({ module: mod, fn, invoiceId, err }, 'Error al obtener invoice');
     throw err;
@@ -159,8 +160,8 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
   const invoiceKey = ip.of_invoice_key;
   const nodumId  = (ip.id_factura_nodum || '').trim() || null;
   const fechaEmisionRaw = ip.fecha_de_emision || null;
-  const fechaEmisionYMD = invoiceDateToYMD(fechaEmisionRaw);
-
+  const fechaCreacionYMD = invoiceDateToYMD(ip.hs_createdate || null);
+  
   logger.info({ module: mod, fn, invoiceId, etapa, nodumId, invoiceKey, fechaEmisionYMD }, 'Iniciando propagación');
 
   // 2. Buscar ticket — primero por of_invoice_key, fallback a ticket_id en invoice
@@ -217,8 +218,10 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     ticketUpdate.hs_pipeline_stage = String(targetStage);
   }
 
-  // fecha_real_de_facturacion: solo cuando hay fecha de emisión real y la etapa es post-pendiente
-  const etapasConFechaReal = ['Emitida', 'Enviada', 'Paga', 'Atrasada'];
+  // fecha_de_facturacion: fecha de creación de la invoice en HubSpot
+   if (fechaCreacionYMD) {
+     ticketUpdate.fecha_de_facturacion = toHubSpotDateOnly(fechaCreacionYMD);
+   }
   if (fechaEmisionYMD && etapasConFechaReal.includes(etapa)) {
     const fechaHubSpot = toHubSpotDateOnly(fechaEmisionYMD);
     if (tp.fecha_real_de_facturacion !== fechaHubSpot) {
