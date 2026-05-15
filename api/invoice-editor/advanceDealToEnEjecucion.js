@@ -18,7 +18,7 @@ function hs() {
   })
 }
 
-const DEAL_STAGE_WON          = process.env.DEAL_STAGE_80 || 'closedwon'
+const DEAL_STAGE_WON          = process.env.DEAL_STAGE_85 || 'closedwon'
 const DEAL_STAGE_EN_EJECUCION = process.env.DEAL_STAGE_95 || '1327905636'
 
 /**

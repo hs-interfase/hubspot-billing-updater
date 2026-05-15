@@ -7,7 +7,7 @@
  *
  * DEAL E — Mirror PY→UY: Verificación Completa
  *   E-LI1: Manual, cupo por monto, mensual 3p, uy=true
- *   E-LI2: Automático, 3p, fecha inicio futura cercana, uy=true
+ *   E-LI2: Automático, auto-renew, fecha inicio futura cercana, uy=true
  *
  * Flujo de prueba:
  *   1. node seedTestDeals.mjs              → deal PY + 2 LIs
@@ -135,18 +135,21 @@ async function main() {
   // El motor crea el deal UY espejo automáticamente.
   //
   // E-LI1: Manual, cupo por monto, mensual 3p
-  //   PY: price=1000, qty=3, cogs=1500, parte_del_cupo=true
-  //   Mirror UY esperado: price = cogs/qty = 500, sin cupo, manual
+  //   PY: price=1500, qty=3, cogs=500, parte_del_cupo=true
+  //   Mirror UY esperado: price = cogs/qty = 500/3 ≈ 167, sin cupo, manual
   //   Verifica:
   //     - Cupo se calcula correctamente al cambiar cantidad
   //     - Mirror copia sin cupo (parte_del_cupo no se copia)
   //     - Costo editable en mirror no se sobreescribe en siguiente corrida
+  //     - Margen positivo: revenue 1500×3=4500, costo 500 → margen 4000
   //
-  // E-LI2: Automático en PY, 3p, fecha inicio +5 días
+  // E-LI2: Automático en PY, auto-renew, fecha inicio +5 días
   //   PY: price=2000, qty=1, cogs=800, facturacion_automatica=true
-  //   Mirror UY esperado: price = cogs/qty = 800, manual, 3 pagos
+  //   Auto-renew: sin hs_recurring_billing_period, vencimiento=2099-12-31
+  //   Mirror UY esperado: price = cogs/qty = 800, manual, auto-renew
   //   Verifica:
   //     - Mirror queda manual (facturacion_automatica=false forzado)
+  //     - Phase P genera ventana de tickets (hasta 36)
   //     - Cambiar fecha_inicio_facturacion antes del 1er promotion → acepta
   //     - billing_anchor_date + fecha vencimiento se actualizan al cambiar inicio
   //     - Cambiar fecha inicio a hoy → Phase 3 factura PY
@@ -170,9 +173,9 @@ async function main() {
     [
       {
         name: `${PREFIX} E-LI1: Manual cupo×monto mensual 3p`,
-        price:                           '1000',
+        price:                           '1500',
         quantity:                        '3',
-        hs_cost_of_goods_sold:           '1500',
+        hs_cost_of_goods_sold:           '500',
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: TODAY,
         hs_recurring_billing_period:     'P3M',
@@ -182,14 +185,15 @@ async function main() {
         pais_operativo:                  'Paraguay',
       },
       {
-        name: `${PREFIX} E-LI2: Auto 3p inicio +5d`,
+        name: `${PREFIX} E-LI2: Auto auto-renew inicio +5d`,
         price:                           '2000',
         quantity:                        '1',
         hs_cost_of_goods_sold:           '800',
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: PLUS_5,
-        hs_recurring_billing_period:     'P3M',
         facturacion_automatica:          'true',
+        renovacion_automatica:           'true',
+        fecha_vencimiento_contrato:      '2099-12-31',
         uy:                              'true',
         pais_operativo:                  'Paraguay',
       },
@@ -224,12 +228,14 @@ async function main() {
 
   PY Deal:
     E-LI1: 1 ticket READY manual (start=${TODAY}, dentro lookahead)
+           + 2 tickets forecast
            cupo_consumido actualizado
-    E-LI2: 3 tickets forecast auto (start=${PLUS_5}, Phase P crea, Phase 3 no ejecuta aún)
+    E-LI2: Phase P genera ventana de tickets auto-renew (hasta 36)
+           (start=${PLUS_5}, Phase 3 no ejecuta aún porque fecha futura)
 
   Mirror UY (creado por el motor):
-    E-LI1 mirror: price=500 (cogs 1500 / qty 3), manual, SIN cupo
-    E-LI2 mirror: price=800 (cogs 800 / qty 1), manual, 3 pagos
+    E-LI1 mirror: price ≈ 167 (cogs 500 / qty 3), manual, SIN cupo
+    E-LI2 mirror: price = 800 (cogs 800 / qty 1), manual, auto-renew
 
   Empresas UY:
     Primary = cliente final (${COMPANY_ID})

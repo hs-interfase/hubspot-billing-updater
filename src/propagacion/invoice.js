@@ -30,7 +30,10 @@ import {
   BILLING_AUTOMATED_PAID,
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
+  INVOICED_STAGES,
 } from '../config/constants.js';
+import { recalcFacturasRestantes } from '../services/billing/recalcFacturasRestantes.js';
+
 
 const INVOICE_OBJECT_TYPE = 'invoices';
 
@@ -167,8 +170,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     try {
       const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
         filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
-        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion'],
-        limit: 1,
+        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id'],        limit: 1,
       });
       ticket = resp?.results?.[0] || null;
     } catch (err) {
@@ -180,7 +182,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     try {
       ticket = await hubspotClient.crm.tickets.basicApi.getById(
         String(ip.ticket_id),
-        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion']
+        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id']
       );
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId: ip.ticket_id, err }, 'Error obteniendo ticket por ticket_id');
@@ -259,6 +261,22 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId, lineItemId, err },
         '[BLBD] Error actualizando billing_last_billed_date con fecha real (no bloquea)');
+    }
+  }
+
+// 7. Recalcular facturas_restantes si el ticket llegó a un stage facturado
+  const effectiveStage = targetStage || currentStage;
+  if (INVOICED_STAGES.has(String(effectiveStage)) && lineItemId) {
+    const dealId = tp.of_deal_id || null;
+    if (dealId) {
+      try {
+        const recalcResult = await recalcFacturasRestantes({ hubspotClient, lineItemId, dealId });
+        logger.info({ module: mod, fn, invoiceId, ticketId, lineItemId, dealId, ...recalcResult },
+          'recalcFacturasRestantes ejecutado post-propagación');
+      } catch (err) {
+        logger.warn({ module: mod, fn, invoiceId, ticketId, lineItemId, dealId, err },
+          'recalcFacturasRestantes falló (no bloquea propagación)');
+      }
     }
   }
 
@@ -349,5 +367,7 @@ logger.info({ module: mod, fn, liks }, 'LIKs extraídos para búsqueda');
     }
   }
 
+  
   return results;
 }
+

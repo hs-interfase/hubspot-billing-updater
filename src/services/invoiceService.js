@@ -30,7 +30,7 @@ export const REQUIRED_TICKET_PROPS = [
   'of_fecha_de_facturacion', 'fecha_real_de_facturacion', 'fecha_resolucion_esperada',
   'total_real_a_facturar', 'cantidad_real', 'monto_unitario_real',
   'subject', 'of_producto_nombres', 'of_descripcion_producto', 'of_rubro',
-  'descuento_en_porcentaje', 'descuento_por_unidad_real', 'of_iva', 'of_exonera_irae',
+  'descuento_en_porcentaje', 'descuento_por_unidad_real', 'of_iva', 'exonera_irae',
   'of_aplica_para_cupo', 'of_cupo_alerta_preventiva_emitida', 'of_cupo_alerta_preventiva_fecha',
   'of_cupo_restante_proyectado', 'of_cupo_consumo_estimado',
   'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
@@ -354,7 +354,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     exonera_irae: tp.exonera_irae,
     responsable_asignado: toNumericOwnerOrNull(tp.hubspot_owner_id || tp.responsable_asignado),
     vendedor_factura: tp.of_propietario_secundario,
-    frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || (tp.repetitivo ? 'Mensual' : undefined),
+    frecuencia_de_facturacion: tp.of_frecuencia_de_facturacion || frecuenciaDerivada,
     // NUEVAS LÍNEAS SEGÚN DIFF
     hs_title: [tp.of_cliente, tp.of_producto_nombres, totalFinal].filter(Boolean).join(' - '),
     monto_unitario: montoUnitarioResolved,
