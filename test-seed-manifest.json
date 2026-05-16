@@ -1,14 +1,14 @@
 {
   "prefix": "[TEST-SEED]",
-  "createdAt": "2026-05-15T00:57:04.056Z",
-  "today": "2026-05-14",
+  "createdAt": "2026-05-16T18:18:26.165Z",
+  "today": "2026-05-16",
   "deals": [
     {
-      "dealId": "60259151389",
+      "dealId": "60295289944",
       "dealName": "E — Mirror PY→UY Verificación Completa",
       "lineItemIds": [
-        "55260093623",
-        "55260181780"
+        "55296765593",
+        "55295073577"
       ]
     }
   ]

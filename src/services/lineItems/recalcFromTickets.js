@@ -32,6 +32,7 @@ import {
   DERIVED_STAGES,
   BILLING_AUTOMATED_CANCELLED,
 } from '../../config/constants.js';
+import { parseBool } from '../../utils/parsers.js'
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../tickets/ticketService.js';

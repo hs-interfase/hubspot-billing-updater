@@ -332,6 +332,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
       ? 'Único'
       : null;
 
+      
   // 6) Propiedades de la factura — mapeo Ticket → Invoice
   const invoicePropsRaw = {
     hs_currency: tp.of_moneda || DEFAULT_CURRENCY,
@@ -634,7 +635,46 @@ const invoiceTitle = `${dealName} - ${liShort} - ${totalFinal}`;
   billDate.setDate(billDate.getDate() + 10);
   const dueDateYMD = billDate.toISOString().split('T')[0];
 
-  // 6) Propiedades
+  // 5.5) Leer ticket asociado para obtener snapshots (FREEZE RULE)
+  let ticketProps = {};
+//  const expectedTicketKey = buildInvoiceKeyFromLIK(dealId, lik, billingPeriodDate)
+//   .replace(dealId + '::', dealId + '::LIK:')  // invoiceKey → ticketKey format
+//    ; // Fallback: buscar por LIK + fecha
+  
+  // Intentar buscar ticket por of_ticket_key construido desde LIK + billingPeriodDate
+  try {
+    const ticketKeyForSearch = `${dealId}::LIK:${lik}::${billingPeriodDate}`;
+    const ticketResp = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [{
+        filters: [{ propertyName: 'of_ticket_key', operator: 'EQ', value: ticketKeyForSearch }],
+      }],
+      properties: REQUIRED_TICKET_PROPS,
+      limit: 1,
+    });
+    const foundTicket = ticketResp?.results?.[0];
+    if (foundTicket) {
+      ticketProps = foundTicket.properties || {};
+      logger.info({
+        module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem',
+        lineItemId, ticketId: foundTicket.id, ticketKey: ticketKeyForSearch,
+      }, '[invoice] Ticket encontrado para snapshot de montos');
+    }
+  } catch (err) {
+    logger.warn({
+      module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem',
+      lineItemId, err,
+    }, '[invoice] No se pudo buscar ticket para snapshots, factura se crea sin montos del ticket');
+  }
+
+  // 6) Propiedades — FREEZE RULE: leer montos RAW del ticket, NO calcular
+  const cantidadFromTicket = parseNumber(ticketProps.cantidad_real ?? null, 0);
+  const montoUnitarioFromTicket = parseNumber(ticketProps.monto_unitario_real ?? null, 0);
+  const totalFromTicket = parseNumber(ticketProps.total_real_a_facturar ?? null, 0);
+  const descuentoPctFromTicket = parseNumber(ticketProps.descuento_en_porcentaje ?? null, 0);
+  const descuentoUnitFromTicket = parseNumber(ticketProps.descuento_por_unidad_real ?? null, 0);
+  const hasIVAFromTicket = parseBool(ticketProps.of_iva);
+  const ticketId = ticketProps.hs_object_id || null;
+
   const invoiceProps = {
     hs_title: invoiceTitle,
     hs_currency: dp.deal_currency_code || DEFAULT_CURRENCY,
@@ -644,13 +684,28 @@ const invoiceTitle = `${dealName} - ${liShort} - ${totalFinal}`;
     hs_external_recipient: process.env.INVOICE_RECIPIENT_ID || '65820526',
     of_invoice_key: invoiceKey,
     etapa_de_la_factura: 'Pendiente',
+    // Ticket refs
+    ...(ticketId ? { ticket_id: String(ticketId) } : {}),
+    line_item_key: lik,
+    // FREEZE RULE: montos RAW del ticket
+    cantidad: cantidadFromTicket,
+    monto_a_facturar: totalFromTicket,
+    hs_amount_billed: totalFromTicket,
+    monto_unitario: montoUnitarioFromTicket,
+    descuento: descuentoPctFromTicket,
+    descuento_por_unidad: descuentoUnitFromTicket,
+    iva: hasIVAFromTicket ? 'true' : 'false',
+    exonera_irae: ticketProps.exonera_irae || null,
+    // Contexto
     ...(lp.name ? { nombre_producto: lp.name } : {}),
     ...(lp.description ? { descripcion: lp.description } : {}),
     ...(lp.servicio ? { servicio: lp.servicio } : {}),
     ...(dp.dealname ? { nombre_empresa: dp.dealname } : {}),
-    ...(lp.monto_unitario_real ? { monto_unitario: lp.monto_unitario_real } : {}),
     id_empresa: dealId,
     ...(lp.unidad_de_negocio ? { unidad_de_negocio: lp.unidad_de_negocio } : {}),
+    ...(ticketProps.of_pais_operativo ? { pais_operativo: ticketProps.of_pais_operativo } : {}),
+    ...(ticketProps.of_frecuencia_de_facturacion ? { frecuencia_de_facturacion: ticketProps.of_frecuencia_de_facturacion } : {}),
+    modo_de_generacion_de_factura: 'AUTO_LINEITEM',
   };
 
   if (process.env.INVOICE_OWNER_ID) invoiceProps.hubspot_owner_id = process.env.INVOICE_OWNER_ID;
