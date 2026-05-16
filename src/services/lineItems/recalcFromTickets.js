@@ -296,14 +296,32 @@ export async function recalcFromTickets({
   // ====== I1: Promover forecasts con fecha pasada a READY ======
   let pastDuePromoted = 0;
 
-  if (facturacionActiva) {
+  // ====== I1: Promover forecasts con fecha pasada a READY ======
+  // Guard: no promover automáticamente en deals mirror UY — el PY controla el flujo
+  let skipPastDuePromotion = false;
+  if (facturacionActiva && dealId) {
+    try {
+      const dealForMirrorCheck = await hubspotClient.crm.deals.basicApi.getById(
+        String(dealId), ['es_mirror_de_py']
+      );
+      if (parseBool(dealForMirrorCheck?.properties?.es_mirror_de_py)) {
+        skipPastDuePromotion = true;
+        logger.info({ module: MOD, fn, dealId, lineItemKey },
+          'Deal es mirror UY — saltando promotePastDueForecast (el PY controla el flujo)');
+      }
+    } catch (err) {
+      logger.warn({ module: MOD, fn, dealId, err },
+        'Error leyendo es_mirror_de_py, continuando sin skip');
+    }
+  }
+
+  if (facturacionActiva && !skipPastDuePromotion) {
     for (const t of allTickets) {
       const isForecast = FORECAST_MANUAL_STAGES.has(t.stage) || FORECAST_AUTO_STAGES.has(t.stage);
       if (!isForecast) continue;
       if (!t.fechaEsperada) continue;
-      if (t.fechaEsperada > todayYmd) continue; // futuro → no tocar
+      if (t.fechaEsperada > todayYmd) continue;
 
-      // Fecha pasada o de hoy en FORECAST → promover
       const promoted = await promotePastDueForecast({
         ticketId: t.id,
         pipelineId: t.pipelineId,

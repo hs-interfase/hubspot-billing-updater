@@ -96,8 +96,8 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 /**
  * Núcleo de la facturación urgente de un Line Item.
  * NO contiene guard de facturar_ahora — eso es responsabilidad del caller.
- * Puede ser llamado tanto para el line item PY (desde processUrgentLineItem)
- * como para el mirror UY (desde _propagateToMirror), sin pasar por el portero.
+ * Llamado para el line item PY desde processUrgentLineItem.
+ * NO debe llamarse para mirrors UY — el mirror solo recibe notificación/promoción.
  */
 async function _executeUrgentBillingForLineItem(lineItemId) {
   logger.info(
@@ -501,7 +501,7 @@ const created = ticketResult.created;
       await updateTicket(ticketId, {
         of_facturacion_urgente: 'true',
         of_fecha_de_facturacion: today,
-        fecha_resolucion_esperada: today,
+        fecha_resolucion_esperada: billingPeriodDate,
       });
 
       const readyStage = process.env.BILLING_TICKET_STAGE_READY;
@@ -775,19 +775,18 @@ export async function processUrgentLineItem(lineItemId) {
   const result = await _executeUrgentBillingForLineItem(lineItemId);
 
   // Propagar al mirror UY — fire-and-forget, no bloquea la respuesta al caller
-  _propagateToMirror(lineItemId).catch(() => {
-    // Los errores ya son manejados y logueados dentro de _propagateToMirror
-  });
+  _propagateToMirror(lineItemId, result?.billingPeriodDate).catch(() => {});
 
   return result;
 }
 
 /**
- * Intenta facturar el line item espejo UY correspondiente al PY dado.
- * Si falla, deja facturar_ahora=true en el mirror para que el cron lo reintente,
- * y escribe of_billing_error para visibilidad del equipo UY en HubSpot.
+ * Propaga al mirror UY la notificación de que el PY facturó.
+ * - PY automático → promueve el ticket forecast UY al pipeline manual.
+ * - PY manual → escribe aviso en el deal UY.
+ * NUNCA crea Invoice en el mirror — el equipo UY factura manualmente.
  */
-async function _propagateToMirror(pyLineItemId) {
+async function _propagateToMirror(pyLineItemId, billingPeriodDate) {
   const log = logger.child({
     module: 'urgentBillingService',
     fn: '_propagateToMirror',
@@ -841,35 +840,21 @@ async function _propagateToMirror(pyLineItemId) {
   }
 
   log.info({ mirrorLineItemId }, 'Propagando facturación urgente al mirror UY');
-
-// DESPUÉS
-// 4) Si el LI PY es automático → promover ticket UY a manual READY
-//    Si el LI PY es manual → facturar el mirror directamente (comportamiento previo)
 const pyLiProps = await hubspotClient.crm.lineItems.basicApi.getById(
   String(pyLineItemId), ['facturacion_automatica']
 ).then(r => r?.properties || {}).catch(() => ({}));
 
+// Mirror UY NUNCA se factura automáticamente — solo se notifica/promueve ticket
+const billingYMD = billingPeriodDate || getTodayYMD();
+
+// Siempre notificar al deal UY que el PY facturó
+await notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD);
+log.info({ mirrorLineItemId, billingYMD }, 'Mirror UY: aviso escrito en deal');
+
+// PY automático → además promover ticket UY al pipeline manual
 if (parseBool(pyLiProps.facturacion_automatica)) {
-  await promoteMirrorTicketToManualReady(pyLineItemId);
-  log.info({ mirrorLineItemId }, 'Mirror UY promovido a manual READY (PY era automático)');
-} else {
-  try {
-    await _executeUrgentBillingForLineItem(mirrorLineItemId);
-    log.info({ mirrorLineItemId }, 'Mirror UY facturado directamente (PY era manual)');
-  } catch (err) {
-    log.error({ err, mirrorLineItemId }, 'Error facturando mirror UY — marcando para reintento');
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(mirrorLineItemId), {
-        properties: {
-          facturar_ahora: 'true',
-          of_billing_error: `mirror_propagation_failed: ${String(err?.message || 'unknown').slice(0, 200)}`,
-          of_billing_error_at: String(getTodayMillis()),
-        },
-      });
-    } catch (updateErr) {
-      log.error({ updateErr, mirrorLineItemId }, 'No se pudo marcar el mirror para reintento');
-    }
-  }
+  await promoteMirrorTicketToManualReady(pyLineItemId, billingYMD);
+  log.info({ mirrorLineItemId, billingYMD }, 'Mirror UY: ticket promovido a pipeline manual (PY automático)');
 }
 }
 
