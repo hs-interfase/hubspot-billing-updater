@@ -5,10 +5,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
 import pool from './Db.js'
+import logger from '../../lib/logger.js'
 import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 import { tryAdvanceDealToEnEjecucion } from './advanceDealToEnEjecucion.js'
 
+const MOD = 'invoice-editor/invoices'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const router = Router()
 
@@ -37,7 +39,7 @@ async function writeAuditLog(entry) {
       [entry.timestamp, entry.invoiceId, entry.user, JSON.stringify(entry.changes)]
     )
   } catch (err) {
-    console.error('[InvoiceEditor][Audit] Error escribiendo log en DB:', err.message)
+    logger.error({ module: MOD, fn: 'writeAuditLog', err: err.message }, 'Error escribiendo audit log en DB')
   }
 }
 
@@ -53,6 +55,7 @@ router.get('/config', (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/:id', async (req, res) => {
   const { id } = req.params
+  const fn = 'GET'
 
   if (!id || !/^\d+$/.test(id)) {
     return res.status(400).json({ error: 'El Invoice ID debe ser un número.' })
@@ -102,12 +105,14 @@ router.get('/:id', async (req, res) => {
             if (liData.properties?.unidad_de_negocio)
               properties.unidad_de_negocio = liData.properties.unidad_de_negocio
           } catch (liErr) {
-            console.warn('[InvoiceEditor][GET] Error leyendo line item para unidad_de_negocio:', liErr.message)
+            logger.warn({ module: MOD, fn, invoiceId: id, lineItemId, err: liErr.message },
+              'Error leyendo line item para unidad_de_negocio')
           }
         }
 
       } catch (fallbackErr) {
-        console.warn('[InvoiceEditor][GET] Error en fallback desde ticket:', fallbackErr.message)
+        logger.warn({ module: MOD, fn, invoiceId: id, err: fallbackErr.message },
+          'Error en fallback desde ticket')
       }
     }
 
@@ -121,7 +126,8 @@ router.get('/:id', async (req, res) => {
     if (err.response?.status === 404) {
       return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
     }
-    console.error('[InvoiceEditor][GET]', err.response?.data || err.message)
+    logger.error({ module: MOD, fn, invoiceId: id, err: err.response?.data || err.message },
+      'Error al leer factura')
     return res.status(500).json({
       error: 'Error al comunicarse con HubSpot.',
       detail: err.response?.data?.message || err.message,
@@ -135,6 +141,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { id } = req.params
   const { properties, changes } = req.body
+  const fn = 'PATCH'
 
   if (!id || !/^\d+$/.test(id)) {
     return res.status(400).json({ error: 'El Invoice ID debe ser un número.' })
@@ -157,7 +164,8 @@ router.patch('/:id', async (req, res) => {
   }
 
   if (rejectedFields.length > 0) {
-    console.warn(`[InvoiceEditor][PATCH] Campos rechazados: ${rejectedFields.join(', ')}`)
+    logger.warn({ module: MOD, fn, invoiceId: id, rejectedFields },
+      'Campos rechazados por whitelist')
   }
 
   if (Object.keys(filteredProperties).length === 0) {
@@ -171,6 +179,8 @@ router.patch('/:id', async (req, res) => {
     !filteredProperties.etapa_de_la_factura
   ) {
     filteredProperties.etapa_de_la_factura = 'Emitida'
+    logger.info({ module: MOD, fn, invoiceId: id },
+      'Auto-seteo etapa a Emitida por id_factura_nodum')
   }
 
   // Si se cancela y no viene fecha_de_cancelacion → inyectar fecha del día
@@ -188,7 +198,8 @@ router.patch('/:id', async (req, res) => {
         filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
       }
     } catch (err) {
-      console.warn('[InvoiceEditor][PATCH] No se pudo verificar fecha_de_cancelacion:', err.message)
+      logger.warn({ module: MOD, fn, invoiceId: id, err: err.message },
+        'No se pudo verificar fecha_de_cancelacion, inyectando fecha del día')
       const hoy = new Date()
       hoy.setUTCHours(0, 0, 0, 0)
       filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
@@ -196,11 +207,15 @@ router.patch('/:id', async (req, res) => {
   }
 
   try {
+    // 1. Actualizar la factura en HubSpot
     await hs().patch(`/crm/v3/objects/invoices/${id}`, {
       properties: filteredProperties,
     })
 
-    // Leer ticket_id una sola vez si alguna de las operaciones post-save lo necesita
+    logger.info({ module: MOD, fn, invoiceId: id, fields: Object.keys(filteredProperties) },
+      'Factura actualizada en HubSpot')
+
+    // 2. Leer ticket_id si alguna operación post-save lo necesita
     const needsTicketId =
       Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0 ||
       !!(filteredProperties.id_factura_nodum)
@@ -213,39 +228,54 @@ router.patch('/:id', async (req, res) => {
           params: { properties: 'ticket_id' },
         })
         ticketId = invoiceData.properties?.ticket_id
+        logger.info({ module: MOD, fn, invoiceId: id, ticketId },
+          'ticket_id resuelto desde factura')
       } catch (err) {
-        console.warn('[InvoiceEditor][PATCH] No se pudo leer ticket_id de la factura:', err.message)
+        logger.warn({ module: MOD, fn, invoiceId: id, err: err.message },
+          'No se pudo leer ticket_id de la factura')
       }
     }
 
-    // Sync campos factura → ticket (id_factura_nodum, montos, etc.)
+    // 3. Sync campos factura → ticket (id_factura_nodum, montos, etc.)
     if (Object.keys(buildTicketPropsFromInvoice(filteredProperties)).length > 0) {
       try {
         await syncInvoiceToTicket(ticketId, filteredProperties, id, hs)
       } catch (syncErr) {
-        console.error('[InvoiceEditor][PATCH] Error en syncInvoiceToTicket:', syncErr?.message)
+        logger.error({ module: MOD, fn, invoiceId: id, ticketId, err: syncErr?.message },
+          'Error en syncInvoiceToTicket')
       }
     }
 
-    // Propagar etapa al ticket si cambió etapa o se emitió primera factura Nodum
+    // 4. Propagar etapa al ticket si cambió etapa o se emitió primera factura Nodum
     const shouldPropagate =
       filteredProperties.etapa_de_la_factura ||
       (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null)
 
     if (shouldPropagate) {
+      logger.info({ module: MOD, fn, invoiceId: id, etapa: filteredProperties.etapa_de_la_factura, hasNodum: !!filteredProperties.id_factura_nodum },
+        'Iniciando propagación invoice→ticket')
       try {
-        await propagateInvoiceStateToTicket(id)
+        const propagateResult = await propagateInvoiceStateToTicket(id)
+        logger.info({ module: MOD, fn, invoiceId: id, propagateResult },
+          'Propagación invoice→ticket completada')
       } catch (propagateErr) {
-        console.error('[InvoiceEditor][PATCH] Error en propagación invoice→ticket:', propagateErr?.message)
+        logger.error({ module: MOD, fn, invoiceId: id, err: propagateErr?.message },
+          'Error en propagación invoice→ticket')
       }
     }
 
-    // Avanzar deal de Ganado → En Ejecución si se asoció primera factura Nodum
+    // 5. Avanzar deal de Ganado → En Ejecución si se asoció primera factura Nodum
     // Fire-and-forget: no bloquea la respuesta al cliente
     if (filteredProperties.id_factura_nodum && filteredProperties.id_factura_nodum !== null) {
-      tryAdvanceDealToEnEjecucion(ticketId).catch(() => {})
+      logger.info({ module: MOD, fn, invoiceId: id, ticketId },
+        'Iniciando tryAdvanceDealToEnEjecucion')
+      tryAdvanceDealToEnEjecucion(ticketId).catch((err) => {
+        logger.error({ module: MOD, fn, invoiceId: id, ticketId, err: err?.message },
+          'tryAdvanceDealToEnEjecucion falló (fire-and-forget)')
+      })
     }
 
+    // 6. Audit log
     writeAuditLog({
       timestamp: new Date().toISOString(),
       invoiceId: id,
@@ -265,7 +295,8 @@ router.patch('/:id', async (req, res) => {
     if (err.response?.status === 404) {
       return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
     }
-    console.error('[InvoiceEditor][PATCH]', err.response?.data || err.message)
+    logger.error({ module: MOD, fn, invoiceId: id, err: err.response?.data || err.message },
+      'Error al actualizar factura en HubSpot')
     return res.status(500).json({
       error: 'Error al actualizar la factura en HubSpot.',
       detail: err.response?.data?.message || err.message,
@@ -279,6 +310,7 @@ router.patch('/:id', async (req, res) => {
 router.post('/:id/cancelar', async (req, res) => {
   const { id } = req.params
   const user = req.headers['x-app-user'] || 'admin'
+  const fn = 'cancelar'
 
   if (!id || !/^\d+$/.test(id)) {
     return res.status(400).json({ error: 'El Invoice ID debe ser un número.' })
@@ -306,10 +338,14 @@ router.post('/:id/cancelar', async (req, res) => {
 
     await hs().patch(`/crm/v3/objects/invoices/${id}`, { properties: propsToUpdate })
 
+    logger.info({ module: MOD, fn, invoiceId: id, ticketId, etapaAnterior: etapaActual },
+      'Factura cancelada, propagando al ticket')
+
     try {
       await propagateInvoiceStateToTicket(id)
     } catch (propagateErr) {
-      console.error('[InvoiceEditor][CANCELAR] Error en propagación invoice→ticket:', propagateErr?.message)
+      logger.error({ module: MOD, fn, invoiceId: id, err: propagateErr?.message },
+        'Error en propagación invoice→ticket (cancelación)')
     }
 
     writeAuditLog({
@@ -333,7 +369,8 @@ router.post('/:id/cancelar', async (req, res) => {
     if (err.response?.status === 404) {
       return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
     }
-    console.error('[InvoiceEditor][CANCELAR]', err.response?.data || err.message)
+    logger.error({ module: MOD, fn, invoiceId: id, err: err.response?.data || err.message },
+      'Error al cancelar factura')
     return res.status(500).json({
       error: 'Error al cancelar la factura.',
       detail: err.response?.data?.message || err.message,

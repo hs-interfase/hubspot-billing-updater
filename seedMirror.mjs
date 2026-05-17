@@ -182,6 +182,9 @@ async function main() {
         facturacion_automatica:          'false',
         parte_del_cupo:                  'true',
         uy:                              'true',
+        description:                   'Servicio de soporte técnico mensual',
+        servicio:                      'Soporte',
+        of_iva:                        'Si',
         pais_operativo:                  'Paraguay',
       },
       {
@@ -195,6 +198,9 @@ async function main() {
         renovacion_automatica:           'true',
         fecha_vencimiento_contrato:      '2099-12-31',
         uy:                              'true',
+        description:                   'Licencia mensual plataforma cloud',
+        servicio:                      'Licencias',
+        of_iva:                        'Si',
         pais_operativo:                  'Paraguay',
       },
     ]

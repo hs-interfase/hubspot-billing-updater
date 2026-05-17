@@ -6,9 +6,11 @@
  * Flujo: invoiceId → ticket_id (ya conocido) → of_deal_id → dealstage → PATCH
  *
  * Fire-and-forget: nunca lanza excepción hacia el llamador.
- * Logging con console para no introducir dependencia de logger del core.
  */
 import axios from 'axios'
+import logger from '../../lib/logger.js'
+
+const MOD = 'invoice-editor/advanceDeal'
 
 function hs() {
   return axios.create({
@@ -28,6 +30,8 @@ const DEAL_STAGE_EN_EJECUCION = process.env.DEAL_STAGE_95 || '1327905636'
  * @param {string|null} ticketId  ID del ticket asociado a la factura
  */
 export async function tryAdvanceDealToEnEjecucion(ticketId) {
+  const fn = 'tryAdvanceDealToEnEjecucion'
+
   if (!ticketId) return
 
   try {
@@ -39,7 +43,7 @@ export async function tryAdvanceDealToEnEjecucion(ticketId) {
     const dealId = ticket.properties?.of_deal_id
 
     if (!dealId) {
-      console.warn('[advanceDeal] ticket sin of_deal_id, skip', { ticketId })
+      logger.warn({ module: MOD, fn, ticketId }, 'Ticket sin of_deal_id, skip')
       return
     }
 
@@ -51,7 +55,7 @@ export async function tryAdvanceDealToEnEjecucion(ticketId) {
     const currentStage = deal.properties?.dealstage
 
     if (currentStage !== DEAL_STAGE_WON) {
-      console.log('[advanceDeal] deal no está en Ganado, skip', { dealId, currentStage })
+      logger.info({ module: MOD, fn, dealId, currentStage }, 'Deal no está en Ganado, skip')
       return
     }
 
@@ -60,13 +64,11 @@ export async function tryAdvanceDealToEnEjecucion(ticketId) {
       properties: { dealstage: DEAL_STAGE_EN_EJECUCION },
     })
 
-    console.info('[advanceDeal] ✅ Deal avanzado a En Ejecución', { dealId, ticketId })
+    logger.info({ module: MOD, fn, dealId, ticketId }, '✅ Deal avanzado a En Ejecución')
 
   } catch (err) {
     // fire-and-forget: loguear y absorber sin bloquear la respuesta al cliente
-    console.error('[advanceDeal] Error al avanzar deal', {
-      ticketId,
-      detail: err.response?.data || err.message,
-    })
+    logger.error({ module: MOD, fn, ticketId, err: err.response?.data || err.message },
+      'Error al avanzar deal')
   }
 }

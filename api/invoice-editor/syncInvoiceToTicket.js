@@ -4,6 +4,10 @@
 // Solo mapea los campos que vienen en el update (no sobreescribe con null).
 // La etapa (of_invoice_status) tiene su propia función en invoices.js y NO se toca acá.
 
+import logger from '../../lib/logger.js'
+
+const MOD = 'invoice-editor/syncInvoiceToTicket'
+
 // Mapeo invoice → ticket
 // Clave: nombre del campo en la factura
 // Valor: nombre del campo en el ticket
@@ -53,33 +57,31 @@ export function buildTicketPropsFromInvoice(invoiceProps) {
  * @param {Function} hsClient   - función que devuelve el cliente axios de HubSpot
  */
 export async function syncInvoiceToTicket(ticketId, invoiceProps, invoiceId, hsClient) {
+  const fn = 'syncInvoiceToTicket'
+
   if (!ticketId) {
-    console.warn('[syncInvoiceToTicket] ticketId vacío, skip', { invoiceId })
+    logger.warn({ module: MOD, fn, invoiceId }, 'ticketId vacío, skip')
     return
   }
 
   const ticketProps = buildTicketPropsFromInvoice(invoiceProps)
 
   if (Object.keys(ticketProps).length === 0) {
-    console.debug('[syncInvoiceToTicket] Ningún campo mapeable en el update, skip', { invoiceId })
+    logger.debug({ module: MOD, fn, invoiceId }, 'Ningún campo mapeable en el update, skip')
     return
   }
 
-  console.info('[syncInvoiceToTicket] Propagando a ticket', {
-    invoiceId,
-    ticketId,
-    fields: Object.keys(ticketProps),
-  })
+  logger.info({ module: MOD, fn, invoiceId, ticketId, fields: Object.keys(ticketProps) },
+    'Propagando campos de factura a ticket')
 
   try {
     await hsClient().patch(`/crm/v3/objects/tickets/${ticketId}`, {
       properties: ticketProps,
     })
-    console.info(`[syncInvoiceToTicket] ✅ Ticket ${ticketId} actualizado desde factura ${invoiceId}`)
+    logger.info({ module: MOD, fn, invoiceId, ticketId },
+      '✅ Ticket actualizado desde factura')
   } catch (err) {
-    console.error(
-      `[syncInvoiceToTicket] ❌ Error actualizando ticket ${ticketId} desde factura ${invoiceId}:`,
-      err.response?.data || err.message
-    )
+    logger.error({ module: MOD, fn, invoiceId, ticketId, err: err.response?.data || err.message },
+      '❌ Error actualizando ticket desde factura')
   }
 }
