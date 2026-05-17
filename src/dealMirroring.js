@@ -535,13 +535,40 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
     );
 
     try {
-      const updateProps = {
+const updateProps = {
         pais_operativo: 'Uruguay',
         dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
       };
 
       if (srcProps.pipeline) updateProps.pipeline = srcProps.pipeline;
-      if (srcProps.dealstage) updateProps.dealstage = srcProps.dealstage;
+
+      // Stage: copiar del PY solo hasta 85%. Si el mirror ya avanzó a 95%/100%
+      // de forma independiente (por sus propios tickets), no pisar.
+      if (srcProps.dealstage) {
+        const MIRROR_INDEPENDENT_STAGES = new Set([
+          process.env.DEAL_STAGE_95 || '1327905636',
+          process.env.DEAL_STAGE_100 || '1296491150',
+        ]);
+
+        let currentMirrorStage = null;
+        try {
+          const mirrorDeal = await hubspotClient.crm.deals.basicApi.getById(targetDealId, ['dealstage']);
+          currentMirrorStage = String(mirrorDeal?.properties?.dealstage || '');
+        } catch (err) {
+          logger.warn({ module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
+            'No se pudo leer stage actual del mirror, se copiará del PY');
+        }
+
+        if (!MIRROR_INDEPENDENT_STAGES.has(currentMirrorStage)) {
+          // Mirror no está en 95%/100% → copiar stage del PY (hasta 85% máx)
+          if (!MIRROR_INDEPENDENT_STAGES.has(srcProps.dealstage)) {
+            updateProps.dealstage = srcProps.dealstage;
+          }
+          // Si PY está en 95%/100% pero mirror no, no copiar — el mirror
+          // avanzará cuando tenga su propia factura emitida
+        }
+        // Si mirror ya está en 95%/100% → no tocar
+      }
 
       await hubspotClient.crm.deals.basicApi.update(targetDealId, {
         properties: updateProps,
@@ -614,10 +641,20 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
 
   if (!targetDealId) {
     // 3b) Crear un nuevo negocio espejo con país operativo Uruguay
+const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
+      process.env.DEAL_STAGE_95 || '1327905636',
+      process.env.DEAL_STAGE_100 || '1296491150',
+    ]);
+
     const newDealProps = {
       dealname: srcProps.dealname ? `${srcProps.dealname} - UY` : 'Negocio UY',
       ...(srcProps.pipeline ? { pipeline: srcProps.pipeline } : {}),
-      ...(srcProps.dealstage ? { dealstage: srcProps.dealstage } : {}),
+      // Stage: copiar solo hasta 85%. Si PY ya está en 95%/100%, el mirror
+      // arranca en 85% y avanzará por sus propios tickets.
+      ...(srcProps.dealstage && !MIRROR_INDEPENDENT_STAGES_CREATE.has(srcProps.dealstage)
+        ? { dealstage: srcProps.dealstage }
+        : { dealstage: 'closedwon' }),
+        
       pais_operativo: 'Uruguay',
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
