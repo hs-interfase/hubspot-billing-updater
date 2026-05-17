@@ -12,6 +12,7 @@ import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { countActivePlanInvoices } from '../utils/invoiceUtils.js';
 import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
+import { syncLineItemAfterPromotion } from './lineItems/syncAfterPromotion.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
 
@@ -464,13 +465,8 @@ const ticketResult = await ensureTicketCanonical({
 });
 
 const ticketId = ticketResult.ticketId;
-const created = ticketResult.created;
-    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-      properties: {
-        last_ticketed_date: billingPeriodDate || today,
-        last_billing_period: billingPeriodDate,
-      },
-    });
+    const created = ticketResult.created;
+
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, ticketId, created },
       'Ticket creado/reutilizado'
@@ -494,6 +490,25 @@ const created = ticketResult.created;
           'Error asegurando asociaciones en ticket reutilizado — no bloquea'
         );
       }
+    }
+
+    // 7.a.3) Sync fechas + pagos_restantes en line item (igual que Phase 2)
+    try {
+      await syncLineItemAfterPromotion({
+        dealId,
+        lineItemId: String(lineItemId),
+        lineItemKey: lik,
+        expectedYMD: billingPeriodDate,
+      });
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, billingPeriodDate },
+        'syncLineItemAfterPromotion completado (pagos_restantes, last_ticketed_date, billing_next_date)'
+      );
+    } catch (syncErr) {
+      logger.warn(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, err: syncErr },
+        'syncLineItemAfterPromotion falló — no bloquea flujo urgente'
+      );
     }
 
     // 7.b) Marcar ticket como urgente
@@ -536,22 +551,21 @@ const created = ticketResult.created;
     }
     const ticketInvoiceStatus = (ticketReload?.properties?.of_invoice_status || '').trim();
 
-    if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
+   if (existingTicketInvoiceId && ticketInvoiceStatus !== 'Cancelada') {
       logger.info(
         { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', ticketId, invoiceId: existingTicketInvoiceId },
         'Factura ya creada desde ticket, omitiendo auto-invoice'
       );
       invoiceIdFinal = existingTicketInvoiceId;
     } else {
-      const invoiceResult = await createAutoInvoiceFromLineItem(deal, targetLineItem, billingPeriodDate, today);
+      // Usar createInvoiceFromTicket (mismo path que Phase 2/3 y facturación desde ticket)
+      // Esto garantiza: nombre_empresa correcto, asociación invoice→ticket, recalcFacturasRestantes
+      const invoiceResult = await createInvoiceFromTicket(ticketReload, 'AUTO_LINEITEM', null, { skipRefetch: false });
       logger.info(
-        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, invoiceId: invoiceResult.invoiceId },
-        'Factura creada'
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, ticketId, invoiceId: invoiceResult.invoiceId },
+        'Factura creada desde ticket (flujo unificado)'
       );
       invoiceIdFinal = invoiceResult.invoiceId;
-      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-        properties: { last_billing_period: billingPeriodDate },
-      });
     }
 
     // 7.d) Asegurar ticket actualizado con invoice ID
@@ -587,22 +601,11 @@ const created = ticketResult.created;
     // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
 
-    // 9) Recalc fechas del line item desde tickets reales (post-facturación urgente)
-    try {
-      await recalcFromTickets({
-        lineItemKey: lik,
-        dealId,
-        lineItemId: String(lineItemId),
-        lineItemProps,
-        facturacionActiva: true,
-        applyUpdate: true,
-      });
-    } catch (recalcErr) {
-      logger.warn(
-        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, err: recalcErr },
-        'recalcFromTickets falló post-facturación urgente, no bloquea flujo'
-      );
-    }
+// 9) recalcFromTickets eliminado — cubierto por:
+    //    - syncLineItemAfterPromotion (paso 7.a.3): last_ticketed_date, billing_next_date, pagos_restantes
+    //    - createInvoiceFromTicket (paso 7.c): last_billing_period, recalcFacturasRestantes, syncBillingLastBilledDate
+    //    NOTA: recalcFromTickets usaba Search API que tiene delay de indexación (~1-3s),
+    //    lo cual causaba que sobreescribiera valores correctos con datos desactualizados.
 
     logger.info(
       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, ticketId, invoiceId: invoiceIdFinal, billingPeriodDate },

@@ -267,9 +267,79 @@ export async function runPhase2({ deal, lineItems }) {
       } catch (err) {
         logger.warn({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId, err }, 'Error leyendo LI PY origen, asumiendo manual');
       }
-      if (pyEsAutomatico) {
+ if (pyEsAutomatico) {
         logger.info({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, pyOrigenId }, 'LI mirror UY con PY automático, saltando Phase 2');
         continue;
+      }
+
+      // Mirror manual: buscar tickets forecast por LIK con fecha en ventana de lookahead.
+      // No podemos depender de billing_next_date porque recalcFromTickets la avanza
+      // antes de que Phase 2 corra en el mismo cron run.
+      const mirrorLineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
+      if (mirrorLineItemKey) {
+        const forecastStageIds = [...FORECAST_MANUAL_STAGES];
+        let searchResp;
+        try {
+          searchResp = await withRetry(
+            () => hubspotClient.crm.tickets.searchApi.doSearch({
+              filterGroups: forecastStageIds.map(stageId => ({
+                filters: [
+                  { propertyName: 'of_line_item_key', operator: 'EQ', value: mirrorLineItemKey },
+                  { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stageId },
+                ],
+              })),
+              properties: ['hs_pipeline_stage', 'fecha_resolucion_esperada', 'of_ticket_key'],
+              limit: 20,
+            }),
+            { module: 'phase2', fn: 'mirrorManualScan', dealId, lineItemId }
+          );
+        } catch (err) {
+          logger.warn({ module: 'phase2', fn: 'runPhase2', dealId, lineItemId, err }, 'Error buscando tickets forecast para mirror manual');
+          searchResp = null;
+        }
+
+        const mirrorForecastTickets = searchResp?.results || [];
+        let mirrorPromoted = 0;
+
+        for (const ft of mirrorForecastTickets) {
+          const ftProps = ft?.properties || {};
+          const ftDateRaw = (ftProps.fecha_resolucion_esperada || '').slice(0, 10);
+          // Fallback: extraer fecha del ticket key (último segmento después de ::)
+          const ftDate = ftDateRaw || (() => {
+            const parts = String(ftProps.of_ticket_key || '').split('::');
+            const last = parts[parts.length - 1];
+            return (last && /^\d{4}-\d{2}-\d{2}$/.test(last)) ? last : '';
+          })();
+          if (!ftDate) continue;
+
+          const daysUntil = diffDays(today, ftDate);
+          if (daysUntil === null || daysUntil > MANUAL_TICKET_LOOKAHEAD_DAYS) continue;
+
+          const promoted = await promoteManualForecastTicketToReady({
+            dealId,
+            dealStage,
+            lineItemKey: mirrorLineItemKey,
+            nextBillingDate: ftDate,
+            lineItemId,
+          });
+
+          if (promoted.moved) {
+            mirrorPromoted++;
+            ticketsCreated++;
+            logger.info(
+              { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, ticketId: promoted.ticketId, ftDate, reason: 'mirror_manual_scan' },
+              'Ticket mirror manual promovido a READY (scan por LIK)'
+            );
+          }
+        }
+
+        if (mirrorPromoted > 0 || mirrorForecastTickets.length > 0) {
+          logger.info(
+            { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, scanned: mirrorForecastTickets.length, promoted: mirrorPromoted },
+            'Mirror manual: scan de tickets forecast completado'
+          );
+        }
+        continue; // Mirror manual ya procesado por scan, no usar flujo normal de resolvePlanYMD
       }
     }
 
