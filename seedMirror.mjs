@@ -27,6 +27,7 @@
 import 'dotenv/config';
 import { hubspotClient } from './src/hubspotClient.js';
 import fs from 'fs';
+import { IVA_PY_TAX_GROUP_ID } from './src/config/constants.js';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -184,7 +185,7 @@ async function main() {
         uy:                              'true',
         description:                   'Servicio de soporte técnico mensual',
         servicio:                      'Soporte',
-        of_iva:                        'Si',
+        hs_tax_rate_group_id:           IVA_PY_TAX_GROUP_ID,
         pais_operativo:                  'Paraguay',
       },
       {
@@ -200,7 +201,7 @@ async function main() {
         uy:                              'true',
         description:                   'Licencia mensual plataforma cloud',
         servicio:                      'Licencias',
-        of_iva:                        'Si',
+        hs_tax_rate_group_id:           IVA_PY_TAX_GROUP_ID,
         pais_operativo:                  'Paraguay',
       },
     ]

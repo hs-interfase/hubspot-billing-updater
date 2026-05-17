@@ -160,6 +160,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
   const invoiceKey = ip.of_invoice_key;
   const nodumId  = (ip.id_factura_nodum || '').trim() || null;
   const fechaEmisionRaw = ip.fecha_de_emision || null;
+  const fechaEmisionYMD = invoiceDateToYMD(fechaEmisionRaw);
   const fechaCreacionYMD = invoiceDateToYMD(ip.hs_createdate || null);
   
   logger.info({ module: mod, fn, invoiceId, etapa, nodumId, invoiceKey, fechaEmisionYMD }, 'Iniciando propagación');
