@@ -18,6 +18,7 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
       'hs_recurring_billing_frequency',
       'hs_recurring_billing_number_of_payments',
       'facturas_restantes',
+      'fechas_completas',
       'line_item_key',
     ],
     undefined,
@@ -129,8 +130,12 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
 
   if (currentRaw !== nextRaw) {
     try {
+      const updateProps = { facturas_restantes: nextRaw };
+      if (restantes === 0) {
+        updateProps.fechas_completas = 'true';
+    }
       await hubspotClient.crm.lineItems.basicApi.update(id, {
-        properties: { facturas_restantes: nextRaw },
+        properties: updateProps,
       });
 
       // Confirmación (releer)
@@ -144,6 +149,21 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
       throw err;
     }
   } else {
+    // fechas_completas puede estar desincronizado (ej: writer viejo en ticketService)
+if (restantes === 0 && String(properties?.fechas_completas || '').toLowerCase() !== 'true') {
+  try {
+    await hubspotClient.crm.lineItems.basicApi.update(id, {
+      properties: { fechas_completas: 'true' },
+    });
+    logger.info(
+      { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id },
+      'fechas_completas corregido a true (facturas_restantes ya era 0)'
+    );
+  } catch (err) {
+    reportIfActionable({ objectType: 'line_item', objectId: id, message: 'Error al corregir fechas_completas', err });
+  }
+
+}
     logger.debug(
       { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id, facturas_restantes: currentRaw },
       'facturas_restantes sin cambio, noop'

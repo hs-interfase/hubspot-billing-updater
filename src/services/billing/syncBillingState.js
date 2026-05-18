@@ -16,14 +16,15 @@ import logger from '../../../lib/logger.js';
  *   buildPagoDisplay(12, 12) → "██████████ 12 / 12"
  *   buildPagoDisplay(0, 0)   → ""   (auto-renew / sin total)
  *
- * @param {number} countInvoices  Facturas emitidas hasta ahora
+ *
+ * @param {number} countInvoiced  Tickets en INVOICED_STAGES (confirmados por Nodum)
  * @param {number} cuotasTotales  Total de pagos del plan
  * @returns {string}
  */
-export function buildPagoDisplay(countInvoices, cuotasTotales) {
+export function buildPagoDisplay(countInvoiced, cuotasTotales) {
   if (!cuotasTotales || cuotasTotales <= 0) return '';
 
-  const emitidas = Math.min(countInvoices ?? 0, cuotasTotales);
+  const emitidas = Math.min(countInvoiced ?? 0, cuotasTotales);
   const filled   = Math.round((emitidas / cuotasTotales) * 10);
   const empty    = 10 - filled;
   const bar      = '█'.repeat(filled) + '░'.repeat(empty);
@@ -54,7 +55,7 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
     const props = [
       'billing_next_date',
       'facturas_restantes',
-      'progreso_pagos',                           // ← nuevo: leer para diff
+      'progreso_pagos',                           
       'renovacion_automatica',
       'recurringbillingfrequency',
       'hs_recurring_billing_frequency',
@@ -101,11 +102,11 @@ export async function syncBillingState({ hubspotClient, lineItemId, lineItem, de
   //    - AUTO_RENEW o sin cuotasTotales → vacío
   //    - PLAN_FIJO con datos → barra Unicode + fracción
   const nextProgreso = (!autoRenew && recalcRes?.cuotasTotales > 0)
-    ? buildPagoDisplay(recalcRes.countInvoices, recalcRes.cuotasTotales)
+    ? buildPagoDisplay(recalcRes.countTickets, recalcRes.cuotasTotales)
     : '';
 
   log.debug(
-    { id, autoRenew, countInvoices: recalcRes?.countInvoices, cuotasTotales: recalcRes?.cuotasTotales, nextProgreso },
+    { id, autoRenew, countTickets: recalcRes?.countTickets, cuotasTotales: recalcRes?.cuotasTotales, nextProgreso },
     '[syncBillingState] progreso_pagos calculado'
   );
 

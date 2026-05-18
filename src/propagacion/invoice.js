@@ -34,6 +34,8 @@ import {
   INVOICED_STAGES,
 } from '../config/constants.js';
 import { recalcFacturasRestantes } from '../services/billing/recalcFacturasRestantes.js';
+import { buildPagoDisplay } from '../services/billing/syncBillingState.js';
+
 
 
 const INVOICE_OBJECT_TYPE = 'invoices';
@@ -275,6 +277,25 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     if (dealId) {
       try {
         const recalcResult = await recalcFacturasRestantes({ hubspotClient, lineItemId, dealId });
+        if (recalcResult.cuotasTotales > 0) {
+          try {
+            const nuevoProgreso = buildPagoDisplay(recalcResult.countTickets, recalcResult.cuotasTotales);
+            const liProps = await hubspotClient.crm.lineItems.basicApi.getById(
+              lineItemId, ['progreso_pagos']
+            );
+            const curProgreso = String(liProps.properties?.progreso_pagos ?? '').trim();
+            if (curProgreso !== nuevoProgreso) {
+              await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+                properties: { progreso_pagos: nuevoProgreso },
+              });
+              logger.info({ module: mod, fn, invoiceId, lineItemId, from: curProgreso, to: nuevoProgreso },
+                'progreso_pagos actualizado post-propagación');
+            }
+          } catch (err) {
+            logger.warn({ module: mod, fn, invoiceId, lineItemId, err },
+              'progreso_pagos falló (no bloquea propagación)');
+          }
+        }
         logger.info({ module: mod, fn, invoiceId, ticketId, lineItemId, dealId, ...recalcResult },
           'recalcFacturasRestantes ejecutado post-propagación');
       } catch (err) {

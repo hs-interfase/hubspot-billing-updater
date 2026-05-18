@@ -291,6 +291,15 @@ const isAutoRenew =
   String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
   !(term > 0);
 
+  // Plan fijo con todos los tickets ya promovidos → early return
+  if (!isAutoRenew && safeInt(p.pagos_restantes) === 0) {
+    logger.debug(
+      { module: 'phaseP', fn: 'buildDesiredDates', lineItemId: lineItem?.id, pagos_restantes: 0 },
+      '[buildDesiredDates] PLAN_FIJO: pagos_restantes=0, early return'
+    );
+    return { desiredCount: 0, dates: [] };
+  }
+
   const hardMax = 24;
 
   // CAMBIO: descontar pagos ya emitidos para plan fijo

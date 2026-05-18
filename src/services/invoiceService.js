@@ -154,7 +154,7 @@ async function updateInvoiceDirect(invoiceId, properties) {
  *
  * @param {Object} ticket
  * @param {string} modoGeneracion - 'AUTO_LINEITEM' | 'MANUAL_TICKET' | 'MANUAL_LINEITEM'
- * @param {string|null} usuarioDisparador
+ * @param {string|null} usuarioDisparador/
  * @param {Object} options
  * @param {boolean} [options.skipRefetch=false]
  *   Si true, asume que el ticket ya viene con todas las props de REQUIRED_TICKET_PROPS

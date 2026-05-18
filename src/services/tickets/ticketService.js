@@ -200,7 +200,10 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
         updates.billing_next_date = '';
       }
 
-      updates.fechas_completas = 'true';
+   logger.info(
+        { module: 'ticketService', fn: 'syncLineItemAfterCanonicalTicket', lineItemId, dealId, issued, totalPayments },
+        'Plan agotado: todos los tickets promovidos, fechas_completas se activará vía recalcFacturasRestantes'
+      );
 
       if (Object.keys(updates).length) {
         try {
