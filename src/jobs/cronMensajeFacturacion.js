@@ -25,6 +25,7 @@ import { buildMensajeFacturacion } from '../services/billing/buildMensajeFactura
 import {
   TICKET_PIPELINE,
   TICKET_STAGES,
+  ASSOC_LABEL_EMPRESA_FACTURA,
 } from '../config/constants.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
@@ -162,7 +163,6 @@ function isDealHot(tickets) {
 /**
  * Obtiene el nombre del deal.
  */
-const ASSOC_LABEL_EMPRESA_FACTURA  = 9;  // deals→companies "Empresa Factura"
 const ASSOC_LABEL_PERSONA_FACTURA  = 7;  // deals→contacts  "Persona Factura"
 
 async function getDealInfo(dealId) {

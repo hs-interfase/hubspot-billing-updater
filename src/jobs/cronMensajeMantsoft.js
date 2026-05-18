@@ -32,7 +32,7 @@ import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
-import { BILLING_ACTIVE_DEAL_STAGES } from '../config/constants.js';
+import { BILLING_ACTIVE_DEAL_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from '../config/constants.js';
 
 
 
@@ -178,7 +178,6 @@ function groupByDeal(lineItems, liToDealMap) {
 // Helpers HubSpot
 // ────────────────────────────────────────────────────────────
 
-const ASSOC_LABEL_EMPRESA_FACTURA = 9;
 const ASSOC_LABEL_PERSONA_FACTURA = 7;
 
 async function getDealInfo(dealId) {

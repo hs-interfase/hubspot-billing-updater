@@ -68,6 +68,9 @@ export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').t
 export const IRAE_TAX_GROUP_ID = (process.env.IRAE_UY_TAX_GROUP_ID || '').trim();
 export const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_IRAE_UY_TAX_GROUP_ID || '').trim();
 
+export const ASSOC_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPRESA_FACTURA || '2', 10);
+
+
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
 
 // Lookahead para tickets manuales (30 días)

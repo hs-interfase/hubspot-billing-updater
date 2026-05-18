@@ -12,7 +12,7 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 import logger from '../lib/logger.js';
-import { PROMOTED_STAGES } from './config/constants.js';
+import { PROMOTED_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from './config/constants.js';
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
@@ -818,7 +818,7 @@ const allowedProps = new Set([
   }
   // IDs de labels de asociación deals → companies
   const ASSOC_LABEL_PRIMARY          = 5; // HUBSPOT_DEFINED
-  const ASSOC_LABEL_EMPRESA_FACTURA  = 9; // USER_DEFINED
+  
 
   // 5) Determinar empresa beneficiaria (primera empresa asociada al deal PY)
   const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
