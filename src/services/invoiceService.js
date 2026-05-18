@@ -6,7 +6,7 @@ import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateU
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
-import { recalcFacturasRestantes } from './billing/recalcFacturasRestantes.js';
+import { recalcDerivedFacturas } from './billing/recalcDerivedFacturas.js';
 import { syncBillingState } from './billing/syncBillingState.js';
 import { isAutoRenew } from './billing/mode.js';
 import { ensure24FutureTickets } from './tickets/ticketService.js';
@@ -496,7 +496,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
           },
         });
 
-        const rr = await recalcFacturasRestantes({ hubspotClient, lineItemId: String(lineItemId), dealId: String(tp.of_deal_id) });
+        const rr = await recalcDerivedFacturas({ hubspotClient, lineItemId: String(lineItemId), dealId: String(tp.of_deal_id) });
 
         const liAfter = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
           'facturas_restantes','hs_recurring_billing_number_of_payments',
@@ -761,7 +761,7 @@ const invoiceTitle = `${dealName} - ${liShort} - ${totalFinal}`;
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
         properties: { invoice_id: String(invoiceId), invoice_key: String(invoiceKey) },
       });
-      await recalcFacturasRestantes({ hubspotClient, lineItemId, dealId });
+      await recalcDerivedFacturas({ hubspotClient, lineItemId, dealId });
       logger.info({ module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem', lineItemId, invoiceId }, '[invoice] Line item actualizado con invoice refs');
     } catch (err) {
       logger.warn({ module: 'invoiceService', fn: 'createAutoInvoiceFromLineItem', lineItemId, invoiceId, err }, '[invoice] No se pudo actualizar line item con invoice refs');

@@ -4,6 +4,7 @@ import { isAutoRenew } from './mode.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { INVOICED_STAGES } from '../../config/constants.js';
+import { alertFechasCompletas } from '../notifications/dealAlerts.js';
 
 const INVOICE_LIK_PROP = 'line_item_key';
 
@@ -144,6 +145,12 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
         { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id, from: currentRaw, to: nextRaw, confirmed: liAfter?.properties?.facturas_restantes },
         'facturas_restantes actualizado'
       );
+      // ── Alerta: fechas_completas ──
+      if (restantes === 0) {
+        alertFechasCompletas({ dealId, lineItemId: id, lineItemName: null, lik })
+          .catch(err => logger.warn({ module: 'recalcFacturasRestantes', lineItemId: id, err: err?.message },
+            'alertFechasCompletas falló (no bloquea)'));
+      }
     } catch (err) {
       reportIfActionable({ objectType: 'line_item', objectId: id, message: 'Error al actualizar facturas_restantes', err });
       throw err;
@@ -159,6 +166,11 @@ if (restantes === 0 && String(properties?.fechas_completas || '').toLowerCase() 
       { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id },
       'fechas_completas corregido a true (facturas_restantes ya era 0)'
     );
+
+    alertFechasCompletas({ dealId, lineItemId: id, lineItemName: null, lik })
+      .catch(err => logger.warn({ module: 'recalcFacturasRestantes', lineItemId: id, err: err?.message },
+        'alertFechasCompletas falló (no bloquea)'));
+
   } catch (err) {
     reportIfActionable({ objectType: 'line_item', objectId: id, message: 'Error al corregir fechas_completas', err });
   }

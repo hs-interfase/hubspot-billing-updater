@@ -8,6 +8,7 @@ import {
 } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
+import { alertPagosCompletos } from '../notifications/dealAlerts.js'
 
 /**
  * Devuelve el YYYY-MM-DD más chico > afterYMD para tickets FORECAST
@@ -220,6 +221,17 @@ export async function syncLineItemAfterPromotion({
       expectedYMD,
       updates,
     }, '[syncLineItemAfterPromotion] LineItem actualizado');
+
+    // ── Alerta: pagos_restantes llegó a 0 ──
+    if (Number.isFinite(newRemaining) && newRemaining === 0) {
+      alertPagosCompletos({ dealId, lineItemId, lineItemName: null })
+        .catch(err => logger.warn({ module: 'syncAfterPromotion', lineItemId, err: err?.message },
+          'alertPagosCompletos falló (no bloquea)'));
+    }
+
+    // NOTA: fire-and-forget con .catch() — nunca bloquea el flujo principal.
+    // Se ejecuta DESPUÉS del update exitoso, solo si newRemaining es exactamente 0.
+    
   } catch (err) {
     logger.error({ module: 'syncAfterPromotion', fn: 'syncLineItemAfterPromotion', lineItemId, err }, '[syncLineItemAfterPromotion] No se pudo actualizar line item');
     reportIfActionable({
