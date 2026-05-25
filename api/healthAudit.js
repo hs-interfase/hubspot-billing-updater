@@ -4,6 +4,7 @@ import logger from '../lib/logger.js'
 import { hubspotClient } from '../src/hubspotClient.js'
 import { TICKET_PIPELINE, TICKET_STAGES } from '../src/config/constants.js'
 import { parseBool } from '../src/utils/parsers.js'
+import { checkWebhookQueue } from '../src/webhookQueue.js'
 
 const router = Router()
 
@@ -223,14 +224,15 @@ async function checkAvisos() {
 // ── Endpoint ────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    const [cronLiveness, failedDeals, avisos] = await Promise.all([
-      checkCronLiveness(),
-      checkFailedDeals(),
-      checkAvisos(),
-    ])
+const [cronLiveness, failedDeals, avisos, webhookQueue] = await Promise.all([
+  checkCronLiveness(),
+  checkFailedDeals(),
+  checkAvisos(),
+  checkWebhookQueue(),
+])
 
-    const checks = { cronLiveness, failedDeals, avisos }
-    const status = worstStatus(cronLiveness.status, failedDeals.status, avisos.status)
+const checks = { cronLiveness, failedDeals, avisos, webhookQueue }
+const status = worstStatus(cronLiveness.status, failedDeals.status, avisos.status, webhookQueue.status)
 
     const statusCode = status === 'error' ? 503 : 200
 

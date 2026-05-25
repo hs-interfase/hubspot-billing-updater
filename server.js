@@ -13,6 +13,8 @@ import { initDB } from './api/invoice-editor/Db.js'
 import { initExchangeRatesTable } from './src/db.js'
 import debugUrgent from './api/debugUrgent.js'
 import healthAuditRouter from './api/healthAudit.js'
+// ── Webhook Queue ──────────────────────────────
+import { initWebhookQueueTable, startWorker } from './src/webhookQueue.js'
 
 // ── Nodum Upload ─────────────────────────────────
 import nodumUploadRouter from './api/nodum/nodumUpload.js'
@@ -90,6 +92,10 @@ await initDB()
 await initExchangeRatesTable()
 await initNodumUploadsTable()
 await initExportSnapshotsTable()
+await initWebhookQueueTable()
 
 const PORT = process.env.PORT || 8080
-app.listen(PORT, '0.0.0.0', () => logger.info({ port: PORT }, 'Server running'))
+app.listen(PORT, '0.0.0.0', () => {
+  logger.info({ port: PORT }, 'Server running')
+  startWorker(2000)
+})
