@@ -1,95 +1,32 @@
 // api/escuchar-cambios.js
 import logger from '../lib/logger.js';
-import { reportIfActionable } from '../src/utils/errorReporting.js';
-import { processUrgentLineItem, processUrgentTicket } from '../src/services/urgentBillingService.js';
-import { hubspotClient, getDealWithLineItems } from '../src/hubspotClient.js';
-import { runPhasesForDeal } from '../src/phases/index.js';
+import { hubspotClient } from '../src/hubspotClient.js';
+import { enqueue } from '../src/webhookQueue.js';
 import { parseBool } from '../src/utils/parsers.js';
-import { processTicketUpdate } from '../src/services/tickets/ticketUpdateService.js';
 
-
-const dealProcessingLocks = new Map()
 const MODULE = 'escuchar-cambios';
 
+// ─── Helper: resolver dealId desde line item (para deduplicación en la cola) ─
+
 async function getDealIdForLineItem(lineItemId) {
-  const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-    "line_items",
-    String(lineItemId),
-    "deals",
-    100
-  );
-  const dealIds = (resp.results || [])
-    .map((r) => String(r.toObjectId))
-    .filter(Boolean);
-  return dealIds.length ? dealIds[0] : null;
-}
-
-async function processRecalculation(lineItemId, propertyName) {
-  logger.info({ module: MODULE, fn: 'processRecalculation', lineItemId, propertyName }, 'Iniciando recalculación');
-
-  if (propertyName === "actualizar") {
-    try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
-        properties: { actualizar: false },
-      });
-      logger.info({ module: MODULE, fn: 'processRecalculation', lineItemId }, 'Trigger "actualizar" reseteado a false (inicio)');
-    } catch (err) {
-      logger.warn({ module: MODULE, fn: 'processRecalculation', lineItemId, err }, 'No se pudo resetear "actualizar" al inicio');
-      reportIfActionable({ objectType: 'line_item', objectId: lineItemId, message: 'No se pudo resetear "actualizar" al inicio', err });
-    }
+  try {
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'line_items',
+      String(lineItemId),
+      'deals',
+      100
+    );
+    const dealIds = (resp.results || [])
+      .map((r) => String(r.toObjectId))
+      .filter(Boolean);
+    return dealIds.length ? dealIds[0] : null;
+  } catch (err) {
+    logger.warn(
+      { module: MODULE, fn: 'getDealIdForLineItem', lineItemId, err: err?.message },
+      'No se pudo resolver dealId pre-enqueue, se resolverá en el worker'
+    );
+    return null;
   }
-
-  const dealId = await getDealIdForLineItem(lineItemId);
-  if (!dealId) {
-    logger.error({ module: MODULE, fn: 'processRecalculation', lineItemId }, 'No se encontró deal asociado al line item');
-    return { skipped: true, reason: 'No associated deal' };
-  }
-
-  const deal = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
-    "facturacion_activa",
-    "dealname",
-  ]);
-  const dealProps = deal?.properties || {};
-  const dealName = dealProps.dealname || "Sin nombre";
-
-  logger.info({ module: MODULE, fn: 'processRecalculation', dealId, dealName }, 'Deal resuelto');
-
-// ── Lock por deal ──
-if (dealProcessingLocks.has(dealId)) {
-  logger.info(
-    { module: MODULE, fn: 'processRecalculation', dealId, lineItemId },
-    'Deal ya en proceso, descartando webhook duplicado'
-  );
-  return { skipped: true, reason: 'deal_already_processing' };
-}
-
-let releaseLock;
-const lockPromise = new Promise(resolve => { releaseLock = resolve; });
-dealProcessingLocks.set(dealId, lockPromise);
-
-try {
-  const RECALC_DELAY_MS = Number(process.env.RECALC_DELAY_MS ?? 5000);
-  if (RECALC_DELAY_MS > 0) {
-    logger.info({ module: MODULE, fn: 'processRecalculation', dealId, delayMs: RECALC_DELAY_MS }, 'Delay defensivo pre-runPhases');
-    await new Promise(r => setTimeout(r, RECALC_DELAY_MS));
-  }
-
-  const dealWithLineItems = await getDealWithLineItems(dealId);
-  const billingResult = await runPhasesForDeal(dealWithLineItems);
-
-  logger.info({
-    module: MODULE,
-    fn: 'processRecalculation',
-    dealId,
-    ticketsCreated: billingResult.ticketsCreated || 0,
-    invoicesEmitted: billingResult.autoInvoicesEmitted || 0,
-  }, 'Recalculación completada');
-
-  return { success: true, dealId, dealName, billingResult };
-} finally {
-  dealProcessingLocks.delete(dealId);
-  releaseLock();
-}
 }
 
 export default async function handler(req, res) {
@@ -119,27 +56,35 @@ export default async function handler(req, res) {
         return res.status(200).json({ message: 'Property value not true, skipped' });
       }
 
-      let result;
       if (objectType === 'line_item') {
-        result = await processUrgentLineItem(objectId);
+        const dealId = await getDealIdForLineItem(objectId);
+        const queueId = await enqueue({
+          source: 'escuchar-cambios',
+          objectType, objectId, propertyName, propertyValue,
+          dealId,
+          actionType: 'urgent_line_item',
+          priority: 1,
+          eventId,
+          rawPayload: payload,
+        });
+        return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_line_item' });
+
       } else if (objectType === 'ticket') {
-        result = await processUrgentTicket(objectId);
+        // Tickets no tienen dealId directo para deduplicar, se encolan sin él
+        const queueId = await enqueue({
+          source: 'escuchar-cambios',
+          objectType, objectId, propertyName, propertyValue,
+          dealId: null,
+          actionType: 'urgent_ticket',
+          priority: 1,
+          eventId,
+          rawPayload: payload,
+        });
+        return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_ticket' });
+
       } else {
         return res.status(400).json({ error: `Unsupported object type: ${objectType}` });
       }
-
-      if (result.skipped) {
-        return res.status(200).json({ skipped: true, reason: result.reason, objectId, objectType });
-      }
-
-      return res.status(200).json({
-        success: true,
-        action: 'urgent_billing',
-        objectId,
-        objectType,
-        invoiceId: result.invoiceId,
-        eventId,
-      });
     }
 
     // ====== RUTA 2: RECALCULACIÓN ======
@@ -151,22 +96,16 @@ export default async function handler(req, res) {
           return res.status(200).json({ message: 'actualizar flag not true, skipped', receivedValue: propertyValue });
         }
 
-        try {
-          const result = await processTicketUpdate(objectId);
-          return res.status(200).json({ success: true, action: 'ticket_update', objectId, ticketId: objectId, result, eventId });
-        } catch (err) {
-          logger.error({ module: MODULE, fn: 'handler', ticketId: objectId, err }, 'Error procesando ticket');
-          return res.status(200).json({ error: true, message: err?.message || 'Error procesando ticket', objectId });
-        } finally {
-          try {
-            await hubspotClient.crm.tickets.basicApi.update(String(objectId), {
-              properties: { actualizar: false },
-            });
-          } catch (err) {
-            logger.error({ module: MODULE, fn: 'handler', ticketId: objectId, err }, "Error reseteando 'actualizar' en ticket");
-            reportIfActionable({ objectType: 'ticket', objectId, message: "Error reseteando 'actualizar' en ticket", err });
-          }
-        }
+        const queueId = await enqueue({
+          source: 'escuchar-cambios',
+          objectType, objectId, propertyName, propertyValue,
+          dealId: null,
+          actionType: 'ticket_update',
+          priority: 0,
+          eventId,
+          rawPayload: payload,
+        });
+        return res.status(200).json({ queued: true, queueId, objectId, action: 'ticket_update' });
       }
 
       // CASO B: hs_billing_start_delay_type solo para line items
@@ -181,35 +120,21 @@ export default async function handler(req, res) {
         }
       }
 
-      // CASO D: ejecutar recalculación para line items
+      // CASO D: encolar recalculación para line items
       if (objectType === 'line_item') {
-        const result = await processRecalculation(objectId, propertyName);
+        const dealId = await getDealIdForLineItem(objectId);
 
-        if (result.skipped) {
-          return res.status(200).json({ skipped: true, reason: result.reason, objectId, propertyName });
-        }
-
-        if (propertyName === "actualizar") {
-          try {
-            await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
-              properties: { actualizar: false },
-            });
-          } catch (err) {
-            logger.error({ module: MODULE, fn: 'handler', lineItemId: objectId, err }, "Error reseteando 'actualizar' post-flujo");
-            reportIfActionable({ objectType: 'line_item', objectId, message: "Error reseteando 'actualizar' post-flujo", err });
-          }
-        }
-
-        return res.status(200).json({
-          success: true,
-          action: 'recalculation',
-          objectId,
-          propertyName,
-          dealId: result.dealId,
-          dealName: result.dealName,
-          billingResult: result.billingResult,
+        const queueId = await enqueue({
+          source: 'escuchar-cambios',
+          objectType, objectId, propertyName, propertyValue,
+          dealId,
+          actionType: 'recalc',
+          priority: 0,
           eventId,
+          rawPayload: payload,
         });
+
+        return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'recalc' });
       }
     }
 

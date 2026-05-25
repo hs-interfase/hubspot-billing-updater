@@ -1,33 +1,35 @@
 // api/actualizar-webhook.js
 import logger from '../lib/logger.js';
-import { reportIfActionable } from '../src/utils/errorReporting.js';
-import { hubspotClient, getDealWithLineItems } from "../src/hubspotClient.js";
-import { runPhasesForDeal } from "../src/phases/index.js";
+import { hubspotClient } from '../src/hubspotClient.js';
+import { enqueue } from '../src/webhookQueue.js';
+import { parseBool } from '../src/utils/parsers.js';
 
 const MODULE = 'actualizar';
 
-function parseBool(value) {
-  const s = String(value ?? "").trim().toLowerCase();
-  return s === "true" || s === "1" || s === "yes" || s === "si" || s === "sí";
-}
-
 async function getDealIdForLineItem(lineItemId) {
-  const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
-    "line_items",
-    String(lineItemId),
-    "deals",
-    100
-  );
-  const dealIds = (resp.results || [])
-    .map((r) => String(r.toObjectId))
-    .filter(Boolean);
-  if (!dealIds.length) return null;
-  return dealIds[0];
+  try {
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'line_items',
+      String(lineItemId),
+      'deals',
+      100
+    );
+    const dealIds = (resp.results || [])
+      .map((r) => String(r.toObjectId))
+      .filter(Boolean);
+    return dealIds.length ? dealIds[0] : null;
+  } catch (err) {
+    logger.warn(
+      { module: MODULE, fn: 'getDealIdForLineItem', lineItemId, err: err?.message },
+      'No se pudo resolver dealId pre-enqueue, se resolverá en el worker'
+    );
+    return null;
+  }
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
@@ -37,85 +39,46 @@ export default async function handler(req, res) {
     const propertyName = payload?.propertyName;
     const propertyValue = payload?.propertyValue;
     const subscriptionType = payload?.subscriptionType;
+    const eventId = payload?.eventId;
 
-    const [objectType] = (subscriptionType || "").split(".");
-    if (objectType !== "line_item") {
-      return res.status(200).json({ message: "Not a line_item event, ignored" });
+    const [objectType] = (subscriptionType || '').split('.');
+    if (objectType !== 'line_item') {
+      return res.status(200).json({ message: 'Not a line_item event, ignored' });
     }
 
-    if (!["actualizar", "hs_billing_start_delay_type"].includes(propertyName)) {
-      return res.status(200).json({ message: "Property not relevant, skipped" });
+    if (!['actualizar', 'hs_billing_start_delay_type'].includes(propertyName)) {
+      return res.status(200).json({ message: 'Property not relevant, skipped' });
     }
 
-    if (propertyName === "actualizar" && !parseBool(propertyValue)) {
-      return res.status(200).json({ message: "actualizar flag not true, skipped" });
+    if (propertyName === 'actualizar' && !parseBool(propertyValue)) {
+      return res.status(200).json({ message: 'actualizar flag not true, skipped' });
     }
 
     if (!objectId) {
-      return res.status(400).json({ error: "Missing objectId" });
+      return res.status(400).json({ error: 'Missing objectId' });
     }
 
     logger.info({ module: MODULE, fn: 'handler', lineItemId: objectId, propertyName, propertyValue }, 'Webhook event received');
 
     const dealId = await getDealIdForLineItem(objectId);
-    if (!dealId) {
-      logger.error({ module: MODULE, fn: 'handler', lineItemId: objectId }, 'No deal associated with line item');
-      return res.status(400).json({ error: "No associated deal" });
-    }
 
-    let deal;
-    try {
-      deal = await hubspotClient.crm.deals.basicApi.getById(String(dealId), [
-        "facturacion_activa",
-        "dealname",
-      ]);
-    } catch (err) {
-      logger.error({ module: MODULE, fn: 'handler', dealId, err }, 'Error fetching deal');
-      return res.status(500).json({ error: "Error fetching deal" });
-    }
-
-    const dealProps = deal?.properties || {};
-    const active = parseBool(dealProps.facturacion_activa);
-    const dealName = dealProps.dealname || "";
-
-    logger.info({ module: MODULE, fn: 'handler', dealId, dealName, facturacion_activa: active }, 'Deal resolved');
-
-    let billingResult = null;
-    if (active) {
-      try {
-        const dealWithLineItems = await getDealWithLineItems(dealId);
-        billingResult = await runPhasesForDeal(dealWithLineItems);
-      } catch (err) {
-        logger.error({ module: MODULE, fn: 'handler', dealId, err }, 'Error ejecutando fases de facturación');
-        // no aborta, continúa a resetear flags
-      }
-    }
-
-    if (propertyName === "actualizar") {
-      try {
-        await hubspotClient.crm.lineItems.basicApi.update(String(objectId), {
-          properties: { actualizar: "false" },
-        });
-        logger.info({ module: MODULE, fn: 'handler', lineItemId: objectId }, "Flag 'actualizar' reset to false");
-      } catch (err) {
-        logger.error({ module: MODULE, fn: 'handler', lineItemId: objectId, err }, "Error resetting 'actualizar' flag");
-        reportIfActionable({ objectType: 'line_item', objectId, message: "Error resetting 'actualizar' flag", err });
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      dealId: String(dealId),
-      dealName,
-      ranBilling: active,
-      billingResult,
+    const queueId = await enqueue({
+      source: 'actualizar-webhook',
+      objectType: 'line_item',
+      objectId,
+      propertyName,
+      propertyValue,
+      dealId,
+      actionType: 'recalc',
+      priority: 0,
+      eventId,
+      rawPayload: payload,
     });
+
+    return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'recalc' });
 
   } catch (err) {
     logger.error({ module: MODULE, fn: 'handler', err }, 'Unexpected error processing webhook');
-    return res.status(500).json({
-      error: "Internal server error",
-      message: err?.message || "Unknown error",
-    });
+    return res.status(500).json({ error: 'Internal server error', message: err?.message || 'Unknown error' });
   }
 }
