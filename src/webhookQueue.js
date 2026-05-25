@@ -23,6 +23,7 @@ export async function initWebhookQueueTable() {
       property_name   TEXT,
       property_value  TEXT,
       deal_id         TEXT,
+      owner_id        TEXT,
       action_type     TEXT NOT NULL,
       priority        INTEGER NOT NULL DEFAULT 0,
       status          TEXT NOT NULL DEFAULT 'pending',
@@ -72,6 +73,7 @@ export async function enqueue({
   propertyName = null,
   propertyValue = null,
   dealId = null,
+  ownerId = null,
   actionType,
   priority = 0,
   eventId = null,
@@ -265,9 +267,18 @@ async function executeJob(job) {
 
       // Verificar facturación activa
       const deal = await hubspotClient.crm.deals.basicApi.getById(String(resolvedDealId), [
-        'facturacion_activa', 'dealname',
+        'facturacion_activa', 'dealname', 'hubspot_owner_id',
       ]);
       const dealProps = deal?.properties || {};
+
+// Guardar owner_id en la fila para visibilidad
+      if (dealProps.hubspot_owner_id) {
+        await pool.query(
+          `UPDATE webhook_queue SET owner_id = $2 WHERE id = $1`,
+          [job.id, dealProps.hubspot_owner_id]
+        );
+      }
+
       const active = parseBool(dealProps.facturacion_activa);
 
       if (!active) {
