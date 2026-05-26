@@ -301,6 +301,21 @@ if (!acquireLock()) {
   return { skipped: true };
 }
 
+  // ── Ventana horaria: solo ejecutar entre 03:40 y 07:00 UTC (00:40–04:00 UY) ──
+  if (!onlyDealId && !modeOverride) {
+    const now = new Date();
+    const utcH = now.getUTCHours();
+    const utcM = now.getUTCMinutes();
+    const utcMinutes = utcH * 60 + utcM; // minutos desde medianoche UTC
+    const WINDOW_START = 3 * 60 + 40;    // 03:40 UTC
+    const WINDOW_END   = 7 * 60;         // 07:00 UTC
+    if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
+      releaseLock();
+      logger.info({ jobRunId, utcH, utcM, reason: "fuera_de_ventana" }, "[cronDealsBatch] Skipped (fuera de ventana horaria)");
+      return { skipped: true, reason: "fuera_de_ventana" };
+    }
+  }
+
   let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
 // Cursores weekday desde PostgreSQL (sobrevive redeploys)

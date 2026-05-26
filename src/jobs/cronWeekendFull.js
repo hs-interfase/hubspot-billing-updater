@@ -320,6 +320,19 @@ if (!acquireLock()) {
     return { skipped: true };
   }
 
+  // ── Ventana horaria: solo ejecutar entre 03:20 y 09:20 UTC (00:20–06:20 UY) ──
+  if (!onlyDealId) {
+    const now = new Date();
+    const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const WINDOW_START = 3 * 60 + 20;  // 03:20 UTC
+    const WINDOW_END   = 9 * 60 + 20;  // 09:20 UTC
+    if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
+      releaseLock();
+      logger.info({ jobRunId, utcH: now.getUTCHours(), utcM: now.getUTCMinutes(), reason: "fuera_de_ventana" }, "[cronWeekend] Skipped (fuera de ventana horaria)");
+      return { skipped: true, reason: "fuera_de_ventana" };
+    }
+  }
+
 let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
 
   try {

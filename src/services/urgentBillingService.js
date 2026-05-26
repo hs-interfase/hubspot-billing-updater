@@ -435,6 +435,68 @@ if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail
         return { skipped: true, reason: 'plan_completed', activeCount, totalPayments };
       }
     }
+
+     // 6b) GUARD: invoice ya existe para este período exacto
+    {
+      const { buildInvoiceKey } = await import('../utils/invoiceKey.js');
+      const { invoiceExistsForKey } = await import('../utils/invoiceUtils.js');
+      const candidateInvoiceKey = buildInvoiceKey(dealId, lik, billingPeriodDate);
+      const alreadyExists = await invoiceExistsForKey(candidateInvoiceKey);
+      if (alreadyExists) {
+        logger.info(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, billingPeriodDate, invoiceKey: candidateInvoiceKey },
+          'Invoice activa ya existe para este período (guard invoiceExistsForKey), no se emite otra'
+        );
+        return { skipped: true, reason: 'invoice_exists_for_period', invoiceKey: candidateInvoiceKey };
+      }
+    }
+
+    // 6c) GUARD: tickets promovidos sin factura (previene saltos de período)
+    {
+      const { PROMOTED_STAGES } = await import('../config/constants.js');
+      try {
+        const ticketsByLik = await hubspotClient.crm.tickets.searchApi.doSearch({
+          filterGroups: [{
+            filters: [
+              { propertyName: 'of_line_item_key', operator: 'EQ', value: lik },
+            ],
+          }],
+          properties: ['hs_pipeline_stage', 'of_invoice_id', 'of_invoice_status', 'fecha_resolucion_esperada', 'of_ticket_key'],
+          limit: 100,
+        });
+
+        const pendientes = (ticketsByLik?.results || []).filter(t => {
+          const stage = String(t?.properties?.hs_pipeline_stage || '');
+          if (!PROMOTED_STAGES.has(stage)) return false;
+          const invId = (t?.properties?.of_invoice_id || '').trim();
+          const invStatus = (t?.properties?.of_invoice_status || '').trim();
+          return !invId || invStatus === 'Cancelada';
+        });
+
+        if (pendientes.length > 0) {
+          const primerPendiente = pendientes[0];
+          const fechaPendiente = (primerPendiente?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+          const ticketPendienteId = primerPendiente.id;
+          const msg =
+            `⚠️ Hay un período pendiente de facturación (período ${fechaPendiente}, ticket ${ticketPendienteId}). ` +
+            `Facturar desde el ticket o resolver antes de avanzar.`;
+          logger.info(
+            { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, ticketPendienteId, fechaPendiente },
+            msg
+          );
+          await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+            properties: { of_billing_error: msg.slice(0, 250), facturar_ahora: 'false' },
+          });
+          return { skipped: true, reason: 'pending_ticket_without_invoice', ticketId: ticketPendienteId, fecha: fechaPendiente };
+        }
+      } catch (guardErr) {
+        logger.warn(
+          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, err: guardErr },
+          'Guard de tickets pendientes falló — fail open, continuando'
+        );
+      }
+    }
+
 // 7.a) Crear/reutilizar ticket con billingPeriodDate
 const { ensureTicketCanonical } = await import('./tickets/ticketService.js');
 const { buildTicketKeyFromLineItemKey } = await import('../utils/ticketKey.js');
@@ -989,11 +1051,29 @@ if (currentStage && !FORECAST_MANUAL_STAGES.has(currentStage)) {
           return { skipped: true, reason: 'plan_completed', activeCount, totalPayments };
         }
       }
-    } else {
+} else {
       logger.warn(
         { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId },
         'of_line_item_key vacío, omitiendo guard de plan completo'
       );
+    }
+
+    // GUARD: invoice ya existe para este período exacto (ticket path)
+    if (lik && dealId) {
+      const fechaTicket = (ticketProps.fecha_resolucion_esperada || '').slice(0, 10);
+      if (fechaTicket && /^\d{4}-\d{2}-\d{2}$/.test(fechaTicket)) {
+        const { buildInvoiceKey } = await import('../utils/invoiceKey.js');
+        const { invoiceExistsForKey } = await import('../utils/invoiceUtils.js');
+        const candidateKey = buildInvoiceKey(dealId, lik, fechaTicket);
+        const alreadyExists = await invoiceExistsForKey(candidateKey);
+        if (alreadyExists) {
+          logger.info(
+            { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, lik, fechaTicket, invoiceKey: candidateKey },
+            'Invoice activa ya existe para este período (guard invoiceExistsForKey), no se emite otra'
+          );
+          return { skipped: true, reason: 'invoice_exists_for_period', invoiceKey: candidateKey };
+        }
+      }
     }
 
     const invoiceResult = await createInvoiceFromTicket(ticket, 'AUTO_LINEITEM', null, { skipRefetch: true });

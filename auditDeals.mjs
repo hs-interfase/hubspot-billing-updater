@@ -101,7 +101,7 @@ function getInterval(freqRaw) {
 
 // ─── buildDesiredDates (misma lógica que auditDeal.mjs) ──────────────────────
 
-function buildDesiredDates(li) {
+function buildDesiredDates(li, realTickets = []) {
   const p = li?.properties || {};
   const today = nowMontevideoYmd();
 
@@ -119,57 +119,74 @@ function buildDesiredDates(li) {
   if (!freqKey) return { desiredCount: 1, dates: [startYmd], mode: 'pago_unico' };
   if (!interval) return { desiredCount: 1, dates: [startYmd], mode: 'frecuencia_desconocida' };
 
-  const termRaw    = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
-  const term       = termRaw ? parseInt(String(termRaw), 10) : null;
+  const termRaw = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
+  const term    = termRaw ? parseInt(String(termRaw), 10) : null;
   const isAutoRenew =
     String(p.renovacion_automatica || '').toLowerCase() === 'true' ||
     !(term > 0);
 
-  const hardMax       = 24;
-  const pagosEmitidos = parseInt(String(p.pagos_emitidos || '0'), 10) || 0;
+  const hardMax = 24;
 
-  let maxCount;
-  if (!isAutoRenew && term > 0) {
-    maxCount = Math.min(Math.max(0, term - pagosEmitidos), hardMax);
-  } else {
-    maxCount = hardMax;
-  }
-
-  if (maxCount === 0) return { desiredCount: 0, dates: [], mode: 'plan_fijo_completo' };
-
-  const lastTicketedYmd = toYmd(p.last_ticketed_date);
-  const anchorYmd       = toYmd(p.billing_anchor_date);
-  const billingNextYmd  = toYmd(p.billing_next_date);
-
-  // AUTO RENEW
+  // ── AUTO RENEW: ventana fija año-1 a año+1, split pasado/futuro ──
   if (isAutoRenew) {
-    let seriesStart = today;
-    if (lastTicketedYmd) {
-      const d0 = parseLocalDate(lastTicketedYmd);
-      if (d0) { d0.setDate(d0.getDate() + 1); const p1 = formatDateISO(d0); if (p1 > seriesStart) seriesStart = p1; }
-    }
-    if (billingNextYmd && billingNextYmd > seriesStart) seriesStart = billingNextYmd;
-    if ((anchorYmd || startYmd) > seriesStart) seriesStart = anchorYmd || startYmd;
+    const currentYear = new Date().getFullYear();
+    const windowStart = `${currentYear - 1}-01-01`;
+    const windowEnd   = `${currentYear + 1}-12-31`;
 
-    const startDate = parseLocalDate(seriesStart);
-    if (!startDate) return { desiredCount: 0, dates: [], mode: 'auto_renew_sin_start' };
+    const anchorYmd = toYmd(p.billing_anchor_date);
+    const seriesOrigin = parseLocalDate(anchorYmd || startYmd);
+    if (!seriesOrigin) return { desiredCount: 0, dates: [], mode: 'auto_renew_sin_start' };
 
-    const horizon = new Date(startDate.getTime());
-    horizon.setFullYear(horizon.getFullYear() + 2);
+    const pastDates = [];
+    const futureDates = [];
+    let d = new Date(seriesOrigin.getTime());
+    let safety = 0;
 
-    const dates = [];
-    let d = new Date(startDate.getTime());
-    while (dates.length < maxCount) {
-      if (!d || !Number.isFinite(d.getTime()) || d > horizon) break;
-      dates.push(formatDateISO(d));
+    while (safety < 1200) {
+      safety++;
+      if (!d || !Number.isFinite(d.getTime())) break;
+      const ymd = formatDateISO(d);
+      if (ymd > windowEnd) break;
+
+      if (ymd >= windowStart) {
+        if (ymd < today) {
+          pastDates.push(ymd);
+        } else {
+          futureDates.push(ymd);
+        }
+      }
+
       const next = addInterval(d, interval);
-      if (!next || next.getTime() === d.getTime()) break;
+      if (!next || !Number.isFinite(next.getTime()) || next.getTime() === d.getTime()) break;
       d = next;
     }
-    return { desiredCount: dates.length, dates, mode: 'auto_renew', term: null, pagosEmitidos };
+
+    const trimmedPast   = pastDates.slice(-hardMax);
+    const trimmedFuture = futureDates.slice(0, hardMax);
+    const dates = [...trimmedPast, ...trimmedFuture];
+
+    return {
+      desiredCount: dates.length,
+      dates,
+      mode: 'auto_renew',
+      term: null,
+      pastCount: trimmedPast.length,
+      futureCount: trimmedFuture.length,
+    };
   }
 
-  // PLAN FIJO
+  // ── PLAN FIJO: term total, descontar consumidos reales ──
+  const consumidos = realTickets.filter(t => {
+    const tk = (t?.properties?.of_ticket_key || '').trim();
+    return tk.length > 0;
+  }).length;
+  const maxCount = Math.min(Math.max(0, term - consumidos), hardMax);
+
+  if (maxCount === 0) return { desiredCount: 0, dates: [], mode: 'plan_fijo_completo', term, consumidos };
+
+  const anchorYmd       = toYmd(p.billing_anchor_date);
+  const lastTicketedYmd = toYmd(p.last_ticketed_date);
+
   const anchorEsManual = anchorYmd && anchorYmd !== startYmd;
   let floorYmd;
   if (anchorEsManual) {
@@ -206,7 +223,7 @@ function buildDesiredDates(li) {
     d = next;
   }
 
-  return { desiredCount: dates.length, dates, mode: 'plan_fijo', term, pagosEmitidos, maxCount };
+  return { desiredCount: dates.length, dates, mode: 'plan_fijo', term, consumidos, maxCount };
 }
 
 // ─── Stage sets ───────────────────────────────────────────────────────────────
@@ -419,7 +436,7 @@ function auditDeal(deal, lineItems, tickets) {
     const forecast      = activos.filter(t => isForecast(t));
     const reales        = activos.filter(t => !isForecast(t));
 
-    const { desiredCount, dates: desiredDates, mode, term, pagosEmitidos } = buildDesiredDates(li);
+    const { desiredCount, dates: desiredDates, mode, term, consumidos, pastCount, futureCount } = buildDesiredDates(li, reales);
 
     // ── Tickets faltantes ──
     if (activos.length < desiredCount) {
@@ -429,7 +446,7 @@ function auditDeal(deal, lineItems, tickets) {
         liId: li.id,
         liNombre: safe(lp.name),
         lik,
-        detalle: `Modo: ${mode}${term ? ` | term=${term}` : ''}${pagosEmitidos ? ` | emitidos=${pagosEmitidos}` : ''}`,
+        detalle: `Modo: ${mode}${term ? ` | term=${term}` : ''}${consumidos ? ` | consumidos=${consumidos}` : ''}${pastCount != null ? ` | past=${pastCount} future=${futureCount}` : ''}`,
         ticketIds: '',
         esperado: desiredCount,
         real: activos.length,
@@ -445,7 +462,7 @@ function auditDeal(deal, lineItems, tickets) {
         liId: li.id,
         liNombre: safe(lp.name),
         lik,
-        detalle: `Modo: ${mode}${term ? ` | term=${term}` : ''}${pagosEmitidos ? ` | emitidos=${pagosEmitidos}` : ''}`,
+        detalle: `Modo: ${mode}${term ? ` | term=${term}` : ''}${consumidos ? ` | consumidos=${consumidos}` : ''}${pastCount != null ? ` | past=${pastCount} future=${futureCount}` : ''}`,
         ticketIds: activos.map(t => t.id).join(', '),
         esperado: desiredCount,
         real: activos.length,

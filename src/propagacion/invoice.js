@@ -252,6 +252,96 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     logger.info({ module: mod, fn, invoiceId, ticketId }, 'Ticket sin cambios necesarios, skip update');
   }
 
+// 5b. Lógica de cancelación: preparar ticket para refacturación
+  // El ticket NUNCA va a CANCELLED por cancelación de factura.
+  // Manual → vuelve a NEW. Automático → vuelve a READY.
+  if (etapa === 'Cancelada') {
+    const dealId = (tp.of_deal_id || '').trim() || null;
+    const periodoYMD = fechaCreacionYMD || 'desconocido';
+
+    // Mensaje específico por pipeline
+    const cancelMsg = isAutomated
+      ? `Factura ${invoiceId} cancelada el ${new Date().toISOString().slice(0, 10)}. ` +
+        `Período: ${periodoYMD}. ` +
+        `El ticket vuelve a Listo para facturar y será refacturado automáticamente en el próximo ciclo del cron. ` +
+        `Si NO desea refacturar este período, pause el line item, o modifique o cancele el ticket antes del próximo ciclo.`
+      : `Factura ${invoiceId} cancelada el ${new Date().toISOString().slice(0, 10)}. ` +
+        `Período: ${periodoYMD}. ` +
+        `El ticket vuelve a Próximos a Facturar, limpio y listo para refacturación. ` +
+        `Use 'facturar ahora' en el ticket cuando desee emitir la nueva factura. ` +
+        `Si NO desea refacturar este período, cancele el ticket.`;
+
+    // Stage destino: NEW para manual, READY para automático
+    const cancelTargetStage = isAutomated
+      ? process.env.BILLING_AUTOMATED_READY
+      : TICKET_STAGES.NEW;
+
+    // Limpiar props de facturación y mover a stage facturable
+    const cancelCleanup = {
+      of_invoice_id: '',
+      of_invoice_status: '',
+      fecha_de_facturacion: '',
+      fecha_real_de_facturacion: '',
+      of_billing_error: cancelMsg.slice(0, 250),
+      of_billing_error_at: String(Date.now()),
+    };
+    if (cancelTargetStage) {
+      cancelCleanup.hs_pipeline_stage = String(cancelTargetStage);
+    }
+
+    try {
+      await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: cancelCleanup });
+      logger.info(
+        { module: mod, fn, invoiceId, ticketId, isAutomated, cancelTargetStage, cancelCleanup },
+        'Ticket limpiado y movido a stage facturable post-cancelación'
+      );
+    } catch (err) {
+      logger.warn(
+        { module: mod, fn, invoiceId, ticketId, err },
+        'Error limpiando ticket post-cancelación (no bloquea)'
+      );
+    }
+
+    // Billing error en el deal
+    if (dealId) {
+      try {
+        await hubspotClient.crm.deals.basicApi.update(String(dealId), {
+          properties: { of_billing_error: cancelMsg.slice(0, 250) },
+        });
+        logger.info({ module: mod, fn, invoiceId, dealId },
+          'Billing error escrito en deal post-cancelación');
+      } catch (err) {
+        logger.warn({ module: mod, fn, invoiceId, dealId, err },
+          'Error escribiendo billing error en deal (no bloquea)');
+      }
+    }
+
+    // Recalcular contadores (facturas_restantes, progreso_pagos)
+    if (lineItemId && dealId) {
+      try {
+        const recalcResult = await recalcFacturasRestantes({ hubspotClient, lineItemId, dealId });
+        if (recalcResult.cuotasTotales > 0) {
+          try {
+            const nuevoProgreso = buildPagoDisplay(recalcResult.countTickets, recalcResult.cuotasTotales);
+            await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {
+              properties: { progreso_pagos: nuevoProgreso },
+            });
+            logger.info({ module: mod, fn, invoiceId, lineItemId, to: nuevoProgreso },
+              'progreso_pagos actualizado post-cancelación');
+          } catch (err) {
+            logger.warn({ module: mod, fn, invoiceId, lineItemId, err },
+              'progreso_pagos falló post-cancelación (no bloquea)');
+          }
+        }
+        logger.info({ module: mod, fn, invoiceId, ticketId, lineItemId, dealId, ...recalcResult },
+          'recalcFacturasRestantes ejecutado post-cancelación');
+      } catch (err) {
+        logger.warn({ module: mod, fn, invoiceId, ticketId, lineItemId, err },
+          'recalcFacturasRestantes falló post-cancelación (no bloquea)');
+      }
+    }
+  }
+
   // 6. Actualizar last_billing_period del line item con fecha REAL de emisión
   // Fecha real → billing_last_billed_date
   //    last_billing_period se mantiene con la fecha plan (seteada al crear invoice)

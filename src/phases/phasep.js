@@ -35,7 +35,9 @@ import {
   FORECAST_TICKET_STAGES,
   isForecastStage,
   DEAL_STAGE_EN_EJECUCION, 
-  DEAL_STAGE_FINALIZADO
+  DEAL_STAGE_FINALIZADO,
+  TICKET_STAGES,
+  BILLING_AUTOMATED_CANCELLED,
 } from '../config/constants.js';
 
 const BILLING_TZ = 'America/Montevideo';
