@@ -280,7 +280,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     const cancelCleanup = {
       of_invoice_id: '',
       of_invoice_status: '',
-      fecha_de_facturacion: '',
+      of_fecha_de_facturacion: '',
       fecha_real_de_facturacion: '',
       of_billing_error: cancelMsg.slice(0, 250),
       of_billing_error_at: String(Date.now()),
@@ -306,7 +306,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     if (dealId) {
       try {
         await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-          properties: { of_billing_error: cancelMsg.slice(0, 250) },
+          properties: { billing_error: cancelMsg.slice(0, 250) },
         });
         logger.info({ module: mod, fn, invoiceId, dealId },
           'Billing error escrito en deal post-cancelación');
