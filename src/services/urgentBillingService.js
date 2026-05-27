@@ -15,6 +15,7 @@ import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { syncLineItemAfterPromotion } from './lineItems/syncAfterPromotion.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
+import { AUTOMATED_TICKET_PIPELINE } from '../config/constants.js';
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
