@@ -987,6 +987,28 @@ if (dealId) {
     return { skipped: true, reason: 'facturacion_activa_false' };
   }
 }
+    // Guard: facturar_ahora no aplica a tickets del pipeline automático
+    const ticketPipeline = (ticketProps.hs_pipeline || '').trim();
+    if (String(ticketPipeline) === String(AUTOMATED_TICKET_PIPELINE)) {
+      const msg = 'Facturar ahora no está disponible para tickets del pipeline automático. '
+        + 'Estos tickets son procesados automáticamente por el motor de facturación.';
+      try {
+        await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+          properties: { facturar_ahora: 'false', of_billing_error: msg },
+        });
+      } catch (updateErr) {
+        logger.error(
+          { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err: updateErr },
+          'Error escribiendo bloqueo de pipeline automático en ticket'
+        );
+      }
+      logger.info(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, ticketPipeline },
+        'Bloqueado: facturar_ahora en ticket de pipeline automático'
+      );
+      return { skipped: true, reason: 'automated_pipeline_no_urgent' };
+    }
+
 /*
 // Guard: solo tickets en etapa forecast son promovibles con facturar_ahora
 const currentStage = (ticketProps.hs_pipeline_stage || '').trim();
