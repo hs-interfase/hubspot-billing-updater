@@ -287,6 +287,9 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     };
     if (cancelTargetStage) {
       cancelCleanup.hs_pipeline_stage = String(cancelTargetStage);
+      cancelCleanup.hs_pipeline = String(
+        isAutomated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE
+      );
     }
 
     try {
