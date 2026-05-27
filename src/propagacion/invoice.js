@@ -174,7 +174,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     try {
       const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
         filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
-        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id'],        limit: 1,
+        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo'],        limit: 1,
       });
       ticket = resp?.results?.[0] || null;
     } catch (err) {
@@ -259,17 +259,24 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     const dealId = (tp.of_deal_id || '').trim() || null;
     const periodoYMD = fechaCreacionYMD || 'desconocido';
 
+    const aplicaCupo = (tp.of_aplica_para_cupo || '').trim();
+    const avisoCupo = aplicaCupo
+      ? ` ⚠️ Este ticket tenía cupo (${aplicaCupo}). Verificar que el cupo del deal se haya restablecido correctamente.`
+      : '';
+
     // Mensaje específico por pipeline
     const cancelMsg = isAutomated
       ? `Factura ${invoiceId} cancelada el ${new Date().toISOString().slice(0, 10)}. ` +
         `Período: ${periodoYMD}. ` +
         `El ticket vuelve a Listo para facturar y será refacturado automáticamente en el próximo ciclo del cron. ` +
-        `Si NO desea refacturar este período, pause el line item, o modifique o cancele el ticket antes del próximo ciclo.`
+        `Si NO desea refacturar este período, pause el line item, o modifique o cancele el ticket antes del próximo ciclo.` +
+        avisoCupo
       : `Factura ${invoiceId} cancelada el ${new Date().toISOString().slice(0, 10)}. ` +
         `Período: ${periodoYMD}. ` +
         `El ticket vuelve a Próximos a Facturar, limpio y listo para refacturación. ` +
         `Use 'facturar ahora' en el ticket cuando desee emitir la nueva factura. ` +
-        `Si NO desea refacturar este período, cancele el ticket.`;
+        `Si NO desea refacturar este período, cancele el ticket.` +
+        avisoCupo;
 
     // Stage destino: NEW para manual, READY para automático
     const cancelTargetStage = isAutomated
