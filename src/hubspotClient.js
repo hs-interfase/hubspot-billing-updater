@@ -281,17 +281,22 @@ export async function getDealWithLineItems(dealId) {
     lineItemProperties.push(`fecha_${i}`);
   }
 
-  const batchInput = {
-    inputs: lineItemIds.map((id) => ({ id })),
-    properties: lineItemProperties,
-  };
+// HubSpot limita batchApi.read a 100 inputs por request.
+  // Troceamos en chunks de 100 y concatenamos resultados.
+  const BATCH_LIMIT = 100;
+  const lineItems = [];
 
-  const batch = await hubspotClient.crm.lineItems.batchApi.read(
-    batchInput,
-    false
-  );
-
-  const lineItems = batch.results || [];
+  for (let i = 0; i < lineItemIds.length; i += BATCH_LIMIT) {
+    const chunkIds = lineItemIds.slice(i, i + BATCH_LIMIT);
+    const batch = await hubspotClient.crm.lineItems.batchApi.read(
+      {
+        inputs: chunkIds.map((id) => ({ id })),
+        properties: lineItemProperties,
+      },
+      false
+    );
+    lineItems.push(...(batch.results || []));
+  }
 
   return { deal, lineItems };
 }

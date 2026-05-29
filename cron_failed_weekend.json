@@ -1,0 +1,10 @@
+{
+  "date": "2026-05-29",
+  "items": [
+    {
+      "dealId": "60709384022",
+      "reason": "HTTP-Code: 400\nMessage: An error occurred.\nBody: {\"status\":\"error\",\"message\":\"The maximum number of inputs supported in a batch is 100. Please reduce the number of items and try again\",\"correlationId\":\"019e7414-71b3-7e22-ac21-479b63ef5150\",\"category\":\"VALIDATION_ERROR\"}\nHeaders: {\"access-control-allow-credentials\":\"false\",\"cf-cache-status\":\"DYNAMIC\",\"cf-ray\":\"a036185439651a73-EZE\",\"connection\":\"keep-alive\",\"content-length\":\"221\",\"content-type\":\"application/json;charset=utf-8\",\"date\":\"Fri, 29 May 2026 14:12:37 GMT\",\"nel\":\"{\\\"report_to\\\":\\\"cf-nel\\\",\\\"success_fraction\\\":0.01,\\\"max_age\\\":604800}\",\"report-to\":\"{\\\"group\\\":\\\"cf-nel\\\",\\\"max_age\\\":604800,\\\"endpoints\\\":[{\\\"url\\\":\\\"https://a.nel.cloudflare.com/report/v4?s=SWhp8JWZyXai3BJFX1XdtC%2BrBpcODmow2FdOxIZejKvtCGd2HMrhzjui4w5hePaqLumJtcxn67iB6C9Z6tUEU7BQqahRZvkQMn6cs4jBRE85f%2FCIkbYsilB5%2Bi8qmSPN\\\"}]}\",\"server\":\"cloudflare\",\"server-timing\":\"hcid;desc=\\\"019e7414-71b3-7e22-ac21-479b63ef5150\\\", cfr;desc=\\\"a036185555eb1a73-IAD\\\"\",\"set-cookie\":\"__cf_bm=z6n7VnieZ9LokI22iXT_ulTXC0.cTa5Ky152_TLXKso-1780063957.1528983-1.0.1.1-oekNXiebyEMxnxTEU.E0HSMOt8BpUVyWNpOhcvWAh56rioqn6YH3wEEctiYUBQeEMtTVHUokvqiL6nkoo2GIq75gwo.ZNWujlrkI8Ws.MZIXEujgdq9pZOdvmhz3xqs7; HttpOnly; SameSite=None; Secure; Path=/; Domain=hubapi.com; Expires=Fri, 29 May 2026 14:42:37 GMT\",\"strict-transport-security\":\"max-age=31536000; includeSubDomains; preload\",\"vary\":\"origin\",\"x-hubspot-correlation-id\":\"019e7414-71b3-7e22-ac21-479b63ef5150\",\"x-hubspot-ratelimit-daily\":\"625000\",\"x-hubspot-ratelimit-daily-remaining\":\"606537\",\"x-hubspot-ratelimit-interval-milliseconds\":\"10000\",\"x-hubspot-ratelimit-max\":\"190\",\"x-hubspot-ratelimit-remaining\":\"184\",\"x-hubspot-ratelimit-secondly\":\"19\",\"x-hubspot-ratelimit-secondly-remaining\":\"18\"}",
+      "at": "2026-05-29T14:12:38.020Z"
+    }
+  ]
+}
