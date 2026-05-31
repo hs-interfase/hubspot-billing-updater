@@ -22,7 +22,7 @@ import * as dateUtils from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { assignTicketOwners } from '../services/tickets/assignTicketOwners.js';
-
+import { acquireDealLock, releaseDealLock } from '../db.js';
 
 
 function isDealCancelled(dealProps) {
@@ -125,312 +125,314 @@ function filterActiveLineItems(lineItems) {
 }
 
 export async function runPhasesForDeal({ deal, lineItems }) {
-  let currentDeal = deal;
-  let currentLineItems = Array.isArray(lineItems) ? lineItems : [];
-  let activeLineItems = currentLineItems;
+  const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
-  const dealId = String(currentDeal?.id || currentDeal?.properties?.hs_object_id);
-
-  const dealLastMod =
-    currentDeal?.properties?.hs_lastmodifieddate ??
-    currentDeal?.hs_lastmodifieddate;
-
-  logger.info(
-    {
-      module: 'phases/index',
-      fn: 'runPhasesForDeal',
-      dealId,
-      dealLastModified: formatHsLastModified(dealLastMod),
-      lineItemsCount: currentLineItems.length,
-    },
-    'Inicio procesamiento de fases'
-  );
-
-  const results = {
-    dealId,
-    cleanup: { scanned: 0, duplicates: 0, deprecated: 0 },
-    phase1: { success: false },
-    phaseP: { success: false },
-    phase2: { ticketsCreated: 0 },
-    phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
-    ticketsCreated: 0,
-    autoInvoicesEmitted: 0,
-  };
-
-  // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
-  try {
-    const cleanupResult = await cleanupClonedTicketsForDeal({
-      dealId,
-      lineItems: currentLineItems,
-    });
-    results.cleanup = cleanupResult || results.cleanup;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.cleanup },
-      'Cleanup PRE completado'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Cleanup PRE'
-    );
-    results.cleanup.error = err?.message || 'Error desconocido';
-  }
-
-  // ========== PHASE 1: Fechas, calendario, cupo ==========
-  try {
-    await runPhase1(dealId);
-    results.phase1.success = true;
+  // ─── CANDADO POR DEAL ───────────────────────────────────────────────
+  const __lockToken = await acquireDealLock(dealId, 'phases');
+  if (!__lockToken) {
     logger.info(
       { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-      'Phase 1 completada'
+      'Deal en proceso por otro proceso — omitiendo (deal_locked)'
     );
-
-    // Refetch post-Phase1
-    const refreshed = await getDealWithLineItems(dealId);
-
-    currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
-
-    const refreshedLineItems =
-      refreshed?.lineItems ||
-      refreshed?.line_items ||
-      refreshed?.lineitems ||
-      null;
-
-    if (Array.isArray(refreshedLineItems)) {
-      currentLineItems = refreshedLineItems;
-    }
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemsCount: currentLineItems.length },
-      'Refetch post-Phase1 completado'
-    );
-
-    // Filtro: excluir LIs completados de fases P/2/3
-    activeLineItems = filterActiveLineItems(currentLineItems);
-    if (activeLineItems.length < currentLineItems.length) {
-      logger.info(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, total: currentLineItems.length, active: activeLineItems.length, skipped: currentLineItems.length - activeLineItems.length },
-        'Line items con fechas_completas=true excluidos de fases P/2/3'
-      );
-    }
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 1'
-    );
-    results.phase1.error = err?.message || 'Error desconocido';
+    return { dealId, skipped: true, reason: 'deal_locked' };
   }
 
-  // ========== CANCELACIÓN: si el deal está perdido/cancelado ==========
-  if (isDealCancelled(currentDeal?.properties)) {
+  try {
+    let currentDeal = deal;
+    let currentLineItems = Array.isArray(lineItems) ? lineItems : [];
+    let activeLineItems = currentLineItems;
+
+    const dealLastMod =
+      currentDeal?.properties?.hs_lastmodifieddate ??
+      currentDeal?.hs_lastmodifieddate;
+
     logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, dealStage: currentDeal?.properties?.dealstage },
-      'Deal cancelado — propagando cancelación y saltando Phase P/2/3'
+      {
+        module: 'phases/index',
+        fn: 'runPhasesForDeal',
+        dealId,
+        dealLastModified: formatHsLastModified(dealLastMod),
+        lineItemsCount: currentLineItems.length,
+      },
+      'Inicio procesamiento de fases'
     );
 
+    const results = {
+      dealId,
+      cleanup: { scanned: 0, duplicates: 0, deprecated: 0 },
+      phase1: { success: false },
+      phaseP: { success: false },
+      phase2: { ticketsCreated: 0 },
+      phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
+      ticketsCreated: 0,
+      autoInvoicesEmitted: 0,
+    };
+
+    // ========== PRE: LIMPIEZA DE TICKETS CLONADOS ==========
     try {
-      await propagateDealCancellation({
+      const cleanupResult = await cleanupClonedTicketsForDeal({
         dealId,
-        dealProps: currentDeal?.properties,
         lineItems: currentLineItems,
       });
-      results.cancellation = { propagated: true };
+      results.cleanup = cleanupResult || results.cleanup;
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.cleanup },
+        'Cleanup PRE completado'
+      );
     } catch (err) {
       logger.error(
         { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-        'Error en propagateDealCancellation'
+        'Error en Cleanup PRE'
       );
-      results.cancellation = { propagated: false, error: err?.message };
+      results.cleanup.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== PHASE 1: Fechas, calendario, cupo ==========
+    try {
+      await runPhase1(dealId);
+      results.phase1.success = true;
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+        'Phase 1 completada'
+      );
+
+      const refreshed = await getDealWithLineItems(dealId);
+      currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
+
+      const refreshedLineItems =
+        refreshed?.lineItems ||
+        refreshed?.line_items ||
+        refreshed?.lineitems ||
+        null;
+
+      if (Array.isArray(refreshedLineItems)) {
+        currentLineItems = refreshedLineItems;
+      }
+
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemsCount: currentLineItems.length },
+        'Refetch post-Phase1 completado'
+      );
+
+      activeLineItems = filterActiveLineItems(currentLineItems);
+      if (activeLineItems.length < currentLineItems.length) {
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, total: currentLineItems.length, active: activeLineItems.length, skipped: currentLineItems.length - activeLineItems.length },
+          'Line items con fechas_completas=true excluidos de fases P/2/3'
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase 1'
+      );
+      results.phase1.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== CANCELACIÓN ==========
+    if (isDealCancelled(currentDeal?.properties)) {
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, dealStage: currentDeal?.properties?.dealstage },
+        'Deal cancelado — propagando cancelación y saltando Phase P/2/3'
+      );
+
+      try {
+        await propagateDealCancellation({
+          dealId,
+          dealProps: currentDeal?.properties,
+          lineItems: currentLineItems,
+        });
+        results.cancellation = { propagated: true };
+      } catch (err) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+          'Error en propagateDealCancellation'
+        );
+        results.cancellation = { propagated: false, error: err?.message };
+      }
+
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+        'Deal completado (cancelado)'
+      );
+
+      return results;
+    }
+
+    try {
+      const propagationResult = await propagateCancelledInvoicesForDeal(currentLineItems);
+      results.invoicePropagation = propagationResult;
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...propagationResult },
+        'Propagación de facturas canceladas completada'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en propagación de facturas canceladas, continuando'
+      );
+    }
+
+    // ========== PROMOCIÓN 85% → 95% ==========
+    try {
+      const promoted = await promoteToEjecucionIfNeeded(currentDeal);
+      if (promoted) {
+        const refreshed = await getDealWithLineItems(dealId);
+        currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
+        currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+          'Refetch post-promoción a 95% completado'
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en promoción a 95%'
+      );
+    }
+
+    // ========== PHASE P: Forecast/Promesa ==========
+    try {
+      const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems });
+      results.phaseP = phasePResult;
+      results.ticketsCreated += phasePResult?.created || 0;
+
+      const { created, updated, deleted, skipped } = phasePResult || {};
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, created, updated, deleted, skipped },
+        'Phase P completada'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase P'
+      );
+      results.phaseP.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
+    try {
+      const ownerResult = await assignTicketOwners({
+        dealId,
+        lineItems: currentLineItems,
+        dealProps: currentDeal?.properties,
+      });
+      results.ownerAssignment = ownerResult;
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...ownerResult },
+        'Asignación de owner en tickets completada'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en assignTicketOwners'
+      );
+      results.ownerAssignment = { error: err?.message };
+    }
+
+    // ========== CATCH-UP: promover forecasts atrasados + recalc fechas ==========
+    try {
+      const dealFacturacionActiva = parseBool(currentDeal?.properties?.facturacion_activa);
+      if (dealFacturacionActiva) {
+        let catchUpPromoted = 0;
+        for (const li of currentLineItems) {
+          const lp = li?.properties || {};
+          const lineItemKey = String(lp.line_item_key || lp.of_line_item_key || '').trim();
+          if (!lineItemKey) continue;
+
+          const fechasCompletas = String(lp.fechas_completas || '').trim().toLowerCase() === 'true';
+          if (fechasCompletas) continue;
+
+          const isPaused = parseBool(lp.pausa);
+          if (isPaused) continue;
+
+          try {
+            const result = await recalcFromTickets({
+              lineItemKey,
+              dealId,
+              lineItemId: String(li.id || lp.hs_object_id),
+              lineItemProps: lp,
+              facturacionActiva: true,
+              applyUpdate: true,
+            });
+            catchUpPromoted += result?.pastDuePromoted || 0;
+          } catch (err) {
+            logger.warn(
+              { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemId: li.id, err },
+              'recalcFromTickets catch-up falló (no bloquea)'
+            );
+          }
+        }
+
+        if (catchUpPromoted > 0) {
+          logger.info(
+            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
+            'Catch-up: tickets forecast atrasados promovidos a READY'
+          );
+        }
+
+        const refreshedAfterCatchUp = await getDealWithLineItems(dealId);
+        currentDeal = refreshedAfterCatchUp?.deal || refreshedAfterCatchUp?.Deal || currentDeal;
+        currentLineItems = Array.isArray(refreshedAfterCatchUp?.lineItems)
+          ? refreshedAfterCatchUp.lineItems : currentLineItems;
+        activeLineItems = filterActiveLineItems(currentLineItems);
+      }
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en catch-up de forecasts atrasados'
+      );
+    }
+
+    // ========== PHASE 2: Tickets manuales ==========
+    try {
+      const phase2Result = await runPhase2({ deal: currentDeal, lineItems: activeLineItems });
+      results.phase2 = phase2Result;
+      results.ticketsCreated = phase2Result?.ticketsCreated || 0;
+
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated },
+        'Phase 2 completada'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase 2'
+      );
+      results.phase2.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== PHASE 3: Facturas automáticas ==========
+    try {
+      const phase3Result = await runPhase3({ deal: currentDeal, lineItems: activeLineItems });
+      results.phase3 = phase3Result;
+      results.autoInvoicesEmitted = phase3Result?.invoicesEmitted || 0;
+
+      const ticketsPhase3 = phase3Result?.ticketsEnsured || 0;
+      results.ticketsCreated += ticketsPhase3;
+
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, autoInvoicesEmitted: results.autoInvoicesEmitted, ticketsPhase3 },
+        'Phase 3 completada'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase 3'
+      );
+      results.phase3.error = err?.message || 'Error desconocido';
     }
 
     logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-      'Deal completado (cancelado)'
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
+      'Deal completado'
     );
 
     return results;
+  } finally {
+    await releaseDealLock(dealId, __lockToken);
   }
-    try {
-    const propagationResult = await propagateCancelledInvoicesForDeal(currentLineItems);
-    results.invoicePropagation = propagationResult;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...propagationResult },
-      'Propagación de facturas canceladas completada'
-    );
-  } catch (err) {
-    // fail open: no bloqueamos las fases si falla la propagación
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en propagación de facturas canceladas, continuando'
-    );
-  }
-
-  
-// ========== PROMOCIÓN 85% → 95% ==========
-  try {
-    const promoted = await promoteToEjecucionIfNeeded(currentDeal);
-    if (promoted) {
-      const refreshed = await getDealWithLineItems(dealId);
-      currentDeal = refreshed?.deal || refreshed?.Deal || currentDeal;
-      currentLineItems = Array.isArray(refreshed?.lineItems) ? refreshed.lineItems : currentLineItems;
-      logger.info(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-        'Refetch post-promoción a 95% completado'
-      );
-    }
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en promoción a 95%'
-    );
-  }
-
-  // ========== PHASE P: Forecast/Promesa ==========
-
-  try {
-    const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems });
-    results.phaseP = phasePResult;
-    results.ticketsCreated += phasePResult?.created || 0;
-
-    const { created, updated, deleted, skipped } = phasePResult || {};
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, created, updated, deleted, skipped },
-      'Phase P completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase P'
-    );
-    results.phaseP.error = err?.message || 'Error desconocido';
-  }
-
-  // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
-  try {
-    const ownerResult = await assignTicketOwners({
-      dealId,
-      lineItems: currentLineItems,
-      dealProps: currentDeal?.properties,
-    });
-    results.ownerAssignment = ownerResult;
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...ownerResult },
-      'Asignación de owner en tickets completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en assignTicketOwners'
-    );
-    results.ownerAssignment = { error: err?.message };
-  }
-
-  // ========== CATCH-UP: promover forecasts atrasados + recalc fechas ==========
-  // recalcFromTickets (bloque I1) detecta tickets forecast con fecha <= hoy
-  // y los promueve a READY. Esto corrige el caso donde Phase 1 avanzó
-  // billing_next_date y Phase 2/3 nunca encontraría el ticket atrasado.
-  try {
-    const dealFacturacionActiva = parseBool(currentDeal?.properties?.facturacion_activa);
-    if (dealFacturacionActiva) {
-      let catchUpPromoted = 0;
-      for (const li of currentLineItems) {
-        const lp = li?.properties || {};
-        const lineItemKey = String(lp.line_item_key || lp.of_line_item_key || '').trim();
-        if (!lineItemKey) continue;
-
-        const fechasCompletas = String(lp.fechas_completas || '').trim().toLowerCase() === 'true';
-        if (fechasCompletas) continue;
-
-        const isPaused = parseBool(lp.pausa);
-        if (isPaused) continue;
-
-        try {
-          const result = await recalcFromTickets({
-            lineItemKey,
-            dealId,
-            lineItemId: String(li.id || lp.hs_object_id),
-            lineItemProps: lp,
-            facturacionActiva: true,
-            applyUpdate: true,
-          });
-          catchUpPromoted += result?.pastDuePromoted || 0;
-        } catch (err) {
-          logger.warn(
-            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemId: li.id, err },
-            'recalcFromTickets catch-up falló (no bloquea)'
-          );
-        }
-      }
-
-// DESPUÉS
-      if (catchUpPromoted > 0) {
-        logger.info(
-          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
-          'Catch-up: tickets forecast atrasados promovidos a READY'
-        );
-      }
-
-      // Refetch incondicional: Phase P y recalcFromTickets pueden actualizar
-      // billing_next_date en HubSpot sin reflejar el cambio en currentLineItems.
-      // Phase 2/3 necesitan leer el valor fresco para resolvePlanYMD.
-      const refreshedAfterCatchUp = await getDealWithLineItems(dealId);
-      currentDeal = refreshedAfterCatchUp?.deal || refreshedAfterCatchUp?.Deal || currentDeal;
-      currentLineItems = Array.isArray(refreshedAfterCatchUp?.lineItems)
-        ? refreshedAfterCatchUp.lineItems : currentLineItems;
-      activeLineItems = filterActiveLineItems(currentLineItems);
-    }
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en catch-up de forecasts atrasados'
-    );
-  }
-
-  // ========== PHASE 2: Tickets manuales ==========
-  try {
-    const phase2Result = await runPhase2({ deal: currentDeal, lineItems: activeLineItems });
-    results.phase2 = phase2Result;
-    results.ticketsCreated = phase2Result?.ticketsCreated || 0;
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated },
-      'Phase 2 completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 2'
-    );
-    results.phase2.error = err?.message || 'Error desconocido';
-  }
-
-  // ========== PHASE 3: Facturas automáticas ==========
-  try {
-    const phase3Result = await runPhase3({ deal: currentDeal, lineItems: activeLineItems });
-    results.phase3 = phase3Result;
-    results.autoInvoicesEmitted = phase3Result?.invoicesEmitted || 0;
-
-    const ticketsPhase3 = phase3Result?.ticketsEnsured || 0;
-    results.ticketsCreated += ticketsPhase3;
-
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, autoInvoicesEmitted: results.autoInvoicesEmitted, ticketsPhase3 },
-      'Phase 3 completada'
-    );
-  } catch (err) {
-    logger.error(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-      'Error en Phase 3'
-    );
-    results.phase3.error = err?.message || 'Error desconocido';
-  }
-
-  logger.info(
-    { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
-    'Deal completado'
-  );
-
-  return results;
 }
 
 /*

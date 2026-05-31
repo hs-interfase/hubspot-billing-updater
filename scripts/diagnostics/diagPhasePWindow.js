@@ -18,12 +18,12 @@
  */
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
-import { buildDesiredDates } from './src/phases/phaseP.js';
-import { getEffectiveBillingConfig } from './src/billingEngine.js';
-import { buildTicketKeyFromLineItemKey } from './src/utils/ticketKey.js';
-import { withRetry } from './src/utils/withRetry.js';
-import { isForecastStage } from './src/config/constants.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
+import { buildDesiredDates } from '../../src/phases/phaseP.js';
+import { getEffectiveBillingConfig } from '../../src/billingEngine.js';
+import { buildTicketKeyFromLineItemKey } from '../../src/utils/ticketKey.js';
+import { withRetry } from '../../src/utils/withRetry.js';
+import { isForecastStage } from '../../src/config/constants.js';
 
 // ── Args ──────────────────────────────────────────────────
 const args = process.argv.slice(2);

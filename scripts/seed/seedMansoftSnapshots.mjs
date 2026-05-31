@@ -27,14 +27,14 @@
 //
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
-import { withRetry } from './src/utils/withRetry.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
+import { withRetry } from '../../src/utils/withRetry.js';
 import {
   buildMansoftSnapshot,
   serializeMansoftSnapshot,
   MANSOFT_WATCHED_PROPS,
-} from './src/services/billing/mansoftSnapshot.js';
-import logger from './lib/logger.js';
+} from '../../src/services/billing/mansoftSnapshot.js';
+import logger from '../../lib/logger.js';
 
 // ─────────────────────────────────────────────────────────────────
 // Args

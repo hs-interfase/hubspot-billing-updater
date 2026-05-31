@@ -16,6 +16,7 @@
 // Llamado exclusivamente por cronMensajeMantsoft.js.
 
 import logger from '../../../lib/logger.js';
+import { parseBool } from '../../utils/parsers.js';
 import {
   parseMansoftSnapshot,
   buildMansoftSnapshot,
@@ -299,6 +300,10 @@ export function classifyLineItem(li) {
   const prevSnap = parseMansoftSnapshot(p.mansoft_ultimo_snapshot);
   const currSnap = buildMansoftSnapshot(li);
   const diffs = diffMansoftSnapshots(prevSnap, currSnap);
+
+  // Estado actual manda: si la línea está en pausa, es baja (nunca edición),
+  // sin importar qué cambió o qué quedó en mansoft_tipo_aviso.
+  if (parseBool(p.pausa)) return { tipo: 'baja', diffs: [] };
 
   if (tipoRaw === 'baja') return { tipo: 'baja', diffs: [] };
   if (tipoRaw === 'alta') return { tipo: 'alta', diffs: [] };

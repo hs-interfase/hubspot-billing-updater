@@ -38,7 +38,7 @@
  */
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 import fs from 'fs';
 
 // ─── Config ────────────────────────────────────────────────────────────────────

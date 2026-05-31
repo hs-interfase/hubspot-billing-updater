@@ -1,6 +1,6 @@
 // test-nodum-prop.mjs
-import { hubspotClient } from './src/hubspotClient.js'
-import { PROMOTED_STAGES } from './src/config/constants.js'
+import { hubspotClient } from '../../src/hubspotClient.js'
+import { PROMOTED_STAGES } from '../../src/config/constants.js'
 
 // Intendencia de Lavalleja - factura 6435
 const companyId = '53946065514'

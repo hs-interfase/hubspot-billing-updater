@@ -1,5 +1,5 @@
 // src/services/urgentBillingService.js
-
+import { acquireDealLock, releaseDealLock } from '../db.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { createInvoiceFromTicket, createAutoInvoiceFromLineItem, REQUIRED_TICKET_PROPS } from './invoiceService.js';
 import { getTodayYMD, getTodayMillis, toHubSpotDateOnly, parseLocalDate, formatDateISO } from '../utils/dateUtils.js';
@@ -837,8 +837,23 @@ export async function processUrgentLineItem(lineItemId) {
   }
   // ─── FIN GUARD DE FACTURACIÓN ACTIVA ─────────────────────────────────────────
 
-  // Facturar PY — un error aquí sí bloquea (es lo principal)
-  const result = await _executeUrgentBillingForLineItem(lineItemId);
+// ─── CANDADO POR DEAL: evita facturar el mismo deal mientras lo procesa el cron ───
+  const __lockToken = await acquireDealLock(dealIdEarly, `urgent_li:${lineItemId}`);
+  if (!__lockToken) {
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealId: dealIdEarly },
+      'Deal en proceso por otro proceso — difiriendo facturación urgente (deal_locked, NO se resetea facturar_ahora)'
+    );
+    return { skipped: true, reason: 'deal_locked' };
+  }
+
+  let result;
+  try {
+    // Facturar PY — un error aquí sí bloquea (es lo principal)
+    result = await _executeUrgentBillingForLineItem(lineItemId);
+  } finally {
+    await releaseDealLock(dealIdEarly, __lockToken);
+  }
 
   // Propagar al mirror UY — fire-and-forget, no bloquea la respuesta al caller
   _propagateToMirror(lineItemId, result?.billingPeriodDate).catch(() => {});
@@ -933,7 +948,9 @@ export async function processUrgentTicket(ticketId) {
     'Inicio facturación urgente de Ticket'
   );
 
-  let shouldResetFlag = false;
+let shouldResetFlag = false;
+  let __lockDealId = null;
+  let __lockToken = null;
 
   try {
     const ticket = await hubspotClient.crm.tickets.basicApi.getById(
@@ -949,6 +966,19 @@ export async function processUrgentTicket(ticketId) {
         'facturar_ahora no está en true, ignorando'
       );
       return { skipped: true, reason: 'facturar_ahora_false' };
+    }
+
+    // ─── CANDADO POR DEAL (antes de reclamar el trabajo) ───
+    __lockDealId = (ticketProps.of_deal_id || '').trim();
+    if (__lockDealId) {
+      __lockToken = await acquireDealLock(__lockDealId, `urgent_ticket:${ticketId}`);
+      if (!__lockToken) {
+        logger.info(
+          { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealId: __lockDealId },
+          'Deal en proceso por otro proceso — difiriendo facturación urgente de ticket (deal_locked, NO se resetea facturar_ahora)'
+        );
+        return { skipped: true, reason: 'deal_locked' };
+      }
     }
 
     shouldResetFlag = true;
@@ -1194,7 +1224,10 @@ if (pyLineItemId) {
     }
 
     throw err;
-  } finally {
+} finally {
+    if (__lockToken) {
+      await releaseDealLock(__lockDealId, __lockToken);
+    }
     if (shouldResetFlag) {
       try {
         await hubspotClient.crm.tickets.basicApi.update(ticketId, {

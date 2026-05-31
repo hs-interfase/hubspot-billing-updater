@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 
 async function listLabels(fromType, toType) {
   try {

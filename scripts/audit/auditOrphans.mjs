@@ -15,7 +15,7 @@
  */
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 
 const args = process.argv.slice(2);
 const DELETE_TICKETS = args.includes('--delete-tickets');

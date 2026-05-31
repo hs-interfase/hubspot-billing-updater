@@ -162,17 +162,28 @@ async function processNext() {
 
     // 4) Ejecutar según action_type
     try {
-      await executeJob(job);
+      const jobResult = await executeJob(job);
 
-      await pool.query(
-        `UPDATE webhook_queue SET status = 'done', finished_at = NOW() WHERE id = $1`,
-        [job.id]
-      );
-
-      logger.info(
-        { module: MODULE, fn: 'processNext', jobId: job.id, actionType: job.action_type },
-        'Evento procesado → done'
-      );
+      if (jobResult && jobResult.reason === 'deal_locked') {
+        // El deal está siendo procesado por el cron u otro worker → reintentar luego
+        await pool.query(
+          `UPDATE webhook_queue SET status = 'pending', started_at = NULL, created_at = now() WHERE id = $1`,
+          [job.id]
+        );
+        logger.info(
+          { module: MODULE, fn: 'processNext', jobId: job.id, actionType: job.action_type, dealId: job.deal_id },
+          'Deal ocupado por otro proceso → reencolado para reintento'
+        );
+      } else {
+        await pool.query(
+          `UPDATE webhook_queue SET status = 'done', finished_at = NOW() WHERE id = $1`,
+          [job.id]
+        );
+        logger.info(
+          { module: MODULE, fn: 'processNext', jobId: job.id, actionType: job.action_type },
+          'Evento procesado → done'
+        );
+      }
     } catch (err) {
       const errorMsg = err?.message || 'Unknown error';
 

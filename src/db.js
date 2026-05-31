@@ -1,8 +1,10 @@
 // src/db.js
 import pg from 'pg'
 import logger from '../lib/logger.js'
+import crypto from 'node:crypto'
 
 const { Pool } = pg
+const DEAL_LOCK_TTL_MS = Number(process.env.DEAL_LOCK_TTL_MS || 15 * 60 * 1000)
 
 // rejectUnauthorized: false es necesario para Railway (TLS interno con cert self-signed).
 // Si migrás a una DB externa con cert válido, cambiar a rejectUnauthorized: true.
@@ -218,6 +220,70 @@ export async function getCronFailures(jobName, days = 7) {
     [jobName, String(days)]
   )
   return res.rows
+}
+// ─── Candado por deal (evita procesamiento concurrente del mismo deal) ───────
+// Sin esto, dos procesos simultáneos sobre el mismo deal pueden duplicar
+// tickets/facturas, porque la dedup por of_ticket_key depende de la Search API
+// de HubSpot, que tarda 1-2s en indexar.
+
+export async function initDealLocksTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS deal_locks (
+      deal_id     TEXT PRIMARY KEY,
+      lock_token  TEXT NOT NULL,
+      owner_label TEXT,
+      locked_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at  TIMESTAMPTZ NOT NULL
+    )
+  `)
+  logger.info('[DB] Tabla deal_locks lista.')
+}
+
+/**
+ * Intenta tomar el candado de un deal. NO espera: si otro proceso lo tiene
+ * tomado y vigente, devuelve null al instante.
+ * @returns {Promise<string|null>} token si lo tomó, null si está ocupado.
+ */
+export async function acquireDealLock(dealId, ownerLabel = null, ttlMs = DEAL_LOCK_TTL_MS) {
+  const token = crypto.randomUUID()
+  const sql = `
+    INSERT INTO deal_locks (deal_id, lock_token, owner_label, locked_at, expires_at)
+    VALUES ($1, $2, $3, now(), now() + ($4 * INTERVAL '1 millisecond'))
+    ON CONFLICT (deal_id) DO UPDATE
+      SET lock_token  = EXCLUDED.lock_token,
+          owner_label = EXCLUDED.owner_label,
+          locked_at   = now(),
+          expires_at  = EXCLUDED.expires_at
+    WHERE deal_locks.expires_at < now()
+    RETURNING lock_token`
+  const params = [String(dealId), token, ownerLabel, Number(ttlMs)]
+  try {
+    const res = await pool.query(sql, params)
+    return res.rows[0]?.lock_token ?? null
+  } catch (err) {
+    if (err?.code === '42P01') {        // la tabla aún no existe → crearla y reintentar
+      await initDealLocksTable()
+      const res = await pool.query(sql, params)
+      return res.rows[0]?.lock_token ?? null
+    }
+    throw err
+  }
+}
+
+/**
+ * Libera el candado SOLO si todavía es nuestro (mismo token). Si nuestro TTL
+ * venció y otro lo tomó, este DELETE no borra el candado ajeno.
+ */
+export async function releaseDealLock(dealId, token) {
+  if (!token) return
+  try {
+    await pool.query(
+      `DELETE FROM deal_locks WHERE deal_id = $1 AND lock_token = $2`,
+      [String(dealId), token]
+    )
+  } catch (err) {
+    logger.warn({ err: err?.message, dealId }, '[DB] releaseDealLock falló')
+  }
 }
 
 export default pool

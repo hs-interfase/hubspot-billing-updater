@@ -5,7 +5,7 @@
 // Si la propiedad está vacía, escribe un HTML de prueba con varios tipos de
 // markers, relee, y compara qué sobrevivió.
 
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 
 const dealId = process.argv.find((a, i) => process.argv[i - 1] === '--deal') || '58655169389';
 

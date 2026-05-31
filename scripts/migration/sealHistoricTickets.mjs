@@ -144,10 +144,20 @@ async function fetchTargetDeals() {
 }
 
 async function fetchLineItemsForDeal(dealId) {
-  const assocResp = await hubspot.crm.associations.v4.basicApi.getPage(
-    'deals', String(dealId), 'line_items', undefined, 100
-  );
-  const liIds = (assocResp?.results || []).map(r => String(r.toObjectId));
+  // 1) Traer TODAS las asociaciones, paginando (getPage corta en 100)
+  const liIds = [];
+  let assocAfter;
+  do {
+    const assocResp = await hubspot.crm.associations.v4.basicApi.getPage(
+      'deals', String(dealId), 'line_items', assocAfter, 100
+    );
+    for (const r of (assocResp?.results || [])) {
+      liIds.push(String(r.toObjectId));
+    }
+    assocAfter = assocResp?.paging?.next?.after;
+    if (assocAfter) await sleep(150);
+  } while (assocAfter);
+
   if (!liIds.length) return [];
 
   const props = [
@@ -160,12 +170,18 @@ async function fetchLineItemsForDeal(dealId) {
     'facturas_restantes', 'fechas_completas', 'progreso_pagos',
   ];
 
-  const batch = await hubspot.crm.lineItems.batchApi.read({
-    inputs: liIds.map(id => ({ id })),
-    properties: props,
-  });
+  // 2) Leer en lotes de 100 (batchApi.read tope = 100)
+  const results = [];
+  for (let i = 0; i < liIds.length; i += 100) {
+    const batch = await hubspot.crm.lineItems.batchApi.read({
+      inputs: liIds.slice(i, i + 100).map(id => ({ id })),
+      properties: props,
+    });
+    results.push(...(batch?.results || []));
+    if (i + 100 < liIds.length) await sleep(150);
+  }
 
-  return batch?.results || [];
+  return results;
 }
 
 async function fetchTicketsForLIK(lik) {

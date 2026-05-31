@@ -25,9 +25,9 @@
  */
 
 import 'dotenv/config';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 import fs from 'fs';
-import { IVA_PY_TAX_GROUP_ID } from './src/config/constants.js';
+import { IVA_PY_TAX_GROUP_ID } from '../../src/config/constants.js';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 

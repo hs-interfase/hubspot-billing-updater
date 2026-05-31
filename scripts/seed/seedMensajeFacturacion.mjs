@@ -20,7 +20,7 @@
 
 import 'dotenv/config';
 import fs from 'fs';
-import { hubspotClient } from './src/hubspotClient.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 // z.mjs — diagnóstico facturas_restantes + test side-effect
-import { hubspotClient } from './src/hubspotClient.js';
-import { INVOICED_STAGES } from './src/config/constants.js';
+import { hubspotClient } from '../../src/hubspotClient.js';
+import { INVOICED_STAGES } from '../../src/config/constants.js';
 
 const LI_ID = '55298530056';
 const LIK = '60299770128:55298530056:478432';

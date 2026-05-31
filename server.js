@@ -10,12 +10,11 @@ import escucharCambios from './api/escuchar-cambios.js'
 import actualizarWebhook from './api/actualizar-webhook.js'
 import auditRouter from './api/invoice-editor/audit.js'
 import { initDB } from './api/invoice-editor/Db.js'
-import { initExchangeRatesTable } from './src/db.js'
 import debugUrgent from './api/debugUrgent.js'
 import healthAuditRouter from './api/healthAudit.js'
 // ── Webhook Queue ──────────────────────────────
 import { initWebhookQueueTable, startWorker } from './src/webhookQueue.js'
-
+import { initExchangeRatesTable, initDealLocksTable } from './src/db.js'
 // ── Nodum Upload ─────────────────────────────────
 import nodumUploadRouter from './api/nodum/nodumUpload.js'
 import { initNodumUploadsTable } from './api/nodum/nodumUpload.js'
@@ -93,6 +92,7 @@ await initExchangeRatesTable()
 await initNodumUploadsTable()
 await initExportSnapshotsTable()
 await initWebhookQueueTable()
+await initDealLocksTable()
 
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => {
