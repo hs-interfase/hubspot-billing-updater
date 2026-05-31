@@ -600,34 +600,52 @@ export async function runPhaseP({ deal, lineItems }) {
               parseBool(pausaDiff.after) === true &&
               parseBool(pausaDiff.before) !== true;
 
-            // Regla de prioridad: baja > alta > edicion
-            let tipoFinal;
-            if (currentTipo === 'baja' || transicionAPausa) {
-              tipoFinal = 'baja';
-            } else if (currentTipo === 'alta') {
-              tipoFinal = 'alta';
+            // Si la línea YA está de baja (en pausa) y este cambio NO es la
+            // transición que la dio de baja, no se reavisar al admin: la baja
+            // ya se notificó una vez. Los avisos se reactivan recién cuando le
+            // sacan la pausa (pausa vuelve a false).
+            const yaEnPausa = parseBool(p.pausa) === true;
+            if (yaEnPausa && !transicionAPausa) {
+              logger.debug(
+                {
+                  module: 'phaseP',
+                  fn: 'runPhaseP',
+                  dealId,
+                  lineItemId: li.id,
+                  changedProps: diffs.map(d => d.prop),
+                },
+                'Mantsoft: LI ya en pausa (de baja), aviso suprimido hasta que le saquen la pausa'
+              );
             } else {
-              tipoFinal = 'edicion';
-            }
+              // Regla de prioridad: baja > alta > edicion
+              let tipoFinal;
+              if (currentTipo === 'baja' || transicionAPausa) {
+                tipoFinal = 'baja';
+              } else if (currentTipo === 'alta') {
+                tipoFinal = 'alta';
+              } else {
+                tipoFinal = 'edicion';
+              }
 
-            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-              properties: {
-                mansoft_pendiente: 'true',
-                mansoft_tipo_aviso: tipoFinal,
-              },
-            });
-            logger.info(
-              {
-                module: 'phaseP',
-                fn: 'runPhaseP',
-                dealId,
-                lineItemId: li.id,
-                changedProps: diffs.map(d => d.prop),
-                tipo: tipoFinal,
-                transicionAPausa: !!transicionAPausa,
-              },
-              'Mantsoft: cambio detectado en LI automático'
-            );
+              await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+                properties: {
+                  mansoft_pendiente: 'true',
+                  mansoft_tipo_aviso: tipoFinal,
+                },
+              });
+              logger.info(
+                {
+                  module: 'phaseP',
+                  fn: 'runPhaseP',
+                  dealId,
+                  lineItemId: li.id,
+                  changedProps: diffs.map(d => d.prop),
+                  tipo: tipoFinal,
+                  transicionAPausa: !!transicionAPausa,
+                },
+                'Mantsoft: cambio detectado en LI automático'
+              );
+            }
           }
         } catch (err) {
           logger.warn(

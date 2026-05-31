@@ -1020,16 +1020,32 @@ export async function getDealContacts(dealId) {
   }
 }
 
-/**
- * Asocia el ticket a empresas, contactos y line item.
- */
+// Asocia ticket→deal con reintento. El ticket recién creado por Phase P puede
+// no estar indexado cuando la promoción intenta asociarlo (el create falla con
+// 404/no encontrado). Reintentamos con delay para que HubSpot lo indexe.
+// Las demás asociaciones (line item, company, contact) apuntan a objetos ya
+// existentes y no sufren este lag, por eso van directas.
+async function associateTicketToDealWithRetry(ticketId, dealId) {
+  for (const delay of [0, 500, 1000]) {
+    if (delay) await new Promise(r => setTimeout(r, delay));
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, []);
+      return true;
+    } catch (err) {
+      const last = delay === 1000;
+      logger[last ? 'warn' : 'debug'](
+        { module: 'ticketService', fn: 'associateTicketToDealWithRetry', ticketId, dealId, delay, err },
+        last ? 'Error asociando deal (agotados los reintentos)' : 'Asociación ticket→deal falló, reintentando'
+      );
+    }
+  }
+  return false;
+}
+
 export async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds) {
   const associations = [];
 
-  associations.push(
-    hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, [])
-      .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, dealId, err }, 'Error asociando deal'))
-  );
+  associations.push(associateTicketToDealWithRetry(ticketId, dealId));
 
   associations.push(
     hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'line_items', lineItemId, [])

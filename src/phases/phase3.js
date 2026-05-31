@@ -8,7 +8,7 @@ import { updateTicket } from '../services/tickets/ticketService.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../services/tickets/ticketService.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { syncLineItemAfterPromotion } from '../services/lineItems/syncAfterPromotion.js';
-import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS } from '../services/invoiceService.js';
+import { createInvoiceFromTicket, REQUIRED_TICKET_PROPS, setNodumIdAndPropagate  } from '../services/invoiceService.js';
 import { countActivePlanInvoices, invoiceExistsForKey } from '../utils/invoiceUtils.js';
 import { buildInvoiceKey } from '../utils/invoiceKey.js';
 import { checkMissedBillingsForLineItem } from '../services/billing/missedBillingGuard.js';
@@ -18,6 +18,7 @@ import { promoteMirrorTicketToManualReady, notifyMirrorDealOnManualEmission } fr
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import {
+  AUTOMATED_TICKET_PIPELINE,
   BILLING_AUTOMATED_READY,
   BILLING_AUTOMATED_FORECAST,
   BILLING_AUTOMATED_FORECAST_50,
@@ -211,8 +212,162 @@ if (moved) {
   return { moved, ticketId: t.id, reason };
 }
 
+// Extrae YYYY-MM-DD del último segmento de un of_ticket_key
+function ymdFromKey(ticketKey) {
+  if (!ticketKey) return '';
+  const parts = String(ticketKey).split('::');
+  const last = parts[parts.length - 1];
+  return /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : '';
+}
 
-export async function runPhase3({ deal, lineItems }) {
+/**
+ * Barrido de backlog automático.
+ *
+ * El catch-up (recalcFromTickets I1) promueve los forecast automáticos con
+ * fecha <= hoy a BILLING_AUTOMATED_READY y los asocia, pero NO emite factura;
+ * además empuja billing_next_date al primer forecast futuro, por lo que el
+ * bloque de período único de runPhase3 (que mira billing_next_date) ya no ve
+ * esos períodos pasados. Este barrido cierra el hueco: recorre los tickets
+ * automáticos en READY con fecha <= hoy y emite la factura faltante.
+ *
+ * Idempotente: invoiceExistsForKey por período + el propio guard de
+ * createInvoiceFromTicket. Asocia (belt-and-suspenders) por si la asociación
+ * del catch-up falló. Respeta el guardrail de plan finito.
+ *
+ * migration=true: tras emitir, estampa id_factura_nodum=MIGRATION_NODUM_ID y
+ * propaga el estado al ticket (lo lleva a emitido) — backfill de deals migrados
+ * sin tocar Nodum real.
+ */
+async function sweepAutoBacklog({ dealId, lineItemId, lineItemKey, today, migration }) {
+  let emitted = 0;
+  let ensured = 0;
+  const errors = [];
+
+  // 1) Traer (paginado) tickets automáticos en READY
+  const readyTickets = [];
+  let after;
+  const MAX_PAGES = 20; // hasta ~2000 tickets/LIK por corrida
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let resp;
+    try {
+      resp = await withRetry(
+        () => hubspotClient.crm.tickets.searchApi.doSearch({
+          filterGroups: [{
+            filters: [
+              { propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) },
+              { propertyName: 'hs_pipeline', operator: 'EQ', value: String(AUTOMATED_TICKET_PIPELINE) },
+              { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: String(BILLING_AUTOMATED_READY) },
+            ],
+          }],
+          properties: ['of_ticket_key', 'fecha_resolucion_esperada', 'of_invoice_id'],
+          sorts: [{ propertyName: 'fecha_resolucion_esperada', direction: 'ASCENDING' }],
+          limit: 100,
+          ...(after ? { after } : {}),
+        }),
+        { module: 'phase3', fn: 'sweepAutoBacklog', lineItemKey }
+      );
+    } catch (err) {
+      logger.error({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, lineItemKey, err },
+        'Error buscando tickets READY para backlog');
+      break;
+    }
+    const results = resp?.results || [];
+    readyTickets.push(...results);
+    const next = resp?.paging?.next?.after;
+    if (!next || results.length < 100) break;
+    after = next;
+    if (page === MAX_PAGES - 1) {
+      logger.warn({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, lineItemKey, collected: readyTickets.length },
+        'Backlog: tope de páginas alcanzado, puede quedar backlog para la próxima corrida');
+    }
+  }
+
+  // 2) Quedarnos con los de fecha <= hoy
+  const backlog = readyTickets
+    .map(t => {
+      const f = String(t.properties?.fecha_resolucion_esperada || '');
+      const ymd = /^\d{4}-\d{2}-\d{2}/.test(f) ? f.slice(0, 10) : ymdFromKey(t.properties?.of_ticket_key);
+      return { id: String(t.id), ymd };
+    })
+    .filter(t => t.ymd && t.ymd <= today)
+    .sort((a, b) => a.ymd.localeCompare(b.ymd));
+
+  if (backlog.length === 0) return { emitted, ensured, errors };
+
+  logger.info({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, lineItemKey, backlog: backlog.length, migration },
+    'Backlog automático detectado (READY <= hoy)');
+
+  // 3) Guardrail de plan finito
+  const liFull = await hubspotClient.crm.lineItems.basicApi
+    .getById(String(lineItemId), ['hs_recurring_billing_number_of_payments'])
+    .catch(() => null);
+  const totalPayments = Number(liFull?.properties?.hs_recurring_billing_number_of_payments);
+  const autoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
+
+  let activeCount = await countActivePlanInvoices(lineItemKey);
+  if (activeCount === null || !Number.isFinite(activeCount)) activeCount = 0;
+
+  // 4) Emitir por período (más viejo → más nuevo)
+  for (const t of backlog) {
+    if (!autoRenew && activeCount >= totalPayments) {
+      logger.info({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, lineItemKey, activeCount, totalPayments },
+        'Plan finito completo, corto barrido');
+      break;
+    }
+
+    const invoiceKey = buildInvoiceKey(dealId, lineItemKey, t.ymd);
+    try {
+      if (await invoiceExistsForKey(invoiceKey)) {
+        logger.debug({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, invoiceKey },
+          'Backlog: invoice ya existe para key, skip');
+        continue;
+      }
+
+      // Asociar (belt-and-suspenders) — el ticket ya está READY; la asociación puede faltar
+      try {
+        const companyIds = await getDealCompanies(String(dealId)).catch(() => []);
+        const contactIds = (typeof getDealContacts === 'function'
+          ? await getDealContacts(String(dealId)).catch(() => [])
+          : []);
+        await createTicketAssociations(t.id, String(dealId), String(lineItemId), companyIds || [], contactIds || []);
+      } catch (assocErr) {
+        logger.warn({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, ticketId: t.id, err: assocErr },
+          'Backlog: error asociando ticket (no bloquea emisión)');
+      }
+
+      const ticketFull = await hubspotClient.crm.tickets.basicApi.getById(t.id, REQUIRED_TICKET_PROPS);
+      const { invoiceId, created } = await createInvoiceFromTicket(ticketFull, 'AUTO_LINEITEM', null, { skipRefetch: true });
+
+      if (created) {
+        emitted++;
+        ensured++;
+        activeCount++;
+        logger.info({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, ticketId: t.id, ymd: t.ymd, invoiceId },
+          'Backlog: factura emitida');
+
+        if (migration && invoiceId) {
+          try {
+            await setNodumIdAndPropagate(invoiceId);
+            logger.info({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, ticketId: t.id, invoiceId },
+              'Backlog (migración): id_factura_nodum estampado y ticket a emitido');
+          } catch (migErr) {
+            logger.error({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, invoiceId, err: migErr },
+              'Backlog (migración): error en setNodumIdAndPropagate');
+            errors.push({ dealId, lineItemId, error: `migration_stamp_failed:${migErr?.message || migErr}` });
+          }
+        }
+      }
+    } catch (err) {
+      logger.error({ module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, ticketId: t.id, ymd: t.ymd, err },
+        'Backlog: error emitiendo factura');
+      errors.push({ dealId, lineItemId, error: err?.message || 'sweep_emit_failed' });
+    }
+  }
+
+  return { emitted, ensured, errors };
+}
+
+export async function runPhase3({ deal, lineItems, migration = false }) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dp = deal.properties || {};
   const dealStage = String(dp.dealstage || '');
@@ -237,6 +392,8 @@ export async function runPhase3({ deal, lineItems }) {
   // skip — mirrors se facturan manualmente
   return { invoicesEmitted: 0, ticketsEnsured: 0, errors: [] };
 }
+
+const migrationMode = migration || process.env.MIGRATION_MODE === 'true';
 
   let invoicesEmitted = 0;
   let ticketsEnsured = 0;
@@ -266,13 +423,29 @@ export async function runPhase3({ deal, lineItems }) {
       continue;
     }
 
-    const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
+const isMirrorLI = String(lp.of_line_item_py_origen_id || '').trim().length > 0;
     if (isMirrorLI) {
       logger.debug(
         { module: 'phase3', fn: 'runPhase3', dealId, lineItemId },
         'Line item espejo UY, saltando Phase 3 (se factura manualmente)'
       );
       continue;
+    }
+
+    // ─── Barrido de backlog automático (períodos READY <= hoy sin factura) ───
+    // Independiente de billing_next_date: cubre deals migrados/atrasados cuyo
+    // billing_next_date ya saltó al futuro (o está vacío) tras el catch-up.
+    const sweepLIK = lp.line_item_key ? String(lp.line_item_key).trim() : '';
+    if (sweepLIK) {
+      try {
+        const sw = await sweepAutoBacklog({ dealId, lineItemId, lineItemKey: sweepLIK, today, migration: migrationMode });
+        invoicesEmitted += sw.emitted;
+        ticketsEnsured  += sw.ensured;
+        if (sw.errors?.length) errors.push(...sw.errors);
+      } catch (err) {
+        logger.error({ module: 'phase3', fn: 'runPhase3', dealId, lineItemId, err }, 'Error en sweepAutoBacklog (no bloquea)');
+        errors.push({ dealId, lineItemId, error: err?.message || 'sweep_failed' });
+      }
     }
 
     try {

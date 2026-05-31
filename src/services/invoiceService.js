@@ -141,6 +141,46 @@ async function updateInvoiceDirect(invoiceId, properties) {
   return response.data;
 }
 
+// Centinela de migración para id_factura_nodum: marca facturas que ya estaban
+// emitidas en el sistema previo. NO se re-emiten en Nodum; solo se sincroniza
+// el estado histórico (el ticket pasa a "emitido" vía propagación).
+export const MIGRATION_NODUM_ID = '11';
+
+/**
+ * Estampa id_factura_nodum en una invoice ya creada y propaga al ticket
+ * (lo lleva a CREATED/"emitido" por la regla de nodum_id en propagacion/invoice).
+ * Idempotente: re-estampar es inocuo y la propagación no retrocede tickets en CREATED+.
+ *
+ * @param {string} invoiceId
+ * @param {string} [nodumId=MIGRATION_NODUM_ID]
+ */
+export async function setNodumIdAndPropagate(invoiceId, nodumId = MIGRATION_NODUM_ID) {
+  const fn = 'setNodumIdAndPropagate';
+  if (!invoiceId) {
+    logger.warn({ module: 'invoiceService', fn }, '[migración] invoiceId vacío, skip');
+    return { status: 'skipped', reason: 'no_invoice_id' };
+  }
+  if (isDryRun()) {
+    logger.info({ module: 'invoiceService', fn, invoiceId }, '[migración] DRY_RUN: no se estampa id_factura_nodum');
+    return { status: 'dry_run', invoiceId };
+  }
+
+  try {
+    await updateInvoiceDirect(invoiceId, { id_factura_nodum: String(nodumId) });
+    logger.info({ module: 'invoiceService', fn, invoiceId, nodumId }, '[migración] id_factura_nodum estampado');
+  } catch (err) {
+    logger.error({ module: 'invoiceService', fn, invoiceId, nodumId, err }, '[migración] Error estampando id_factura_nodum');
+    throw err;
+  }
+
+   // Pipeline completo (numero_de_factura + propagación de stage + avance del deal),
+  // idéntico a lo que hace el editor tras cargar un nodum id.
+  const { runInvoiceNodumPipeline } = await import('./invoiceNodumPipeline.js');
+  const pipeline = await runInvoiceNodumPipeline(invoiceId, { id_factura_nodum: String(nodumId) });
+  logger.info({ module: 'invoiceService', fn, invoiceId, pipeline }, '[migración] Pipeline post-estampado completado');
+  return { status: 'ok', invoiceId, nodumId, pipeline };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ⚠️ REGLA NO NEGOCIABLE - FREEZE RULE ⚠️
 // ═══════════════════════════════════════════════════════════════════════════════
