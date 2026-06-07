@@ -282,13 +282,16 @@ function buildFooter(count) {
 // ────────────────────────────────────────────────────────────
 
 /**
- * Clasifica cada LI en 'alta' o 'edicion' y calcula el diff si corresponde.
+ * Clasifica cada LI en 'migra' / 'alta' / 'edicion' / 'baja' y calcula el diff.
  *
- * Reglas:
- * - tipo explícito 'alta' en el LI  → alta (gana siempre, aunque haya diff)
- * - tipo explícito 'edicion'        → edicion con diff
- * - sin tipo, con snapshot previo   → edicion (fallback defensivo)
- * - sin tipo, sin snapshot previo   → alta (fallback defensivo)
+ * Reglas (en orden de prioridad):
+ * - pausa=true                          → baja
+ * - mig_migracion_historica && SIN snapshot previo → 'migra' (LI migrado: NO se avisa
+ *   al admin; se onboardea en silencio). Gana sobre cualquier tipo explícito (ej. un
+ *   workflow que setea tipo='alta' al crear). Una vez estampado el snapshot → edición.
+ * - tipo explícito 'baja'/'alta'/'edicion' → ese tipo
+ * - sin tipo, con snapshot previo       → edicion (fallback defensivo)
+ * - sin tipo, sin snapshot previo       → alta (fallback defensivo)
  */
 export function classifyLineItem(li) {
   const p = li?.properties || {};
@@ -300,6 +303,11 @@ export function classifyLineItem(li) {
   // Estado actual manda: si la línea está en pausa, es baja (nunca edición),
   // sin importar qué cambió o qué quedó en mansoft_tipo_aviso.
   if (parseBool(p.pausa)) return { tipo: 'baja', diffs: [] };
+
+  // Migración: LI marcado con mig_migracion_historica y aún sin snapshot previo → 'migra'
+  // (no se avisa alta). Gana sobre el tipo explícito (resuelve el caso del workflow de HS
+  // que pone tipo='alta' al crear). Cuando ya hay snapshot estampado, cae a edición normal.
+  if (parseBool(p.mig_migracion_historica) && !prevSnap) return { tipo: 'migra', diffs: [] };
 
   if (tipoRaw === 'baja') return { tipo: 'baja', diffs: [] };
   if (tipoRaw === 'alta') return { tipo: 'alta', diffs: [] };
