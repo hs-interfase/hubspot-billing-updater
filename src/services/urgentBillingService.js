@@ -955,7 +955,7 @@ let shouldResetFlag = false;
   try {
     const ticket = await hubspotClient.crm.tickets.basicApi.getById(
       ticketId,
-      REQUIRED_TICKET_PROPS
+      REQUIRED_TICKET_PROPS, 'mig_emision_historica'
     );
 
     const ticketProps = ticket.properties || {};
@@ -1182,16 +1182,26 @@ try {
   );
 }
 // Notificar mirror UY si el LI PY tiene espejo
+// GUARD migración: si el ticket es una emisión histórica (Paso C), NO se propaga al
+// espejo — el lado UY lo maneja Paso C aparte. El motor solo LEE el flag.
 const pyLineItemId = (ticketProps.of_line_item_ids || '').trim();
 if (pyLineItemId) {
-  const billingYMD = getTodayYMD();
-  notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD).catch(err => {
-    logger.warn(
-      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, pyLineItemId, err },
-      'notifyMirrorDealOnManualEmission falló — no bloquea'
+  if (String(ticketProps.mig_emision_historica).trim() === 'true') {
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, reason: 'mig_emision_historica' },
+      'Propagación a mirror omitida: emisión histórica de migración'
     );
-  });
+  } else {
+    const billingYMD = getTodayYMD();
+    notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD).catch(err => {
+      logger.warn(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, pyLineItemId, err },
+        'notifyMirrorDealOnManualEmission falló — no bloquea'
+      );
+    });
+  }
 }
+
     logger.info(
       { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, invoiceId: invoiceResult.invoiceId },
       'Facturación urgente de Ticket completada'

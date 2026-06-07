@@ -26,16 +26,12 @@ import {
   IVA_UY_TAX_GROUP_ID,
   IVA_PY_TAX_GROUP_ID,
   EXENTO_TAX_GROUP_ID,
-  IRAE_TAX_GROUP_ID,
-  IVA_UY_IRAE_TAX_GROUP_ID,
 } from '../../config/constants.js';
 
 const TAX_GROUP_LABELS = {
   [IVA_UY_TAX_GROUP_ID]:      'IVA 22% (UY)',
   [IVA_PY_TAX_GROUP_ID]:      'IVA (PY)',
   [EXENTO_TAX_GROUP_ID]:      'Exento',
-  [IRAE_TAX_GROUP_ID]:        'IRAE',
-  [IVA_UY_IRAE_TAX_GROUP_ID]: 'IVA 22% + IRAE',
 };
 
 function resolveTaxLabel(taxGroupId) {

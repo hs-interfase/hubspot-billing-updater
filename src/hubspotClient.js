@@ -148,6 +148,8 @@ export async function getDealWithLineItems(dealId) {
     // --- país / negocio ---
     "pais_operativo",
     "unidad_de_negocio",
+    "producto",
+    "rubro",
     "cliente_beneficiario",
 
     // --- cupo ---
@@ -177,6 +179,11 @@ export async function getDealWithLineItems(dealId) {
     "deal_py_origen_id",
     "deal_uy_mirror_id",
     "es_mirror_de_py",
+
+    // --- migración ---
+    "id_crm_origen",
+    "id_cliente_nodum",
+
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -259,11 +266,19 @@ export async function getDealWithLineItems(dealId) {
     "nota",
     "servicio",
     "subrubro",
+    "area",
     "reventa",
+    "hs_product_id",
     "billing_error",
 
     // --- mirror --
     'of_line_item_py_origen_id',
+
+    // ---Migración  ---
+    "of_codigo_rubro",
+    "momento_de_facturacion",
+    "opera_trading",
+    "mig_migracion_historica",
 
     // --- referencias --
     "invoice_id",

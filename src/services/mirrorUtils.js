@@ -316,3 +316,88 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD)
 
   log.info({ mirrorDealId, aviso }, 'Aviso de factura PY manual escrito en deal UY');
 }
+
+/**
+ * Cuando un LI PY automático con uy=true cambia su estado de pausa (se pausa
+ * o se reactiva), escribe un aviso en `billing_error` del deal UY espejo para
+ * que el equipo —que factura manualmente en UY— pause o reactive allí también.
+ *
+ * El aviso al admin del deal PY (mensaje Mantsoft tipo baja) lo maneja el flujo
+ * Mantsoft existente; esta función cubre solo el lado espejo.
+ *
+ * Las condiciones de aplicabilidad (automático, PY no-espejo, uy=true y que la
+ * pausa realmente cambió de estado) se evalúan en el call site (Phase P). Aquí
+ * el último gate es la existencia del mirror UY: si no hay, no se avisa nada.
+ *
+ * Diseñado para llamarse fire-and-forget desde Phase P.
+ * Nunca lanza — todos los errores son capturados y logueados.
+ *
+ * @param {string|number} pyLineItemId   ID del line item PY cuya pausa cambió
+ * @param {Object}  opts
+ * @param {boolean} opts.paused          true si quedó pausado, false si se reactivó
+ * @param {Object}  [opts.details]       Datos del contrato PY para el texto del aviso
+ * @param {string}  [opts.details.cliente]
+ * @param {string}  [opts.details.negocio]
+ * @param {string}  [opts.details.producto]
+ * @param {string}  [opts.details.tipo]         'Renovación automática' | 'Plan fijo'
+ * @param {string}  [opts.details.inicio]       YYYY-MM-DD inicio de la serie
+ * @param {string}  [opts.details.vencimiento]  YYYY-MM-DD (solo plan fijo)
+ * @param {string}  [opts.details.frecuencia]
+ * @param {string}  [opts.details.monto]
+ * @param {string}  [opts.details.motivo]       Motivo de pausa (solo al pausar)
+ */
+export async function notifyMirrorDealOnPauseChange(pyLineItemId, { paused, details = {} } = {}) {
+  const log = logger.child({
+    module: 'mirrorUtils',
+    fn: 'notifyMirrorDealOnPauseChange',
+    pyLineItemId: String(pyLineItemId),
+    paused: !!paused,
+  });
+
+  // 1) Encontrar el LI UY espejo (valida deal_uy_mirror_id internamente)
+  let mirrorInfo;
+  try {
+    mirrorInfo = await findMirrorLineItem(pyLineItemId);
+  } catch (err) {
+    log.warn({ err }, 'Error buscando mirror line item, abortando aviso de pausa');
+    return;
+  }
+
+  if (!mirrorInfo) {
+    log.debug('Sin mirror UY para este LI PY, nada que notificar');
+    return;
+  }
+
+  const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
+
+  // 2) Componer el aviso de texto plano (cae en billing_error del deal UY)
+  const d = details || {};
+  const tipoLinea = [d.tipo, d.inicio ? `inicio ${d.inicio}` : null]
+    .filter(Boolean)
+    .join(' · ');
+  const venc = d.vencimiento ? ` · vence ${d.vencimiento}` : '';
+
+  const encabezado = paused
+    ? 'PAUSA línea PY — pausar la facturación manual en UY'
+    : 'REACTIVACIÓN línea PY — reactivar la facturación manual en UY';
+
+  const lineas = [
+    encabezado,
+    `Cliente: ${d.cliente || '-'} | Negocio: ${d.negocio || '-'} | Producto: ${d.producto || '-'}`,
+    `Tipo: ${tipoLinea || '-'}${venc}`,
+    `Frecuencia: ${d.frecuencia || '-'} | Monto: ${d.monto || '-'}`,
+    paused && d.motivo ? `Motivo: ${d.motivo}` : null,
+    `Deal PY ${d.pyDealId || pyDealId} · LI PY ${pyLineItemId} → Deal UY ${mirrorDealId} · LI UY ${mirrorLineItemId}`,
+  ].filter(Boolean);
+
+  const aviso = lineas.join('\n');
+
+  reportHubSpotError({
+    level: 'warn',
+    objectType: 'deal',
+    objectId: mirrorDealId,
+    message: aviso,
+  });
+
+  log.info({ mirrorDealId, paused, aviso }, 'Aviso de cambio de pausa PY escrito en deal UY');
+}

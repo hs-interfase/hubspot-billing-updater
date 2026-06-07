@@ -6,8 +6,6 @@ import {
   IVA_UY_TAX_GROUP_ID,
   IVA_PY_TAX_GROUP_ID,
   EXENTO_TAX_GROUP_ID,
-  IRAE_TAX_GROUP_ID,
-  IVA_UY_IRAE_TAX_GROUP_ID,
 } from '../config/constants.js';
 import { mirrorDealToUruguay } from '../dealMirroring.js';
 import {
@@ -26,6 +24,7 @@ import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaS
 import logger from '../../lib/logger.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 
@@ -181,18 +180,11 @@ function detectHasIvaFromTaxGroup(taxGroupId) {
   const raw = String(taxGroupId ?? '').trim();
   if (!raw) return null;
 
-  if (
-    raw === IVA_UY_TAX_GROUP_ID ||
-    raw === IVA_PY_TAX_GROUP_ID ||
-    raw === IVA_UY_IRAE_TAX_GROUP_ID
-  ) {
+  if (raw === IVA_UY_TAX_GROUP_ID || raw === IVA_PY_TAX_GROUP_ID) {
     return true;
   }
 
-  if (
-    raw === EXENTO_TAX_GROUP_ID ||
-    raw === IRAE_TAX_GROUP_ID
-  ) {
+  if (raw === EXENTO_TAX_GROUP_ID) {
     return false;
   }
 
@@ -208,33 +200,14 @@ function resolveTaxRateGroupId(lineItem, dealProps = {}) {
 
   if (!isUruguay && !isParaguay) return null;
 
+// IRAE ya NO participa del tax group: solo se resuelve IVA (3 grupos).
   const currentTaxGroupId = String(lp.hs_tax_rate_group_id ?? '').trim();
   const hasIva = detectHasIvaFromTaxGroup(currentTaxGroupId);
-  const exoneraIrae = parseYesNoBool(lp.exonera_irae);
 
-  // exonera_irae = no / false => aplica IRAE
-  const aplicaIrae =
-    exoneraIrae === false ||
-    (
-      exoneraIrae === null &&
-      (
-        currentTaxGroupId === IRAE_TAX_GROUP_ID ||
-        currentTaxGroupId === IVA_UY_IRAE_TAX_GROUP_ID
-      )
-    );
+  if (hasIva === null) return null;
 
-  if (hasIva === null && !aplicaIrae) return null;
-
-  // Uruguay: sí permite IVA UY + IRAE
-  if (isUruguay && hasIva === true && aplicaIrae) return IVA_UY_IRAE_TAX_GROUP_ID;
-  if (isUruguay && hasIva === true) return IVA_UY_TAX_GROUP_ID;
-  if (isUruguay && aplicaIrae) return IRAE_TAX_GROUP_ID;
-  if (isUruguay && hasIva === false) return EXENTO_TAX_GROUP_ID;
-
-  // Paraguay: no combinar IVA + IRAE por ahora
-  if (isParaguay && hasIva === true) return IVA_PY_TAX_GROUP_ID;
-  if (isParaguay && aplicaIrae) return IRAE_TAX_GROUP_ID;
-  if (isParaguay && hasIva === false) return EXENTO_TAX_GROUP_ID;
+  if (isUruguay) return hasIva ? IVA_UY_TAX_GROUP_ID : EXENTO_TAX_GROUP_ID;
+  if (isParaguay) return hasIva ? IVA_PY_TAX_GROUP_ID : EXENTO_TAX_GROUP_ID;
 
   return null;
 }
@@ -599,6 +572,11 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
       } catch (err) {
         logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error updateDealCupo en espejo UY');
       }
+      try {
+        await syncDealCatalogTags(mirrorDeal, mirrorLineItems);
+      } catch (err) {
+        logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error en syncDealCatalogTags (espejo UY)');
+      }
     } catch (err) {
       logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] No se pudo obtener o procesar el deal espejo');
     }
@@ -627,6 +605,13 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
     await updateDealCupo(deal, lineItems);
   } catch (err) {
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error updateDealCupo deal');
+  }
+
+  // 5.5) Sincronizar tags de catálogo (producto/rubro/unidad_de_negocio/area) desde los line items
+  try {
+    await syncDealCatalogTags(deal, lineItems);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncDealCatalogTags (deal original)');
   }
 
   // 6) Construir mensaje
