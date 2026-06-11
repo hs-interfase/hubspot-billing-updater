@@ -3,6 +3,12 @@
 // Lee APP_EDITOR_USER y APP_EDITOR_PASSWORD desde .env
 
 export function invoiceEditorAuth(req, res, next) {
+  // Fail-closed: si no hay credenciales configuradas, no dejamos entrar a nadie.
+  if (!process.env.APP_EDITOR_USER || !process.env.APP_EDITOR_PASSWORD) {
+    console.error('[auth] APP_EDITOR_USER/APP_EDITOR_PASSWORD no configuradas — rechazando acceso')
+    return res.status(503).send('Autenticación no configurada en el servidor.')
+  }
+
   const authHeader = req.headers['authorization']
 
   if (!authHeader?.startsWith('Basic ')) {

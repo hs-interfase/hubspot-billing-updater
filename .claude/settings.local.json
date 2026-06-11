@@ -3,7 +3,10 @@
     "allow": [
       "Bash(wc -l c:/Users/promi/OneDrive/Documentos/GitHub/hubspot-billing-updater/src/**/*.js)",
       "Bash(wc -l /c/Users/promi/OneDrive/Documentos/GitHub/hubspot-billing-updater/src/services/*.js)",
-      "Bash(node -e \"require\\(''''express-rate-limit''''\\)\")"
+      "Bash(node -e \"require\\(''''express-rate-limit''''\\)\")",
+      "PowerShell($env:ESCRIBIR=\"true\"; node scripts/migration/migracion_pasoB_writer.mjs scripts/migration/pruebas_unicos.json scripts/migration/pruebas_mansoft.json sandbox)",
+      "PowerShell($env:ESCRIBIR=\"true\"; node scripts/migration/asignar_area.mjs scripts/migration/pruebas_unicos.json scripts/migration/pruebas_mansoft.json sandbox 2>&1 | Select-String -Pattern 'deal |Resumen|✖|area=')",
+      "Bash(node --check \"c:/Users/promi/OneDrive/Documentos/GitHub/hubspot-billing-updater/scripts/migration/sealHistoricTickets.mjs\")"
     ]
   }
 }

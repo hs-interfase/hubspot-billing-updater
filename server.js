@@ -74,7 +74,7 @@ app.get('/nodum', invoiceEditorAuth, (req, res) => {
 app.use('/nodum', invoiceEditorAuth, nodumUploadRouter)
 
 // ── Export Reporte ──
-app.use('/api/export', exportRouter)
+app.use('/api/export', invoiceEditorAuth, exportRouter)
 
 // ── Guía de Facturación (pública, sin auth) ──
 app.get('/guia', (req, res) => {

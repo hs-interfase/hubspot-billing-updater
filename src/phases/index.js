@@ -24,6 +24,22 @@ import logger from '../../lib/logger.js';
 import { assignTicketOwners } from '../services/tickets/assignTicketOwners.js';
 import { acquireDealLock, releaseDealLock } from '../db.js';
 
+/**
+ * Igual que runPhasesForDeal, pero contiende por el candado deal_locks
+ * (el mismo que usa el worker de webhook_queue). Si el deal está tomado,
+ * NO espera: devuelve { skipped: true, reason: 'deal_locked' }.
+ * Para entry points que NO pasan por la cola (crons, CLI).
+ */
+export async function runPhasesForDealLocked({ deal, lineItems }, ownerLabel = 'cron') {
+  const dealId = String(deal?.id || deal?.properties?.hs_object_id || '');
+  const token = await acquireDealLock(dealId, ownerLabel);
+  if (!token) return { skipped: true, reason: 'deal_locked' };
+  try {
+    return await runPhasesForDeal({ deal, lineItems });
+  } finally {
+    await releaseDealLock(dealId, token);
+  }
+}
 
 function isDealCancelled(dealProps) {
   const stage = String(dealProps?.dealstage || '');
@@ -127,15 +143,6 @@ function filterActiveLineItems(lineItems) {
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
-  // ─── CANDADO POR DEAL ───────────────────────────────────────────────
-  const __lockToken = await acquireDealLock(dealId, 'phases');
-  if (!__lockToken) {
-    logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
-      'Deal en proceso por otro proceso — omitiendo (deal_locked)'
-    );
-    return { dealId, skipped: true, reason: 'deal_locked' };
-  }
 
   try {
     let currentDeal = deal;
@@ -431,7 +438,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     return results;
   } finally {
-    await releaseDealLock(dealId, __lockToken);
+// noop : el candado no libera el caller
   }
 }
 

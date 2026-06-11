@@ -3,7 +3,7 @@ import pool from './db.js';
 import logger from '../lib/logger.js';
 import { processUrgentLineItem, processUrgentTicket } from './services/urgentBillingService.js';
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { runPhasesForDeal } from './phases/index.js';
+import { runPhasesForDealLocked } from './phases/index.js';
 import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
 import { parseBool } from './utils/parsers.js';
 import { reportIfActionable } from './utils/errorReporting.js';
@@ -307,8 +307,7 @@ async function executeJob(job) {
       }
 
       const dealWithLineItems = await getDealWithLineItems(resolvedDealId);
-      const billingResult = await runPhasesForDeal(dealWithLineItems);
-
+      const billingResult = await runPhasesForDealLocked(dealWithLineItems, 'webhook_queue');
       logger.info(
         {
           module: MODULE, fn: 'executeJob', jobId: job.id,

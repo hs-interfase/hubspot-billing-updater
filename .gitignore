@@ -144,3 +144,8 @@ vite.config.ts.timestamp-*
 # HubSpot config file
 hubspot.config.yml
 .vercel
+
+# Migration scripts / scratch files (not for the repo)
+scripts/migration/
+**/CONTEXTO_migracion*
+**/auditoria_tickets_migrados*
