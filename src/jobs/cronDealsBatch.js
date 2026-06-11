@@ -13,16 +13,13 @@ import {
   CRON_LOOKBACK_DAYS,
   FORECAST_MANUAL_STAGES,
 } from '../config/constants.js';
+import { acquireCronLock, releaseCronLock } from "../utils/cronLock.js";
 
 // -------------------- Paths / Config --------------------
 
 const FAILED_PATH =
   process.env.CRON_FAILED_PATH ||
   path.resolve(process.cwd(), "cron_failed_deals.json");
-
-const LOCK_PATH =
-  process.env.CRON_LOCK_PATH ||
-  path.resolve(process.cwd(), "cron_state_deals.lock");
 
 const LOG_DIR = process.env.CRON_LOG_DIR || "/data/logs";
 
@@ -31,7 +28,6 @@ const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 const MAX_RUN_MS = Number(process.env.CRON_MAX_RUN_MS || 6 * 60 * 60 * 1000);
 const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
-const LOCK_TTL_MS = Number(process.env.CRON_LOCK_TTL_MS || 60 * 60 * 1000);
 
 // Your deal properties (adjust if your portal uses different names)
 const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
@@ -74,32 +70,6 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8");
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-function acquireLock({ ttlMs = LOCK_TTL_MS } = {}) {
-  try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const stat = fs.statSync(LOCK_PATH);
-      const age = Date.now() - stat.mtimeMs;
-      if (age > ttlMs) {
-const lockAgeSec = Math.round(age / 1000);
-logger.warn(
-  { lockAgeSec, lockPath: LOCK_PATH, ttlMs },
-  "Stale lock detected -> removing"
-);
-        try { fs.unlinkSync(LOCK_PATH); } catch {}
-      } else {
-        return false;
-      }
-    }
-    fs.writeFileSync(LOCK_PATH, String(Date.now()), { flag: "wx" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function releaseLock() {
-  try { fs.unlinkSync(LOCK_PATH); } catch {}
-}
 
 async function withRetry(fn, { maxRetries = 5 } = {}) {
   let attempt = 0;
@@ -296,7 +266,7 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
   logger.info({ jobRunId }, "Cron started");
   lastCtx = { ...lastCtx, where: "runDealsBatchCron.start", dealId: null, mirrorId: null };
 
-if (!acquireLock()) {
+if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
   logger.warn({ jobRunId, mode, reason: "lock_present" }, "[cronDealsBatch] Cron skipped (lock present)");
   return { skipped: true };
 }
@@ -310,7 +280,7 @@ if (!acquireLock()) {
     const WINDOW_START = 3 * 60 + 40;    // 03:40 UTC
     const WINDOW_END   = 7 * 60;         // 07:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
-      releaseLock();
+  await releaseCronLock("cronDealsBatch", jobRunId);
       logger.info({ jobRunId, utcH, utcM, reason: "fuera_de_ventana" }, "[cronDealsBatch] Skipped (fuera de ventana horaria)");
       return { skipped: true, reason: "fuera_de_ventana" };
     }
@@ -707,7 +677,7 @@ if (!mirrorId) {
     );
   }
 
-releaseLock();
+await releaseCronLock("cronDealsBatch", jobRunId);
   const cronStatus = failed === 0 ? 'OK' : failed < processed * 0.1 ? 'WARN' : 'ERROR';
   logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, skippedLocked, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
   logger.info({ jobRunId }, "Cron finished");

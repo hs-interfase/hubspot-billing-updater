@@ -13,6 +13,7 @@ import pool, { initCronStateTable, getCronState, setCronState, initCronFailuresT
 import {
   FORECAST_MANUAL_STAGES,
 } from '../config/constants.js';
+import { acquireCronLock, releaseCronLock } from "../utils/cronLock.js";
 
 // -------------------- Paths / Config --------------------
 // const STATE_PATH =
@@ -23,10 +24,6 @@ const FAILED_PATH =
   process.env.CRON_WEEKEND_FAILED_PATH ||
   path.resolve(process.cwd(), "cron_failed_weekend.json");
 
-const LOCK_PATH =
-  process.env.CRON_WEEKEND_LOCK_PATH ||
-  path.resolve(process.cwd(), "cron_weekend.lock");
-
 const LOG_DIR = process.env.CRON_LOG_DIR || "/data/logs";
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
@@ -34,7 +31,6 @@ const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 const MAX_RUN_MS = Number(process.env.CRON_MAX_RUN_MS || 6 * 60 * 60 * 1000);
 const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
-const LOCK_TTL_MS = Number(process.env.CRON_LOCK_TTL_MS || 60 * 60 * 1000);
 
 const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
 const PROP_AUTO = process.env.PROP_AUTO || "facturacion_automatica";
@@ -67,32 +63,6 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8");
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-function acquireLock({ ttlMs = LOCK_TTL_MS } = {}) {
-  try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const stat = fs.statSync(LOCK_PATH);
-      const age = Date.now() - stat.mtimeMs;
-      if (age > ttlMs) {
-        const lockAgeSec = Math.round(age / 1000);
-        logger.warn(
-          { lockAgeSec, lockPath: LOCK_PATH, ttlMs },
-          "Stale lock detected -> removing"
-        );
-        try { fs.unlinkSync(LOCK_PATH); } catch {}
-      } else {
-        return false;
-      }
-    }
-    fs.writeFileSync(LOCK_PATH, String(Date.now()), { flag: "wx" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function releaseLock() {
-  try { fs.unlinkSync(LOCK_PATH); } catch {}
-}
 
 async function withRetry(fn, { maxRetries = 5 } = {}) {
   let attempt = 0;
@@ -315,7 +285,7 @@ export async function runWeekendFullCron({ onlyDealId = null, once = false, dry 
   logger.info({ jobRunId }, "[cronWeekend] Cron started");
   lastCtx = { ...lastCtx, where: "runWeekendFullCron.start", dealId: null, mirrorId: null };
 
-if (!acquireLock()) {
+if (!(await acquireCronLock("cronWeekendFull", jobRunId))) {
     logger.warn({ jobRunId, mode, reason: "lock_present" }, "[cronWeekend] Cron skipped (lock present)");
     return { skipped: true };
   }
@@ -332,7 +302,7 @@ if (!acquireLock()) {
     const WINDOW_START = 3 * 60 + 20;  // 03:20 UTC
     const WINDOW_END   = 9 * 60 + 20;  // 09:20 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
-      releaseLock();
+      await releaseCronLock("cronWeekendFull", jobRunId);
       logger.info({ jobRunId, utcH: now.getUTCHours(), utcM: now.getUTCMinutes(), reason: "fuera_de_ventana" }, "[cronWeekend] Skipped (fuera de ventana horaria)");
       return { skipped: true, reason: "fuera_de_ventana" };
     }
@@ -676,7 +646,7 @@ lastCtx = { ...lastCtx, where: "batch.runPhasesForDeal", dealId };
       );
     }
 
-    releaseLock();
+    await releaseCronLock("cronWeekendFull", jobRunId);
     const cronStatus = failed === 0 ? 'OK' : failed < processed * 0.1 ? 'WARN' : 'ERROR';
     logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, skippedLocked, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
     logger.info({ jobRunId }, "[cronWeekend] Cron finished");
