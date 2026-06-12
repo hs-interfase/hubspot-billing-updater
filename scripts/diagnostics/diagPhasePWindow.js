@@ -53,7 +53,7 @@ function isAutomatedBilling(li) {
     p.facturacion_automatica ??
     p.billing_automatico ??
     p.facturacion_automatica__c ??
-    p.of_facturacion_automatica ??
+    p.facturacion_automatica ??
     '';
   const v = String(raw).trim().toLowerCase();
   return v === 'true' || v === '1' || v === 'si' || v === 'sí' || v === 'yes';
@@ -75,7 +75,7 @@ const LINE_ITEM_PROPS = [
   'facturacion_automatica',
   'billing_automatico',
   'facturacion_automatica__c',
-  'of_facturacion_automatica',
+  'facturacion_automatica',
   'billing_next_date',
   'billing_anchor_date',
   'last_ticketed_date',

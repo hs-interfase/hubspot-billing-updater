@@ -71,7 +71,24 @@ export async function recalcFacturasRestantes({ hubspotClient, lineItemId, dealI
 
   // PLAN FIJO => necesita total payments
   const totalRaw = properties?.hs_recurring_billing_number_of_payments;
-  const cuotasTotales = Number.parseInt(String(totalRaw ?? ''), 10);
+  let cuotasTotales = Number.parseInt(String(totalRaw ?? ''), 10);
+
+  // PAGO ÚNICO: sin frecuencia, sin auto-renew (ya descartado arriba) y sin
+  // total de pagos → se trata como plan fijo de 1 cuota. Así el flujo normal
+  // sella fechas_completas cuando el ticket único llega a INVOICED_STAGES.
+  const freq = String(
+    properties?.recurringbillingfrequency ||
+    properties?.hs_recurring_billing_frequency ||
+    ''
+  ).trim();
+
+  if ((!Number.isFinite(cuotasTotales) || cuotasTotales <= 0) && !freq) {
+    cuotasTotales = 1;
+    logger.info(
+      { module: 'recalcFacturasRestantes', fn: 'recalcFacturasRestantes', lineItemId: id, mode: 'PAGO_UNICO' },
+      'Pago único detectado: tratado como plan de 1 cuota'
+    );
+  }
 
   if (!Number.isFinite(cuotasTotales) || cuotasTotales <= 0) {
     const current = String(properties?.facturas_restantes ?? '').trim();

@@ -25,6 +25,11 @@ const EMPRESA_EMISORA_MAP = {
   '33688943634': 'ISA PY',    // Proyectos
 };
 
+function esUrgente(ticket) {
+  return String(ticket?.properties?.facturacion_urgente || '')
+    .trim().toLowerCase() === 'true';
+}
+
 /**
  * Determina la empresa emisora según el product_id del ticket.
  * Usa `producto_id` (snapshotteado desde hs_product_id del line item).
@@ -94,6 +99,9 @@ const STYLES = {
   container: 'font-family:Arial,sans-serif;font-size:14px;color:#333;',
   header: 'font-size:16px;font-weight:bold;color:#1a1a1a;margin-bottom:12px;',
   sectionTitle: 'font-size:14px;font-weight:bold;color:#0056b3;margin:16px 0 8px 0;',
+  urgentBanner: 'background:#fff3e0;border:1px solid #ff9800;border-radius:6px;padding:10px 12px;margin:10px 0;color:#b35900;font-weight:bold;',
+  lineItemDivUrgent: 'background:#fff8f0;border:2px solid #ff9800;border-radius:6px;padding:12px;margin:10px 0;',
+  urgentBadge: 'color:#e65100;font-weight:bold;',
   row: 'margin:4px 0;padding:2px 0;',
   label: 'font-weight:bold;color:#555;',
   lineItemDiv: 'background:#f7f9fc;border:1px solid #dde3eb;border-radius:6px;padding:12px;margin:10px 0;',
@@ -171,10 +179,13 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
 function buildLineItemDiv(ticket) {
   const tp = ticket?.properties || {};
   const frecuencia = resolverFrecuencia(ticket);
+  const urgente = esUrgente(ticket);
 
   const rows = [
-    `<div style="${STYLES.lineItemDiv}">`,
-    `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}</div>`,
+    `<div style="${urgente ? STYLES.lineItemDivUrgent : STYLES.lineItemDiv}">`,
+    `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}${
+      urgente ? ` — <span style="${STYLES.urgentBadge}">⚡ FACTURACIÓN URGENTE</span>` : ''
+    }</div>`,
     buildRow('Descripción',          val(tp.of_descripcion_producto)),
     buildRow('Rubro',                val(tp.of_rubro)),
     buildRow('Unidad de negocio',    val(tp.unidad_de_negocio)),
@@ -215,12 +226,17 @@ function buildFooter(ticketIds) {
 export function buildMensajeFacturacion(tickets, dealName, dealMeta = {}) {
   if (!tickets || tickets.length === 0) return '';
 
+  const urgentes = tickets.filter(esUrgente).length;
+  const banner = urgentes > 0
+    ? `<div style="${STYLES.urgentBanner}">⚡ Esta solicitud incluye ${urgentes} ítem(s) de FACTURACIÓN URGENTE solicitada manualmente desde el contrato.</div>`
+    : '';
+
   const header       = buildHeader(tickets[0], dealName, dealMeta);
   const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
   const ticketIds    = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
   const footer       = buildFooter(ticketIds);
 
-  return header + '\n' + lineItemDivs + '\n' + footer;
+  return header + (banner ? '\n' + banner : '') + '\n' + lineItemDivs + '\n' + footer;
 }
 
 // ── Legacy export (mantener compatibilidad temporal) ──

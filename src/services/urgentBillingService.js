@@ -536,7 +536,7 @@ const ticketId = ticketResult.ticketId;
     );
 
     // 7.a.2) Si se reutilizó un ticket existente, asegurar asociaciones
-    if (!created && ticketId) {
+    if (ticketId) {
       try {
         const [companyIds, contactIds] = await Promise.all([
           getDealCompanies(dealId),
@@ -577,7 +577,7 @@ const ticketId = ticketResult.ticketId;
     // 7.b) Marcar ticket como urgente
     if (ticketId) {
       await updateTicket(ticketId, {
-        of_facturacion_urgente: 'true',
+        facturacion_urgente: 'true',
         of_fecha_de_facturacion: today,
         fecha_resolucion_esperada: billingPeriodDate,
       });

@@ -96,7 +96,7 @@ async function searchLineItemsMantsoft() {
         { module: 'cronMensajeMantsoft', fn: 'searchLineItemsMantsoft', err },
         'Error buscando line items mansoft_pendiente'
       );
-      return allItems;
+      return { items: allItems, searchError: err?.message || String(err) };
     }
 
     const results = res?.results || [];
@@ -114,7 +114,7 @@ async function searchLineItemsMantsoft() {
     after = nextAfter;
   }
 
-  return allItems;
+  return { items: allItems, searchError: null };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -229,7 +229,10 @@ async function getDealInfo(dealId) {
 
 async function writeMensaje(dealId, html) {
   await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-    properties: { [DEAL_PROPERTY]: html },
+    properties: {
+      [DEAL_PROPERTY]: html,
+      mensaje_mansoft_actualizado: String(Date.now()),
+    },
   });
 }
 
@@ -262,7 +265,12 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
   );
 
   // 1. Buscar line items pendientes
-  const lineItems = await searchLineItemsMantsoft();
+ const { items: lineItems, searchError } = await searchLineItemsMantsoft();
+  if (searchError) {
+    logger.error({ module: 'cronMensajeMantsoft', searchError },
+      '❌ Search API falló — el run NO es confiable');
+    process.exitCode = 1;  // Railway marca el run como fallido
+  }
 
   logger.info(
     { module: 'cronMensajeMantsoft', total: lineItems.length },
@@ -271,7 +279,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
   if (lineItems.length === 0) {
     logger.info({ module: 'cronMensajeMantsoft' }, 'Sin line items pendientes, saliendo');
-    return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0 };
+    return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0, searchError };
   }
 
   // 2. Resolver dealId via associations batch
@@ -338,11 +346,27 @@ const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await 
 
       const html = buildMensajeMantsoft(itemsToProcess, dealName, dealMeta);
 
-      if (!html && migraItems.length === 0) {
+if (!html && migraItems.length === 0) {
+        // Nada real que notificar (ej: ediciones cuyo diff quedó vacío).
+        // Sin reset, estos LIs se reintentan todos los días para siempre.
         logger.warn(
-          { module: 'cronMensajeMantsoft', dealId },
-          'buildMensajeMantsoft retornó vacío y sin migrados, saltando'
+          { module: 'cronMensajeMantsoft', dealId, lineItemCount: itemsToProcess.length },
+          'Mensaje vacío sin migrados — se resetean flags para cortar reintentos'
         );
+        if (!dry) {
+          for (const li of itemsToProcess) {
+            try {
+              await finalizeLineItemAfterNotify(li);
+              lineItemsReset++;
+            } catch (err) {
+              logger.error(
+                { module: 'cronMensajeMantsoft', dealId, lineItemId: li.id, err },
+                'Error reseteando LI con mensaje vacío'
+              );
+              errors++;
+            }
+          }
+        }
         continue;
       }
 
