@@ -304,8 +304,19 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD)
     return;
   }
 
-  const productName = String(mirrorLi?.properties?.name || '').trim() || 'Producto desconocido';
-  const aviso = `Factura PY original ha sido enviada a facturar. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
+ const productName = String(mirrorLi?.properties?.name || '').trim() || 'Producto desconocido';
+
+  // ¿Es nota de crédito? El flag `nc` (manual) vive en el LI PY. Solo etiqueta el aviso.
+  let esNotaCredito = false;
+  try {
+    const pyLi = await hubspotClient.crm.lineItems.basicApi.getById(String(pyLineItemId), ['nc']);
+    esNotaCredito = String(pyLi?.properties?.nc || '').toLowerCase() === 'true';
+  } catch (err) {
+    log.debug({ err, pyLineItemId }, 'No se pudo leer flag nc del LI PY; asumo factura normal');
+  }
+  const prefijoNC = esNotaCredito ? '⚠️ ES NOTA DE CRÉDITO. ' : '';
+
+  const aviso = `${prefijoNC}Factura PY original ha sido enviada a facturar. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
 
   reportHubSpotError({
     level: 'warn',
