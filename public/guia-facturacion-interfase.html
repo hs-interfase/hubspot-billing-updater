@@ -577,6 +577,41 @@ const C = {
   <div class="note nw">⚠️ Si querés pausar <strong>todo el negocio</strong>, es más limpio moverlo a la etapa Suspendido que pausar línea por línea.</div>
   <div class="note ni">ℹ️ Para reactivar: poner Pausa en <strong>No</strong> y verificar que la próxima fecha de cobro sea válida y futura.</div>`,
 
+'nota-credito': `
+  <div class="inicio-box">
+    <strong>¿Qué es?</strong> Una nota de crédito revierte un cobro: emite una factura en <strong>negativo</strong> y, si la línea consumía cupo, le <strong>devuelve</strong> ese cupo al negocio.
+  </div>
+  <div class="sl">Antes de empezar: ¿la línea tiene cupo?</div>
+  <div class="note ni">ℹ️ <strong>Si tiene cupo</strong>, revisá dos cosas antes de emitir:<br>1) Que el <strong>cupo del negocio esté activo</strong>. Si se agotó y se desactivó, reactivalo a mano primero — si no, la NC no devuelve nada.<br>2) Si el cupo es <strong>Por Horas</strong> o <strong>Por Monto</strong>: de eso depende dónde va el número negativo.</div>
+  <div class="note nok">✅ <strong>Si no tiene cupo</strong>, no hay nada de cupo que revisar. Seguí con el paso a paso; solo se genera la factura negativa.</div>
+  <div class="bco"><div class="bco-em">🔢</div><div class="bco-tx"><strong>¿Dónde va el negativo?</strong> Si el cupo es por <strong>Monto</strong> → en el <strong>monto unitario</strong> del ticket. Si es por <strong>Horas</strong> → en la <strong>cantidad</strong> del ticket.</div></div>
+  <div class="sl">Paso a paso</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Cloná la línea de pedido que vas a revertir</div><div class="sd">La misma línea que se facturó y querés acreditar.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Ponele precio <strong>0</strong> y facturación <strong>manual</strong></div><div class="sd">El monto negativo no va en la línea (no acepta negativos) — va en el ticket.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Marcá <strong>NC = Sí</strong> en la línea de pedido</div><div class="sd">Con eso alcanza: el sistema lo copia al ticket solo. Marcalo antes de que se genere el ticket.</div></div></div>
+    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Guardá — se genera el ticket</div></div></div>
+    <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">Editá el ticket con el número en <strong>negativo</strong></div><div class="sd"><strong>Por Monto:</strong> monto unitario negativo (dejá la cantidad positiva). <strong>Por Horas:</strong> cantidad negativa.</div></div></div>
+    <div class="step"><div class="sn">6</div><div class="sb2"><div class="st">Mandá a facturar el ticket</div><div class="sd">Se emite la factura negativa y, si aplica, se devuelve el cupo.</div></div></div>
+  </div>
+  <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
+  <div class="pb">${CAB}
+    ${fila('NC','Sí/No','usuario','Marcar en <strong>Sí</strong>. Indica que esta línea es una nota de crédito. El sistema la copia al ticket solo.')}
+    ${fila('Precio unitario','Número','usuario','Poner en <strong>0</strong>. El negativo va en el ticket, no acá.')}
+    ${fila('Facturación Automática','Sí/No','usuario','Dejar en <strong>No</strong> — la NC siempre es manual.')}
+    ${fila('¿Parte del cupo?','Sí/No','usuario','<strong>Sí</strong> si la línea original consumía cupo, para que se lo devuelva.')}
+  </div>
+  <div class="sl">Ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Monto unitario','Número','usuario','<strong>Cupo por Monto:</strong> ponelo en negativo (ej. <code>-500</code>).')}
+    ${fila('Cantidad','Número','usuario','<strong>Cupo por Horas:</strong> ponela en negativo (ej. <code>-10</code>).')}
+    ${fila('NC','Sí/No','sistema','Llega solo desde la línea de pedido. Es solo registro.')}
+    ${fila('Facturar Ahora','Sí/No','usuario','Tocar <strong>Sí</strong> para emitir la nota de crédito.')}
+  </div>
+  <div class="note nok">✅ Si el negocio tiene espejo de Uruguay, en el negocio UY aparece un aviso con <strong>"ES NOTA DE CRÉDITO"</strong>. La NC de Uruguay se emite a mano, con este mismo procedimiento.</div>
+  <div class="note nw">⚠️ No emitas una NC por <strong>más</strong> de lo que se consumió: el cupo consumido podría quedar negativo.</div>
+  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Dato:</strong> el sistema reconoce la nota de crédito por el <strong>monto negativo</strong> del ticket. La marca NC es solo para dejar registro. 📝</div></div>`,
+
 };
 
 /* ─── SECCIONES ─── */
@@ -632,6 +667,7 @@ const SUBCOMS = {
   'cancelar-ticket':'El ticket se cancela, el negocio sigue vivo. Quirúrgico. 🔪',
   'cancelar-factura':'Las facturas no se borran, se cancelan. El sistema guarda el rastro de todo. 📋',
   'pausar-li':'Congelar una línea sin afectar el resto del negocio. ❄️',
+  'nota-credito':'Una NC es como un "deshacer" del cobro: factura en negativo y te devuelve el cupo. ↩️',
 };
 
 /* ─── NAVEGACIÓN ─── */

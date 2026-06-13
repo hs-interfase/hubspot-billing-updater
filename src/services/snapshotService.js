@@ -257,6 +257,7 @@ const repetitivo = !!rawFreq && ![
     reventa: parseBool(lp.reventa),
     opera_trading: parseBool(lp.opera_trading),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
+    nc: parseBool(lp.nc), // NC: se setea a mano en el LI y se propaga al ticket (solo registro)
     repetitivo,
   };
 
