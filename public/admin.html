@@ -156,9 +156,19 @@
   <div class="export-section">
     <h2>📊 Extracto Consolidado</h2>
     <p class="export-info" id="export-info">Cargando información...</p>
-    <button class="btn-export" id="btn-download-export" disabled>⬇ Descargar último extracto</button>
-  </div>
 
+    <button class="btn-export" id="btn-download-export" disabled>⬇ Descargar Excel completo</button>
+
+    <div id="csv-buttons" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:14px;">
+      <a class="btn-export" href="/api/export/csv/forecast_debil"     download>⬇ Forecast Débil</a>
+      <a class="btn-export" href="/api/export/csv/forecast_strech"    download>⬇ Forecast En Strech</a>
+      <a class="btn-export" href="/api/export/csv/forecast_firme"     download>⬇ Forecast Firme</a>
+      <a class="btn-export" href="/api/export/csv/forecast_pendiente" download>⬇ Forecast (Pendiente)</a>
+      <a class="btn-export" href="/api/export/csv/listo"              download>⬇ Listo para Facturar</a>
+      <a class="btn-export" href="/api/export/csv/facturado"          download>⬇ Facturado</a>
+    </div>
+  </div>
+  
   <!-- Health -->
   <div class="health-row">
     <span class="health-dot" id="health-dot"></span>
