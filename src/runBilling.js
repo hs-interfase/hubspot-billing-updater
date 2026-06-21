@@ -90,12 +90,12 @@ async function getAllDealIds() {
   let after;
 
   do {
+    // OJO: el 5º arg de getPage es `associations` (array), no `archived`.
+    // Pasar `false` ahí rompe el serializer ("data is not iterable").
     const resp = await hubspotClient.crm.deals.basicApi.getPage(
       100,
       after,
-      ["dealname"],
-      undefined,
-      false
+      ["dealname"]
     );
 
     out.push(...(resp.results || []).map((d) => String(d.id)));

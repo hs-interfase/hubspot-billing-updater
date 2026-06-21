@@ -15,6 +15,7 @@ import {
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
+import { recalcValorTotal } from '../services/deal/recalcValorTotal.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
@@ -431,8 +432,21 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       results.phase3.error = err?.message || 'Error desconocido';
     }
 
+    // ========== DEAL TOTAL: valor_total desde tickets ==========
+    // Suma subtotal_real de los tickets no cancelados; los auto-renew solo
+    // cuentan los pagos del año en curso. No bloquea el ciclo si falla.
+    try {
+      const { total } = await recalcValorTotal({ dealId });
+      results.valorTotal = total;
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en recalcValorTotal (no bloquea)'
+      );
+    }
+
     logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted, valorTotal: results.valorTotal },
       'Deal completado'
     );
 
