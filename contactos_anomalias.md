@@ -1,0 +1,34 @@
+# Anomalías contactos
+
+- elisapereira@aca.com.uy Elisa Pereira -> SIN_PER_CODIGO_USA_EMAIL
+- ecalafi@anp.com.uy Emilia Calafi -> SIN_PER_CODIGO_USA_EMAIL
+- rmartony@anp.com.uy Rafael Martony -> SIN_PER_CODIGO_USA_EMAIL
+- pperera@anp.com.uy Pablo Perera -> SIN_PER_CODIGO_USA_EMAIL
+- ccalvo@anp.com.uy Cinthia Calvo -> SIN_PER_CODIGO_USA_EMAIL
+- redmine@anp.com.uy redmine -> SIN_PER_CODIGO_USA_EMAIL
+- gcastro@anp.com.uy Graciela Castro -> SIN_PER_CODIGO_USA_EMAIL
+- kleber.marsicano@agesic.gub.uy Kleber Marsicano -> SIN_PER_CODIGO_USA_EMAIL
+- AFernandez@aluminios.com Andrés Fernández -> SIN_PER_CODIGO_USA_EMAIL
+- jmaly@antel.com.uy Maly Miraballes,Javier Andrés -> SIN_PER_CODIGO_USA_EMAIL
+- ggcamponovo@antel.com.uy Gómez Camponovo,Gabriela -> SIN_PER_CODIGO_USA_EMAIL
+- vgarrido@bse.com.uy Virginia Garrido -> SIN_PER_CODIGO_USA_EMAIL
+- OSegovia@bse.com.uy Oscar Segovia -> SIN_PER_CODIGO_USA_EMAIL
+- cidelemos@bse.com.uy Ignacio De Lemos -> SIN_PER_CODIGO_USA_EMAIL
+- silvade@gmail.com Alvaro Silva -> SIN_PER_CODIGO_USA_EMAIL
+- rossina.canoniero@hsbc.com.uy Rossina Canoniero -> SIN_PER_CODIGO_USA_EMAIL
+- gestion@brg.com.py Ramon Matiauda -> SIN_PER_CODIGO_USA_EMAIL
+- camila.munoz@imcanelones.gub.uy Camila Muñoz -> SIN_PER_CODIGO_USA_EMAIL
+- nicolas.gallego@imcanelones.gub.uy Nicolas Gallego -> SIN_PER_CODIGO_USA_EMAIL
+- soporteigdoc@maldonado.gub.uy Soporte Igdoc -> SIN_PER_CODIGO_USA_EMAIL
+- lorena.franquez@imm.gub.uy Lorena Franquez -> SIN_PER_CODIGO_USA_EMAIL
+- Jorge.Borges@interfase.com.uy Jorge Borges -> SIN_PER_CODIGO_USA_EMAIL
+- Ismael.Olivet@isaportal.uy Ismael.Olivet -> SIN_PER_CODIGO_USA_EMAIL
+- federicofalero@hotmail.com Federico Falero -> SIN_PER_CODIGO_USA_EMAIL
+- comisiones@juntadecanelones.gub.uy comisiones -> SIN_PER_CODIGO_USA_EMAIL
+- lrealini@mapfre.com.uy Lucia Realini -> SIN_PER_CODIGO_USA_EMAIL
+- expediente.consultas@mec.gub.uy Consultas Expediente -> SIN_PER_CODIGO_USA_EMAIL
+- casanova@mec.gub.uy CASANOVA Cecilia -> SIN_PER_CODIGO_USA_EMAIL
+- macg@montevideo.com.uy Alejandra Carreño -> SIN_PER_CODIGO_USA_EMAIL
+- epontinvrea@gmail.com Valentino Pitta -> SIN_PER_CODIGO_USA_EMAIL
+- victorio.cecot@ursea.gub.uy Victorio Cecot -> SIN_PER_CODIGO_USA_EMAIL
+- marianela.rodriguez@ursea.gub.uy Marianela Rodriguez -> SIN_PER_CODIGO_USA_EMAIL

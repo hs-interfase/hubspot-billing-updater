@@ -4,6 +4,7 @@ import axios from 'axios';
 import "dotenv/config";
 import logger from '../lib/logger.js';
 import { withRetry, isRetryable, calcDelay } from './utils/withRetry.js';
+import { acquireRateToken } from './db.js';
 
 // ─────────────────────────────────────────────────────────────
 // HubSpot SDK — Proxy con retry automático
@@ -18,18 +19,64 @@ const rawHubspotClient = new Hubspot.Client({
 });
 
 // ─────────────────────────────────────────────────────────────
-// Token bucket — rate limiter (9 req/seg)
+// Rate limiter global — balde de fichas compartido (Postgres)
 // ─────────────────────────────────────────────────────────────
-const RATE_LIMIT_RPS = Number(process.env.HS_RATE_LIMIT_RPS || 9);
-const BUCKET_INTERVAL_MS = Math.floor(1000 / RATE_LIMIT_RPS); // ~111ms entre tokens
+// acquireToken() pide 1 ficha al balde compartido (tabla hs_rate_bucket, ver
+// src/db.js). Como TODOS los procesos (worker de webhooks + crons) piden al
+// mismo balde, el ritmo COMBINADO respeta el límite de HubSpot sin importar
+// cuántos procesos corran a la vez. Tanto el SDK como axiosHubSpot pasan por acá.
+//
+// Si Postgres no responde, degradamos a un gate en memoria (~FALLBACK_RPS req/s)
+// para no frenar la facturación por un hipo de la DB; withRetry cubre los 429
+// que pudieran escaparse en ese modo degradado.
+// ─────────────────────────────────────────────────────────────
+const HS_RATE_FALLBACK_RPS = Number(process.env.HS_RATE_FALLBACK_RPS || 9);
+const FALLBACK_INTERVAL_MS = Math.floor(1000 / HS_RATE_FALLBACK_RPS);
+const RATE_MAX_WAIT_MS     = Number(process.env.HS_RATE_MAX_WAIT_MS || 30_000);
 
-let lastTokenAt = 0;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+let lastFallbackAt = 0;
+let lastFallbackWarnAt = 0;
+
+// Gate en memoria: fallback si la DB no responde (comportamiento previo).
+async function acquireTokenInMemory() {
+  const now = Date.now();
+  const wait = FALLBACK_INTERVAL_MS - (now - lastFallbackAt);
+  if (wait > 0) await sleep(wait);
+  lastFallbackAt = Date.now();
+}
 
 async function acquireToken() {
-  const now = Date.now();
-  const wait = BUCKET_INTERVAL_MS - (now - lastTokenAt);
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastTokenAt = Date.now();
+  const deadline = Date.now() + RATE_MAX_WAIT_MS;
+  for (;;) {
+    let r;
+    try {
+      r = await acquireRateToken();
+    } catch (err) {
+      // DB caída/lenta → degradar al gate en memoria, avisando (throttle 60s).
+      const now = Date.now();
+      if (now - lastFallbackWarnAt > 60_000) {
+        lastFallbackWarnAt = now;
+        logger.warn({ err: err?.message }, '[rateLimit] balde Postgres no responde → fallback a gate en memoria');
+      }
+      return acquireTokenInMemory();
+    }
+
+    if (r.granted) return;
+
+    // No había ficha: esperar lo justo hasta que se rellene una.
+    const rps = r.refillPerSec > 0 ? r.refillPerSec : HS_RATE_FALLBACK_RPS;
+    let waitMs = Math.ceil(((1 - r.avail) / rps) * 1000);
+    waitMs = Math.min(Math.max(waitMs, 5), 1000);   // entre 5ms y 1s por vuelta
+
+    if (Date.now() + waitMs > deadline) {
+      // Salvaguarda anti-bloqueo: no esperar para siempre (withRetry cubre un 429).
+      logger.warn({ avail: r.avail }, '[rateLimit] espera de ficha excede el tope; continúo igual');
+      return;
+    }
+    await sleep(waitMs);
+  }
 }
 
 function makeRetryProxy(target, path = '') {

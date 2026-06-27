@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eef1f6">
+<title>Documento · Responsable de Orden de Facturación</title>
+<script>(function(){try{var t=localStorage.getItem('if-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  color-scheme:light;
+  --bg:#eef1f6;--s1:#ffffff;--s2:#e7ebf3;--bd:#cdd5e3;
+  --tx:#1b2333;--td:#4a566e;--tdm:#7c89a3;
+  --c-warn-tx:#8a5212;--c-info-tx:#274bb5;--c-ok-tx:#15724a;--c-err-tx:#b02a26;
+  --c-green:#0f7a4d;--c-orange:#a85410;--c-blue:#2b50c0;--c-purple:#6b46d0;--c-pink:#b4377f;--c-slate:#566377;
+  --br1:#22d3ee;--br2:#4f7cff;--brink:#06121a;
+  --r:12px;--rs:9px;
+}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b0d14;--s1:#12151f;--s2:#181c28;--bd:#222738;
+  --tx:#e8eaf2;--td:#aab4ca;--tdm:#5b6680;
+  --c-warn-tx:#e8c4a0;--c-info-tx:#a0b4e8;--c-ok-tx:#a0e8d0;--c-err-tx:#e8a0a0;
+  --c-green:#6ee8c0;--c-orange:#fdb27c;--c-blue:#7fa8ff;--c-purple:#c4b0fd;--c-pink:#f9a8d4;--c-slate:#94a3b8;
+}
+html{background:var(--bg)}
+body{
+  background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;
+  font-weight:400;min-height:100vh;-webkit-text-size-adjust:100%;line-height:1.6;
+}
+
+header{background:var(--bg);border-bottom:1px solid var(--bd);padding:16px;position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:12px}
+.lm{width:34px;height:34px;background:linear-gradient(135deg,var(--br1),var(--br2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--brink);flex-shrink:0}
+header h1{font-size:16px;font-weight:700;color:var(--tx)}
+header p{font-size:13px;color:var(--td);font-family:'SF Mono','Courier New',monospace}
+header .actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+header a.gl{font-size:13px;color:var(--td);text-decoration:none;border:1px solid var(--bd);border-radius:var(--rs);padding:8px 12px}
+header a.gl:hover{color:var(--tx);border-color:var(--br1)}
+.themebtn{background:var(--s2);border:1px solid var(--bd);color:var(--td);border-radius:var(--rs);padding:9px 13px;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+.themebtn:active,.themebtn:hover{border-color:var(--br1);color:var(--tx)}
+
+.wrap{max-width:760px;margin:0 auto;padding:30px 18px 90px}
+
+.hero{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:26px;margin-bottom:26px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--br1),var(--br2))}
+.hero .ic{font-size:32px;margin-bottom:10px}
+.hero h2{font-size:25px;font-weight:800;margin-bottom:8px}
+.hero p{font-size:16.5px;color:var(--td)}
+
+h3{font-size:20px;font-weight:800;margin:34px 0 6px;display:flex;align-items:center;gap:10px}
+h3 .n{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--br1),var(--br2));color:var(--brink);font-size:14px;font-family:'SF Mono','Courier New',monospace;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sub{font-size:15.5px;color:var(--td);margin:0 0 13px 38px}
+p.par{font-size:16px;color:var(--tx);margin:11px 0}
+
+.tag{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:11px;padding:3px 8px;border-radius:99px;border:1px solid;margin-left:6px;vertical-align:middle}
+.ttk{background:rgba(244,114,182,.1);color:var(--c-pink);border-color:rgba(244,114,182,.3)}
+
+table.props{width:100%;border:1px solid var(--bd);border-radius:var(--rs);border-collapse:separate;border-spacing:0;overflow:hidden;margin:12px 0}
+table.props th{background:rgba(34,211,238,.1);border-bottom:1px solid var(--bd);padding:9px 13px;font-family:'SF Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--tdm);text-align:left;font-weight:400}
+table.props td{padding:13px;border-bottom:1px solid var(--bd);font-size:15px;color:var(--td);vertical-align:top}
+table.props tr:last-child td{border-bottom:none}
+table.props td:first-child{width:38%;color:var(--tx);font-weight:600}
+.pt{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+
+.badge{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:11px;padding:2px 7px;border-radius:99px;border:1px solid}
+.tb{border-color:rgba(52,211,153,.4);color:var(--c-green)}
+.td2{border-color:rgba(251,146,60,.4);color:var(--c-orange)}
+.tt2{border-color:rgba(79,124,255,.4);color:var(--c-blue)}
+.te{border-color:rgba(167,139,250,.4);color:var(--c-purple)}
+.tn{border-color:rgba(244,114,182,.4);color:var(--c-pink)}
+.tc{border-color:rgba(148,163,184,.4);color:var(--c-slate)}
+.wu{background:rgba(52,211,153,.09);color:var(--c-green);border-color:rgba(52,211,153,.28)}
+.ws{background:rgba(79,124,255,.09);color:var(--c-blue);border-color:rgba(79,124,255,.28)}
+.wa{background:rgba(167,139,250,.09);color:var(--c-purple);border-color:rgba(167,139,250,.28)}
+
+ol.steps{list-style:none;counter-reset:s;margin:14px 0}
+ol.steps li{counter-increment:s;position:relative;padding:0 0 18px 42px;font-size:15px;color:var(--td)}
+ol.steps li::before{content:counter(s);position:absolute;left:0;top:-2px;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--br1),var(--br2));color:var(--brink);font-family:'SF Mono','Courier New',monospace;font-size:13px;display:flex;align-items:center;justify-content:center}
+ol.steps li:not(:last-child)::after{content:'';position:absolute;left:14px;top:28px;bottom:0;width:2px;background:var(--bd)}
+ol.steps li b{color:var(--tx);display:block;font-size:15.5px;margin-bottom:3px;font-weight:600}
+
+.note{border-radius:var(--rs);padding:13px 15px;font-size:15px;margin:14px 0;line-height:1.6;border-left:4px solid}
+.nw{background:rgba(251,146,60,.1);border-color:#fb923c;color:var(--c-warn-tx)}
+.ni{background:rgba(79,124,255,.1);border-color:#4f7cff;color:var(--c-info-tx)}
+.nok{background:rgba(52,211,153,.1);border-color:#34d399;color:var(--c-ok-tx)}
+.ne{background:rgba(248,113,113,.1);border-color:#f87171;color:var(--c-err-tx)}
+.note b{color:var(--tx)}
+
+code{font-family:'SF Mono','Courier New',monospace;font-size:14px;background:rgba(34,211,238,.14);color:var(--c-blue);padding:2px 6px;border-radius:4px}
+b.hl{color:var(--tx)}
+footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--bd);font-size:12.5px;color:var(--tdm);text-align:center}
+@media print{html,body{background:#fff!important;color:#111!important}header{position:static}.themebtn,header a.gl{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="lm">OF</div>
+  <div>
+    <h1>Responsable de Orden de Facturación</h1>
+    <p>Documento de referencia · Ticket</p>
+  </div>
+  <div class="actions">
+    <a class="gl" href="guia-facturacion-interfase.html">Guía interactiva →</a>
+    <button id="themebtn" class="themebtn" onclick="toggleTheme()">🌙 Oscuro</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <div class="ic">🧾</div>
+    <h2>Tu rol como responsable</h2>
+    <p>Sos quien revisa el CRM, controla los datos de los tickets a tu cargo, los corrige si hace falta y dispara la factura. El sistema no factura los tickets manuales por vos: necesitan tu visto bueno.</p>
+  </div>
+
+  <h3><span class="n">1</span>Tu día a día</h3>
+  <p class="sub">Revisar el CRM, ocuparte de tus tickets y disparar la factura.</p>
+  <ol class="steps">
+    <li><b>Entrá al CRM y mirá tus tickets</b>En el pipeline de facturación manual. Los tickets asignados a vos son los que tenés que gestionar.</li>
+    <li><b>Quedate con los que están en «Próximos a facturar»</b>Son los únicos editables. Un ticket llega acá cuando es manual y faltan menos de 30 días para la fecha propuesta por el vendedor.</li>
+    <li><b>Revisá y corregí los datos</b>Monto, cantidad, descuento, fecha. Más abajo está el detalle de qué se puede tocar y qué no.</li>
+    <li><b>Tocá «Facturar Ahora»</b>Ese es el paso que emite la factura. Hasta que no lo toques, el ticket se queda esperando.</li>
+  </ol>
+  <div class="note ni">ℹ️ El ticket queda en <b>Próximos a facturar</b> hasta que vos lo revises, lo corrijas y toques <b>Facturar Ahora</b>. El sistema no lo factura solo: los manuales siempre necesitan tu confirmación.</div>
+
+  <h3><span class="n">2</span>Cuándo es editable un ticket</h3>
+  <p class="sub">Regla de oro: solo los tickets manuales en la etapa Próximos a facturar.</p>
+  <p class="par">Un ticket entra a la etapa <b class="hl">Próximos a facturar</b> cuando se cumplen <b class="hl">dos condiciones</b>:</p>
+  <ol class="steps">
+    <li><b>Es una línea manual</b>Las líneas automáticas no pasan por acá: el sistema las factura solo en la fecha programada.</li>
+    <li><b>Faltan menos de 30 días</b>Cuando la fecha propuesta por el vendedor está a menos de 30 días, el ticket entra a la etapa y queda esperando tu revisión.</li>
+  </ol>
+  <table class="props">
+    <thead><tr><th>Propiedad</th><th>¿Para qué sirve?</th></tr></thead>
+    <tbody>
+      <tr><td>Etapa del pipeline<div class="pt"><span class="badge te">Opción</span> <span class="badge ws">El sistema</span></div></td><td>El sistema lo mueve a <b>Próximos a facturar</b> cuando es manual y faltan menos de 30 días. Es la única etapa en la que podés editar.</td></tr>
+      <tr><td>Fecha de cobro esperada<div class="pt"><span class="badge td2">Fecha</span> <span class="badge wa">Ambos</span></div></td><td>La fecha propuesta por el vendedor. Es la que dispara la regla de los 30 días.</td></tr>
+    </tbody>
+  </table>
+  <div class="note nw">⚠️ Si el ticket es <b>automático</b> o todavía falta <b>más de 30 días</b>, no vas a poder editarlo. Las correcciones solo se permiten en la etapa Próximos a facturar.</div>
+
+  <h3><span class="n">3</span>Qué podés corregir <span class="tag ttk">Ticket</span></h3>
+  <p class="sub">Estas propiedades las editás vos directo en el ticket, antes de facturar.</p>
+  <table class="props">
+    <thead><tr><th>Propiedad</th><th>¿Para qué sirve?</th></tr></thead>
+    <tbody>
+      <tr><td>Monto unitario<div class="pt"><span class="badge tn">Número</span> <span class="badge wu">El usuario</span></div></td><td>Precio por unidad. Cambialo si el cobro acordado no coincide.</td></tr>
+      <tr><td>Cantidad<div class="pt"><span class="badge tn">Número</span> <span class="badge wu">El usuario</span></div></td><td>Cuántas unidades. En cupo por horas = horas a cobrar.</td></tr>
+      <tr><td>Descuento %<div class="pt"><span class="badge tn">Número</span> <span class="badge wu">El usuario</span></div></td><td>Descuento en porcentaje. Editable antes de facturar.</td></tr>
+      <tr><td>Descuento por unidad<div class="pt"><span class="badge tn">Número</span> <span class="badge wu">El usuario</span></div></td><td>Descuento de monto fijo por unidad. Editable.</td></tr>
+      <tr><td>Fecha de cobro esperada<div class="pt"><span class="badge td2">Fecha</span> <span class="badge wu">El usuario</span></div></td><td>Cuándo se planificó el cobro. Se puede mover si hace falta.</td></tr>
+      <tr><td>Responsable asignado<div class="pt"><span class="badge tt2">Texto</span> <span class="badge wu">El usuario</span></div></td><td>Quién procesa el ticket. Se puede reasignar. El sistema no lo pisa.</td></tr>
+      <tr><td>Observaciones ventas<div class="pt"><span class="badge tt2">Texto</span> <span class="badge wu">El usuario</span></div></td><td>El mensaje que dejó el vendedor al configurar la línea. Sirve de referencia.</td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">4</span>Propiedades de cálculo — no se editan <span class="tag ttk">Ticket</span></h3>
+  <p class="sub">Estas las maneja el sistema solo. No pelees con ellas: se actualizan solas.</p>
+  <table class="props">
+    <thead><tr><th>Propiedad</th><th>¿Para qué sirve?</th></tr></thead>
+    <tbody>
+      <tr><td>Total a facturar<div class="pt"><span class="badge tc">Calculado</span> <span class="badge ws">El sistema</span></div></td><td>El sistema lo arma con <code>cantidad × precio − descuentos</code>. Se recalcula solo cuando corregís lo de arriba.</td></tr>
+      <tr><td>Número de factura Nodum<div class="pt"><span class="badge tt2">Texto</span> <span class="badge ws">El sistema</span></div></td><td>El número en el ERP. Aparece recién cuando la factura se emite.</td></tr>
+      <tr><td>Etapa de la factura<div class="pt"><span class="badge te">Opción</span> <span class="badge ws">El sistema</span></div></td><td>Pendiente, Emitida, Enviada, Pagada, Cancelada. Se actualiza solo.</td></tr>
+      <tr><td>Fecha real de facturación<div class="pt"><span class="badge td2">Fecha</span> <span class="badge ws">El sistema</span></div></td><td>Cuándo se emitió de verdad. La pone el sistema.</td></tr>
+      <tr><td>Moneda<div class="pt"><span class="badge te">Opción</span> <span class="badge ws">El sistema</span></div></td><td>La moneda del cobro. Viene de la configuración de la línea.</td></tr>
+      <tr><td>Error de facturación<div class="pt"><span class="badge tt2">Texto</span> <span class="badge ws">El sistema</span></div></td><td>Si algo falla, acá se explica qué pasó. Primer lugar para mirar ante un problema.</td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">5</span>El botón que dispara todo <span class="tag ttk">Ticket</span></h3>
+  <table class="props">
+    <thead><tr><th>Propiedad</th><th>¿Para qué sirve?</th></tr></thead>
+    <tbody>
+      <tr><td>Facturar Ahora<div class="pt"><span class="badge tb">Sí/No</span> <span class="badge wu">El usuario</span></div></td><td>Tocá <b>Sí</b> para emitir la factura. Solo funciona en tickets manuales en Próximos a facturar. Después vuelve solo a No.</td></tr>
+    </tbody>
+  </table>
+  <div class="note nok">✅ Corregí lo editable, dejá que el sistema recalcule el total, y recién ahí tocá <b>Facturar Ahora</b>.</div>
+
+  <footer>Interfase Billing Engine · Documento de referencia para Responsables de OF</footer>
+</div>
+
+<script>
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  try{localStorage.setItem('if-theme',t);}catch(e){}
+  var b=document.getElementById('themebtn');
+  if(b)b.textContent=(t==='dark')?'☀️ Claro':'🌙 Oscuro';
+  var m=document.querySelector('meta[name=theme-color]');
+  if(m)m.setAttribute('content',(t==='dark')?'#0b0d14':'#eef1f6');
+}
+function toggleTheme(){
+  var cur=document.documentElement.getAttribute('data-theme')||'light';
+  applyTheme(cur==='dark'?'light':'dark');
+}
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
+</script>
+</body>
+</html>

@@ -1,0 +1,258 @@
+[
+  {
+    "clave": "1168",
+    "props": {
+      "name": "Acronar S.A.",
+      "razon_social": "ACRONAR S.A.",
+      "rut": "213637760012",
+      "codigo_cliente_nodum": "0001168",
+      "codigo_empresa_contactos": "0001168",
+      "giro_comercial": "Eess Axion",
+      "country": "Uruguay",
+      "state": "Montevideo",
+      "city": "Montevideo",
+      "address": "Agraciada 2704 y Entre Rios esquina Entre Rios",
+      "phone": "22097433",
+      "telefono_1": "22097433",
+      "telefono_2": "22098427"
+    }
+  },
+  {
+    "clave": "2407",
+    "props": {
+      "name": "ANP",
+      "razon_social": "Administración Nacional de Puertos",
+      "rut": "212596710018",
+      "codigo_cliente_nodum": "0001377",
+      "codigo_empresa_contactos": "0002407",
+      "giro_comercial": "Gobierno",
+      "country": "Uruguay",
+      "state": "Montevideo",
+      "city": "Montevideo",
+      "address": "Rambla 25 de agosto de 1825 N° 160 entre Guaraní y Maciel",
+      "zip": "11000",
+      "domain": "anp.com.uy",
+      "website": "http://www.anp.com.uy/",
+      "phone": "1901",
+      "telefono_1": "1901",
+      "telefono_2": "29164747",
+      "telefono_3": "29160734"
+    }
+  },
+  {
+    "clave": "1185",
+    "props": {
+      "name": "ANTEL",
+      "razon_social": "ANTEL",
+      "rut": "211003420017",
+      "codigo_cliente_nodum": "0001185",
+      "codigo_empresa_contactos": "0001185",
+      "giro_comercial": "Telecomunicaciones, Utility, Sector Público",
+      "country": "Uruguay",
+      "state": "Montevideo",
+      "city": "Montevideo",
+      "address": "Paraguay 2797 esq. Panama",
+      "zip": "11800",
+      "domain": "antel.com.uy",
+      "website": "http://www.antel.com.uy",
+      "phone": "29280000",
+      "telefono_1": "29280000",
+      "telefono_2": "24088887"
+    }
+  },
+  {
+    "clave": "3828",
+    "props": {
+      "name": "Banco Central de Paraguay",
+      "razon_social": "Banco Central de Paraguay",
+      "rut": "80009769-6",
+      "codigo_cliente_nodum": "0003137",
+      "codigo_empresa_contactos": "0003828",
+      "giro_comercial": "Banca",
+      "country": "Paraguay",
+      "state": "Capital",
+      "city": "Asunción",
+      "address": "Federacion Rusa y Augusto Roa Bastos N° 1767",
+      "domain": "bcp.gov.py",
+      "website": "http://www.bcp.gov.py/",
+      "phone": "+595216192326",
+      "telefono_1": "+595216192326",
+      "telefono_2": "+59521610408"
+    }
+  },
+  {
+    "clave": "7052",
+    "props": {
+      "name": "BLOSSON HONEY EAS",
+      "razon_social": "BLOSSON HONEY E.A.S",
+      "rut": "80161543-7",
+      "codigo_cliente_nodum": "0003242",
+      "codigo_empresa_contactos": "0007052",
+      "country": "Paraguay",
+      "state": "Paraguari",
+      "city": "La Colmena",
+      "address": "La Colmena"
+    }
+  },
+  {
+    "clave": "6407",
+    "props": {
+      "name": "Club Centenario",
+      "razon_social": "Club Centenario",
+      "rut": "80027621-3",
+      "codigo_cliente_nodum": "0003148",
+      "codigo_empresa_contactos": "0006407",
+      "country": "Paraguay",
+      "state": "Capital",
+      "city": "Asunción",
+      "address": "Av. Mariscal López 2351 casi Venezuela",
+      "domain": "clubcentenario.org.py",
+      "website": "https://www.clubcentenario.org.py/",
+      "phone": "2470000",
+      "telefono_1": "2470000"
+    }
+  },
+  {
+    "clave": "1207",
+    "props": {
+      "name": "CYNEL S.A ( RUTA )",
+      "razon_social": "CYNEL S.A ( RUTA )",
+      "rut": "211196510013",
+      "codigo_cliente_nodum": "0001207",
+      "codigo_empresa_contactos": "0001207",
+      "giro_comercial": "EESS Ancap",
+      "country": "Uruguay",
+      "state": "Paysandú",
+      "city": "Paysandú",
+      "address": "Ruta 3 km 375.800",
+      "phone": "47225488",
+      "telefono_1": "47225488"
+    }
+  },
+  {
+    "clave": "6690",
+    "props": {
+      "name": "DNIT",
+      "razon_social": "Direccion Nacional de Ingresos Tributarios",
+      "rut": "80137559-2",
+      "codigo_cliente_nodum": "0003218",
+      "codigo_empresa_contactos": "0006690",
+      "giro_comercial": "Gobierno",
+      "country": "Paraguay",
+      "state": "Capital",
+      "city": "Asunción",
+      "address": "Yegros entre Eligio Ayala y Mariscal Lopez",
+      "domain": "dnit.gov.py",
+      "website": "http://www.dnit.gov.py/web/portal-institucional/"
+    }
+  },
+  {
+    "clave": "6481",
+    "props": {
+      "name": "Granja Avicola La Blanca PECHUGON",
+      "razon_social": "GRANJA AVICOLA LA BLANCA S.A",
+      "rut": "80019740-2",
+      "codigo_cliente_nodum": "0003171",
+      "codigo_empresa_contactos": "0006481",
+      "country": "Paraguay",
+      "state": "Central",
+      "city": "Capiata",
+      "address": "Ruta 2 Mcal. Estigarribia Km. 20.",
+      "domain": "pechugon.com",
+      "website": "https://www.pechugon.com/",
+      "phone": "+595228633450",
+      "telefono_1": "+595228633450"
+    }
+  },
+  {
+    "clave": "2340",
+    "props": {
+      "name": "Intendencia de Canelones",
+      "razon_social": "Intendencia de Canelones",
+      "rut": "020071360012",
+      "codigo_cliente_nodum": "0001569",
+      "codigo_empresa_contactos": "0002340",
+      "giro_comercial": "Intendencia",
+      "country": "Uruguay",
+      "state": "Canelones",
+      "city": "Canelones",
+      "address": "Tomás Berreta 370 esq. Treinta y Tres",
+      "zip": "90000",
+      "domain": "imcanelones.gub.uy",
+      "website": "http://www.imcanelones.gub.uy/",
+      "phone": "43322288",
+      "telefono_1": "43322288"
+    }
+  },
+  {
+    "clave": "3453",
+    "props": {
+      "name": "Intendencia de Treinta y Tres",
+      "razon_social": "Intendencia de Treinta y Tres",
+      "rut": "200052290010",
+      "codigo_cliente_nodum": "0001910",
+      "codigo_empresa_contactos": "0003453",
+      "country": "Uruguay",
+      "state": "Treinta y tres",
+      "address": "Manuel Lavalleja 1130",
+      "domain": "imtt.gub.uy",
+      "website": "http://www.imtt.gub.uy",
+      "phone": "44522108",
+      "telefono_1": "44522108",
+      "telefono_2": "44522162"
+    }
+  },
+  {
+    "clave": "3900",
+    "props": {
+      "name": "ISA PARAGUAY S.A",
+      "razon_social": "ISA PARAGUAY S.A",
+      "rut": "80094652-9",
+      "codigo_cliente_nodum": "0001896",
+      "codigo_empresa_contactos": "0003900",
+      "country": "Paraguay",
+      "state": "Capital",
+      "city": "Asunción",
+      "address": "Avda. España 2028 - Edificio Urano esquina Brasilia",
+      "zip": "1586",
+      "domain": "isaportal.com.py",
+      "website": "http://www.isaportal.com.py",
+      "phone": "+595213280171",
+      "telefono_1": "+595213280171"
+    }
+  },
+  {
+    "clave": "3640",
+    "props": {
+      "name": "Junta Departamental de Canelones",
+      "razon_social": "Junta Departamental de Canelones",
+      "rut": "020071350017",
+      "codigo_cliente_nodum": "0001783",
+      "codigo_empresa_contactos": "0003640",
+      "country": "Uruguay",
+      "state": "Canelones",
+      "city": "Canelones",
+      "address": "Luis Alberto de Herrera 473",
+      "phone": "43322420",
+      "telefono_1": "43322420"
+    }
+  },
+  {
+    "clave": "2285",
+    "props": {
+      "name": "Serinal S.A",
+      "razon_social": "Serinal S.A",
+      "rut": "214069820018",
+      "codigo_cliente_nodum": "0001289",
+      "codigo_empresa_contactos": "0002285",
+      "giro_comercial": "Eess Axion",
+      "country": "Uruguay",
+      "state": "Montevideo",
+      "city": "Montevideo",
+      "address": "Bvar. Jose Batlle y Ordoñez 3326 esq Cádiz",
+      "phone": "25080785",
+      "telefono_1": "25080785",
+      "telefono_2": "25094409"
+    }
+  }
+]

@@ -1,36 +1,51 @@
 <!DOCTYPE html>
-<html lang="es" style="background:#0b0d14!important;color-scheme:dark">
+<html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0b0d14">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eef1f6">
 <title>Guía de Facturación · Interfase</title>
+<script>(function(){try{var t=localStorage.getItem('if-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{background:#0b0d14!important;color-scheme:dark!important}
+html{background:var(--bg)!important}
 :root{
-  --bg:#0b0d14;--s1:#12151f;--s2:#181c28;--bd:#222738;
-  --a:#4f7cff;--a2:#a78bfa;--a3:#34d399;--a4:#fb923c;--a5:#f472b6;
-  --tx:#e8eaf2;--td:#8891aa;--tdm:#44506a;--r:12px;--rs:9px;
+color-scheme:light;
+--bg:#eef1f6;--s1:#ffffff;--s2:#e7ebf3;--bd:#cdd5e3;
+--tx:#1b2333;--td:#4a566e;--tdm:#7c89a3;
+--c-warn-tx:#8a5212;--c-info-tx:#274bb5;--c-ok-tx:#15724a;--c-err-tx:#b02a26;
+--c-green:#0f7a4d;--c-orange:#a85410;--c-blue:#2b50c0;--c-purple:#6b46d0;
+--c-pink:#b4377f;--c-slate:#566377;--c-greenstrong:#0e9a61;
+--r:12px;--rs:9px;
+}
+html[data-theme="dark"]{
+color-scheme:dark;
+--bg:#0b0d14;--s1:#12151f;--s2:#181c28;--bd:#222738;
+--tx:#e8eaf2;--td:#aab4ca;--tdm:#5b6680;
+--c-warn-tx:#e8c4a0;--c-info-tx:#a0b4e8;--c-ok-tx:#a0e8d0;--c-err-tx:#e8a0a0;
+--c-green:#6ee8c0;--c-orange:#fdb27c;--c-blue:#7fa8ff;--c-purple:#c4b0fd;
+--c-pink:#f9a8d4;--c-slate:#94a3b8;--c-greenstrong:#34d399;
 }
 body{
-  background:#0b0d14!important;background-color:#0b0d14!important;
-  color:#e8eaf2!important;
+  background:var(--bg)!important;background-color:var(--bg)!important;
+  color:var(--tx)!important;
   font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;
   font-weight:400;min-height:100vh;-webkit-text-size-adjust:100%;
 }
-body::before{content:'';position:fixed;inset:0;background:#0b0d14;z-index:-999;pointer-events:none}
+body::before{content:'';position:fixed;inset:0;background:var(--bg);z-index:-999;pointer-events:none}
 
-header{background:#0b0d14;border-bottom:1px solid #222738;padding:14px 16px;position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:12px}
-.lm{width:30px;height:30px;background:linear-gradient(135deg,#4f7cff,#a78bfa);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#fff;flex-shrink:0}
-header h1{font-size:14px;font-weight:700;color:#e8eaf2}
-header p{font-size:11px;color:#8891aa;font-family:'SF Mono','Courier New',monospace}
+header{background:var(--bg);border-bottom:1px solid var(--bd);padding:14px 16px;position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:12px}
+.lm{width:30px;height:30px;background:linear-gradient(135deg,#4f7cff,#a78bfa);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#fff;flex-shrink:0}
+header h1{font-size:16px;font-weight:700;color:var(--tx)}
+header p{font-size:13px;color:var(--td);font-family:'SF Mono','Courier New',monospace}
+.themebtn{margin-left:auto;flex-shrink:0;background:var(--s2);border:1px solid var(--bd);color:var(--td);border-radius:var(--rs);padding:9px 13px;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;-webkit-tap-highlight-color:transparent}
+.themebtn:active,.themebtn:hover{border-color:var(--c-blue);color:var(--tx)}
 
 .wrap{max-width:680px;margin:0 auto;padding:0 16px 90px}
 
 /* ── INTRO ── */
-#intro{min-height:calc(100dvh - 58px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 16px;background:#0b0d14}
+#intro{min-height:calc(100dvh - 58px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 16px;background:var(--bg)}
 
 /* ── BUDDY ── */
 .buddy-scene{position:relative;margin-bottom:28px;display:inline-block}
@@ -49,22 +64,23 @@ header p{font-size:11px;color:#8891aa;font-family:'SF Mono','Courier New',monosp
 .barm.l{left:-11px;transform:rotate(14deg);transform-origin:top center;animation:wave 2.2s ease-in-out infinite}
 .barm.r{right:-11px;transform:rotate(-14deg)}
 @keyframes wave{0%,100%{transform:rotate(14deg)}50%{transform:rotate(-22deg)}}
-.bubble{position:absolute;left:96px;top:-4px;background:#181c28;border:1.5px solid #4f7cff;border-radius:11px 11px 11px 3px;padding:9px 12px;font-size:12px;color:#e8eaf2;line-height:1.45;min-width:170px;max-width:240px;box-shadow:0 4px 18px rgba(79,124,255,.2);opacity:0;transform:scale(.85) translateX(-5px);transition:opacity .25s,transform .25s;font-style:italic;text-align:left;pointer-events:none}
+.bubble{position:absolute;left:96px;top:-4px;background:var(--s2);border:1.5px solid #4f7cff;border-radius:11px 11px 11px 3px;padding:9px 12px;font-size:14px;color:var(--tx);line-height:1.45;min-width:170px;max-width:240px;box-shadow:0 4px 18px rgba(79,124,255,.2);opacity:0;transform:scale(.85) translateX(-5px);transition:opacity .25s,transform .25s;font-style:italic;text-align:left;pointer-events:none}
 .bubble.on{opacity:1;transform:scale(1) translateX(0)}
 .bubble::before{content:'';position:absolute;left:-7px;top:14px;border-top:5px solid transparent;border-bottom:5px solid transparent;border-right:7px solid #4f7cff}
 @media(max-width:400px){.bubble{display:none}}
 
-.ititle{font-size:clamp(22px,5vw,30px);font-weight:800;line-height:1.2;margin-bottom:8px;color:#e8eaf2}
-.isub{color:#8891aa;font-size:13px;margin-bottom:30px;max-width:380px;line-height:1.5}
-.iq{font-family:'SF Mono','Courier New',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.15em;color:#4f7cff;margin-bottom:16px}
+.ititle{font-size:clamp(22px,5vw,30px);font-weight:800;line-height:1.2;margin-bottom:8px;color:var(--tx)}
+.isub{color:var(--td);font-size:15.5px;margin-bottom:30px;max-width:380px;line-height:1.5}
+.iq{font-family:'SF Mono','Courier New',monospace;font-size:12px;text-transform:uppercase;letter-spacing:.15em;color:var(--c-blue);margin-bottom:16px}
 
 /* ── TARJETAS PRINCIPALES ── */
 .mcards{display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:480px;width:100%}
 @media(max-width:380px){.mcards{grid-template-columns:1fr}}
-.mc{background:#12151f;border:1px solid #222738;border-radius:var(--r);padding:18px 16px;cursor:pointer;text-align:left;position:relative;overflow:hidden;opacity:0;transform:translateY(16px);transition:border-color .22s,transform .18s,box-shadow .22s;-webkit-tap-highlight-color:transparent}
+.mc{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:18px 16px;cursor:pointer;text-align:left;position:relative;overflow:hidden;opacity:0;transform:translateY(16px);transition:border-color .22s,transform .18s,box-shadow .22s;-webkit-tap-highlight-color:transparent}
 .mc.vis{animation:cardIn .42s ease forwards}
 .mc:nth-child(1).vis{animation-delay:.05s}.mc:nth-child(2).vis{animation-delay:.13s}
 .mc:nth-child(3).vis{animation-delay:.21s}.mc:nth-child(4).vis{animation-delay:.29s}
+.mc:nth-child(5).vis{animation-delay:.37s}.mc:nth-child(6).vis{animation-delay:.45s}
 @keyframes cardIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 .mc::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px;opacity:0;transition:opacity .22s}
 .mc:active{transform:scale(.97)}.mc:active::before,.mc:hover::before{opacity:1}
@@ -73,116 +89,122 @@ header p{font-size:11px;color:#8891aa;font-family:'SF Mono','Courier New',monosp
 .mc2::before{background:linear-gradient(90deg,#fb923c,#f472b6)}
 .mc3::before{background:linear-gradient(90deg,#a78bfa,#4f7cff)}
 .mc4::before{background:linear-gradient(90deg,#f87171,#f472b6)}
+.mc5::before{background:linear-gradient(90deg,#22d3ee,#4f7cff)}
+.mc6::before{background:linear-gradient(90deg,#facc15,#fb923c)}
 .mc-ic{font-size:22px;margin-bottom:8px}
-.mc-tt{font-size:13.5px;font-weight:700;color:#e8eaf2;margin-bottom:2px}
-.mc-sb{font-size:11px;color:#8891aa;line-height:1.4}
+.mc-tt{font-size:16px;font-weight:700;color:var(--tx);margin-bottom:2px}
+.mc-sb{font-size:13px;color:var(--td);line-height:1.4}
 
 /* ── PANEL PRINCIPAL ── */
-#mpanel{display:none;padding-top:24px;background:#0b0d14}
-.bc-nav{display:flex;align-items:center;gap:6px;font-size:10.5px;font-family:'SF Mono','Courier New',monospace;color:#44506a;margin-bottom:18px}
-.bc-nav span{color:#8891aa;cursor:pointer}.bc-nav span:hover{color:#4f7cff}
+#mpanel{display:none;padding-top:24px;background:var(--bg)}
+.bc-nav{display:flex;align-items:center;gap:6px;font-size:12.5px;font-family:'SF Mono','Courier New',monospace;color:var(--tdm);margin-bottom:18px}
+.bc-nav span{color:var(--td);cursor:pointer}.bc-nav span:hover{color:var(--c-blue)}
 
-.shero{background:#12151f;border:1px solid #222738;border-radius:var(--r);padding:20px;margin-bottom:14px;position:relative;overflow:hidden}
+.shero{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:20px;margin-bottom:14px;position:relative;overflow:hidden}
 .shero::before{content:'';position:absolute;top:0;left:0;right:0;height:2.5px}
 .sg::before{background:linear-gradient(90deg,#34d399,#4f7cff)}
 .so::before{background:linear-gradient(90deg,#fb923c,#f472b6)}
 .sp::before{background:linear-gradient(90deg,#a78bfa,#4f7cff)}
 .sr::before{background:linear-gradient(90deg,#f87171,#f472b6)}
+.s5::before{background:linear-gradient(90deg,#22d3ee,#4f7cff)}
+.s6::before{background:linear-gradient(90deg,#facc15,#fb923c)}
 .sh-ic{font-size:24px;margin-bottom:7px}
-.sh-tt{font-size:17px;font-weight:800;color:#e8eaf2;margin-bottom:2px}
-.sh-sb{font-size:12px;color:#8891aa}
+.sh-tt{font-size:20px;font-weight:800;color:var(--tx);margin-bottom:2px}
+.sh-sb{font-size:14px;color:var(--td)}
+.doclink{display:inline-flex;align-items:center;gap:6px;margin-top:11px;font-size:14px;color:var(--td);text-decoration:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:7px 12px;transition:all .18s;-webkit-tap-highlight-color:transparent}
+.doclink:active,.doclink:hover{color:#fff;border-color:rgba(79,124,255,.5);background:#1d2334}
 
 /* ── SUBOPCIONES ── */
 .scards{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
-.sc{background:#12151f;border:1px solid #222738;border-radius:var(--rs);padding:12px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:border-color .18s,background .18s,transform .14s;opacity:0;transform:translateX(-10px);-webkit-tap-highlight-color:transparent}
+.sc{background:var(--s1);border:1px solid var(--bd);border-radius:var(--rs);padding:12px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:border-color .18s,background .18s,transform .14s;opacity:0;transform:translateX(-10px);-webkit-tap-highlight-color:transparent}
 .sc.vis{animation:slideR .3s ease forwards}
 .sc:nth-child(1).vis{animation-delay:.04s}.sc:nth-child(2).vis{animation-delay:.1s}
 .sc:nth-child(3).vis{animation-delay:.16s}.sc:nth-child(4).vis{animation-delay:.22s}
 .sc:nth-child(5).vis{animation-delay:.28s}.sc:nth-child(6).vis{animation-delay:.34s}
 @keyframes slideR{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
-.sc:active,.sc:hover{border-color:rgba(79,124,255,.38);background:#181c28}
-.sc.active{border-color:rgba(79,124,255,.55);background:#181c28}
-.sc-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
-.sc-tt{font-size:12.5px;font-weight:600;color:#e8eaf2}
-.sc-sb{font-size:10.5px;color:#8891aa;margin-top:1px}
-.sc-ar{color:#44506a;font-size:11px;margin-left:auto;flex-shrink:0;transition:transform .16s,color .16s}
-.sc:hover .sc-ar,.sc.active .sc-ar{transform:translateX(3px);color:#4f7cff}
+.sc:active,.sc:hover{border-color:rgba(79,124,255,.38);background:var(--s2)}
+.sc.active{border-color:rgba(79,124,255,.55);background:var(--s2)}
+.sc-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.sc-tt{font-size:15px;font-weight:600;color:var(--tx)}
+.sc-sb{font-size:12.5px;color:var(--td);margin-top:1px}
+.sc-ar{color:var(--tdm);font-size:13px;margin-left:auto;flex-shrink:0;transition:transform .16s,color .16s}
+.sc:hover .sc-ar,.sc.active .sc-ar{transform:translateX(3px);color:var(--c-blue)}
 
 /* ── CONTENIDO ── */
 #cpanel{display:none;animation:fadeU .25s ease}
 @keyframes fadeU{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.ct-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:16px;background:#12151f;border:1px solid #222738;border-radius:var(--rs)}
+.ct-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:16px;background:var(--s1);border:1px solid var(--bd);border-radius:var(--rs)}
 .ct-ic{font-size:22px;flex-shrink:0}
-.ct-tt{font-size:16px;font-weight:800;color:#e8eaf2}
-.ct-sb{font-size:11.5px;color:#8891aa;margin-top:2px}
+.ct-tt{font-size:19px;font-weight:800;color:var(--tx)}
+.ct-sb{font-size:14px;color:var(--td);margin-top:2px}
 
 /* comentario del muñeco */
 .bco{display:flex;align-items:flex-start;gap:10px;margin:12px 0;padding:10px 12px;background:rgba(79,124,255,.07);border:1px solid rgba(79,124,255,.15);border-radius:var(--rs)}
 .bco-em{font-size:18px;flex-shrink:0}
-.bco-tx{font-size:11.5px;color:#8891aa;font-style:italic;line-height:1.5}
-.bco-tx strong{color:#e8eaf2;font-style:normal}
+.bco-tx{font-size:14px;color:var(--td);font-style:italic;line-height:1.5}
+.bco-tx strong{color:var(--tx);font-style:normal}
 
 /* etiqueta de sección */
-.sl{font-family:'SF Mono','Courier New',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.14em;color:#44506a;margin:16px 0 8px;display:flex;align-items:center;gap:8px}
-.sl::after{content:'';flex:1;height:1px;background:#222738}
+.sl{font-family:'SF Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--tdm);margin:16px 0 8px;display:flex;align-items:center;gap:8px}
+.sl::after{content:'';flex:1;height:1px;background:var(--bd)}
 
 /* cajita de inicio */
-.inicio-box{background:rgba(52,211,153,.07);border:1px solid rgba(52,211,153,.2);border-radius:var(--rs);padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#a0e8d0;line-height:1.6}
-.inicio-box strong{color:#34d399}
+.inicio-box{background:rgba(52,211,153,.07);border:1px solid rgba(52,211,153,.2);border-radius:var(--rs);padding:12px 14px;margin-bottom:12px;font-size:15px;color:var(--c-ok-tx);line-height:1.6}
+.inicio-box strong{color:var(--c-greenstrong)}
 
 /* ── TABLA DE PROPIEDADES ── */
-.pb{border:1px solid #222738;border-radius:var(--rs);overflow:hidden;margin-bottom:10px}
-.pbh{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;background:rgba(79,124,255,.08);border-bottom:1px solid #222738;padding:7px 12px;font-family:'SF Mono','Courier New',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#44506a}
-.pbr{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;padding:10px 12px;border-bottom:1px solid #222738;transition:background .12s;align-items:start}
+.pb{border:1px solid var(--bd);border-radius:var(--rs);overflow:hidden;margin-bottom:10px}
+.pbh{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;background:rgba(79,124,255,.08);border-bottom:1px solid var(--bd);padding:7px 12px;font-family:'SF Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--tdm)}
+.pbr{display:grid;grid-template-columns:1fr 1.8fr;gap:8px;padding:10px 12px;border-bottom:1px solid var(--bd);transition:background .12s;align-items:start}
 .pbr:last-child{border-bottom:none}
 .pbr:hover,.pbr:active{background:rgba(255,255,255,.02)}
-.p-tt{font-size:12.5px;font-weight:600;color:#e8eaf2;margin-bottom:3px;line-height:1.35}
+.p-tt{font-size:15px;font-weight:600;color:var(--tx);margin-bottom:3px;line-height:1.35}
 .p-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.p-desc{font-size:11.5px;color:#8891aa;line-height:1.55}
+.p-desc{font-size:14px;color:var(--td);line-height:1.55}
 
 /* badges de tipo y autor */
-.badge{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:9px;padding:2px 6px;border-radius:99px;border:1px solid}
-.tb{border-color:rgba(52,211,153,.35);color:#6ee8c0}
-.td2{border-color:rgba(251,146,60,.35);color:#fdb27c}
-.tt2{border-color:rgba(79,124,255,.35);color:#7fa8ff}
-.te{border-color:rgba(167,139,250,.35);color:#c4b0fd}
-.tn{border-color:rgba(244,114,182,.35);color:#f9a8d4}
-.tc{border-color:rgba(148,163,184,.3);color:#94a3b8}
-.wu{background:rgba(52,211,153,.07);color:#6ee8c0;border-color:rgba(52,211,153,.22)}
-.ws{background:rgba(79,124,255,.07);color:#7fa8ff;border-color:rgba(79,124,255,.22)}
-.wa{background:rgba(167,139,250,.07);color:#c4b0fd;border-color:rgba(167,139,250,.22)}
+.badge{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:11px;padding:2px 6px;border-radius:99px;border:1px solid}
+.tb{border-color:rgba(52,211,153,.35);color:var(--c-green)}
+.td2{border-color:rgba(251,146,60,.35);color:var(--c-orange)}
+.tt2{border-color:rgba(79,124,255,.35);color:var(--c-blue)}
+.te{border-color:rgba(167,139,250,.35);color:var(--c-purple)}
+.tn{border-color:rgba(244,114,182,.35);color:var(--c-pink)}
+.tc{border-color:rgba(148,163,184,.3);color:var(--c-slate)}
+.wu{background:rgba(52,211,153,.07);color:var(--c-green);border-color:rgba(52,211,153,.22)}
+.ws{background:rgba(79,124,255,.07);color:var(--c-blue);border-color:rgba(79,124,255,.22)}
+.wa{background:rgba(167,139,250,.07);color:var(--c-purple);border-color:rgba(167,139,250,.22)}
 
 /* etiquetas de objeto */
-.tag{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:9px;padding:2px 7px;border-radius:99px;border:1px solid;margin-left:6px}
-.tng{background:rgba(167,139,250,.1);color:#c4b0fd;border-color:rgba(167,139,250,.28)}
-.tlp{background:rgba(251,146,60,.1);color:#fdb27c;border-color:rgba(251,146,60,.28)}
-.ttk{background:rgba(244,114,182,.1);color:#f9a8d4;border-color:rgba(244,114,182,.28)}
-.tin{background:rgba(52,211,153,.1);color:#6ee8c0;border-color:rgba(52,211,153,.28)}
+.tag{display:inline-flex;align-items:center;font-family:'SF Mono','Courier New',monospace;font-size:11px;padding:2px 7px;border-radius:99px;border:1px solid;margin-left:6px}
+.tng{background:rgba(167,139,250,.1);color:var(--c-purple);border-color:rgba(167,139,250,.28)}
+.tlp{background:rgba(251,146,60,.1);color:var(--c-orange);border-color:rgba(251,146,60,.28)}
+.ttk{background:rgba(244,114,182,.1);color:var(--c-pink);border-color:rgba(244,114,182,.28)}
+.tin{background:rgba(52,211,153,.1);color:var(--c-green);border-color:rgba(52,211,153,.28)}
 
 /* ── PASOS ── */
 .steps{display:flex;flex-direction:column;margin:10px 0}
 .step{display:flex;gap:12px;align-items:flex-start;position:relative}
-.step:not(:last-child)::after{content:'';position:absolute;left:13px;top:28px;bottom:-10px;width:2px;background:#222738}
-.sn{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#4f7cff,#a78bfa);display:flex;align-items:center;justify-content:center;font-family:'SF Mono','Courier New',monospace;font-size:10px;color:#fff;flex-shrink:0;z-index:1}
+.step:not(:last-child)::after{content:'';position:absolute;left:13px;top:28px;bottom:-10px;width:2px;background:var(--bd)}
+.sn{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#4f7cff,#a78bfa);display:flex;align-items:center;justify-content:center;font-family:'SF Mono','Courier New',monospace;font-size:12px;color:#fff;flex-shrink:0;z-index:1}
 .sb2{padding:3px 0 14px;flex:1}
-.st{font-size:12.5px;font-weight:600;color:#e8eaf2;margin-bottom:2px}
-.sd{font-size:11.5px;color:#8891aa;line-height:1.55}
+.st{font-size:15px;font-weight:600;color:var(--tx);margin-bottom:2px}
+.sd{font-size:14px;color:var(--td);line-height:1.55}
 
 /* ── NOTAS ── */
-.note{border-radius:var(--rs);padding:10px 12px;font-size:11.5px;margin:10px 0;line-height:1.55;border-left:3px solid}
-.nw{background:rgba(251,146,60,.08);border-color:#fb923c;color:#e8c4a0}
-.ni{background:rgba(79,124,255,.08);border-color:#4f7cff;color:#a0b4e8}
-.nok{background:rgba(52,211,153,.08);border-color:#34d399;color:#a0e8d0}
-.ne{background:rgba(248,113,113,.08);border-color:#f87171;color:#e8a0a0}
+.note{border-radius:var(--rs);padding:10px 12px;font-size:14px;margin:10px 0;line-height:1.55;border-left:3px solid}
+.nw{background:rgba(251,146,60,.08);border-color:#fb923c;color:var(--c-warn-tx)}
+.ni{background:rgba(79,124,255,.08);border-color:var(--c-blue);color:var(--c-info-tx)}
+.nok{background:rgba(52,211,153,.08);border-color:var(--c-greenstrong);color:var(--c-ok-tx)}
+.ne{background:rgba(248,113,113,.08);border-color:#f87171;color:var(--c-err-tx)}
 
-code{font-family:'SF Mono','Courier New',monospace;font-size:11px;background:rgba(79,124,255,.13);color:#4f7cff;padding:1px 5px;border-radius:3px}
+code{font-family:'SF Mono','Courier New',monospace;font-size:13px;background:rgba(79,124,255,.13);color:var(--c-blue);padding:1px 5px;border-radius:3px}
 
 /* ── VOLVER ── */
-.back{display:inline-flex;align-items:center;gap:7px;background:#181c28;border:1px solid #222738;color:#8891aa;border-radius:var(--rs);padding:8px 14px;font-size:12.5px;cursor:pointer;transition:all .18s;margin-bottom:18px;-webkit-tap-highlight-color:transparent}
-.back:active,.back:hover{background:#4f7cff;color:#fff;border-color:#4f7cff}
+.back{display:inline-flex;align-items:center;gap:7px;background:var(--s2);border:1px solid var(--bd);color:var(--td);border-radius:var(--rs);padding:8px 14px;font-size:15px;cursor:pointer;transition:all .18s;margin-bottom:18px;-webkit-tap-highlight-color:transparent}
+.back:active,.back:hover{background:#4f7cff;color:#fff;border-color:var(--c-blue)}
 
-#topbtn{position:fixed;bottom:20px;right:16px;background:#181c28;border:1px solid #222738;color:#8891aa;border-radius:50%;width:36px;height:36px;font-size:14px;cursor:pointer;display:none;align-items:center;justify-content:center;transition:all .18s;z-index:300}
-#topbtn:active{background:#4f7cff;color:#fff;border-color:#4f7cff}
+#topbtn{position:fixed;bottom:20px;right:16px;background:var(--s2);border:1px solid var(--bd);color:var(--td);border-radius:50%;width:36px;height:36px;font-size:16px;cursor:pointer;display:none;align-items:center;justify-content:center;transition:all .18s;z-index:300}
+#topbtn:active{background:#4f7cff;color:#fff;border-color:var(--c-blue)}
 #topbtn.on{display:flex}
 </style>
 </head>
@@ -194,6 +216,7 @@ code{font-family:'SF Mono','Courier New',monospace;font-size:11px;background:rgb
     <h1>Guía de Facturación</h1>
     <p>Interfase Billing Engine</p>
   </div>
+  <button id="themebtn" class="themebtn" onclick="toggleTheme()">🌙 Oscuro</button>
 </header>
 
 <div id="intro" class="wrap">
@@ -236,6 +259,16 @@ code{font-family:'SF Mono','Courier New',monospace;font-size:11px;background:rgb
       <div class="mc-tt">Cancelaciones</div>
       <div class="mc-sb">Negocio, ticket, factura, línea</div>
     </div>
+    <div class="mc mc5" onclick="goSection('responsables')">
+      <div class="mc-ic">🧾</div>
+      <div class="mc-tt">Responsables de OF</div>
+      <div class="mc-sb">Revisar tickets y facturar</div>
+    </div>
+    <div class="mc mc6" onclick="goSection('admins')">
+      <div class="mc-ic">📨</div>
+      <div class="mc-tt">Admins de Facturación</div>
+      <div class="mc-sb">Avisos de HubSpot y ediciones</div>
+    </div>
   </div>
 </div>
 
@@ -243,8 +276,8 @@ code{font-family:'SF Mono','Courier New',monospace;font-size:11px;background:rgb
   <button class="back" onclick="goHome()">← Inicio</button>
   <div class="bc-nav">
     <span onclick="goHome()">Inicio</span>
-    <span style="color:#44506a">›</span>
-    <span id="bc-sec" style="color:#e8eaf2">—</span>
+    <span style="color:var(--tdm)">›</span>
+    <span id="bc-sec" style="color:var(--tx)">—</span>
   </div>
   <div id="shero" class="shero"></div>
   <div id="scards" class="scards"></div>
@@ -582,16 +615,16 @@ const C = {
     <strong>¿Qué es?</strong> Una nota de crédito revierte un cobro: emite una factura en <strong>negativo</strong> y, si la línea consumía cupo, le <strong>devuelve</strong> ese cupo al negocio.
   </div>
   <div class="sl">Antes de empezar: ¿la línea tiene cupo?</div>
-  <div class="note ni">ℹ️ <strong>Si tiene cupo</strong>, revisá dos cosas antes de emitir:<br>1) Que el <strong>cupo del negocio esté activo</strong>. Si se agotó y se desactivó, reactivalo a mano primero — si no, la NC no devuelve nada.<br>2) Si el cupo es <strong>Por Horas</strong> o <strong>Por Monto</strong>: de eso depende dónde va el número negativo.</div>
+  <div class="note ni">ℹ️ <strong>Si tiene cupo</strong>, revisá una sola cosa antes de emitir: que el <strong>cupo del negocio esté activo</strong>. Si se agotó y se desactivó, reactivalo a mano primero — si no, la NC no devuelve nada.</div>
   <div class="note nok">✅ <strong>Si no tiene cupo</strong>, no hay nada de cupo que revisar. Seguí con el paso a paso; solo se genera la factura negativa.</div>
-  <div class="bco"><div class="bco-em">🔢</div><div class="bco-tx"><strong>¿Dónde va el negativo?</strong> Si el cupo es por <strong>Monto</strong> → en el <strong>monto unitario</strong> del ticket. Si es por <strong>Horas</strong> → en la <strong>cantidad</strong> del ticket.</div></div>
+  <div class="bco"><div class="bco-em">🔢</div><div class="bco-tx"><strong>¿Dónde va el negativo?</strong> Siempre en la <strong>cantidad</strong> del ticket. Así, no importa si el cupo es por <strong>monto</strong> o por <strong>horas</strong>: el cupo se ajusta correctamente y los subtotales y totales quedan con los valores correctos. ✅</div></div>
   <div class="sl">Paso a paso</div>
   <div class="steps">
     <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Cloná la línea de pedido que vas a revertir</div><div class="sd">La misma línea que se facturó y querés acreditar.</div></div></div>
-    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Ponele precio <strong>0</strong> y facturación <strong>manual</strong></div><div class="sd">El monto negativo no va en la línea (no acepta negativos) — va en el ticket.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Ponele precio <strong>0</strong> y facturación <strong>manual</strong></div><div class="sd">La cantidad negativa no va en la línea (no acepta negativos) — va en el ticket.</div></div></div>
     <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Marcá <strong>NC = Sí</strong> en la línea de pedido</div><div class="sd">Con eso alcanza: el sistema lo copia al ticket solo. Marcalo antes de que se genere el ticket.</div></div></div>
     <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Guardá — se genera el ticket</div></div></div>
-    <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">Editá el ticket con el número en <strong>negativo</strong></div><div class="sd"><strong>Por Monto:</strong> monto unitario negativo (dejá la cantidad positiva). <strong>Por Horas:</strong> cantidad negativa.</div></div></div>
+    <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">Poné la <strong>cantidad</strong> del ticket en <strong>negativo</strong></div><div class="sd">Siempre la cantidad (ej. <code>-10</code>). No importa si el cupo es por monto o por horas: con eso el cupo se ajusta solo y los subtotales y totales quedan correctos.</div></div></div>
     <div class="step"><div class="sn">6</div><div class="sb2"><div class="st">Mandá a facturar el ticket</div><div class="sd">Se emite la factura negativa y, si aplica, se devuelve el cupo.</div></div></div>
   </div>
   <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
@@ -603,14 +636,132 @@ const C = {
   </div>
   <div class="sl">Ticket <span class="tag ttk">Ticket</span></div>
   <div class="pb">${CAB}
-    ${fila('Monto unitario','Número','usuario','<strong>Cupo por Monto:</strong> ponelo en negativo (ej. <code>-500</code>).')}
-    ${fila('Cantidad','Número','usuario','<strong>Cupo por Horas:</strong> ponela en negativo (ej. <code>-10</code>).')}
+    ${fila('Cantidad','Número','usuario','Ponela <strong>siempre en negativo</strong> (ej. <code>-10</code>). Con eso alcanza: sea cupo por monto o por horas, el cupo se ajusta correctamente y los subtotales y totales quedan con los valores correctos.')}
+    ${fila('Monto unitario','Número','usuario','Dejalo <strong>positivo</strong>, igual que en la factura original.')}
     ${fila('NC','Sí/No','sistema','Llega solo desde la línea de pedido. Es solo registro.')}
     ${fila('Facturar Ahora','Sí/No','usuario','Tocar <strong>Sí</strong> para emitir la nota de crédito.')}
   </div>
   <div class="note nok">✅ Si el negocio tiene espejo de Uruguay, en el negocio UY aparece un aviso con <strong>"ES NOTA DE CRÉDITO"</strong>. La NC de Uruguay se emite a mano, con este mismo procedimiento.</div>
   <div class="note nw">⚠️ No emitas una NC por <strong>más</strong> de lo que se consumió: el cupo consumido podría quedar negativo.</div>
-  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Dato:</strong> el sistema reconoce la nota de crédito por el <strong>monto negativo</strong> del ticket. La marca NC es solo para dejar registro. 📝</div></div>`,
+  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Dato:</strong> el sistema reconoce la nota de crédito por la <strong>cantidad negativa</strong> del ticket. La marca NC es solo para dejar registro. 📝</div></div>`,
+
+/* ═══ RESPONSABLES DE ÓRDENES DE FACTURACIÓN ═══ */
+
+'resp-flujo': `
+  <div class="inicio-box">
+    <strong>¿Cuál es tu rol?</strong> Como responsable de una orden de facturación, tu trabajo es <strong>revisar el CRM</strong> y ocuparte de los tickets que tenés a tu cargo: chequear que los datos estén bien, corregir lo que haga falta y disparar la factura.
+  </div>
+  <div class="sl">Paso a paso</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Entrá al CRM y mirá tus tickets</div><div class="sd">En el pipeline de facturación manual. Los tickets asignados a vos son los que tenés que gestionar.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Quedate con los que están en <strong>Próximos a facturar</strong></div><div class="sd">Son los únicos editables. Un ticket llega acá cuando es manual y faltan menos de 30 días para la fecha propuesta por el vendedor.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Revisá y corregí los datos</div><div class="sd">Monto, cantidad, descuento, fecha. Mirá "Qué corregir y qué no" para saber qué se puede tocar.</div></div></div>
+    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Tocá <strong>Facturar Ahora</strong></div><div class="sd">Ese es el paso que emite la factura. Hasta que no lo toques, el ticket se queda esperando.</div></div></div>
+  </div>
+  <div class="note ni">ℹ️ El ticket queda en <strong>Próximos a facturar</strong> hasta que vos lo revises, lo corrijas y toques <strong>Facturar Ahora</strong>. El sistema no lo factura solo: los manuales siempre necesitan tu visto bueno.</div>
+  <div class="bco"><div class="bco-em">🫡</div><div class="bco-tx">Tu firma es la que deja salir la factura. Revisá bien antes de tocar Facturar Ahora. ✅</div></div>`,
+
+'resp-etapa': `
+  <div class="inicio-box">
+    <strong>Regla de oro:</strong> solo son editables los tickets <strong>manuales</strong> que estén en la etapa <strong>Próximos a facturar</strong>.
+  </div>
+  <div class="sl">¿Cuándo entra un ticket a "Próximos a facturar"?</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Es una línea <strong>manual</strong></div><div class="sd">Las líneas automáticas no pasan por acá: el sistema las factura solo en la fecha programada.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Faltan <strong>menos de 30 días</strong></div><div class="sd">Cuando la fecha propuesta por el vendedor está a menos de 30 días, el ticket entra a la etapa.</div></div></div>
+    <div class="step"><div class="sn">✓</div><div class="sb2"><div class="st">Queda esperando tu revisión</div><div class="sd">Se mantiene en Próximos a facturar hasta que lo revises, corrijas y toques Facturar Ahora.</div></div></div>
+  </div>
+  <div class="sl">Estado del ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Etapa del pipeline','Opción','sistema','El sistema lo mueve a <strong>Próximos a facturar</strong> cuando es manual y faltan menos de 30 días. Es la única etapa en la que podés editar.')}
+    ${fila('Fecha de cobro esperada','Fecha','ambos','La fecha propuesta por el vendedor. Es la que dispara la regla de los 30 días.')}
+  </div>
+  <div class="note nw">⚠️ Si el ticket es <strong>automático</strong> o todavía falta <strong>más de 30 días</strong>, no vas a poder editarlo. Las correcciones solo se permiten en la etapa Próximos a facturar.</div>`,
+
+'resp-propiedades': `
+  <div class="bco"><div class="bco-em">📝</div><div class="bco-tx">Hay propiedades que <strong>vos corregís</strong> y otras que <strong>el sistema calcula</strong>. No pelees con las de cálculo: se actualizan solas. 🧮</div></div>
+  <div class="sl">Qué podés corregir <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Monto unitario','Número','usuario','Precio por unidad. Cambialo si el cobro acordado no coincide.')}
+    ${fila('Cantidad','Número','usuario','Cuántas unidades. En cupo por horas = horas a cobrar.')}
+    ${fila('Descuento %','Número','usuario','Descuento en porcentaje. Editable antes de facturar.')}
+    ${fila('Descuento por unidad','Número','usuario','Descuento de monto fijo por unidad. Editable.')}
+    ${fila('Fecha de cobro esperada','Fecha','usuario','Cuándo se planificó el cobro. Se puede mover si hace falta.')}
+    ${fila('Responsable asignado','Texto','usuario','Quién procesa el ticket. Se puede reasignar. El sistema no lo pisa.')}
+    ${fila('Observaciones ventas','Texto','usuario','El mensaje que dejó el vendedor al configurar la línea. Sirve de referencia.')}
+  </div>
+  <div class="sl">Propiedades de cálculo — no se editan <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Total a facturar','Calculado','sistema','El sistema lo arma con <code>cantidad × precio − descuentos</code>. Se recalcula solo cuando corregís lo de arriba.')}
+    ${fila('Número de factura Nodum','Texto','sistema','El número en el ERP. Aparece recién cuando la factura se emite.')}
+    ${fila('Etapa de la factura','Opción','sistema','Pendiente, Emitida, Enviada, Pagada, Cancelada. Se actualiza solo.')}
+    ${fila('Fecha real de facturación','Fecha','sistema','Cuándo se emitió de verdad. La pone el sistema.')}
+    ${fila('Moneda','Opción','sistema','La moneda del cobro. Viene de la configuración de la línea.')}
+    ${fila('Error de facturación','Texto','sistema','Si algo falla, acá se explica qué pasó. Primer lugar para mirar ante un problema.')}
+  </div>
+  <div class="sl">El botón que dispara todo <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Facturar Ahora','Sí/No','usuario','Tocá <strong>Sí</strong> para emitir la factura. Solo funciona en tickets manuales en Próximos a facturar. Después vuelve solo a No.')}
+  </div>
+  <div class="note nok">✅ Corregí lo editable, dejá que el sistema recalcule el total, y recién ahí tocá Facturar Ahora.</div>`,
+
+/* ═══ ADMINISTRADORES DE FACTURACIÓN ═══ */
+
+'admin-mensajes': `
+  <div class="inicio-box">
+    <strong>¿Qué vas a recibir?</strong> Cuando se solicita una facturación, te llega un <strong>mensaje de HubSpot</strong>. Hay dos grandes familias: <strong>manuales</strong> y <strong>automáticos</strong>.
+  </div>
+  <div class="sl">Los dos tipos de aviso</div>
+  <div class="pb">${CAB}
+    ${fila2('📝 Avisos manuales','Los dispara una persona: puede ser una urgencia del <strong>vendedor</strong> o un pedido estándar del <strong>responsable</strong>.')}
+    ${fila2('🤖 Avisos automáticos','Los genera el sistema solo: un <strong>alta</strong>, una <strong>edición</strong> o una <strong>baja</strong> en la generación de facturas.')}
+  </div>
+  <div class="bco"><div class="bco-em">📨</div><div class="bco-tx">En todos los avisos hay una <strong>URL para entrar</strong> y los <strong>datos de la factura</strong>, así hacés las ediciones directo. 🔗</div></div>`,
+
+'admin-manuales': `
+  <div class="inicio-box">
+    <strong>Avisos manuales:</strong> los dispara una persona. Se distinguen dos casos.
+  </div>
+  <div class="sl">Los dos casos</div>
+  <div class="pb">${CAB}
+    ${fila2('🚀 Facturación urgente','La emite el <strong>vendedor</strong>. Necesita facturar ya, fuera del ciclo normal.')}
+    ${fila2('📝 Facturación manual estándar','La emite el <strong>responsable</strong> de la orden cuando revisó el ticket y le dio el OK.')}
+  </div>
+  <div class="note ni">ℹ️ Los avisos manuales llegan <strong>cada 1 hora</strong> (08:10, 09:10… hasta 17:10) más una excepcional a las <strong>17:46</strong>. Mirá "¿Cuándo llegan?" para el detalle.</div>`,
+
+'admin-automaticos': `
+  <div class="inicio-box">
+    <strong>Avisos automáticos:</strong> los genera el sistema solo. Hay tres tipos.
+  </div>
+  <div class="sl">Los tres tipos</div>
+  <div class="pb">${CAB}
+    ${fila2('🟢 Alta','Se dispara cuando el <strong>cierre del negocio es Ganado</strong>. Arranca la generación de facturas.')}
+    ${fila2('✏️ Edición','Cuando el vendedor <strong>edita una propiedad relevante</strong> de la facturación.')}
+    ${fila2('🔴 Baja','Cuando se <strong>cancela la generación de facturas</strong> por alguna razón.')}
+  </div>
+  <div class="note ni">ℹ️ Los avisos automáticos caen <strong>todos los días a las 07:00 y a las 16:30</strong>. Mirá "¿Cuándo llegan?" para el detalle.</div>`,
+
+'admin-horarios': `
+  <div class="sl">Facturación automática</div>
+  <div class="inicio-box">
+    Caen <strong>todos los días</strong> en dos tandas fijas: <strong>07:00</strong> y <strong>16:30</strong>.
+  </div>
+  <div class="sl">Avisos manuales</div>
+  <div class="inicio-box">
+    Aparecen <strong>cada 1 hora</strong>: 08:10, 09:10, 10:10, 11:10… y así hasta las <strong>17:10</strong>. Más una excepcional a las <strong>17:46</strong>.
+  </div>
+  <div class="bco"><div class="bco-em">⏰</div><div class="bco-tx">El sistema <strong>junta los mensajes de cada hora en punto</strong> y los entrega aproximadamente a las <strong>xx:15</strong>. Así te llegan agrupados en vez de uno por uno. 📬</div></div>`,
+
+'admin-editar': `
+  <div class="inicio-box">
+    <strong>Cada aviso trae todo lo que necesitás:</strong> una <strong>URL para ingresar</strong> y los <strong>datos de la factura</strong> para hacer las correcciones.
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Abrí la URL del aviso</div><div class="sd">Te lleva al editor de facturas (<code>/invoice-editor</code>). Va a pedir usuario y contraseña.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Revisá los datos de la factura</div><div class="sd">Vienen identificados en el mismo aviso, así sabés qué factura estás tocando.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Editá lo que haga falta y guardá</div><div class="sd">Los cambios se propagan solos al ticket correspondiente.</div></div></div>
+  </div>
+  <div class="note ni">ℹ️ Es el mismo editor de facturas. Para el detalle de cada campo editable, mirá <strong>Ediciones → Editar una factura</strong>.</div>`,
 
 };
 
@@ -641,6 +792,19 @@ const SECS = {
     {k:'pausar-li',        ic:'⏸️',bg:'rgba(248,113,113,.13)',tt:'Pausar una línea de pedido', sb:'Sin cancelar el negocio'},
     {k:'nota-credito',     ic:'↩️',bg:'rgba(248,113,113,.13)',tt:'Emitir una Nota de Crédito',  sb:'Revertir un cobro y devolver el cupo'},
   ]},
+  responsables:{icon:'🧾',title:'Responsables de OF',hc:'s5',doc:'doc-responsable-of.html',sub:[
+    {k:'resp-flujo',       ic:'📋',bg:'rgba(34,211,238,.13)',tt:'Tu día a día',                sb:'Revisar el CRM, tus tickets, y disparar la factura'},
+    {k:'resp-etapa',       ic:'⏳',bg:'rgba(34,211,238,.13)',tt:'Cuándo es editable un ticket', sb:'Manual + etapa Próximos a facturar + 30 días'},
+    {k:'resp-propiedades', ic:'✏️',bg:'rgba(34,211,238,.13)',tt:'Qué corregir y qué no',        sb:'Propiedades editables vs. propiedades de cálculo'},
+  ]},
+  admins:{icon:'📨',title:'Administradores de Facturación',hc:'s6',doc:'doc-admin-facturacion.html',sub:[
+    {k:'admin-mensajes',   ic:'🔔',bg:'rgba(250,204,21,.13)',tt:'Los avisos de HubSpot',  sb:'Te llegan cuando se solicita una facturación'},
+    {k:'admin-manuales',   ic:'📝',bg:'rgba(250,204,21,.13)',tt:'Avisos manuales',         sb:'Urgente del vendedor o estándar del responsable'},
+    {k:'admin-automaticos',ic:'🤖',bg:'rgba(250,204,21,.13)',tt:'Avisos automáticos',      sb:'Alta, edición y baja'},
+    {k:'admin-horarios',   ic:'⏰',bg:'rgba(250,204,21,.13)',tt:'¿Cuándo llegan?',         sb:'Horarios de los avisos automáticos y manuales'},
+    {k:'admin-editar',     ic:'🔗',bg:'rgba(250,204,21,.13)',tt:'Editar desde el aviso',   sb:'La URL y los datos para corregir la factura'},
+    {k:'nota-credito',     ic:'↩️',bg:'rgba(250,204,21,.13)',tt:'Emitir una Nota de Crédito',sb:'Revertir un cobro y devolver el cupo'},
+  ]},
 };
 
 const BUDS = [
@@ -669,6 +833,14 @@ const SUBCOMS = {
   'cancelar-factura':'Las facturas no se borran, se cancelan. El sistema guarda el rastro de todo. 📋',
   'pausar-li':'Congelar una línea sin afectar el resto del negocio. ❄️',
   'nota-credito':'Una NC es como un "deshacer" del cobro: factura en negativo y te devuelve el cupo. ↩️',
+  'resp-flujo':'Tu misión: revisar, corregir y disparar. Sin tu OK, la factura no sale. 🫡',
+  'resp-etapa':'Solo los manuales en "Próximos a facturar" se dejan tocar. El resto, ni los mires. 🔒',
+  'resp-propiedades':'Lo que es de cálculo, dejalo en paz: el sistema lo hace por vos. 🧮',
+  'admin-mensajes':'Te van a llover avisos de HubSpot. Tranqui, te enseño a leerlos. 📬',
+  'admin-manuales':'¿Lo pidió el vendedor o el responsable? El aviso te lo dice. 👀',
+  'admin-automaticos':'Alta, edición o baja: el sistema te avisa de todo lo que hace solo. 🤖',
+  'admin-horarios':'Automáticos a las 7 y 16:30. Manuales cada hora, llegan a las xx:15. Agendalo. ⏰',
+  'admin-editar':'Cada aviso trae la URL y los datos. Un clic y a editar. 🔗',
 };
 
 /* ─── NAVEGACIÓN ─── */
@@ -689,7 +861,8 @@ function goSection(key){
   document.getElementById('shero').innerHTML=`
     <div class="sh-ic">${sec.icon}</div>
     <div class="sh-tt">${sec.title}</div>
-    <div class="sh-sb">Elegí una opción para ver las propiedades y el procedimiento</div>`;
+    <div class="sh-sb">Elegí una opción para ver las propiedades y el procedimiento</div>
+    ${sec.doc?`<a class="doclink" href="${sec.doc}" target="_blank" rel="noopener">📄 Ver todo como documento</a>`:''}`;
 
   const wrap=document.getElementById('scards');
   wrap.innerHTML='';
@@ -718,7 +891,7 @@ function goSub(key,cardEl){
   panel.innerHTML=`<div class="ct-head">
     <div class="ct-ic">${meta.ic}</div>
     <div><div class="ct-tt">${meta.tt}</div><div class="ct-sb">${meta.sb}</div></div>
-  </div>${C[key]||'<p style="color:#8891aa;padding:16px">Contenido no disponible.</p>'}`;
+  </div>${C[key]||'<p style="color:var(--td);padding:16px">Contenido no disponible.</p>'}`;
   if(SUBCOMS[key])say(SUBCOMS[key]);else sayR();
   setTimeout(()=>panel.scrollIntoView({behavior:'smooth',block:'start'}),80);
 }
@@ -740,11 +913,26 @@ window.addEventListener('load',()=>{
   document.querySelectorAll('.mc').forEach((c,i)=>
     setTimeout(()=>c.classList.add('vis'),350+i*90));
   setTimeout(()=>say('¡Hola! Soy tu guía de facturación. ¿En qué te ayudo? 👋'),700);
-  setTimeout(()=>say('Elegí una de las 4 categorías y te explico todo con detalle. 📖'),6400);
+  setTimeout(()=>say('Elegí una de las 6 categorías y te explico todo con detalle. 📖'),6400);
 });
 window.addEventListener('scroll',()=>{
   document.getElementById('topbtn').classList.toggle('on',window.scrollY>300);
 });
+
+/* ─── TEMA CLARO / OSCURO ─── */
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  try{localStorage.setItem('if-theme',t);}catch(e){}
+  const b=document.getElementById('themebtn');
+  if(b)b.textContent=(t==='dark')?'☀️ Claro':'🌙 Oscuro';
+  const m=document.querySelector('meta[name=theme-color]');
+  if(m)m.setAttribute('content',(t==='dark')?'#0b0d14':'#eef1f6');
+}
+function toggleTheme(){
+  const cur=document.documentElement.getAttribute('data-theme')||'light';
+  applyTheme(cur==='dark'?'light':'dark');
+}
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 </script>
 </body>
 </html>

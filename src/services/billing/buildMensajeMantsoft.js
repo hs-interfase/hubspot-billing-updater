@@ -17,6 +17,11 @@
 
 import logger from '../../../lib/logger.js';
 import { parseBool } from '../../utils/parsers.js';
+import { buildDealUrl } from '../../utils/hubspotPortal.js';
+
+// Flag de debug temporal: si SHOW_NULLS=true, las filas sin dato se muestran
+// igual con su título y "(sin datos)", para verificar que las propiedades llegan.
+const SHOW_NULLS = String(process.env.SHOW_NULLS || '').toLowerCase() === 'true';
 import {
   parseMansoftSnapshot,
   buildMansoftSnapshot,
@@ -96,7 +101,7 @@ function val(v) {
 
 function fmtNum(v) {
   const n = parseFloat(v);
-  return isNaN(n) ? '-' : n.toFixed(2);
+  return isNaN(n) ? null : n.toFixed(2);
 }
 
 function fmtValDiff(v) {
@@ -126,6 +131,8 @@ const STYLES = {
   diffTitle:     'font-size:13px;font-weight:bold;color:#9a6700;margin:10px 0 6px 0;',
   diffRow:       'margin:2px 0;padding:2px 0;font-family:monospace;font-size:13px;',
   footer:        'margin-top:16px;padding-top:8px;border-top:1px solid #dde3eb;font-size:12px;color:#888;',
+  nullVal:       'color:#b0b0b0;font-style:italic;',
+  link:          'color:#0056b3;text-decoration:underline;',
 };
 
 // ────────────────────────────────────────────────────────────
@@ -133,7 +140,10 @@ const STYLES = {
 // ────────────────────────────────────────────────────────────
 
 function buildRow(label, value) {
-  if (value === null) return '';
+  if (value === null || value === undefined || value === '') {
+    if (!SHOW_NULLS) return '';
+    return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> <span style="${STYLES.nullVal}">(sin datos)</span></div>`;
+  }
   return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${value}</div>`;
 }
 
@@ -148,6 +158,11 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
   const clienteFinal     = val(dealMeta.empresa_que_factura);
   const personaFactura   = val(dealMeta.persona_que_factura);
 
+  const dealUrl = buildDealUrl(dealMeta.portalId, dealMeta.dealId);
+  const dealLink = dealUrl
+    ? `<a href="${dealUrl}" style="${STYLES.link}">Ver negocio #${dealMeta.dealId}</a>`
+    : null;
+
   const rows = [
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Aviso Mantsoft — ${hoy}</div>`,
@@ -158,6 +173,7 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
     buildRow('Empresa que factura',  clienteFinal),
     buildRow('Persona que factura',  personaFactura),
     buildRow('Fecha del aviso',      hoy),
+    buildRow('Negocio',              dealLink),
   ];
 
   return rows.filter(r => r !== '').join('\n');
@@ -173,42 +189,53 @@ function buildLineItemBaseRows(li) {
 
   const total = fmtNum(lp.amount);
 
-  const fechaVenc  = val(lp.fecha_vencimiento_contrato)?.slice(0, 10);
   const freqRaw    = val(lp.recurringbillingfrequency) || val(lp.hs_recurring_billing_frequency);
-  const frecuencia = freqRaw || '-';
+  const frecuencia = freqRaw || null;
 
   const esRenovacion = String(lp.renovacion_automatica || '').toLowerCase() === 'true';
   const tipoLabel    = esRenovacion ? 'Renovación automática' : 'Plan fijo';
 
-  const pagosRestantes = val(lp.pagos_restantes);
-  const totalPagos     = val(lp.hs_recurring_billing_number_of_payments);
-  const pagosLabel     = (!esRenovacion && pagosRestantes && totalPagos)
-    ? `Quedan ${pagosRestantes} / ${totalPagos} pagos`
-    : null;
-
+  // ── Fechas: contrato (manual) vs facturación (calculada) ──
+  const inicioContrato = val(lp.inicio_del_contrato)?.slice(0, 10);          // Inicio del contrato
+  const vigenciaContrato = val(lp.fin_del_contrato)?.slice(0, 10);           // Fin / vigencia del contrato
+  const fechaInicioFact = val(lp.hs_recurring_billing_start_date)?.slice(0, 10); // cuándo se factura
   const fechaAncla  = val(lp.billing_anchor_date)?.slice(0, 10);
-  const fechaInicio = val(lp.hs_recurring_billing_start_date)?.slice(0, 10);
-  const anclaLabel  = (fechaAncla && fechaAncla !== fechaInicio) ? fechaAncla : null;
+  const anclaLabel  = (fechaAncla && fechaAncla !== fechaInicioFact) ? fechaAncla : null;
+
+  // ── Pagos ──
+  const totalPagos     = val(lp.hs_recurring_billing_number_of_payments);
+  const pagosEmitidos  = val(lp.pagos_emitidos);
+  const pagosRestantes = val(lp.pagos_restantes);
+  const cantidadPagos  = totalPagos || (esRenovacion ? 'Renovación automática' : null);
+  let progresoPagos = null;
+  if (pagosEmitidos && totalPagos)      progresoPagos = `${pagosEmitidos} de ${totalPagos} emitidos`;
+  else if (pagosRestantes && totalPagos) progresoPagos = `Quedan ${pagosRestantes} de ${totalPagos}`;
+  else if (pagosEmitidos)               progresoPagos = `${pagosEmitidos} emitidos`;
 
   return [
-    buildRow('Descripción',           val(lp.description)),
-    buildRow('Rubro',                 val(lp.of_rubro) || val(lp.rubro)),
-    buildRow('Nota',                  val(lp.nota)),
-    buildRow('Unidad de negocio',     val(lp.unidad_de_negocio)),
-    buildRow('Precio unitario',       fmtNum(lp.price)),
-    buildRow('Cantidad',              fmtNum(lp.quantity)),
-    buildRow('Descuento (%)',         fmtNum(lp.hs_discount_percentage)),
-    buildRow('Total',                 total),
-    buildRow('Impuestos', resolveTaxLabel(lp.hs_tax_rate_group_id)),
-    buildRow('Moneda',                val(lp.of_moneda)),
-    buildRow('Frecuencia',            frecuencia),
-    buildRow('Inicio de facturación', fechaInicio),
-    buildRow('Fecha ancla',           anclaLabel),
-    buildRow('Próxima fecha',         val(lp.billing_next_date)?.slice(0, 10)),
-    buildRow('Tipo',                  tipoLabel),
-    buildRow('Vencimiento contrato',  esRenovacion ? null : fechaVenc),
-    buildRow('Pagos',                 pagosLabel),
-    buildRow('Observaciones',         val(lp.observaciones)),
+    buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),
+    buildRow('Descripción',               val(lp.description)),
+    buildRow('Rubro',                     val(lp.of_rubro) || val(lp.rubro)),
+    buildRow('Nota',                      val(lp.nota)),
+    buildRow('Unidad de negocio',         val(lp.unidad_de_negocio)),
+    buildRow('Precio unitario',           fmtNum(lp.price)),
+    buildRow('Cantidad',                  fmtNum(lp.quantity)),
+    buildRow('Descuento (%)',             fmtNum(lp.hs_discount_percentage)),
+    buildRow('Total',                     total),
+    buildRow('Impuestos',                 resolveTaxLabel(lp.hs_tax_rate_group_id)),
+    buildRow('Moneda',                    val(lp.of_moneda)),
+    buildRow('Frecuencia',                frecuencia),
+    buildRow('Inicio de contrato',        inicioContrato),
+    buildRow('Vigencia de contrato',      vigenciaContrato),
+    buildRow('Inicio de facturación',     fechaInicioFact),
+    buildRow('Fecha ancla',               anclaLabel),
+    buildRow('Próxima facturación',       val(lp.billing_next_date)?.slice(0, 10)),
+    buildRow('Tipo',                      tipoLabel),
+    buildRow('Cantidad de pagos',         cantidadPagos),
+    buildRow('Pagos emitidos',            pagosEmitidos),
+    buildRow('Pagos restantes',           pagosRestantes),
+    buildRow('Progreso de pagos',         progresoPagos),
+    buildRow('Observaciones',             val(lp.observaciones)),
   ].filter(r => r !== '');
 }
 

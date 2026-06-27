@@ -1,6 +1,6 @@
 // src/runBilling.js
 import { hubspotClient, getDealWithLineItems } from "./hubspotClient.js";
-import { runPhasesForDeal } from "./phases/index.js";
+import { runPhasesForDealLocked } from "./phases/index.js";
 import { emitInvoicesForReadyTickets } from "./invoices.js";
 import { fileURLToPath } from 'url';
 import { resolve } from 'path';
@@ -148,7 +148,11 @@ export async function runBilling({ dealId, allDeals } = {}) {
 
       totalDeals++;
 
-      const res = await runPhasesForDeal({ deal, lineItems });
+      const res = await runPhasesForDealLocked({ deal, lineItems }, 'runBilling');
+      if (res?.skipped) {
+        logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, dealName, reason: res.reason }, '[runBilling] Deal con lock activo, saltando (otro proceso lo está procesando)');
+        continue;
+      }
 
       totalTickets += res.ticketsCreated || 0;
       totalInvoicesAuto += res.autoInvoicesEmitted || 0;
@@ -169,14 +173,18 @@ export async function runBilling({ dealId, allDeals } = {}) {
           const { deal: mDeal, lineItems: mLIs } = await getDealWithLineItems(mirrorId);
           if (isMirrorDealFromDeal(mDeal) && mLIs.length > 0) {
             logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, mirrorId }, '[runBilling] Procesando mirror UY');
-            const mRes = await runPhasesForDeal({ deal: mDeal, lineItems: mLIs });
-            logger.info({
-              module: 'runBilling',
-              fn: 'runBilling',
-              dealId: id,
-              mirrorId,
-              ticketsCreated: mRes.ticketsCreated || 0,
-            }, '[runBilling] Mirror UY completado');
+            const mRes = await runPhasesForDealLocked({ deal: mDeal, lineItems: mLIs }, 'runBilling');
+            if (mRes?.skipped) {
+              logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, mirrorId, reason: mRes.reason }, '[runBilling] Mirror UY con lock activo, saltando');
+            } else {
+              logger.info({
+                module: 'runBilling',
+                fn: 'runBilling',
+                dealId: id,
+                mirrorId,
+                ticketsCreated: mRes.ticketsCreated || 0,
+              }, '[runBilling] Mirror UY completado');
+            }
           } else {
             logger.info({ module: 'runBilling', fn: 'runBilling', dealId: id, mirrorId }, '[runBilling] Mirror no válido o sin line items, saltando');
           }

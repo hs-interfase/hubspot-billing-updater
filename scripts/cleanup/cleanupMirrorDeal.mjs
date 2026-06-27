@@ -12,6 +12,7 @@
  */
 
 import 'dotenv/config';
+import { guardProduction } from '../_lib/guardProduction.mjs';
 import { hubspotClient } from '../../src/hubspotClient.js';
 import fs from 'fs';
 
@@ -20,6 +21,7 @@ import fs from 'fs';
 const args      = process.argv.slice(2);
 const DRY_RUN   = args.includes('--dry');
 const prefixArg = args.find((_, i, a) => a[i - 1] === '--prefix') || null;
+guardProduction({ scriptName: 'cleanupMirrorDeal.mjs', dryRun: DRY_RUN });
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 

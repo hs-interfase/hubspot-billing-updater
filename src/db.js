@@ -286,4 +286,105 @@ export async function releaseDealLock(dealId, token) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Rate limiter global — balde de fichas (token bucket) compartido
+// ─────────────────────────────────────────────────────────────
+// Una sola fila (id=1) en hs_rate_bucket representa el presupuesto de llamadas
+// a HubSpot compartido por TODOS los procesos (worker de webhooks + los crons).
+// Cada proceso saca 1 ficha antes de llamar a HubSpot; como el balde es único,
+// el ritmo COMBINADO respeta el límite sin importar cuántos procesos corran.
+//
+// Parámetros derivados de env (nada hardcodeado):
+//   refill_per_sec = HS_RATE_LIMIT_PER_10S/10 * HS_RATE_SAFETY
+//   capacity       = refill_per_sec * HS_RATE_BURST_FRAC   (mín 1)
+// En sandbox conviene HS_RATE_LIMIT_PER_10S=190; default 100 es conservador.
+// ─────────────────────────────────────────────────────────────
+const HS_RATE_LIMIT_PER_10S = Number(process.env.HS_RATE_LIMIT_PER_10S || 100)
+const HS_RATE_SAFETY        = Number(process.env.HS_RATE_SAFETY || 0.8)
+const HS_RATE_BURST_FRAC    = Number(process.env.HS_RATE_BURST_FRAC || 0.2)
+
+const RATE_REFILL_PER_SEC = (HS_RATE_LIMIT_PER_10S / 10) * HS_RATE_SAFETY
+const RATE_CAPACITY       = Math.max(1, RATE_REFILL_PER_SEC * HS_RATE_BURST_FRAC)
+
+export async function initRateBucketTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hs_rate_bucket (
+      id             INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      tokens         DOUBLE PRECISION NOT NULL,
+      capacity       DOUBLE PRECISION NOT NULL,
+      refill_per_sec DOUBLE PRECISION NOT NULL,
+      last_refill    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      observed_max   INT
+    )
+  `)
+  // Siembra la única fila. Si ya existe NO pisa tokens/last_refill (estado vivo),
+  // solo refresca capacity/refill por si cambió algún env entre arranques.
+  await pool.query(
+    `INSERT INTO hs_rate_bucket (id, tokens, capacity, refill_per_sec)
+     VALUES (1, $1, $1, $2)
+     ON CONFLICT (id) DO UPDATE
+       SET capacity = EXCLUDED.capacity,
+           refill_per_sec = EXCLUDED.refill_per_sec`,
+    [RATE_CAPACITY, RATE_REFILL_PER_SEC]
+  )
+  logger.info(
+    { capacity: RATE_CAPACITY, refillPerSec: RATE_REFILL_PER_SEC, limitPer10s: HS_RATE_LIMIT_PER_10S },
+    '[DB] Tabla hs_rate_bucket lista.'
+  )
+}
+
+// SQL atómica (validada con dry-run). FOR UPDATE serializa entre procesos:
+// (1) rellena según el tiempo transcurrido, (2) si hay ficha la resta,
+// (3) siempre devuelve el estado para que el caller sepa cuánto esperar.
+const RATE_ACQUIRE_SQL = `
+  WITH cur AS (
+    SELECT tokens, capacity, refill_per_sec, last_refill
+    FROM hs_rate_bucket WHERE id = 1 FOR UPDATE
+  ),
+  calc AS (
+    SELECT LEAST(capacity,
+                 tokens + EXTRACT(EPOCH FROM (now() - last_refill)) * refill_per_sec) AS avail,
+           refill_per_sec
+    FROM cur
+  ),
+  upd AS (
+    UPDATE hs_rate_bucket b
+       SET tokens = (SELECT avail FROM calc) - 1,
+           last_refill = now()
+     WHERE b.id = 1 AND (SELECT avail FROM calc) >= 1
+    RETURNING 1
+  )
+  SELECT (SELECT count(*) FROM upd) = 1     AS granted,
+         (SELECT avail FROM calc)            AS avail,
+         (SELECT refill_per_sec FROM calc)   AS refill_per_sec`
+
+/**
+ * Intenta sacar 1 ficha del balde global. NO espera: devuelve el resultado al
+ * instante. El caller decide si reintentar (ver acquireToken en hubspotClient).
+ * @returns {Promise<{granted:boolean, avail:number, refillPerSec:number}>}
+ */
+export async function acquireRateToken() {
+  try {
+    const res = await pool.query(RATE_ACQUIRE_SQL)
+    const row = res.rows[0]
+    return {
+      granted: row.granted,
+      avail: Number(row.avail),
+      refillPerSec: Number(row.refill_per_sec),
+    }
+  } catch (err) {
+    if (err?.code === '42P01') {        // la tabla aún no existe → crearla y reintentar
+      await initRateBucketTable()
+      const res = await pool.query(RATE_ACQUIRE_SQL)
+      const row = res.rows[0]
+      return {
+        granted: row.granted,
+        avail: Number(row.avail),
+        refillPerSec: Number(row.refill_per_sec),
+      }
+    }
+    throw err
+  }
+}
+
 export default pool

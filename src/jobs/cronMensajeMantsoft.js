@@ -33,6 +33,7 @@ import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
 import { BILLING_ACTIVE_DEAL_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from '../config/constants.js';
+import { getPortalId } from '../utils/hubspotPortal.js';
 
 
 
@@ -51,6 +52,7 @@ const LI_PROPS = [
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
   'billing_next_date', 'fecha_vencimiento_contrato',
+  'inicio_del_contrato', 'fin_del_contrato',
   'hs_recurring_billing_number_of_payments', 'pagos_restantes',
   'renovacion_automatica', 'hs_recurring_billing_terms',
   'hs_product_id', 'pagos_emitidos', 'billing_anchor_date',
@@ -319,7 +321,8 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
   for (const [dealId, items] of dealGroups) {
     try {
 const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
-      const dealMeta = { empresa_que_factura, persona_que_factura };
+      const portalId = await getPortalId();
+      const dealMeta = { empresa_que_factura, persona_que_factura, dealId, portalId };
 
       // Altas solo se procesan si el deal está en stage ≥ 85%.
       // Si no califica, separamos las altas para no resetear su flag.

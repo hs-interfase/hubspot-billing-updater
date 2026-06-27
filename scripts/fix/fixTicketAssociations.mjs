@@ -30,6 +30,7 @@ const hubspot = new Client({ accessToken: TOKEN });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const DRY_RUN = !process.argv.includes('--execute');
+guardProduction({ scriptName: 'fixTicketAssociations.mjs', dryRun: DRY_RUN });
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);

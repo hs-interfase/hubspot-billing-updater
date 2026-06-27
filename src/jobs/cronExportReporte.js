@@ -1,4 +1,4 @@
-// src/jobs/cronxportReporte.js
+// src/jobs/cronExportReporte.js
 //
 // Cron de exportación de reporte consolidado.
 // Genera el xlsx, lo guarda en PostgreSQL (sobreescribiendo cada día),
@@ -20,6 +20,8 @@ import logger from '../../lib/logger.js';
 import { initExportSnapshotsTable, saveExportSnapshot } from '../db-export.js';
 import { setCronState } from '../db.js';
 import pool from '../db.js';
+import { sendAlert } from '../../lib/alertService.js';
+import { EXCHANGE_RATE_STALE_DAYS } from '../config/constants.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -180,7 +182,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
-  'total_real_a_facturar', 'numero_de_factura', 'dolar',
+  'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda',
 ];
 
@@ -451,7 +453,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const ancla = ymd(lp?.billing_anchor_date || '');
   const incluyeUY = safe(lp?.uy || '').toLowerCase() === 'true';
 
-  const monto = safeNum(tp.total_real_a_facturar) ?? safeNum(tp.monto_a_facturar);
+  const monto = safeNum(tp.subtotal_real);
   const costo = safeNum(tp.of_costo);
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
 
@@ -610,8 +612,25 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const latestRates = await getLatestExchangeRate();
   if (latestRates) {
     logger.info({ date: latestRates.date, uyu_usd: latestRates.uyu_usd, pyg_usd: latestRates.pyg_usd }, '[export] TC último cierre cargado');
+
+    // CHECK-4: frescura del TC. Si el último cierre es más viejo que el umbral,
+    // el reporte usaría cotizaciones obsoletas → avisar (no bloquea el reporte).
+    const ageDays = Math.floor((Date.now() - new Date(latestRates.date).getTime()) / 86_400_000);
+    if (ageDays > EXCHANGE_RATE_STALE_DAYS) {
+      logger.warn({ date: latestRates.date, ageDays, staleAfterDays: EXCHANGE_RATE_STALE_DAYS }, '[export] TC obsoleto — el reporte usará cotizaciones viejas');
+      sendAlert('warning', `Tipo de cambio obsoleto (${ageDays} días) al generar el reporte`, {
+        ultimaFecha: String(latestRates.date),
+        diasDeAntiguedad: ageDays,
+        umbralDias: EXCHANGE_RATE_STALE_DAYS,
+        uyu_usd: latestRates.uyu_usd,
+        pyg_usd: latestRates.pyg_usd,
+      }).catch(() => {});
+    }
   } else {
     logger.warn('[export] No se encontró TC en exchange_rates — columnas USD quedarán vacías');
+    sendAlert('warning', 'No hay tipos de cambio en exchange_rates al generar el reporte', {
+      detalle: 'Las columnas USD del reporte quedarán vacías. Revisar el cron de tasas (cronExchangeRates).',
+    }).catch(() => {});
   }
 
   // 1) Fetch all deals

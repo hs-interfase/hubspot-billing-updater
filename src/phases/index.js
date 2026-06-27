@@ -6,12 +6,10 @@ import { runPhase2 } from './phase2.js';
 import { runPhase3 } from './phase3.js';
 import { withRetry } from '../utils/withRetry.js';
 import {
-  DEAL_STAGE_LOST,
-  DEAL_STAGE_SUSPENDED,
-  DEAL_STAGE_VOIDED,
   DEAL_STAGE_WON,
   DEAL_STAGE_EN_EJECUCION,
   EMITTED_STAGES,
+  isDealCancelledStage,
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
@@ -42,12 +40,7 @@ export async function runPhasesForDealLocked({ deal, lineItems }, ownerLabel = '
 }
 
 function isDealCancelled(dealProps) {
-  const stage = String(dealProps?.dealstage || '');
-  return (
-    stage === DEAL_STAGE_LOST ||
-    stage === DEAL_STAGE_SUSPENDED ||
-    stage === DEAL_STAGE_VOIDED
-  );
+  return isDealCancelledStage(dealProps?.dealstage);
 }
 
 function formatHsLastModified(raw) {

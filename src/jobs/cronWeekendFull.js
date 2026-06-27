@@ -6,7 +6,8 @@ import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDealLocked } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
 import crypto from "node:crypto";
-import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
+import { sendSummary, pingHeartbeat, sendAlert } from '../../lib/alertService.js'
+import { alertOnStuckAutoEmissions } from '../services/monitoring/zeroEmission.js'
 import logger from "../../lib/logger.js";
 import { auditOrphanTickets } from '../services/orphanAuditService.js';
 import pool, { initCronStateTable, getCronState, setCronState, initCronFailuresTable, insertCronFailure } from "../db.js";
@@ -699,6 +700,10 @@ sendSummary({
     } catch (e) {
       logger.warn({ err: e?.message }, '[cronWeekend] auditOrphanTickets falló — no bloquea');
     }
+
+    // Zero-emission: si el cron corrió pero dejó tickets AUTO en READY sin factura,
+    // alertar por email con deal/lineItem/ticket para identificarlos a mano.
+    await alertOnStuckAutoEmissions({ jobName: 'cronWeekendFull', sendAlert })
   }
 }
 

@@ -15,7 +15,7 @@ import { recalcFromTickets } from './lineItems/recalcFromTickets.js';
 import { syncLineItemAfterPromotion } from './lineItems/syncAfterPromotion.js';
 import { sanitizeClonedLineItem } from './lineItems/cloneSanitizerService.js';
 import { refreshMensajeFacturacionParaDeal } from '../jobs/cronMensajeFacturacion.js';
-import { AUTOMATED_TICKET_PIPELINE } from '../config/constants.js';
+import { AUTOMATED_TICKET_PIPELINE, isDealCancelledStage } from '../config/constants.js';
 
 /**
  * Helper robusto para truthy/falsey (HubSpot manda strings)
@@ -160,7 +160,7 @@ const lineItemProps = lineItem.properties || {};
 
     let dealForGuard;
     try {
-      dealForGuard = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname']);
+      dealForGuard = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname', 'dealstage']);
     } catch (err) {
       logger.error(
         { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, err },
@@ -170,6 +170,23 @@ const lineItemProps = lineItem.properties || {};
     }
 
     const dealGuardProps = dealForGuard?.properties || {};
+
+    // Guard de stage cancelado: cierra la ventana de carrera donde el deal ya
+    // fue movido a Perdido/Suspendido/Anulado pero facturacion_activa todavía
+    // no fue puesto en false por la propagación.
+    if (isDealCancelledStage(dealGuardProps.dealstage)) {
+      const dealName = (dealGuardProps.dealname || dealId).slice(0, 100);
+      const msg = `No se facturó: el negocio está cancelado. Negocio: ${dealName}.`;
+      logger.info(
+        { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, dealId, dealStage: dealGuardProps.dealstage },
+        'Bloqueado: dealstage es de cancelación'
+      );
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { of_billing_error: msg, facturar_ahora: 'false' },
+      });
+      return { skipped: true, reason: 'deal_cancelled_stage' };
+    }
+
     if (!parseBool(dealGuardProps.facturacion_activa)) {
       const dealName = (dealGuardProps.dealname || dealId).slice(0, 100);
       const msg = `Falta activar la facturación. Pase el negocio a cierre ganado. Negocio: ${dealName}.`;
@@ -797,13 +814,35 @@ export async function processUrgentLineItem(lineItemId) {
 
   let dealEarly;
   try {
-    dealEarly = await hubspotClient.crm.deals.basicApi.getById(dealIdEarly, ['facturacion_activa', 'dealname']);
+    dealEarly = await hubspotClient.crm.deals.basicApi.getById(dealIdEarly, ['facturacion_activa', 'dealname', 'dealstage']);
   } catch (err) {
     logger.error(
       { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealIdEarly, err },
       'Error obteniendo deal para verificar facturacion_activa'
     );
     // No bloqueamos — dejamos que _executeUrgentBillingForLineItem maneje el error
+  }
+
+  // Guard de stage cancelado (ver _executeUrgentBillingForLineItem): bloquea
+  // antes de procesar si el deal ya está en stage de cancelación.
+  if (dealEarly && isDealCancelledStage(dealEarly.properties?.dealstage)) {
+    const dealName = (dealEarly.properties?.dealname || dealIdEarly).slice(0, 100);
+    const msg = `No se facturó: el negocio está cancelado. Negocio: ${dealName}.`;
+    try {
+      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, err: updateErr },
+        'Error escribiendo bloqueo dealstage cancelado en line item'
+      );
+    }
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentLineItem', lineItemId, dealIdEarly, dealStage: dealEarly.properties?.dealstage },
+      'Bloqueado: dealstage es de cancelación'
+    );
+    return { skipped: true, reason: 'deal_cancelled_stage' };
   }
 
   if (dealEarly && !parseBool(dealEarly.properties?.facturacion_activa)) {
@@ -988,13 +1027,35 @@ const dealId = (ticketProps.of_deal_id || '').trim();
 if (dealId) {
   let dealProps = {};
   try {
-    const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname']);
+    const deal = await hubspotClient.crm.deals.basicApi.getById(dealId, ['facturacion_activa', 'dealname', 'dealstage']);
     dealProps = deal.properties || {};
   } catch (err) {
     logger.error(
       { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealId, err },
       'Error obteniendo deal para verificar facturacion_activa'
     );
+  }
+
+  // Guard de stage cancelado (ver _executeUrgentBillingForLineItem).
+  if (isDealCancelledStage(dealProps.dealstage)) {
+    const dealName = (dealProps.dealname || dealId).slice(0, 100);
+    const fechaEsperada = (ticketProps.fecha_resolucion_esperada || 'sin fecha').slice(0, 20);
+    const msg = `No se facturó: el negocio está cancelado. Negocio: ${dealName}. Fecha esperada: ${fechaEsperada}.`;
+    try {
+      await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+        properties: { facturar_ahora: 'false', of_billing_error: msg },
+      });
+    } catch (updateErr) {
+      logger.error(
+        { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, err: updateErr },
+        'Error escribiendo bloqueo dealstage cancelado en ticket'
+      );
+    }
+    logger.info(
+      { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, dealId, dealStage: dealProps.dealstage },
+      'Bloqueado: dealstage es de cancelación'
+    );
+    return { skipped: true, reason: 'deal_cancelled_stage' };
   }
 
   if (!parseBool(dealProps.facturacion_activa)) {

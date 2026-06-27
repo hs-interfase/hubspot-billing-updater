@@ -184,10 +184,16 @@ async function buscarTicketsPorCompany({ companyHsId, monedaHS }) {
 // ── Matching ──────────────────────────────────────────────────────────────────
 
 /**
- * Filtra candidatos por monto (±0.01) y fecha (tolerancia creciente ±MAX_DATE_DELTA).
- * Devuelve { ticket, deltaDias, yaFacturado } o null.
+ * Filtra candidatos por monto (±0.01) y fecha (distancia creciente ±MAX_DATE_DELTA).
+ *
+ * Para la distancia de fecha MÁS CERCANA con coincidencias, considera ambos lados
+ * (−d y +d) como igual de cercanos:
+ *   - 1 ticket en esa distancia  → { ticket, deltaDias, yaFacturado }
+ *   - 2+ tickets en esa distancia → { ambiguo: true, deltaDias, candidatos: [...] }
+ *     (empate: no se auto-asigna, se marca para revisión manual)
+ *   - ninguno                    → null
  */
-function encontrarMatch(factura, candidatos) {
+export function encontrarMatch(factura, candidatos) {
   const montoFactura = parseFloat(factura.ImporteMovimientoMonedaOriginal)
   const fechaBase = toYMD(factura.FechaValor)
   if (!fechaBase) return null
@@ -199,20 +205,38 @@ function encontrarMatch(factura, candidatos) {
 
   if (!porMonto.length) return null
 
-  const deltas = [0]
-  for (let d = 1; d <= MAX_DATE_DELTA; d++) {
-    deltas.push(-d, d)
-  }
+  for (let dist = 0; dist <= MAX_DATE_DELTA; dist++) {
+    const fechasTarget = dist === 0
+      ? [fechaBase]
+      : [addDays(fechaBase, -dist), addDays(fechaBase, dist)]
 
-  for (const delta of deltas) {
-    const fechaTarget = delta === 0 ? fechaBase : addDays(fechaBase, delta)
-    for (const ticket of porMonto) {
-      const tp = ticket.properties || {}
-      const fechaTicket = toYMD(tp.of_fecha_de_facturacion)
-      if (fechaTicket !== fechaTarget) continue
-      const yaFacturado = !!(tp.numero_de_factura?.trim().length > 0)
-      return { ticket, deltaDias: delta, yaFacturado }
+    const enEstaDistancia = porMonto.filter(t => {
+      const fechaTicket = toYMD(t.properties?.of_fecha_de_facturacion)
+      return fechaTicket && fechasTarget.includes(fechaTicket)
+    })
+
+    if (enEstaDistancia.length === 0) continue
+
+    // Empate en la distancia más cercana → ambiguo, no auto-asignar.
+    if (enEstaDistancia.length > 1) {
+      return {
+        ambiguo: true,
+        deltaDias: dist,
+        candidatos: enEstaDistancia.map(t => ({
+          ticketId: String(t.id),
+          fecha: toYMD(t.properties?.of_fecha_de_facturacion),
+          yaFacturado: !!(t.properties?.numero_de_factura?.trim().length > 0),
+        })),
+      }
     }
+
+    // Único ticket en la distancia más cercana → match.
+    const ticket = enEstaDistancia[0]
+    const tp = ticket.properties || {}
+    const fechaTicket = toYMD(tp.of_fecha_de_facturacion)
+    const deltaDias = dist === 0 ? 0 : (fechaTicket === addDays(fechaBase, dist) ? dist : -dist)
+    const yaFacturado = !!(tp.numero_de_factura?.trim().length > 0)
+    return { ticket, deltaDias, yaFacturado }
   }
 
   return null
@@ -247,6 +271,8 @@ export async function initNodumUploadsTable() {
       detalle         JSONB NOT NULL DEFAULT '[]'
     )
   `)
+  // Columna agregada después de la creación original (idempotente).
+  await pool.query(`ALTER TABLE nodum_upload_logs ADD COLUMN IF NOT EXISTS ambiguos INT NOT NULL DEFAULT 0`)
   logger.info('[NodumUpload] Tabla nodum_upload_logs lista.')
 }
 
@@ -254,10 +280,11 @@ async function guardarLog({ filename, resultados }) {
   const matches       = resultados.filter(r => r.resultado === 'match').length
   const no_matches    = resultados.filter(r => r.resultado === 'no_match').length
   const ya_facturados = resultados.filter(r => r.resultado === 'ya_facturado').length
+  const ambiguos      = resultados.filter(r => r.resultado === 'ambiguo').length
   await pool.query(
-    `INSERT INTO nodum_upload_logs (filename, total_facturas, matches, no_matches, ya_facturados, detalle)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [filename, resultados.length, matches, no_matches, ya_facturados, JSON.stringify(resultados)]
+    `INSERT INTO nodum_upload_logs (filename, total_facturas, matches, no_matches, ya_facturados, ambiguos, detalle)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [filename, resultados.length, matches, no_matches, ya_facturados, ambiguos, JSON.stringify(resultados)]
   )
 }
 
@@ -349,6 +376,25 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
       continue
     }
 
+    // Empate de candidatos en la fecha más cercana → revisión manual, no se escribe nada.
+    if (match.ambiguo) {
+      resultados.push({
+        NroDocumento: nroDocumento,
+        RazonSocial: razonSocial,
+        nroCliente,
+        companyHsId: empresa.companyHsId,
+        companyName: empresa.companyName,
+        metodoEmpresa: empresa.metodo,
+        importe,
+        moneda: monedaHS,
+        fechaValor: fechaValorYMD,
+        candidatos: match.candidatos,
+        resultado: 'ambiguo',
+        motivo: `${match.candidatos.length} tickets con mismo monto y fecha a ±${match.deltaDias} día(s): ${match.candidatos.map(c => c.ticketId).join(', ')} — revisar y asignar a mano`,
+      })
+      continue
+    }
+
     const { ticket, deltaDias, yaFacturado } = match
     const ticketId = String(ticket.id)
 
@@ -419,6 +465,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
     matches:       resultados.filter(r => r.resultado === 'match').length,
     no_matches:    resultados.filter(r => r.resultado === 'no_match').length,
     ya_facturados: resultados.filter(r => r.resultado === 'ya_facturado').length,
+    ambiguos:      resultados.filter(r => r.resultado === 'ambiguo').length,
     errores:       resultados.filter(r => r.resultado === 'error').length,
   }
 
@@ -427,7 +474,7 @@ router.post('/upload', upload.single('archivo'), async (req, res) => {
   return res.json({
     resumen,
     resultados,
-    para_revision: resultados.filter(r => r.resultado === 'no_match' || r.resultado === 'error'),
+    para_revision: resultados.filter(r => r.resultado === 'no_match' || r.resultado === 'error' || r.resultado === 'ambiguo'),
   })
 })
 

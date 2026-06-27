@@ -18,6 +18,7 @@
  */
 
 import 'dotenv/config';
+import { guardProduction } from '../_lib/guardProduction.mjs';
 import { Client } from '@hubspot/api-client';
 import { readFileSync, writeFileSync } from 'fs';
 
@@ -28,6 +29,7 @@ const hubspot = new Client({ accessToken: TOKEN });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const DRY_RUN = !process.argv.includes('--execute');
+guardProduction({ scriptName: 'deleteOrphanInvoices.mjs', dryRun: DRY_RUN });
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);

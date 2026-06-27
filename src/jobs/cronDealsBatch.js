@@ -5,7 +5,8 @@ import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
 import { runPhasesForDealLocked } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
-import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
+import { sendSummary, pingHeartbeat, sendAlert } from '../../lib/alertService.js'
+import { alertOnStuckAutoEmissions } from '../services/monitoring/zeroEmission.js'
 import { initCronStateTable, initCronFailuresTable, insertCronFailure, getCronState, setCronState } from '../db.js'
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
@@ -699,6 +700,10 @@ await releaseCronLock("cronDealsBatch", jobRunId);
   }).catch(() => {})
 
   pingHeartbeat().catch(() => {})
+
+  // Zero-emission: si el cron corrió pero dejó tickets AUTO en READY sin factura,
+  // alertar por email con deal/lineItem/ticket para identificarlos a mano.
+  await alertOnStuckAutoEmissions({ jobName: 'cronDealsBatch', sendAlert })
 }
 
   lastCtx = { where: ".start", dealId: null, ticketId: null, lineItemId: null, lineItemKey: null };

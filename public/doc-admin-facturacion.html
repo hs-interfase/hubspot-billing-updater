@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eef1f6">
+<title>Documento · Administrador de Facturación</title>
+<script>(function(){try{var t=localStorage.getItem('if-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  color-scheme:light;
+  --bg:#eef1f6;--s1:#ffffff;--s2:#e7ebf3;--bd:#cdd5e3;
+  --tx:#1b2333;--td:#4a566e;--tdm:#7c89a3;
+  --c-warn-tx:#8a5212;--c-info-tx:#274bb5;--c-ok-tx:#15724a;--c-err-tx:#b02a26;
+  --c-green:#0f7a4d;--c-orange:#a85410;--c-blue:#2b50c0;--c-purple:#6b46d0;--c-pink:#b4377f;--c-slate:#566377;
+  --br1:#facc15;--br2:#fb923c;--brink:#2a1605;
+  --r:12px;--rs:9px;
+}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b0d14;--s1:#12151f;--s2:#181c28;--bd:#222738;
+  --tx:#e8eaf2;--td:#aab4ca;--tdm:#5b6680;
+  --c-warn-tx:#e8c4a0;--c-info-tx:#a0b4e8;--c-ok-tx:#a0e8d0;--c-err-tx:#e8a0a0;
+  --c-green:#6ee8c0;--c-orange:#fdb27c;--c-blue:#7fa8ff;--c-purple:#c4b0fd;--c-pink:#f9a8d4;--c-slate:#94a3b8;
+}
+html{background:var(--bg)}
+body{
+  background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',system-ui,sans-serif;
+  font-weight:400;min-height:100vh;-webkit-text-size-adjust:100%;line-height:1.6;
+}
+
+header{background:var(--bg);border-bottom:1px solid var(--bd);padding:16px;position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:12px}
+.lm{width:34px;height:34px;background:linear-gradient(135deg,var(--br1),var(--br2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--brink);flex-shrink:0}
+header h1{font-size:16px;font-weight:700;color:var(--tx)}
+header p{font-size:13px;color:var(--td);font-family:'SF Mono','Courier New',monospace}
+header .actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+header a.gl{font-size:13px;color:var(--td);text-decoration:none;border:1px solid var(--bd);border-radius:var(--rs);padding:8px 12px}
+header a.gl:hover{color:var(--tx);border-color:var(--br2)}
+.themebtn{background:var(--s2);border:1px solid var(--bd);color:var(--td);border-radius:var(--rs);padding:9px 13px;font-size:14px;font-weight:600;cursor:pointer;transition:all .18s;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+.themebtn:active,.themebtn:hover{border-color:var(--br2);color:var(--tx)}
+
+.wrap{max-width:760px;margin:0 auto;padding:30px 18px 90px}
+
+.hero{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:26px;margin-bottom:26px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--br1),var(--br2))}
+.hero .ic{font-size:32px;margin-bottom:10px}
+.hero h2{font-size:25px;font-weight:800;margin-bottom:8px}
+.hero p{font-size:16.5px;color:var(--td)}
+
+h3{font-size:20px;font-weight:800;margin:34px 0 6px;display:flex;align-items:center;gap:10px}
+h3 .n{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--br1),var(--br2));color:var(--brink);font-size:14px;font-family:'SF Mono','Courier New',monospace;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sub{font-size:15.5px;color:var(--td);margin:0 0 13px 38px}
+p.par{font-size:16px;color:var(--tx);margin:11px 0}
+
+table.props{width:100%;border:1px solid var(--bd);border-radius:var(--rs);border-collapse:separate;border-spacing:0;overflow:hidden;margin:12px 0}
+table.props th{background:rgba(250,204,21,.1);border-bottom:1px solid var(--bd);padding:9px 13px;font-family:'SF Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--tdm);text-align:left;font-weight:400}
+table.props td{padding:13px;border-bottom:1px solid var(--bd);font-size:15px;color:var(--td);vertical-align:top}
+table.props tr:last-child td{border-bottom:none}
+table.props td:first-child{width:34%;color:var(--tx);font-weight:600}
+
+ol.steps{list-style:none;counter-reset:s;margin:14px 0}
+ol.steps li{counter-increment:s;position:relative;padding:0 0 18px 42px;font-size:15px;color:var(--td)}
+ol.steps li::before{content:counter(s);position:absolute;left:0;top:-2px;width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--br1),var(--br2));color:var(--brink);font-family:'SF Mono','Courier New',monospace;font-size:13px;display:flex;align-items:center;justify-content:center}
+ol.steps li:not(:last-child)::after{content:'';position:absolute;left:14px;top:28px;bottom:0;width:2px;background:var(--bd)}
+ol.steps li b{color:var(--tx);display:block;font-size:15.5px;margin-bottom:3px;font-weight:600}
+
+.sched{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:14px 0}
+@media(max-width:520px){.sched{grid-template-columns:1fr}}
+.scard{background:var(--s1);border:1px solid var(--bd);border-radius:var(--rs);padding:15px 17px}
+.scard h4{font-size:15px;font-weight:700;color:var(--tx);margin-bottom:9px;display:flex;align-items:center;gap:7px}
+.scard .times{display:flex;flex-wrap:wrap;gap:7px}
+.chip{font-family:'SF Mono','Courier New',monospace;font-size:14px;color:var(--tx);background:rgba(250,204,21,.13);border:1px solid rgba(250,204,21,.4);border-radius:7px;padding:5px 9px}
+.chip.alt{background:rgba(251,146,60,.13);border-color:rgba(251,146,60,.4)}
+.scard p{font-size:13.5px;color:var(--td);margin-top:9px}
+
+.note{border-radius:var(--rs);padding:13px 15px;font-size:15px;margin:14px 0;line-height:1.6;border-left:4px solid}
+.nw{background:rgba(251,146,60,.1);border-color:#fb923c;color:var(--c-warn-tx)}
+.ni{background:rgba(79,124,255,.1);border-color:#4f7cff;color:var(--c-info-tx)}
+.nok{background:rgba(52,211,153,.1);border-color:#34d399;color:var(--c-ok-tx)}
+.note b{color:var(--tx)}
+
+.cards2{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:14px 0}
+@media(max-width:520px){.cards2{grid-template-columns:1fr}}
+.tcard{background:var(--s1);border:1px solid var(--bd);border-radius:var(--rs);padding:16px 17px;position:relative;overflow:hidden}
+.tcard::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.tcard.u::before{background:linear-gradient(90deg,#f87171,#fb923c)}
+.tcard.s::before{background:linear-gradient(90deg,#34d399,#4f7cff)}
+.tcard .ic{font-size:22px;margin-bottom:7px}
+.tcard h4{font-size:16px;font-weight:700;color:var(--tx);margin-bottom:5px}
+.tcard p{font-size:14.5px;color:var(--td)}
+
+code{font-family:'SF Mono','Courier New',monospace;font-size:14px;background:rgba(250,204,21,.16);color:var(--c-orange);padding:2px 6px;border-radius:4px}
+b.hl{color:var(--tx)}
+footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--bd);font-size:12.5px;color:var(--tdm);text-align:center}
+@media print{html,body{background:#fff!important;color:#111!important}header{position:static}.themebtn,header a.gl{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="lm">AF</div>
+  <div>
+    <h1>Administrador de Facturación</h1>
+    <p>Documento de referencia · Avisos de HubSpot</p>
+  </div>
+  <div class="actions">
+    <a class="gl" href="guia-facturacion-interfase.html">Guía interactiva →</a>
+    <button id="themebtn" class="themebtn" onclick="toggleTheme()">🌙 Oscuro</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <div class="ic">📨</div>
+    <h2>Los avisos de HubSpot</h2>
+    <p>Cuando se solicita una facturación, te llega un mensaje de HubSpot. Hay dos grandes familias: <b class="hl">manuales</b> y <b class="hl">automáticos</b>. En todos hay una URL para entrar y los datos de la factura, así hacés las ediciones directo.</p>
+  </div>
+
+  <h3><span class="n">1</span>Los dos tipos de aviso</h3>
+  <table class="props">
+    <thead><tr><th>Tipo</th><th>¿Cuándo llega?</th></tr></thead>
+    <tbody>
+      <tr><td>📝 Avisos manuales</td><td>Los dispara una persona: puede ser una urgencia del <b class="hl">vendedor</b> o un pedido estándar del <b class="hl">responsable</b>.</td></tr>
+      <tr><td>🤖 Avisos automáticos</td><td>Los genera el sistema solo: un <b class="hl">alta</b>, una <b class="hl">edición</b> o una <b class="hl">baja</b> en la generación de facturas.</td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">2</span>Avisos manuales</h3>
+  <p class="sub">Los dispara una persona. Se distinguen dos casos.</p>
+  <div class="cards2">
+    <div class="tcard u">
+      <div class="ic">🚀</div>
+      <h4>Facturación urgente</h4>
+      <p>La emite el <b class="hl">vendedor</b>. Necesita facturar ya, fuera del ciclo normal.</p>
+    </div>
+    <div class="tcard s">
+      <div class="ic">📝</div>
+      <h4>Facturación manual estándar</h4>
+      <p>La emite el <b class="hl">responsable</b> de la orden cuando revisó el ticket y le dio el OK.</p>
+    </div>
+  </div>
+
+  <h3><span class="n">3</span>Avisos automáticos</h3>
+  <p class="sub">Los genera el sistema solo. Hay tres tipos.</p>
+  <table class="props">
+    <thead><tr><th>Tipo</th><th>¿Qué lo dispara?</th></tr></thead>
+    <tbody>
+      <tr><td>🟢 Alta</td><td>Cuando el <b class="hl">cierre del negocio es Ganado</b>. Arranca la generación de facturas.</td></tr>
+      <tr><td>✏️ Edición</td><td>Cuando el vendedor <b class="hl">edita una propiedad relevante</b> de la facturación.</td></tr>
+      <tr><td>🔴 Baja</td><td>Cuando se <b class="hl">cancela la generación de facturas</b> por alguna razón.</td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">4</span>¿Cuándo llegan?</h3>
+  <p class="sub">Cada familia tiene su propio horario.</p>
+  <div class="sched">
+    <div class="scard">
+      <h4>🤖 Facturación automática</h4>
+      <div class="times"><span class="chip">07:00</span><span class="chip">16:30</span></div>
+      <p>Caen todos los días en dos tandas fijas.</p>
+    </div>
+    <div class="scard">
+      <h4>📝 Avisos manuales</h4>
+      <div class="times"><span class="chip alt">08:10</span><span class="chip alt">09:10</span><span class="chip alt">10:10</span><span class="chip alt">…</span><span class="chip alt">17:10</span><span class="chip alt">17:46</span></div>
+      <p>Cada 1 hora, de 08:10 a 17:10, más una excepcional a las 17:46.</p>
+    </div>
+  </div>
+  <div class="note ni">⏰ El sistema <b>junta los mensajes de cada hora en punto</b> y los entrega aproximadamente a las <b>xx:15</b>. Así te llegan agrupados en vez de uno por uno.</div>
+
+  <h3><span class="n">5</span>Editar desde el aviso</h3>
+  <p class="sub">Cada aviso trae todo lo que necesitás: una URL para ingresar y los datos de la factura.</p>
+  <ol class="steps">
+    <li><b>Abrí la URL del aviso</b>Te lleva al editor de facturas (<code>/invoice-editor</code>). Va a pedir usuario y contraseña.</li>
+    <li><b>Revisá los datos de la factura</b>Vienen identificados en el mismo aviso, así sabés qué factura estás tocando.</li>
+    <li><b>Editá lo que haga falta y guardá</b>Los cambios se propagan solos al ticket correspondiente.</li>
+  </ol>
+  <div class="note ni">ℹ️ Es el mismo editor de facturas. Para el detalle de cada campo editable, mirá la guía interactiva → <b>Ediciones → Editar una factura</b>.</div>
+
+  <h3><span class="n">6</span>Nota de crédito</h3>
+  <p class="par">También podés gestionar notas de crédito desde la administración de facturación. Una NC revierte un cobro: emite una factura en negativo y, si la línea consumía cupo, le devuelve ese cupo al negocio.</p>
+  <div class="note nok">✅ <b>Regla simple:</b> poné la <b>cantidad</b> del ticket en negativo (ej. <code>-10</code>). No importa si el cupo es por monto o por horas: el cupo se ajusta correctamente y los subtotales y totales quedan con los valores correctos.</div>
+  <div class="note ni">ℹ️ Para el paso a paso completo de la NC, mirá la guía interactiva → <b>Cancelaciones y Pausas → Emitir una Nota de Crédito</b>.</div>
+
+  <footer>Interfase Billing Engine · Documento de referencia para Administradores de Facturación</footer>
+</div>
+
+<script>
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  try{localStorage.setItem('if-theme',t);}catch(e){}
+  var b=document.getElementById('themebtn');
+  if(b)b.textContent=(t==='dark')?'☀️ Claro':'🌙 Oscuro';
+  var m=document.querySelector('meta[name=theme-color]');
+  if(m)m.setAttribute('content',(t==='dark')?'#0b0d14':'#eef1f6');
+}
+function toggleTheme(){
+  var cur=document.documentElement.getAttribute('data-theme')||'light';
+  applyTheme(cur==='dark'?'light':'dark');
+}
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
+</script>
+</body>
+</html>

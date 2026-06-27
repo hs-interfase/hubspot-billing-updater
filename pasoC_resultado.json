@@ -1,0 +1,483 @@
+{
+  "generatedAt": "2026-06-27T12:38:55.049Z",
+  "env": "prod",
+  "escribir": true,
+  "stats": {
+    "editados": 37,
+    "freezeFalla": 1,
+    "yaFacturados": 0,
+    "yaEnVuelo": 0,
+    "sinMatch": 0,
+    "ambiguos": 0,
+    "sinMonto": 0,
+    "sinLiCanonico": 12,
+    "dealNoEncontrado": 0,
+    "errores": 0
+  },
+  "reporte": [
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF1",
+      "lik": "61699128598:56500263075:B06EC5",
+      "ticketId": "46274037769",
+      "accion": "EDITADO",
+      "total": 1020110.0028,
+      "totalEsperado": 1020110
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF2",
+      "lik": "61699128598:56500263068:7AF21F",
+      "ticketId": "46296902177",
+      "accion": "EDITADO",
+      "total": 646624.9978,
+      "totalEsperado": 646625
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF3",
+      "lik": "61699128598:56500263072:775630",
+      "ticketId": "46290489212",
+      "accion": "EDITADO",
+      "total": 1624244.9992,
+      "totalEsperado": 1624245
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF4",
+      "lik": "61699128598:56500263064:FCFE2E",
+      "ticketId": "46289717331",
+      "accion": "EDITADO",
+      "total": 3725400.0032,
+      "totalEsperado": 3725400
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF5",
+      "lik": "61699128598:56500263074:C609B7",
+      "ticketId": "46288169986",
+      "accion": "EDITADO",
+      "total": 106679.9964,
+      "totalEsperado": 106680
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF6",
+      "lik": "61699128598:56500263063:513AD3",
+      "ticketId": "46278216453",
+      "accion": "EDITADO",
+      "total": 583484.9958,
+      "totalEsperado": 583485
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF8",
+      "lik": "61699128598:56500263077:155E1D",
+      "ticketId": "46298276201",
+      "accion": "EDITADO",
+      "total": 86729.9952,
+      "totalEsperado": 86730
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF9",
+      "lik": "61699128598:56500263070:F08CFE",
+      "ticketId": "46293804163",
+      "accion": "EDITADO",
+      "total": 647220.004,
+      "totalEsperado": 647220
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF10",
+      "lik": "61699128598:56500263065:88B91A",
+      "ticketId": "46286466906",
+      "accion": "EDITADO",
+      "total": 553315.0058,
+      "totalEsperado": 553315
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF11",
+      "lik": "61699128598:56500263066:7B3BCD",
+      "ticketId": "46280608558",
+      "accion": "EDITADO",
+      "total": 1637825.0022,
+      "totalEsperado": 1637825
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF12",
+      "lik": "61699128598:56500263067:79310C",
+      "ticketId": "46293494362",
+      "accion": "EDITADO",
+      "total": 619324.9968,
+      "totalEsperado": 619325
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF13",
+      "lik": "61699128598:56500263073:EE85D9",
+      "ticketId": "46288324272",
+      "accion": "EDITADO",
+      "total": 1453409.9974,
+      "totalEsperado": 1453410
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF14",
+      "lik": "61699128598:56500263078:D39F9C",
+      "ticketId": "46275273078",
+      "accion": "EDITADO",
+      "total": 59219.9956,
+      "totalEsperado": 59220
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF15",
+      "lik": "61699128598:56500263076:E88D16",
+      "ticketId": "46287241372",
+      "accion": "EDITADO",
+      "total": 133769.9988,
+      "totalEsperado": 133770
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF16",
+      "lik": "61699128598:56500263069:D6C0AF",
+      "ticketId": "46285519285",
+      "accion": "EDITADO",
+      "total": 536969.9948,
+      "totalEsperado": 536970
+    },
+    {
+      "caso": "TuID Desarrollo [96CB88DC] (split UYU)",
+      "idOrigen": "96CB88DC6FBB999003258CDD004BCEBE#UYU",
+      "mig": "96CB88DC6FBB999003258CDD004BCEBE-OF17",
+      "lik": "61699128598:56500263071:C4F002",
+      "ticketId": "46276827028",
+      "accion": "EDITADO",
+      "total": 374640.0034,
+      "totalEsperado": 374640
+    },
+    {
+      "caso": "Lector RFID [00BD69E1]",
+      "idOrigen": "00BD69E1D1C4911903258D9500589F83",
+      "mig": "00BD69E1D1C4911903258D9500589F83-OF1",
+      "lik": "61698369136:56508195615:D8CA0C",
+      "ticketId": "46300143398",
+      "accion": "FREEZE_FALLA",
+      "total": 353.8,
+      "totalEsperado": 290
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split USD)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#USD",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF1",
+      "lik": "61702786365:56500885534:4CC8CD",
+      "ticketId": "46289561982",
+      "accion": "EDITADO",
+      "total": 83390.912,
+      "totalEsperado": 83390.91
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split USD)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#USD",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF2",
+      "lik": "61702786365:56500885536:9912C0",
+      "ticketId": "46300450716",
+      "accion": "EDITADO",
+      "total": 83582.004,
+      "totalEsperado": 83582
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split USD)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#USD",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF3",
+      "lik": "61702786365:56500885538:1F4824",
+      "ticketId": "46296438183",
+      "accion": "EDITADO",
+      "total": 16566.935,
+      "totalEsperado": 16566.94
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split USD)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#USD",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF4",
+      "lik": "61702786365:56500885533:939AA8",
+      "ticketId": "46276518192",
+      "accion": "EDITADO",
+      "total": 33261.327,
+      "totalEsperado": 33261.33
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split USD)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#USD",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF5",
+      "lik": "61702786365:56500885539:C121E3",
+      "ticketId": "46294108992",
+      "accion": "EDITADO",
+      "total": 81074.499,
+      "totalEsperado": 81074.5
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF6",
+      "lik": "61692120399:56477620841:A6779F",
+      "ticketId": "46278802445",
+      "accion": "EDITADO",
+      "total": 259438396.36,
+      "totalEsperado": 259438396.36
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF7",
+      "lik": "61692120399:56477620837:B52A56",
+      "ticketId": "46278802446",
+      "accion": "EDITADO",
+      "total": 7273529.087,
+      "totalEsperado": 7273529.09
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF8",
+      "lik": "61692120399:56477620838:66FF74",
+      "ticketId": "46285360275",
+      "accion": "EDITADO",
+      "total": 21820588.185,
+      "totalEsperado": 21820588.18
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF9",
+      "lik": "61692120399:56477620848:EBF6C1",
+      "ticketId": "46292506186",
+      "accion": "EDITADO",
+      "total": 21820588.185,
+      "totalEsperado": 21820588.18
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF10",
+      "lik": "61692120399:56477620842:6DBE85",
+      "ticketId": "46275435661",
+      "accion": "EDITADO",
+      "total": 21820588.185,
+      "totalEsperado": 21820588.18
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF11",
+      "lik": "61692120399:56477620847:A87C13",
+      "ticketId": "46277747479",
+      "accion": "EDITADO",
+      "total": 21820588.185,
+      "totalEsperado": 21820588.18
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF12",
+      "lik": "61692120399:56477620839:3610BB",
+      "ticketId": "46284591505",
+      "accion": "EDITADO",
+      "total": 21820587.998,
+      "totalEsperado": 21820588
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF13",
+      "lik": "61692120399:56477620843:0700A9",
+      "ticketId": "46289875079",
+      "accion": "EDITADO",
+      "total": 21820587.998,
+      "totalEsperado": 21820588
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF14",
+      "lik": "61692120399:56477620840:5A411C",
+      "ticketId": "46283553054",
+      "accion": "EDITADO",
+      "total": 21820587.998,
+      "totalEsperado": 21820588
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF15",
+      "lik": "61692120399:56477620844:F74345",
+      "ticketId": "46288475436",
+      "accion": "EDITADO",
+      "total": 8045454.604,
+      "totalEsperado": 8045454.6
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF19",
+      "lik": "61692120399:56477620845:7D1EA9",
+      "ticketId": "46278651003",
+      "accion": "EDITADO",
+      "total": 13409091.003,
+      "totalEsperado": 13409091
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [D4809A64] (split PYG)",
+      "idOrigen": "D4809A642ACAE5F403258893006F8919#PYG",
+      "mig": "D4809A642ACAE5F403258893006F8919-OF20",
+      "lik": "61692120399:56477620846:283056",
+      "ticketId": "46286617413",
+      "accion": "EDITADO",
+      "total": 21820587.998,
+      "totalEsperado": 21820588
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF1",
+      "lik": "61691980813:56500885562:02510B",
+      "ticketId": "46275435696",
+      "accion": "EDITADO",
+      "total": 68867.86,
+      "totalEsperado": 68867.86
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF2",
+      "lik": "61691980813:56476537175:041E29",
+      "ticketId": "46274969477",
+      "accion": "EDITADO",
+      "total": 12425.21,
+      "totalEsperado": 12425.21
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF3",
+      "lik": "61691980813:56491396362:448212",
+      "ticketId": "46291575593",
+      "accion": "EDITADO",
+      "total": 24323,
+      "totalEsperado": 24323
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF4",
+      "lik": "61691980813:56495992342:136070",
+      "ticketId": "46299989341",
+      "accion": "EDITADO",
+      "total": 60804.75,
+      "totalEsperado": 60804.75
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF5",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF6",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF7",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF8",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF9",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF13",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF14",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF15",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF16",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF17",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF18",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    },
+    {
+      "caso": "ID 443630 -Portal Liferay [B386BBEA]",
+      "idOrigen": "B386BBEA3C55E5BD032588930074D6B1",
+      "mig": "B386BBEA3C55E5BD032588930074D6B1-OF19",
+      "lik": "",
+      "accion": "SIN_LI_CANONICO"
+    }
+  ]
+}

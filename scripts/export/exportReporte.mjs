@@ -178,7 +178,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
-  'total_real_a_facturar', 'numero_de_factura', 'dolar',
+  'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda',
 ];
 
@@ -460,7 +460,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const ancla = ymd(lp?.billing_anchor_date || '');
   const incluyeUY = safe(lp?.uy || '').toLowerCase() === 'true';
 
-  const monto = safeNum(tp.total_real_a_facturar) ?? safeNum(tp.monto_a_facturar);
+  const monto = safeNum(tp.subtotal_real);
   const costo = safeNum(tp.of_costo);
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
 
