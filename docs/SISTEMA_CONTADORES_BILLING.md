@@ -16,10 +16,10 @@ y cómo interactúan.
 | Propiedad | Tipo | Stateless / Stateful | Writer(s) en código | ¿Se recomputa en cada corrida hoy? |
 |---|---|---|---|---|
 | `hs_recurring_billing_number_of_payments` | meta (input) | — | Manual en HubSpot / `scripts/fix/fillNumberOfPayments.mjs` | No (es input) |
-| `facturas_restantes` | contador | **stateless** (conteo) | `recalcFacturasRestantes.js` | **No** (solo en eventos) |
-| `facturas_por_derivar` | contador | **stateless** (conteo) | `recalcDerivedFacturas.js` | **No** (solo al emitir) |
-| `progreso_pagos` | display | **stateless** (conteo) | `syncBillingState.js` | **No** (solo en eventos) |
-| `fechas_completas` | flag | derivado de conteo | `recalcFacturasRestantes.js` | **No** |
+| `facturas_restantes` | contador | **stateless** (conteo) | `recalcFacturasRestantes.js` + `recalcContadores.js` (Phase R) | **Sí** (Phase R, tras Phase 3) |
+| `facturas_por_derivar` | contador | **stateless** (conteo) | `recalcDerivedFacturas.js` + `recalcContadores.js` (Phase R) | **Sí** (Phase R) |
+| `progreso_pagos` | display | **stateless** (conteo) | `syncBillingState.js` + `recalcContadores.js` (Phase R) | **Sí** (Phase R) |
+| `fechas_completas` | flag (gate) | derivado de conteo | `recalcFacturasRestantes.js` (one-way) + `recalcContadores.js` (bidireccional, Phase R) | **Sí** (Phase R, reconcilia ↑↓) |
 | `pagos_restantes` | contador | **⚠️ stateful** (decremental) | `syncAfterPromotion.js` | Solo al promover un ticket |
 | `pagos_emitidos` | numérica | **sin writer** | **— (ninguno)** ⚠️ bug latente | Nunca lo escribe el motor |
 
@@ -103,9 +103,17 @@ operativo.
 no se generan más tickets. **Es el flag más importante del sistema** — una vez en
 `true`, el LI queda "sellado".
 
-**Writer:** `recalcFacturasRestantes.js` — cuando `restantes === 0` (y la
-corrección de consistencia: si ya era 0 pero el flag estaba en `false`). Al
-sellar dispara `alertFechasCompletas`.
+**Writers:**
+- `recalcFacturasRestantes.js` (event-driven) — sella `true` cuando `restantes === 0`
+  (one-way latch; también corrige a `true` si ya era 0 pero el flag estaba en `false`).
+  Al sellar dispara `alertFechasCompletas`.
+- `recalcContadores.js` (**Phase R**, fin de corrida) — lo reconcilia de forma
+  **SEGURA y BIDIRECCIONAL** como espejo del estado real: `restantes===0 → true`,
+  `restantes>0 → false`. Esto **des-sella** una línea que volvió a tener cuotas
+  pendientes (total subido, ticket que salió de facturado, clon 12→6 sobre una
+  línea ya completa) — el latch de una sola vía la mataba para siempre. Sigue
+  siendo el único *significado* del flag (`facturas_restantes===0`), y
+  `recalcContadores` es su único writer bidireccional. Alerta solo en la transición.
 
 **Lectores (consumidores):**
 - `billingEngine.js` `updateLineItemSchedule()` → **regla predominante**: si
@@ -252,18 +260,35 @@ corrida real que `fechas_completas` se sella.
 
 ---
 
-## Implicancias para el refactor "Phase R" (recalc contadores)
+## Phase R — diseño implementado (recalc contadores)
 
-1. **Phase R** = nuevo paso tras Phase 3 en `phases/index.js`, loop sobre los LIs
-   refrescados, que recompone los **tres stateless** por LIK preservando los
-   efectos colaterales (`fechas_completas=true` a 0, alertas). Cubre los tres
-   entry points (Actualizar, cron, CLI) porque todos convergen en `runPhasesForDeal`.
-2. **`pagos_restantes`** → no se toca en Phase R (stateful + alimenta gating/alertas).
-3. **`pagos_emitidos`** → fuera de Phase R; bug latente a tratar aparte.
-4. **Eficiencia:** hoy los stateless hacen 2 búsquedas de tickets por LIK
-   (`INVOICED` + `DERIVED`). Una sola búsqueda alcanza para los tres (lo demuestra
-   `scripts/fix/recalcProgresoPagos.mjs`). Opción A (reusar writers, seguro) para
-   arrancar; Opción B (1 búsqueda por LIK) como optimización medida.
+`runPhaseR` (`src/phases/index.js`) corre tras Phase 3 e itera **todos** los line
+items, delegando cada uno en `recalcContadores` (`src/services/billing/recalcContadores.js`).
+Cubre los tres entry points (Actualizar, cron, CLI) porque todos convergen en
+`runPhasesForDeal`.
+
+`recalcContadores` hace **1 sola búsqueda de tickets por LIK** y:
+1. escribe los **3 contadores COSMÉTICOS** (`facturas_restantes`, `facturas_por_derivar`,
+   `progreso_pagos`) — PATCH solo si cambió;
+2. reconcilia **`fechas_completas` bidireccionalmente** (espejo seguro del estado
+   real: sella y des-sella) — mantiene el gate útil sin el latch que mataba líneas;
+3. dispara alertas (`alertFechasCompletas` / `alertDerivacionCompleta`) **solo en la
+   transición**, no en cada corrida → sin spam.
+
+La lógica de cálculo está en una función PURA `computeContadores(props, counts)`
+(testeada sin mocks). Los writers event-driven
+(`recalcFacturasRestantes` / `recalcDerivedFacturas`) quedan **intactos**:
+`recalcContadores` es el **reconciliador de fin de corrida** contra la verdad,
+con **cero blast radius** sobre el flujo existente.
+
+**Fuera de Phase R (a propósito):**
+- **`pagos_restantes`** → stateful + alimenta gating de Phase P y alertas. No se toca.
+- **`pagos_emitidos`** → sin writer; bug latente a tratar aparte.
+
+**Tests:** `src/__tests__/recalcContadores.test.mjs` (motor: pura + IO con fakes,
+incluido el des-sellado y las alertas en transición) y
+`src/__tests__/phaseR.test.mjs` (orquestación). Correr con:
+`node --test src/__tests__/recalcContadores.test.mjs src/__tests__/phaseR.test.mjs`.
 
 ---
 

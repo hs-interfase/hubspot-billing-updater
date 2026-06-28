@@ -13,8 +13,7 @@ import {
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
-import { syncBillingState } from '../services/billing/syncBillingState.js';
-import { recalcDerivedFacturas } from '../services/billing/recalcDerivedFacturas.js';
+import { recalcContadores } from '../services/billing/recalcContadores.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
@@ -144,18 +143,17 @@ function filterActiveLineItems(lineItems) {
  * recomputaban estos contadores; solo se actualizaban en un evento real de
  * facturación. Ver docs/SISTEMA_CONTADORES_BILLING.md.
  *
- * Solo toca los tres STATELESS (idempotentes, PATCH solo si cambió):
- *   - facturas_restantes  (+ fechas_completas=true al llegar a 0)  [syncBillingState → recalcFacturasRestantes]
- *   - progreso_pagos                                               [syncBillingState]
- *   - facturas_por_derivar                                         [recalcDerivedFacturas]
- * NO toca pagos_restantes (stateful decremental, alimenta gating de Phase P y
- * alertas) ni pagos_emitidos (sin writer; ver doc).
+ * Delega cada línea en recalcContadores (1 búsqueda de tickets por LIK), que:
+ *   - escribe los 3 contadores COSMÉTICOS (facturas_restantes, facturas_por_derivar, progreso_pagos);
+ *   - reconcilia fechas_completas de forma SEGURA y BIDIRECCIONAL (espejo del estado real);
+ *   - dispara alertas solo en la transición (sin spam).
+ * NO toca pagos_restantes (stateful) ni pagos_emitidos (sin writer; ver doc).
  *
  * Itera sobre TODOS los line items (no solo los activos): queremos corregir
  * contadores incluso en líneas excluidas de P/2/3. Un error en una línea se
  * loguea y NO bloquea el resto.
  *
- * Los writers son inyectables para poder testear la orquestación sin API.
+ * recalcContadores es inyectable para testear la orquestación sin API.
  *
  * @returns {Promise<{processed:number, skipped:number, errors:number}>}
  */
@@ -163,8 +161,7 @@ export async function runPhaseR({
   dealId,
   lineItems,
   hubspotClient: client = hubspotClient,
-  syncBillingStateFn = syncBillingState,
-  recalcDerivedFacturasFn = recalcDerivedFacturas,
+  recalcContadoresFn = recalcContadores,
 }) {
   let processed = 0;
   let skipped = 0;
@@ -181,9 +178,7 @@ export async function runPhaseR({
     }
 
     try {
-      // dealIsCanceled:false — el path de cancelación ya retornó antes de Phase R.
-      await syncBillingStateFn({ hubspotClient: client, lineItemId: liId, dealId, dealIsCanceled: false });
-      await recalcDerivedFacturasFn({ hubspotClient: client, lineItemId: liId, dealId });
+      await recalcContadoresFn({ hubspotClient: client, lineItemId: liId, dealId });
       processed++;
     } catch (err) {
       errors++;
