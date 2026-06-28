@@ -145,8 +145,11 @@ vite.config.ts.timestamp-*
 hubspot.config.yml
 .vercel
 
-# Migration scripts / scratch files (not for the repo)
-scripts/migration/
+# Migration scripts / scratch files: TRACK los .mjs (tooling — no perderlos nunca),
+# ignorá data/outputs/PII de esa carpeta. (Antes `scripts/migration/` ignoraba TODO →
+# el seal y otros se borraban por untracked. 2026-06-28.)
+scripts/migration/*
+!scripts/migration/*.mjs
 **/CONTEXTO_migracion*
 **/auditoria_tickets_migrados*
 
