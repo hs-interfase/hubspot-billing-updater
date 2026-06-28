@@ -13,6 +13,8 @@ import {
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
+import { syncBillingState } from '../services/billing/syncBillingState.js';
+import { recalcDerivedFacturas } from '../services/billing/recalcDerivedFacturas.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
@@ -164,6 +166,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       phaseP: { success: false },
       phase2: { ticketsCreated: 0 },
       phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
+      phaseR: { processed: 0, skipped: 0, errors: 0 },
       ticketsCreated: 0,
       autoInvoicesEmitted: 0,
     };
@@ -422,6 +425,69 @@ export async function runPhasesForDeal({ deal, lineItems }) {
         'Error en Phase 3'
       );
       results.phase3.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== PHASE R: Recalcular contadores derivados ==========
+    // Recompone los contadores STATELESS por line item al final de la corrida,
+    // cuando las etapas de tickets ya están estables (tras promover/emitir).
+    // Resuelve el desfase reportado (ej: clon 12→6 pagos): ni "Actualizar" ni el
+    // cron recomputaban estos contadores; solo se actualizaban en un evento real
+    // de facturación. Ver docs/SISTEMA_CONTADORES_BILLING.md.
+    //
+    // Solo toca los tres STATELESS (conteo puro, idempotente):
+    //   - facturas_restantes   (+ fechas_completas=true al llegar a 0)  [recalcFacturasRestantes vía syncBillingState]
+    //   - progreso_pagos                                                [syncBillingState]
+    //   - facturas_por_derivar                                          [recalcDerivedFacturas]
+    // NO toca pagos_restantes (stateful decremental, alimenta gating de Phase P
+    // y alertas) ni pagos_emitidos (sin writer; ver doc).
+    //
+    // Va DESPUÉS de Phase 3 a propósito: recalcFacturasRestantes sella
+    // fechas_completas, que Phase 1 lee para excluir LIs de P/2/3. Recomputar al
+    // final hace que ese sello afecte la corrida siguiente, no la actual.
+    //
+    // Itera sobre currentLineItems (todos, no solo los activos): queremos corregir
+    // contadores incluso en líneas excluidas de P/2/3. Los writers son idempotentes
+    // (PATCH solo si el valor cambió) y resuelven auto-renew / pago único / sin total.
+    try {
+      let processed = 0;
+      let skipped = 0;
+      let errors = 0;
+
+      for (const li of currentLineItems) {
+        const lp = li?.properties || {};
+        const liId = String(li?.id || lp.hs_object_id || '');
+        const lik = String(lp.line_item_key || '').trim();
+
+        if (!liId || !lik) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          // dealIsCanceled:false — el path de cancelación ya retornó antes de aquí.
+          await syncBillingState({ hubspotClient, lineItemId: liId, dealId, dealIsCanceled: false });
+          await recalcDerivedFacturas({ hubspotClient, lineItemId: liId, dealId });
+          processed++;
+        } catch (err) {
+          errors++;
+          logger.warn(
+            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemId: liId, lik, err },
+            'Phase R: recálculo de contadores falló para un line item (no bloquea)'
+          );
+        }
+      }
+
+      results.phaseR = { processed, skipped, errors };
+      logger.info(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, processed, skipped, errors },
+        'Phase R completada (contadores recalculados)'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase R'
+      );
+      results.phaseR.error = err?.message || 'Error desconocido';
     }
 
     logger.info(
