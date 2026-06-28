@@ -27,6 +27,7 @@ import { hubspotClient } from '../../src/hubspotClient.js';
 const APPLY = process.argv.includes('--apply');
 const DEAL_IDX = process.argv.indexOf('--deal');
 const SINGLE_DEAL_ID = DEAL_IDX !== -1 ? process.argv[DEAL_IDX + 1] : null;
+guardProduction({ scriptName: 'fillNumberOfPayments.mjs', dryRun: !APPLY });
 
 // ── Frecuencia → meses ─────────────────────────────────────────────────────
 

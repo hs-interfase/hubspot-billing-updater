@@ -3,9 +3,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { hubspotClient, getDealWithLineItems } from "../hubspotClient.js";
 import { getTodayYMD } from "../utils/dateUtils.js";
-import { runPhasesForDeal } from "../phases/index.js";
+import { runPhasesForDealLocked } from "../phases/index.js";
 import { flushHubSpotErrors } from "../utils/hubspotErrorCollector.js";
-import { sendSummary, pingHeartbeat } from '../../lib/alertService.js'
+import { sendSummary, pingHeartbeat, sendAlert } from '../../lib/alertService.js'
+import { alertOnStuckAutoEmissions } from '../services/monitoring/zeroEmission.js'
 import { initCronStateTable, initCronFailuresTable, insertCronFailure, getCronState, setCronState } from '../db.js'
 import crypto from "node:crypto";
 import logger from "../../lib/logger.js";
@@ -13,16 +14,13 @@ import {
   CRON_LOOKBACK_DAYS,
   FORECAST_MANUAL_STAGES,
 } from '../config/constants.js';
+import { acquireCronLock, releaseCronLock } from "../utils/cronLock.js";
 
 // -------------------- Paths / Config --------------------
 
 const FAILED_PATH =
   process.env.CRON_FAILED_PATH ||
   path.resolve(process.cwd(), "cron_failed_deals.json");
-
-const LOCK_PATH =
-  process.env.CRON_LOCK_PATH ||
-  path.resolve(process.cwd(), "cron_state_deals.lock");
 
 const LOG_DIR = process.env.CRON_LOG_DIR || "/data/logs";
 
@@ -31,7 +29,6 @@ const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 const MAX_RUN_MS = Number(process.env.CRON_MAX_RUN_MS || 6 * 60 * 60 * 1000);
 const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
-const LOCK_TTL_MS = Number(process.env.CRON_LOCK_TTL_MS || 60 * 60 * 1000);
 
 // Your deal properties (adjust if your portal uses different names)
 const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
@@ -74,32 +71,6 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8");
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-function acquireLock({ ttlMs = LOCK_TTL_MS } = {}) {
-  try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const stat = fs.statSync(LOCK_PATH);
-      const age = Date.now() - stat.mtimeMs;
-      if (age > ttlMs) {
-const lockAgeSec = Math.round(age / 1000);
-logger.warn(
-  { lockAgeSec, lockPath: LOCK_PATH, ttlMs },
-  "Stale lock detected -> removing"
-);
-        try { fs.unlinkSync(LOCK_PATH); } catch {}
-      } else {
-        return false;
-      }
-    }
-    fs.writeFileSync(LOCK_PATH, String(Date.now()), { flag: "wx" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function releaseLock() {
-  try { fs.unlinkSync(LOCK_PATH); } catch {}
-}
 
 async function withRetry(fn, { maxRetries = 5 } = {}) {
   let attempt = 0;
@@ -296,7 +267,7 @@ export async function runDealsBatchCron({ modeOverride = null, onlyDealId = null
   logger.info({ jobRunId }, "Cron started");
   lastCtx = { ...lastCtx, where: "runDealsBatchCron.start", dealId: null, mirrorId: null };
 
-if (!acquireLock()) {
+if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
   logger.warn({ jobRunId, mode, reason: "lock_present" }, "[cronDealsBatch] Cron skipped (lock present)");
   return { skipped: true };
 }
@@ -310,13 +281,13 @@ if (!acquireLock()) {
     const WINDOW_START = 3 * 60 + 40;    // 03:40 UTC
     const WINDOW_END   = 7 * 60;         // 07:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
-      releaseLock();
+  await releaseCronLock("cronDealsBatch", jobRunId);
       logger.info({ jobRunId, utcH, utcM, reason: "fuera_de_ventana" }, "[cronDealsBatch] Skipped (fuera de ventana horaria)");
       return { skipped: true, reason: "fuera_de_ventana" };
     }
   }
 
-  let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0;
+  let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0, skippedLocked = 0;
 
 // Cursores weekday desde PostgreSQL (sobrevive redeploys)
   let afterS1 = await getCronState('weekday_after_s1');
@@ -375,8 +346,14 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
   }
 
   appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
-  lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
-  if (!dry) await runPhasesForDeal({ deal, lineItems });
+lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
+  if (!dry) {
+    const r = await runPhasesForDealLocked({ deal, lineItems }, 'cronDealsBatch');
+    if (r?.skipped && r.reason === 'deal_locked') {
+      appendAudit({ at: new Date().toISOString(), type: "skip", reason: "deal_locked", dealId, dealname: name, mode });
+      return { processed: 1, ok: 0, failed: 0, skippedLocked: 1 };
+    }
+  }
   appendAudit({ at: new Date().toISOString(), type: "deal_ok", dealId, dealname: name, mode });
 
   // Mirror immediate
@@ -391,15 +368,19 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
       dealname: name,
       mode,
     });
-  } else {
+} else {
     try {
       lastCtx = { ...lastCtx, where: "onlyDealId.mirror.getDealWithLineItems", dealId, mirrorId: String(mirrorId) };
       const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
       if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
         appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-        lastCtx = { ...lastCtx, where: "onlyDealId.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
-        if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
-        appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+              lastCtx = { ...lastCtx, where: "onlyDealId.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
+        const rM = dry ? null : await runPhasesForDealLocked({ deal: mDeal, lineItems: mLineItems }, 'cronDealsBatch');
+        if (rM?.skipped && rM.reason === 'deal_locked') {
+          appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_deal_locked", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        } else {
+          appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        }
       } else {
         appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
       }
@@ -563,8 +544,17 @@ lastCtx = { ...lastCtx, where: "onlyDealId.getDealWithLineItems", dealId, mirror
 
         appendAudit({ at: new Date().toISOString(), type: "deal_start", dealId, dealname: name, mode });
 
-        lastCtx = { ...lastCtx, where: "batch.runPhasesForDeal", dealId };
-        if (!dry) await runPhasesForDeal({ deal, lineItems });
+lastCtx = { ...lastCtx, where: "batch.runPhasesForDeal", dealId };
+if (!dry) {
+  const r = await runPhasesForDealLocked({ deal, lineItems }, 'cronDealsBatch');
+  if (r?.skipped && r.reason === 'deal_locked') {
+    skippedLocked++;
+    processed++;
+    appendAudit({ at: new Date().toISOString(), type: "skip", reason: "deal_locked", dealId, dealname: name, mode });
+    await sleep(DEAL_PAUSE_MS);
+    continue;
+  }
+}
 
         ok++;
         processed++;
@@ -588,9 +578,13 @@ if (!mirrorId) {
     const { deal: mDeal, lineItems: mLineItems } = await getDealWithLineItems(String(mirrorId));
     if (isMirrorDealFromDeal(mDeal) && Array.isArray(mLineItems) && mLineItems.length > 0) {
       appendAudit({ at: new Date().toISOString(), type: "mirror_start", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
-      lastCtx = { ...lastCtx, where: "batch.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
-      if (!dry) await runPhasesForDeal({ deal: mDeal, lineItems: mLineItems });
-      appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+              lastCtx = { ...lastCtx, where: "batch.mirror.runPhasesForDeal", dealId, mirrorId: String(mirrorId) };
+        const rM = dry ? null : await runPhasesForDealLocked({ deal: mDeal, lineItems: mLineItems }, 'cronDealsBatch');
+        if (rM?.skipped && rM.reason === 'deal_locked') {
+          appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_deal_locked", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        } else {
+          appendAudit({ at: new Date().toISOString(), type: "mirror_ok", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
+        }
     } else {
       appendAudit({ at: new Date().toISOString(), type: "skip", reason: "mirror_not_valid_or_no_line_items", originalDealId: dealId, mirrorDealId: String(mirrorId), mode });
     }
@@ -622,9 +616,17 @@ if (!mirrorId) {
             continue;
           }
 
-lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
-          if (!dry) await runPhasesForDeal({ deal, lineItems });
-
+        lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
+          if (!dry) {
+            const r = await runPhasesForDealLocked({ deal, lineItems }, 'cronDealsBatch');
+            if (r?.skipped && r.reason === 'deal_locked') {
+              skippedLocked++;
+              processed++;
+              appendAudit({ at: new Date().toISOString(), type: "skip", reason: "deal_locked_after_retry", dealId, dealname: name, mode });
+              await sleep(DEAL_PAUSE_MS);
+              continue;
+            }
+          }
           ok++;
           processed++;
           appendAudit({ at: new Date().toISOString(), type: "deal_ok_after_retry", dealId, dealname: name, mode });
@@ -657,13 +659,14 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
       failed,
       skippedMirror,
       skippedNoLI,
+      skippedLocked,
       scanComplete,
     });
      await setCronState('weekday_last_run', JSON.stringify({
       at: new Date().toISOString(), processed, ok, failed, skippedMirror, skippedNoLI,
     }));
 
-   return { mode, processed, ok, failed, skippedMirror, skippedNoLI };
+   return { mode, processed, ok, failed, skippedMirror, skippedNoLI, skippedLocked };
 } finally {
   try {
     await flushHubSpotErrors();
@@ -675,9 +678,9 @@ lastCtx = { ...lastCtx, where: "retry.runPhasesForDeal", dealId };
     );
   }
 
-releaseLock();
+await releaseCronLock("cronDealsBatch", jobRunId);
   const cronStatus = failed === 0 ? 'OK' : failed < processed * 0.1 ? 'WARN' : 'ERROR';
-  logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
+  logger.info({ jobRunId, mode, processed, ok, failed, skippedMirror, skippedNoLI, skippedLocked, event: 'cron_run_summary', status: cronStatus, durationMs: Date.now() - start }, "cron_done");
   logger.info({ jobRunId }, "Cron finished");
 
   const failedItems = readJson(FAILED_PATH, { items: [] }).items || []
@@ -691,11 +694,16 @@ releaseLock();
     failed,
     skippedMirror,
     skippedNoLI,
+    skippedLocked,
     elapsedMs: Date.now() - start,
     failedDeals,
   }).catch(() => {})
 
   pingHeartbeat().catch(() => {})
+
+  // Zero-emission: si el cron corrió pero dejó tickets AUTO en READY sin factura,
+  // alertar por email con deal/lineItem/ticket para identificarlos a mano.
+  await alertOnStuckAutoEmissions({ jobName: 'cronDealsBatch', sendAlert })
 }
 
   lastCtx = { where: ".start", dealId: null, ticketId: null, lineItemId: null, lineItemKey: null };

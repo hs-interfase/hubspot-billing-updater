@@ -23,7 +23,7 @@
 
 import 'dotenv/config';
 import { hubspotClient } from "../hubspotClient.js";
-import { buildMensajeMantsoft } from '../services/billing/buildMensajeMantsoft.js';
+import { buildMensajeMantsoft, classifyLineItem } from '../services/billing/buildMensajeMantsoft.js';
 import {
   buildMansoftSnapshot,
   serializeMansoftSnapshot,
@@ -33,6 +33,7 @@ import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
 import { BILLING_ACTIVE_DEAL_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from '../config/constants.js';
+import { getPortalId } from '../utils/hubspotPortal.js';
 
 
 
@@ -51,6 +52,7 @@ const LI_PROPS = [
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
   'billing_next_date', 'fecha_vencimiento_contrato',
+  'inicio_del_contrato', 'fin_del_contrato',
   'hs_recurring_billing_number_of_payments', 'pagos_restantes',
   'renovacion_automatica', 'hs_recurring_billing_terms',
   'hs_product_id', 'pagos_emitidos', 'billing_anchor_date',
@@ -58,8 +60,10 @@ const LI_PROPS = [
   'observaciones', 'nota',
   'mansoft_pendiente', 'facturacion_automatica',
   // Nuevas props para el sistema alta/edición
-    'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo',
+    'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo', 'pausa',
   'mansoft_tipo_aviso', 'mansoft_ultimo_snapshot',
+  // Flag de migración: si está prendido y aún no hay snapshot → tipo 'migra' (no avisa alta)
+  'mig_migracion_historica',
 ];
 
 // ────────────────────────────────────────────────────────────
@@ -94,7 +98,7 @@ async function searchLineItemsMantsoft() {
         { module: 'cronMensajeMantsoft', fn: 'searchLineItemsMantsoft', err },
         'Error buscando line items mansoft_pendiente'
       );
-      return allItems;
+      return { items: allItems, searchError: err?.message || String(err) };
     }
 
     const results = res?.results || [];
@@ -112,7 +116,7 @@ async function searchLineItemsMantsoft() {
     after = nextAfter;
   }
 
-  return allItems;
+  return { items: allItems, searchError: null };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -227,7 +231,10 @@ async function getDealInfo(dealId) {
 
 async function writeMensaje(dealId, html) {
   await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-    properties: { [DEAL_PROPERTY]: html },
+    properties: {
+      [DEAL_PROPERTY]: html,
+      mensaje_mansoft_actualizado: String(Date.now()),
+    },
   });
 }
 
@@ -260,7 +267,12 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
   );
 
   // 1. Buscar line items pendientes
-  const lineItems = await searchLineItemsMantsoft();
+ const { items: lineItems, searchError } = await searchLineItemsMantsoft();
+  if (searchError) {
+    logger.error({ module: 'cronMensajeMantsoft', searchError },
+      '❌ Search API falló — el run NO es confiable');
+    process.exitCode = 1;  // Railway marca el run como fallido
+  }
 
   logger.info(
     { module: 'cronMensajeMantsoft', total: lineItems.length },
@@ -269,7 +281,7 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
 
   if (lineItems.length === 0) {
     logger.info({ module: 'cronMensajeMantsoft' }, 'Sin line items pendientes, saliendo');
-    return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0 };
+    return { processed: 0, deals: 0, lineItemsReset: 0, errors: 0, searchError };
   }
 
   // 2. Resolver dealId via associations batch
@@ -309,7 +321,8 @@ export async function runCronMensajeMantsoft({ onlyDealId = null, dry = false } 
   for (const [dealId, items] of dealGroups) {
     try {
 const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
-      const dealMeta = { empresa_que_factura, persona_que_factura };
+      const portalId = await getPortalId();
+      const dealMeta = { empresa_que_factura, persona_que_factura, dealId, portalId };
 
       // Altas solo se procesan si el deal está en stage ≥ 85%.
       // Si no califica, separamos las altas para no resetear su flag.
@@ -318,7 +331,6 @@ const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await 
 
       if (!dealIsActive) {
         // Quitar LIs de alta — quedan con mansoft_pendiente=true para el próximo run
-        const { classifyLineItem } = await import('../services/billing/buildMensajeMantsoft.js');
         const nonAltas = items.filter(li => classifyLineItem(li).tipo !== 'alta');
         if (nonAltas.length === 0) {
           logger.info(
@@ -330,19 +342,40 @@ const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await 
         itemsToProcess = nonAltas;
       }
 
+      // Migrados (tipo 'migra'): NO van al mensaje del admin; se onboardean en SILENCIO
+      // (finalizeLineItemAfterNotify estampa el snapshot + apaga mansoft_pendiente). Así no
+      // se avisa alta de los migrados, pero quedan listos para que una edición futura sí avise.
+      const migraItems = itemsToProcess.filter(li => classifyLineItem(li).tipo === 'migra');
+
       const html = buildMensajeMantsoft(itemsToProcess, dealName, dealMeta);
 
-      if (!html) {
+if (!html && migraItems.length === 0) {
+        // Nada real que notificar (ej: ediciones cuyo diff quedó vacío).
+        // Sin reset, estos LIs se reintentan todos los días para siempre.
         logger.warn(
-          { module: 'cronMensajeMantsoft', dealId },
-          'buildMensajeMantsoft retornó vacío, saltando'
+          { module: 'cronMensajeMantsoft', dealId, lineItemCount: itemsToProcess.length },
+          'Mensaje vacío sin migrados — se resetean flags para cortar reintentos'
         );
+        if (!dry) {
+          for (const li of itemsToProcess) {
+            try {
+              await finalizeLineItemAfterNotify(li);
+              lineItemsReset++;
+            } catch (err) {
+              logger.error(
+                { module: 'cronMensajeMantsoft', dealId, lineItemId: li.id, err },
+                'Error reseteando LI con mensaje vacío'
+              );
+              errors++;
+            }
+          }
+        }
         continue;
       }
 
       if (dry) {
         logger.info(
-        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: itemsToProcess.length, htmlLength: html.length },
+        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: itemsToProcess.length, migra: migraItems.length, htmlLength: html.length },
           '🏜️ DRY RUN — no se escribe mensaje ni se resetean line items'
         );
         dealsProcessed++;
@@ -350,13 +383,16 @@ const { dealName, dealstage, empresa_que_factura, persona_que_factura } = await 
         continue;
       }
 
-      // Escribir mensaje en el deal
-      await writeMensaje(dealId, html);
+      // Escribir mensaje en el deal (solo si hay algo que avisar; los migra no generan HTML)
+      if (html) await writeMensaje(dealId, html);
 
-      // Por cada LI: guardar snapshot + resetear flag + limpiar tipo
-for (const li of itemsToProcess) {
-  try{
-  await finalizeLineItemAfterNotify(li);
+      // Finalizar (snapshot + resetear flag + limpiar tipo): si hubo mensaje, TODOS los
+      // itemsToProcess; si no, SOLO los migra (onboard silencioso). El flag mig_migracion_historica
+      // NO se toca acá — lo apaga el último paso de la migración (sealHistoricTickets).
+      const aFinalizar = html ? itemsToProcess : migraItems;
+      for (const li of aFinalizar) {
+        try {
+          await finalizeLineItemAfterNotify(li);
           lineItemsReset++;
         } catch (err) {
           logger.error(
@@ -369,8 +405,8 @@ for (const li of itemsToProcess) {
 
       dealsProcessed++;
       logger.info(
-        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: itemsToProcess.length },
-        '✅ Mensaje Mantsoft escrito y line items finalizados'
+        { module: 'cronMensajeMantsoft', dealId, dealName, lineItemCount: aFinalizar.length, migra: migraItems.length, avisado: !!html },
+        '✅ Mensaje Mantsoft procesado (migrados onboardeados en silencio)'
       );
 
     } catch (err) {

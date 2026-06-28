@@ -136,7 +136,7 @@ const LINE_ITEMS = [
       hs_recurring_billing_start_date:     '2022-08-01',
       hs_recurring_billing_period:         'P24M',
       hs_recurring_billing_number_of_payments: '1',
-      cuando_se_factura:                   'Mes adelantado',
+      momento_de_facturacion:              'adelantado',
     },
     snapshot: {
       billing_anchor_date: '2022-08-01', 
@@ -161,7 +161,7 @@ const LINE_ITEMS = [
       fecha_vencimiento_contrato:          '2025-09-03',
       hs_recurring_billing_period:         'P12M',
       hs_recurring_billing_number_of_payments: '12',
-      cuando_se_factura:                   'Mes vencido',
+      momento_de_facturacion:              'vencido',
     },
     snapshot: {
         billing_anchor_date: '2024-09-04',
@@ -186,7 +186,7 @@ const LINE_ITEMS = [
       fecha_vencimiento_contrato:          '2025-12-31',
       hs_recurring_billing_period:         'P12M',
       hs_recurring_billing_number_of_payments: '1',
-      cuando_se_factura:                   'Fin de Mes',
+      momento_de_facturacion:              'fin_de_mes',
     },
     snapshot: {
       billing_anchor_date: '2025-01-01',
@@ -211,7 +211,7 @@ const LINE_ITEMS = [
       fecha_vencimiento_contrato:          '2025-12-31',
       hs_recurring_billing_period:         'P12M',
       hs_recurring_billing_number_of_payments: '4',
-      cuando_se_factura:                   'Fin de Mes',
+      momento_de_facturacion:              'fin_de_mes',
     },
     snapshot: {
       billing_anchor_date: '2025-01-01',
@@ -234,7 +234,7 @@ const LINE_ITEMS = [
       recurringbillingfrequency:           'monthly',
       hs_recurring_billing_start_date:     '2023-12-21',
       fecha_vencimiento_contrato:          '2099-12-31',
-      cuando_se_factura:                   'Mes adelantado',
+      momento_de_facturacion:              'adelantado',
     },
     snapshot: {
       billing_anchor_date: '2023-12-21',
@@ -256,7 +256,7 @@ const LINE_ITEMS = [
       recurringbillingfrequency:           'annually',
       hs_recurring_billing_start_date:     '2025-06-01',
       fecha_vencimiento_contrato:          '2099-12-31',
-      cuando_se_factura:                   'Mes adelantado',
+      momento_de_facturacion:              'adelantado',
     },
     snapshot: {
       billing_anchor_date: '2025-06-01',
@@ -278,7 +278,7 @@ const LINE_ITEMS = [
       recurringbillingfrequency:           'per_six_months',
       hs_recurring_billing_start_date:     '2012-08-01',
       fecha_vencimiento_contrato:          '2099-12-31',
-      cuando_se_factura:                   'Mes adelantado',
+      momento_de_facturacion:              'adelantado',
     },
     snapshot: {
       billing_anchor_date: '2012-08-01',    

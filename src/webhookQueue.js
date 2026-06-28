@@ -1,11 +1,13 @@
 // src/webhookQueue.js
-import pool from './db.js';
+import pool, { acquireDealLock, releaseDealLock } from './db.js';
 import logger from '../lib/logger.js';
 import { processUrgentLineItem, processUrgentTicket } from './services/urgentBillingService.js';
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
-import { runPhasesForDeal } from './phases/index.js';
+import { runPhasesForDealLocked } from './phases/index.js';
+import { propagateDealCancellation } from './propagacion/deals/cancelDeal.js';
 import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
 import { parseBool } from './utils/parsers.js';
+import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
 
 const MODULE = 'webhookQueue';
@@ -60,7 +62,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update'
+ * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -307,8 +309,7 @@ async function executeJob(job) {
       }
 
       const dealWithLineItems = await getDealWithLineItems(resolvedDealId);
-      const billingResult = await runPhasesForDeal(dealWithLineItems);
-
+      const billingResult = await runPhasesForDealLocked(dealWithLineItems, 'webhook_queue');
       logger.info(
         {
           module: MODULE, fn: 'executeJob', jobId: job.id,
@@ -366,6 +367,46 @@ async function executeJob(job) {
       }
 
       return result;
+    }
+
+    case 'deal_cancel': {
+      const dealId = String(object_id);
+
+      // Tomar el lock del deal (el mismo candado que usan cron y recalc). Si está
+      // ocupado, devolver deal_locked → processNext lo reencola para reintento.
+      const token = await acquireDealLock(dealId, 'webhook_deal_cancel');
+      if (!token) {
+        return { reason: 'deal_locked' };
+      }
+
+      try {
+        const { deal, lineItems } = await getDealWithLineItems(dealId);
+
+        // Re-verificar contra el estado ACTUAL: entre el evento y este momento el
+        // deal pudo volver a un stage activo. Si ya no está cancelado, no
+        // propagamos (evita desactivar facturación por un evento viejo).
+        if (!isDealCancelledStage(deal?.properties?.dealstage)) {
+          logger.info(
+            { module: MODULE, fn: 'executeJob', jobId: job.id, dealId, dealStage: deal?.properties?.dealstage },
+            'deal_cancel: el deal ya no está en stage cancelado, skip'
+          );
+          return { skipped: true, reason: 'stage_no_longer_cancelled' };
+        }
+
+        await propagateDealCancellation({
+          dealId,
+          dealProps: deal.properties,
+          lineItems: Array.isArray(lineItems) ? lineItems : [],
+        });
+
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId, dealStage: deal?.properties?.dealstage },
+          'deal_cancel: cancelación propagada'
+        );
+        return { cancelled: true };
+      } finally {
+        await releaseDealLock(dealId, token);
+      }
     }
 
     default:

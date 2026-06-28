@@ -12,6 +12,7 @@ import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
+import { notifyMirrorDealOnPauseChange } from '../services/mirrorUtils.js';
 import {
   buildMansoftSnapshot,
   parseMansoftSnapshot,
@@ -61,6 +62,34 @@ const STAGE = {
 
 function isMirrorLineItem(p = {}) {
   return String(p.of_line_item_py_origen_id || '').trim().length > 0;
+}
+
+/**
+ * Decide si un cambio de pausa en un LI debe avisarse al mirror UY, y en qué
+ * dirección. Función pura (no toca HubSpot) — testeable de forma aislada.
+ *
+ * Avisa solo si TODAS se cumplen:
+ *   - facturación automática
+ *   - es un LI PY (no espejo)
+ *   - tiene uy=true (línea operada en UY)
+ *   - la prop 'pausa' realmente cambió de estado (no un re-aviso del mismo estado)
+ *
+ * @param {Object} li  line item con .properties
+ * @param {Object|undefined} pausaDiff  diff de la prop 'pausa' ({ before, after }) o undefined
+ * @returns {{ paused: boolean } | null}  null si no corresponde avisar
+ */
+export function shouldNotifyMirrorOnPauseChange(li, pausaDiff) {
+  const p = li?.properties || {};
+  if (!pausaDiff) return null;
+  if (!isAutomatedBilling(li)) return null;
+  if (isMirrorLineItem(p)) return null;
+  if (!parseBool(p.uy)) return null;
+
+  const ahoraPausado = parseBool(pausaDiff.after) === true;
+  const antesPausado = parseBool(pausaDiff.before) === true;
+  if (ahoraPausado === antesPausado) return null;
+
+  return { paused: ahoraPausado };
 }
 
 function isMantsoftAltaStage(dealStage) {
@@ -599,6 +628,43 @@ export async function runPhaseP({ deal, lineItems }) {
               pausaDiff &&
               parseBool(pausaDiff.after) === true &&
               parseBool(pausaDiff.before) !== true;
+
+            // ── Aviso al mirror UY ────────────────────────────────────────
+            // PY automático, no-espejo y con uy=true: si la pausa cambió de
+            // estado (en cualquier dirección), avisar al deal UY espejo para
+            // que pause/reactive su facturación manual.
+            // Fire-and-forget: nunca bloquea el forecast.
+            const mirrorPauseDecision = shouldNotifyMirrorOnPauseChange(li, pausaDiff);
+            if (mirrorPauseDecision) {
+              const ahoraPausado = mirrorPauseDecision.paused;
+              const esRenovacion =
+                String(p.renovacion_automatica || '').toLowerCase() === 'true';
+              const inicio =
+                toYmd(p.hs_recurring_billing_start_date) ||
+                toYmd(p.billing_anchor_date) || '';
+
+              notifyMirrorDealOnPauseChange(li.id, {
+                paused: ahoraPausado,
+                details: {
+                  pyDealId: dealId,
+                  cliente: deal?.properties?.cliente_beneficiario
+                    || deal?.properties?.dealname || '',
+                  negocio: deal?.properties?.dealname || '',
+                  producto: p.name || '',
+                  tipo: esRenovacion ? 'Renovación automática' : 'Plan fijo',
+                  inicio,
+                  vencimiento: esRenovacion ? '' : (toYmd(p.fecha_vencimiento_contrato) || ''),
+                  frecuencia: p.recurringbillingfrequency || p.hs_recurring_billing_frequency || '',
+                  monto: p.amount || '',
+                  motivo: ahoraPausado ? (p.motivo_de_pausa || '') : '',
+                },
+              }).catch(err => {
+                logger.warn(
+                  { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+                  'notifyMirrorDealOnPauseChange falló — no bloquea'
+                );
+              });
+            }
 
             // Si la línea YA está de baja (en pausa) y este cambio NO es la
             // transición que la dio de baja, no se reavisar al admin: la baja

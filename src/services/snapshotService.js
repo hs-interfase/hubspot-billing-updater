@@ -8,8 +8,6 @@ import {
   IVA_UY_TAX_GROUP_ID,
   IVA_PY_TAX_GROUP_ID,
   EXENTO_TAX_GROUP_ID,
-  IRAE_TAX_GROUP_ID,
-  IVA_UY_IRAE_TAX_GROUP_ID,
 } from '../config/constants.js';
 
 /**
@@ -116,17 +114,13 @@ function detectIVA(lineItem) {
     raw &&
     (
       (IVA_UY_TAX_GROUP_ID && raw === IVA_UY_TAX_GROUP_ID) ||
-      (IVA_PY_TAX_GROUP_ID && raw === IVA_PY_TAX_GROUP_ID) ||
-      (IVA_UY_IRAE_TAX_GROUP_ID && raw === IVA_UY_IRAE_TAX_GROUP_ID)
+      (IVA_PY_TAX_GROUP_ID && raw === IVA_PY_TAX_GROUP_ID)
     )
   ) {
     result = 'true';
   } else if (
     raw &&
-    (
-      (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID) ||
-      (IRAE_TAX_GROUP_ID && raw === IRAE_TAX_GROUP_ID)
-    )
+    (EXENTO_TAX_GROUP_ID && raw === EXENTO_TAX_GROUP_ID)
   ) {
     result = 'false';
   } else {
@@ -141,8 +135,6 @@ function detectIVA(lineItem) {
     IVA_UY_TAX_GROUP_ID,
     IVA_PY_TAX_GROUP_ID,
     EXENTO_TAX_GROUP_ID,
-    IRAE_TAX_GROUP_ID,
-    IVA_UY_IRAE_TAX_GROUP_ID,
   }, '[SNAPSHOT][IVA][A] detectIVA()');
 
   return result;
@@ -163,14 +155,6 @@ function detectIRAE(lineItem) {
     result = 'true';
   } else if (exoneraIrae === true) {
     result = 'false';
-  } else if (
-    rawTaxGroupId &&
-    (
-      (IRAE_TAX_GROUP_ID && rawTaxGroupId === IRAE_TAX_GROUP_ID) ||
-      (IVA_UY_IRAE_TAX_GROUP_ID && rawTaxGroupId === IVA_UY_IRAE_TAX_GROUP_ID)
-    )
-  ) {
-    result = 'true';
   } else {
     result = '';
   }
@@ -182,8 +166,6 @@ function detectIRAE(lineItem) {
     exonera_irae: exoneraIraeRaw,
     exoneraIrae,
     result,
-    IRAE_TAX_GROUP_ID,
-    IVA_UY_IRAE_TAX_GROUP_ID,
   }, '[SNAPSHOT][IRAE][A] detectIRAE()');
 
   return result;
@@ -255,8 +237,11 @@ const repetitivo = !!rawFreq && ![
     of_cantidad_de_pagos: parseNumber(lp.hs_recurring_billing_number_of_payments, null),
     of_producto_nombres: safeString(lp.name),
     of_descripcion_producto: safeString(lp.description),
-    of_rubro: safeString(lp.servicio), // ← Valor RAW para validación posterior
+    of_rubro: safeString(lp.servicio),
     of_subrubro: safeString(lp.subrubro),
+    area: safeString(lp.area), // select del line item → select homónimo del ticket (mismas opciones)
+    of_codigo_rubro: safeString(lp.of_codigo_rubro),
+    momento_de_facturacion: safeString(lp.momento_de_facturacion),
     observaciones: safeString(lp.mensaje_para_responsable),
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(deal?.properties?.pais_operativo || lp.pais_operativo),
@@ -270,7 +255,9 @@ const repetitivo = !!rawFreq && ![
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
+    opera_trading: parseBool(lp.opera_trading),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
+    nc: parseBool(lp.nc), // NC: se setea a mano en el LI y se propaga al ticket (solo registro)
     repetitivo,
   };
 
@@ -329,6 +316,8 @@ export function extractDealSnapshots(deal) {
     of_tipo_de_cupo: safeString(dp.tipo_de_cupo),
     of_pais_operativo: safeString(dp.pais_operativo),
     of_propietario_secundario: safeString(dp.hubspot_owner_id),
+    mig_id_crm_origen: safeString(dp.id_crm_origen),
+    mig_id_cliente_nodum: safeString(dp.id_cliente_nodum),
   };
 }
 

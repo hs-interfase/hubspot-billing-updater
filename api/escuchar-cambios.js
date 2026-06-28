@@ -3,6 +3,7 @@ import logger from '../lib/logger.js';
 import { hubspotClient } from '../src/hubspotClient.js';
 import { enqueue } from '../src/webhookQueue.js';
 import { parseBool } from '../src/utils/parsers.js';
+import { isDealCancelledStage } from '../src/config/constants.js';
 
 const MODULE = 'escuchar-cambios';
 
@@ -48,6 +49,29 @@ export default async function handler(req, res) {
     if (!objectId) {
       logger.error({ module: MODULE, fn: 'handler' }, 'Missing objectId');
       return res.status(400).json({ error: 'Missing objectId' });
+    }
+
+    // ====== RUTA 0: CANCELACIÓN DE DEAL (cambio de stage) ======
+    // deal.propertyChange sobre 'dealstage'. Solo nos interesa si el stage
+    // nuevo es de cancelación; cualquier otro cambio de stage se ignora.
+    if (objectType === 'deal' && propertyName === 'dealstage') {
+      if (!isDealCancelledStage(propertyValue)) {
+        return res.status(200).json({ message: 'Dealstage no es de cancelación, skipped', propertyValue });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType: 'deal',
+        objectId,
+        propertyName,
+        propertyValue,
+        dealId: String(objectId),
+        actionType: 'deal_cancel',
+        priority: 1,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'deal_cancel' });
     }
 
     // ====== RUTA 1: FACTURACIÓN URGENTE ======

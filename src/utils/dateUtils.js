@@ -278,6 +278,26 @@ export function isYMD(str) {
 }
 
 /**
+ * Devuelve el último día HÁBIL (lunes-viernes) del mes de `date`.
+ * Si el último día calendario cae sábado → retrocede al viernes;
+ * si cae domingo → retrocede al viernes. NO contempla feriados
+ * (solo fines de semana), según la regla de facturación 2026-06.
+ *
+ * Usado para `momento_de_facturacion = fin_de_mes`: la fecha de cada
+ * período debe caer en el último día hábil del mes correspondiente.
+ */
+export function lastBusinessDayOfMonth(date) {
+  const y = date.getFullYear();
+  const m = date.getMonth();
+  const d = new Date(y, m + 1, 0); // día 0 del mes siguiente = último día del mes actual
+  const dow = d.getDay();          // 0=domingo … 6=sábado
+  if (dow === 6) d.setDate(d.getDate() - 1);       // sábado → viernes
+  else if (dow === 0) d.setDate(d.getDate() - 2);  // domingo → viernes
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
  * Suma meses a una fecha (maneja fin de mes correctamente).
  */
 export function addMonths(date, months) {

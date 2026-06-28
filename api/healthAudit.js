@@ -2,7 +2,8 @@ import { Router } from 'express'
 import pool, { getCronStateWithTimestamp } from '../src/db.js'
 import logger from '../lib/logger.js'
 import { hubspotClient } from '../src/hubspotClient.js'
-import { TICKET_PIPELINE, TICKET_STAGES } from '../src/config/constants.js'
+import { TICKET_PIPELINE, TICKET_STAGES, EXCHANGE_RATE_STALE_DAYS } from '../src/config/constants.js'
+import { findStuckAutoEmissions } from '../src/services/monitoring/zeroEmission.js'
 import { parseBool } from '../src/utils/parsers.js'
 import { checkWebhookQueue } from '../src/webhookQueue.js'
 
@@ -221,18 +222,103 @@ async function checkAvisos() {
   return result
 }
 
+// ── Check 5: Zero-emission ──────────────────────────────
+// Detecta "el cron corrió pero no emitió lo que debía".
+// En el pipeline AUTO, Phase 3 promueve a BILLING_AUTOMATED_READY y emite la
+// factura en el MISMO paso. Por eso un ticket auto en READY SIN of_invoice_id
+// significa que la emisión falló silenciosamente.
+// Solo evaluamos si el scan weekday ya completó hoy: si no, el cron todavía
+// está corriendo y un ticket transitorio en READY-sin-factura es esperable.
+async function checkZeroEmission() {
+  const weekdayScanDate = await getCronStateWithTimestamp('weekday_scan_complete_date')
+  const todayYMD = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Montevideo' })
+  const scanCompletedToday = weekdayScanDate?.value === todayYMD
+
+  const result = { status: 'ok', scanCompletedToday }
+
+  // Si el scan no completó hoy, diferimos el chequeo (no es zero-emission, es cron en curso / fin de semana).
+  if (!scanCompletedToday) {
+    result.message = 'Scan weekday no completó hoy todavía — chequeo de emisiones diferido'
+    return result
+  }
+
+  try {
+    const stuck = await findStuckAutoEmissions()
+    result.pendingEmissions = stuck.length
+    if (stuck.length > 0) {
+      result.status = 'error'
+      result.message = `${stuck.length} ticket(s) AUTO en READY sin factura tras completar el scan — emisión pendiente/fallida`
+      result.sample = stuck.slice(0, 5).map(s => ({
+        ticketId: s.ticketId,
+        dealId: s.dealId,
+        lineItemKey: s.lineItemKey,
+        ticketKey: s.ticketKey,
+        billingError: s.billingError,
+      }))
+    }
+  } catch (err) {
+    logger.warn({ err: err?.message }, '[healthAudit] Error en checkZeroEmission')
+    result.status = 'warn'
+    result.pendingEmissions = null
+    result.searchError = err?.message
+  }
+
+  return result
+}
+
+// ── Check 6: Frescura de tipos de cambio (CHECK-4) ──────
+// Las tasas (BCU/BCP) se usan en el reporte de exportación para convertir a USD.
+// Si la última tasa guardada es más vieja que EXCHANGE_RATE_STALE_DAYS, el reporte
+// estaría usando cotizaciones obsoletas → warn.
+async function checkExchangeRates() {
+  const result = { status: 'ok', staleAfterDays: EXCHANGE_RATE_STALE_DAYS }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT date, (CURRENT_DATE - date) AS age_days
+         FROM exchange_rates
+        ORDER BY date DESC
+        LIMIT 1`
+    )
+
+    if (!rows.length) {
+      result.status = 'error'
+      result.lastDate = null
+      result.message = 'Tabla exchange_rates vacía — no hay tipos de cambio cargados'
+      return result
+    }
+
+    const ageDays = Number(rows[0].age_days)
+    result.lastDate = rows[0].date
+    result.ageDays = ageDays
+
+    if (ageDays > EXCHANGE_RATE_STALE_DAYS) {
+      result.status = 'warn'
+      result.message = `Último tipo de cambio tiene ${ageDays} día(s) (umbral: ${EXCHANGE_RATE_STALE_DAYS}) — posiblemente obsoleto`
+    }
+  } catch (err) {
+    logger.warn({ err: err?.message }, '[healthAudit] Error en checkExchangeRates')
+    result.status = 'warn'
+    result.queryError = err?.message
+  }
+
+  return result
+}
+
 // ── Endpoint ────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-const [cronLiveness, failedDeals, avisos, webhookQueue] = await Promise.all([
+const [cronLiveness, failedDeals, avisos, webhookQueue, zeroEmission, exchangeRates] = await Promise.all([
   checkCronLiveness(),
   checkFailedDeals(),
   checkAvisos(),
   checkWebhookQueue(),
+  checkZeroEmission(),
+  checkExchangeRates(),
 ])
 
-const checks = { cronLiveness, failedDeals, avisos, webhookQueue }
-const status = worstStatus(cronLiveness.status, failedDeals.status, avisos.status, webhookQueue.status)
+const checks = { cronLiveness, failedDeals, avisos, webhookQueue, zeroEmission, exchangeRates }
+const status = worstStatus(cronLiveness.status, failedDeals.status, avisos.status, webhookQueue.status, zeroEmission.status, exchangeRates.status)
 
     const statusCode = status === 'error' ? 503 : 200
 

@@ -31,6 +31,7 @@ import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
+import { getPortalId } from '../utils/hubspotPortal.js';
 
 
 // ────────────────────────────────────────────────────────────
@@ -48,9 +49,10 @@ const TICKET_PROPS = [
   'of_cantidad_de_pagos', 'producto_id',
   'monto_unitario_real', 'cantidad_real', 'subtotal_real',
   'descuento_en_porcentaje', 'descuento_por_unidad_real', 'total_real_a_facturar',
-  'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
+  'nombre_empresa', 'empresa_que_factura', 'persona_que_factura', 'facturacion_urgente',
   'unidad_de_negocio', 'observaciones_ventas',
   'fecha_resolucion_esperada', 'subject',
+  'opera_trading', 'momento_de_facturacion',
   'ticket_emitio_aviso_a_admin',
 ];
 
@@ -250,7 +252,8 @@ export async function refreshMensajeFacturacionParaDeal(dealId) {
     }
 
     const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(String(dealId));
-    const html = buildMensajeFacturacion(pendientes, dealName, { empresa_que_factura, persona_que_factura });
+    const portalId = await getPortalId();
+    const html = buildMensajeFacturacion(pendientes, dealName, { empresa_que_factura, persona_que_factura, portalId });
     if (!html) return;
 
     await writeMensaje(String(dealId), html);
@@ -349,7 +352,8 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
       }
 
       const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(dealId);
-      const html = buildMensajeFacturacion(tickets, dealName, { empresa_que_factura, persona_que_factura });
+      const portalId = await getPortalId();
+      const html = buildMensajeFacturacion(tickets, dealName, { empresa_que_factura, persona_que_factura, portalId });
 
       if (!html) {
         logger.warn(

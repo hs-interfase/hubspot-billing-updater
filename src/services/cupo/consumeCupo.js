@@ -15,8 +15,12 @@ import { reportIfActionable } from '../../utils/errorReporting.js';
  * 3) Solo consume si deal.cupo_activo == true
  * 4) Un ticket consume cupo UNA SOLA VEZ por invoice (idempotencia por ticket+invoice)
  * TIPO DE CONSUMO:
- * - "Por Horas": ticket.total_de_horas_consumidas
- * - "Por Monto": ticket.total_real_a_facturar (neto sin IVA)
+ * - "Por Horas": ticket.cantidad_real / total_de_horas_consumidas
+ * - "Por Monto": ticket.subtotal_real (neto sin IVA)
+ *
+ * NOTA DE CRÉDITO: si el consumo es NEGATIVO (monto/cantidad < 0, por edición
+ * manual del ticket), se DEVUELVE cupo (resta). Se detecta por signo, no por flag.
+ *
  *
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
@@ -126,10 +130,15 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
   // ========== CALCULAR CONSUMO SEGÚN TIPO ==========
   let consumo = 0;
 
-  if (tipoCupo === 'Por Horas') {
-    consumo = parseNumber(tp.total_de_horas_consumidas, 0);
-    if (consumo === 0) {
-      consumo = parseNumber(tp.cantidad_real, 0);
+if (tipoCupo === 'Por Horas') {
+    const horas = parseNumber(tp.total_de_horas_consumidas, 0);
+    const cantidad = parseNumber(tp.cantidad_real, 0);
+    // NC por horas: la cantidad negativa (edición manual) manda, así devolvemos
+    // horas al cupo aunque total_de_horas_consumidas traiga un valor viejo/positivo.
+    if (cantidad < 0) {
+      consumo = cantidad;
+    } else {
+      consumo = horas !== 0 ? horas : cantidad;
     }
   } else if (tipoCupo === 'Por Monto') {
     consumo = parseNumber(tp.subtotal_real, 0);
@@ -140,8 +149,11 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
   }
 
   // ========== VALIDACIÓN 5: Consumo válido ==========
-  if (consumo <= 0 || isNaN(consumo)) {
-    const reason = `consumo inválido: ${consumo} (NaN o <=0)`;
+  // NOTA DE CRÉDITO: un consumo NEGATIVO es válido y DEVUELVE cupo (resta).
+  // Solo se rechazan 0 y NaN. El negativo solo puede llegar por edición manual
+  // del ticket (el LI valida price/cantidad >= 0), así que negativo = NC deliberada.
+  if (consumo === 0 || isNaN(consumo)) {
+    const reason = `consumo inválido: ${consumo} (NaN o cero)`;
     logger.info(
       { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, tipoCupo, consumo, cantidad_real: tp.cantidad_real, total_de_horas_consumidas: tp.total_de_horas_consumidas, total_real_a_facturar: tp.total_real_a_facturar, reason },
       'SKIP consumo de cupo'

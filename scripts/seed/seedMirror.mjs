@@ -36,6 +36,21 @@ const COMPANY_ID = process.env.TEST_COMPANY_ID || '43833570850';
 const DEAL_STAGE = 'closedwon';   // 85%
 const DRY_RUN    = process.argv.includes('--dry');
 
+// ─── Productos ───────────────────────────────────────────────────────────────────
+// hs_product_id de producción. Determinan la "Empresa emisora" que muestra el
+// mensaje Mantsoft, vía EMPRESA_EMISORA_MAP en
+// src/services/billing/buildMensajeMantsoft.js. Ambos resuelven a "ISA".
+// (Los IDs 4201…/4194… que aparecen en scripts/migration son del sandbox, NO se usan acá.)
+const PRODUCTO_PORTAL = '33695807329'; // Portal → manual     → E-LI1
+const PRODUCTO_IJSERV = '33688695870'; // iJServ → automático → E-LI2
+
+// Espejo mínimo del EMPRESA_EMISORA_MAP, solo para el self-check de este seed
+// (loguea la emisora esperada; si un id no está acá ni en el mapa real, sale "-").
+const EMISORA_ESPERADA = {
+  [PRODUCTO_PORTAL]: 'ISA',
+  [PRODUCTO_IJSERV]: 'ISA',
+};
+
 // ─── Fechas ────────────────────────────────────────────────────────────────────
 
 function todayPlus(days) {
@@ -111,6 +126,11 @@ async function seedDeal(dealName, dealProps, lineItemDefs) {
   for (const liDef of lineItemDefs) {
     const li = await createLineItem({ facturacion_activa: 'true', ...liDef });
     await associateLineItemToDeal(li.id, dealId);
+    // Self-check: confirmar que el producto resolverá una emisora en el mensaje Mantsoft.
+    if (liDef.hs_product_id) {
+      const emisora = EMISORA_ESPERADA[liDef.hs_product_id] || '⚠️ "-" (id no mapeado, revisar EMPRESA_EMISORA_MAP)';
+      console.log(`    🏷️  Producto ${liDef.hs_product_id} → Empresa emisora esperada: ${emisora}`);
+    }
     lineItems.push({ id: li.id, name: liDef.name });
   }
 
@@ -174,6 +194,7 @@ async function main() {
     [
       {
         name: `${PREFIX} E-LI1: Manual cupo×monto mensual 3p`,
+        hs_product_id:                   PRODUCTO_PORTAL, // Portal → emisora ISA
         price:                           '1500',
         quantity:                        '3',
         hs_cost_of_goods_sold:           '500',
@@ -190,6 +211,7 @@ async function main() {
       },
       {
         name: `${PREFIX} E-LI2: Auto auto-renew inicio +5d`,
+        hs_product_id:                   PRODUCTO_IJSERV, // iJServ → emisora ISA
         price:                           '2000',
         quantity:                        '1',
         hs_cost_of_goods_sold:           '800',

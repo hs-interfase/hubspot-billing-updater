@@ -38,6 +38,8 @@ export const REQUIRED_TICKET_PROPS = [
   'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
   'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
   'facturar_ahora', 'repetitivo', 'nombre_empresa', 'hs_pipeline_stage',
+  'of_codigo_rubro', 'momento_de_facturacion', 'opera_trading',
+  'mig_id_crm_origen', 'mig_id_cliente_nodum',
 ];
 
 // Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)

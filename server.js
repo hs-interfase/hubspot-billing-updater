@@ -14,7 +14,7 @@ import debugUrgent from './api/debugUrgent.js'
 import healthAuditRouter from './api/healthAudit.js'
 // ── Webhook Queue ──────────────────────────────
 import { initWebhookQueueTable, startWorker } from './src/webhookQueue.js'
-import { initExchangeRatesTable, initDealLocksTable } from './src/db.js'
+import { initExchangeRatesTable, initDealLocksTable, initRateBucketTable } from './src/db.js'
 // ── Nodum Upload ─────────────────────────────────
 import nodumUploadRouter from './api/nodum/nodumUpload.js'
 import { initNodumUploadsTable } from './api/nodum/nodumUpload.js'
@@ -74,7 +74,7 @@ app.get('/nodum', invoiceEditorAuth, (req, res) => {
 app.use('/nodum', invoiceEditorAuth, nodumUploadRouter)
 
 // ── Export Reporte ──
-app.use('/api/export', exportRouter)
+app.use('/api/export', invoiceEditorAuth, exportRouter)
 
 // ── Guía de Facturación (pública, sin auth) ──
 app.get('/guia', (req, res) => {
@@ -93,6 +93,7 @@ await initNodumUploadsTable()
 await initExportSnapshotsTable()
 await initWebhookQueueTable()
 await initDealLocksTable()
+await initRateBucketTable()
 
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => {

@@ -7,6 +7,11 @@
 
 import { TICKET_PIPELINE } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
+import { buildTicketUrl } from '../../utils/hubspotPortal.js';
+
+// Flag de debug temporal: si SHOW_NULLS=true, las filas sin dato se muestran
+// igual con su título y "(sin datos)", para verificar que las propiedades llegan.
+const SHOW_NULLS = String(process.env.SHOW_NULLS || '').toLowerCase() === 'true';
 
 // ────────────────────────────────────────────────────────────
 // Mapeo product_id → empresa emisora
@@ -24,6 +29,11 @@ const EMPRESA_EMISORA_MAP = {
   '33695559589': 'ISA PY',    // MiFactura
   '33688943634': 'ISA PY',    // Proyectos
 };
+
+function esUrgente(ticket) {
+  return String(ticket?.properties?.facturacion_urgente || '')
+    .trim().toLowerCase() === 'true';
+}
 
 /**
  * Determina la empresa emisora según el product_id del ticket.
@@ -65,10 +75,30 @@ function val(v) {
   return String(v).trim();
 }
 
-/** Formatea un número a 2 decimales, o retorna '-' si no es numérico */
+/** Formatea un número a 2 decimales, o retorna null si no es numérico */
 function fmtNum(v) {
   const n = parseFloat(v);
-  return isNaN(n) ? '-' : n.toFixed(2);
+  return isNaN(n) ? null : n.toFixed(2);
+}
+
+/** Booleano 'true'/'false' → 'Sí'/'No' (null si no hay dato) */
+function fmtBoolSiNo(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const t = s.toLowerCase();
+  if (t === 'true' || t === 'sí' || t === 'si') return 'Sí';
+  if (t === 'false' || t === 'no') return 'No';
+  return s;
+}
+
+/** exonera_irae: true → 'Exento', false → 'Aplica' (null si no hay dato) */
+function fmtIrae(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const t = s.toLowerCase();
+  if (t === 'true' || t === 'sí' || t === 'si') return 'Exento';
+  if (t === 'false' || t === 'no') return 'Aplica';
+  return s;
 }
 
 /** Resuelve la frecuencia para mostrar en el mensaje */
@@ -83,7 +113,7 @@ function resolverFrecuencia(ticket) {
     return 'Irregular';
   }
 
-  return frecuencia || '-';
+  return frecuencia || null;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -94,12 +124,17 @@ const STYLES = {
   container: 'font-family:Arial,sans-serif;font-size:14px;color:#333;',
   header: 'font-size:16px;font-weight:bold;color:#1a1a1a;margin-bottom:12px;',
   sectionTitle: 'font-size:14px;font-weight:bold;color:#0056b3;margin:16px 0 8px 0;',
+  urgentBanner: 'background:#fff3e0;border:1px solid #ff9800;border-radius:6px;padding:10px 12px;margin:10px 0;color:#b35900;font-weight:bold;',
+  lineItemDivUrgent: 'background:#fff8f0;border:2px solid #ff9800;border-radius:6px;padding:12px;margin:10px 0;',
+  urgentBadge: 'color:#e65100;font-weight:bold;',
   row: 'margin:4px 0;padding:2px 0;',
   label: 'font-weight:bold;color:#555;',
   lineItemDiv: 'background:#f7f9fc;border:1px solid #dde3eb;border-radius:6px;padding:12px;margin:10px 0;',
   lineItemTitle: 'font-size:14px;font-weight:bold;color:#0056b3;margin-bottom:8px;border-bottom:1px solid #dde3eb;padding-bottom:6px;',
   separator: 'border:0;border-top:1px solid #eee;margin:12px 0;',
   footer: 'margin-top:16px;padding-top:8px;border-top:1px solid #dde3eb;font-size:12px;color:#888;',
+  nullVal: 'color:#b0b0b0;font-style:italic;',
+  link: 'color:#0056b3;text-decoration:underline;',
 };
 
 // ────────────────────────────────────────────────────────────
@@ -107,7 +142,10 @@ const STYLES = {
 // ────────────────────────────────────────────────────────────
 
 function buildRow(label, value) {
-  if (value === null) return '';
+  if (value === null || value === undefined || value === '') {
+    if (!SHOW_NULLS) return '';
+    return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> <span style="${STYLES.nullVal}">(sin datos)</span></div>`;
+  }
   return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${value}</div>`;
 }
 
@@ -143,17 +181,20 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
   // Moneda del deal (tomada del primer ticket, todos deben ser iguales)
   const moneda = val(tp.of_moneda);
 
+  // Fecha solicitud de facturación = fecha de resolución esperada del ticket
+  const fechaSolicitud = val(tp.fecha_resolucion_esperada)?.slice(0, 10) || null;
+
   const rows = [
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRow('Empresa emisora',    empresaEmisora),
-    buildRow('Nombre del negocio', dealName || '-'),
-    buildRow('Cliente final',      clienteFinalLabel),
-    buildRow('Cliente que factura', clienteFacturaLabel),
-    buildRow('Fecha de factura',   hoy),
-    buildRow('Moneda',             moneda),
+    buildRow('Empresa',                    empresaEmisora),
+    buildRow('Nombre del Negocio',         dealName || '-'),
+    buildRow('Cliente',                    clienteFinalLabel),
+    buildRow('Cliente al que se factura',  clienteFacturaLabel),
+    buildRow('Fecha solicitud facturación', fechaSolicitud),
+    buildRow('Moneda',                     moneda),
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
@@ -168,21 +209,36 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
  * nombre → descripción → rubro → unidad de negocio →
  * cantidad → subtotal → total → frecuencia → observaciones
  */
-function buildLineItemDiv(ticket) {
+function buildLineItemDiv(ticket, portalId = null) {
   const tp = ticket?.properties || {};
   const frecuencia = resolverFrecuencia(ticket);
+  const urgente = esUrgente(ticket);
+
+  const ticketId  = ticket?.id || tp.hs_object_id || null;
+  const ticketUrl = buildTicketUrl(portalId, ticketId);
+  const ticketLink = ticketUrl
+    ? `<a href="${ticketUrl}" style="${STYLES.link}">Ver ticket #${ticketId}</a>`
+    : null;
 
   const rows = [
-    `<div style="${STYLES.lineItemDiv}">`,
-    `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}</div>`,
-    buildRow('Descripción',          val(tp.of_descripcion_producto)),
-    buildRow('Rubro',                val(tp.of_rubro)),
-    buildRow('Unidad de negocio',    val(tp.unidad_de_negocio)),
-    buildRow('Cantidad',             fmtNum(tp.cantidad_real)),
-    buildRow('Subtotal',             fmtNum(tp.subtotal_real)),
-    buildRow('Total a facturar',     fmtNum(tp.total_real_a_facturar)),
-    buildRow('Frecuencia',           frecuencia),
-    buildRow('Observaciones',        val(tp.observaciones)),
+    `<div style="${urgente ? STYLES.lineItemDivUrgent : STYLES.lineItemDiv}">`,
+    `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}${
+      urgente ? ` — <span style="${STYLES.urgentBadge}">⚡ FACTURACIÓN URGENTE</span>` : ''
+    }</div>`,
+    buildRow('Descripción de la factura', val(tp.of_descripcion_producto)),
+    buildRow('Rubro',                     val(tp.of_rubro)),
+    buildRow('Unidad de Negocio',         val(tp.unidad_de_negocio)),
+    buildRow('Cantidad',                  fmtNum(tp.cantidad_real)),
+    buildRow('Precio unitario (sin IVA)', fmtNum(tp.monto_unitario_real)),
+    buildRow('Subtotal',                  fmtNum(tp.subtotal_real)),
+    buildRow('IVA',                       fmtBoolSiNo(tp.of_iva)),
+    buildRow('Monto Total a facturar',    fmtNum(tp.total_real_a_facturar)),
+    buildRow('IRAE',                      fmtIrae(tp.exonera_irae)),
+    buildRow('TRADING',                   fmtBoolSiNo(tp.opera_trading)),
+    buildRow('Frecuencia de Facturación', frecuencia),
+    buildRow('Momento de facturación',    val(tp.momento_de_facturacion)),
+    buildRow('Observaciones',             val(tp.observaciones_ventas)),
+    buildRow('Ticket',                    ticketLink),
     `</div>`,
   ];
 
@@ -215,12 +271,18 @@ function buildFooter(ticketIds) {
 export function buildMensajeFacturacion(tickets, dealName, dealMeta = {}) {
   if (!tickets || tickets.length === 0) return '';
 
+  const urgentes = tickets.filter(esUrgente).length;
+  const banner = urgentes > 0
+    ? `<div style="${STYLES.urgentBanner}">⚡ Esta solicitud incluye ${urgentes} ítem(s) de FACTURACIÓN URGENTE solicitada manualmente desde el contrato.</div>`
+    : '';
+
+  const portalId     = dealMeta.portalId || null;
   const header       = buildHeader(tickets[0], dealName, dealMeta);
-  const lineItemDivs = tickets.map(t => buildLineItemDiv(t)).join('\n');
+  const lineItemDivs = tickets.map(t => buildLineItemDiv(t, portalId)).join('\n');
   const ticketIds    = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
   const footer       = buildFooter(ticketIds);
 
-  return header + '\n' + lineItemDivs + '\n' + footer;
+  return header + (banner ? '\n' + banner : '') + '\n' + lineItemDivs + '\n' + footer;
 }
 
 // ── Legacy export (mantener compatibilidad temporal) ──
@@ -333,7 +395,7 @@ function resolverFrecuencia(ticket) {
     return 'Irregular';
   }
 
-  return frecuencia || '-';
+  return frecuencia || null;
 }
 
 // ────────────────────────────────────────────────────────────

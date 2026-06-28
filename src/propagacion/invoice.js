@@ -40,6 +40,11 @@ import { buildPagoDisplay } from '../services/billing/syncBillingState.js';
 
 const INVOICE_OBJECT_TYPE = 'invoices';
 
+// Etapas de factura que tienen una fecha de emisión "real" asociada.
+// Se usa para decidir cuándo escribir fecha_real_de_facturacion en el ticket
+// y billing_last_billed_date en el line item.
+const ETAPAS_CON_FECHA_REAL = ['Emitida', 'Enviada', 'Paga'];
+
 // ─────────────────────────────────────────────
 // Helpers internos
 // ─────────────────────────────────────────────
@@ -225,14 +230,14 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
    if (fechaCreacionYMD) {
      ticketUpdate.fecha_de_facturacion = toHubSpotDateOnly(fechaCreacionYMD);
    }
-  if (fechaEmisionYMD && etapasConFechaReal.includes(etapa)) {
+  if (fechaEmisionYMD && ETAPAS_CON_FECHA_REAL.includes(etapa)) {
     const fechaHubSpot = toHubSpotDateOnly(fechaEmisionYMD);
     if (tp.fecha_real_de_facturacion !== fechaHubSpot) {
       ticketUpdate.fecha_real_de_facturacion = fechaHubSpot;
     }
   }
   // También si tenemos nodumId pero etapa es Pendiente, igual tomamos la fecha si existe
-  if (nodumId && fechaEmisionYMD && !etapasConFechaReal.includes(etapa)) {
+  if (nodumId && fechaEmisionYMD && !ETAPAS_CON_FECHA_REAL.includes(etapa)) {
     const fechaHubSpot = toHubSpotDateOnly(fechaEmisionYMD);
     if (tp.fecha_real_de_facturacion !== fechaHubSpot) {
       ticketUpdate.fecha_real_de_facturacion = fechaHubSpot;
@@ -355,8 +360,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
   // 6. Actualizar last_billing_period del line item con fecha REAL de emisión
   // Fecha real → billing_last_billed_date
   //    last_billing_period se mantiene con la fecha plan (seteada al crear invoice)
-  const etapasParaFechaReal = ['Emitida', 'Enviada', 'Paga'];
-  if (lineItemId && fechaEmisionYMD && (etapasParaFechaReal.includes(etapa) || nodumId)) {
+  if (lineItemId && fechaEmisionYMD && (ETAPAS_CON_FECHA_REAL.includes(etapa) || nodumId)) {
     try {
       const blp = toHubSpotDateOnly(fechaEmisionYMD);
       await hubspotClient.crm.lineItems.basicApi.update(lineItemId, {

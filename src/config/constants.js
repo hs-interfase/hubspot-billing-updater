@@ -65,8 +65,6 @@
 export const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
 export const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
 export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
-export const IRAE_TAX_GROUP_ID = (process.env.IRAE_UY_TAX_GROUP_ID || '').trim();
-export const IVA_UY_IRAE_TAX_GROUP_ID = (process.env.IVA_IRAE_UY_TAX_GROUP_ID || '').trim();
 
 export const ASSOC_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPRESA_FACTURA || '2', 10);
 
@@ -296,6 +294,18 @@ export const BILLING_ACTIVE_DEAL_STAGES = new Set([
   DEAL_STAGE_FINALIZADO,
 ]);
 
+// Stages que representan un negocio cancelado/dado de baja.
+// .filter(Boolean): SUSPENDED/VOIDED default a '' si no están en el .env,
+// y un '' en el Set haría match espurio con un deal sin stage.
+export const CANCELLED_DEAL_STAGES = new Set(
+  [DEAL_STAGE_LOST, DEAL_STAGE_SUSPENDED, DEAL_STAGE_VOIDED].filter(Boolean)
+);
+
+// Fuente única de verdad para "¿este stage es de cancelación?".
+export function isDealCancelledStage(stage) {
+  return CANCELLED_DEAL_STAGES.has(String(stage || ''));
+}
+
 // Al final del archivo, antes del cierre
 export const INVOICED_TICKET_STAGES = new Set([
   process.env.BILLING_TICKET_STAGE_ID_BILLED,
@@ -379,6 +389,13 @@ export function isCompletedStage(stageId) {
 // Otros
 // ===============================
 export const DEFAULT_CURRENCY = 'USD';
+
+// Frescura de tipos de cambio (CHECK-4).
+// BCU/BCP no cotizan fines de semana ni feriados, así que el último cierre puede
+// tener varios días sin que sea un problema. Por eso el default tolera un fin de
+// semana largo. Configurable por env. Si la última tasa es MÁS vieja que esto,
+// se considera obsoleta y se alerta.
+export const EXCHANGE_RATE_STALE_DAYS = Number(process.env.EXCHANGE_RATE_STALE_DAYS || 4);
 
 // DRY RUN mode (evita crear recursos reales en HubSpot)
 export const isDryRun = () => {

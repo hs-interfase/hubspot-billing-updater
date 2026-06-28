@@ -20,6 +20,8 @@ import logger from '../../lib/logger.js';
 import { initExportSnapshotsTable, saveExportSnapshot } from '../db-export.js';
 import { setCronState } from '../db.js';
 import pool from '../db.js';
+import { sendAlert } from '../../lib/alertService.js';
+import { EXCHANGE_RATE_STALE_DAYS } from '../config/constants.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -180,7 +182,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
-  'total_real_a_facturar', 'numero_de_factura', 'dolar',
+  'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda',
 ];
 
@@ -451,7 +453,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const ancla = ymd(lp?.billing_anchor_date || '');
   const incluyeUY = safe(lp?.uy || '').toLowerCase() === 'true';
 
-  const monto = safeNum(tp.total_real_a_facturar) ?? safeNum(tp.monto_a_facturar);
+  const monto = safeNum(tp.subtotal_real);
   const costo = safeNum(tp.of_costo);
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
 
@@ -567,6 +569,32 @@ function addSheet(wb, name, rows) {
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 }
 
+// ── CSV builder ─────────────────────────────────────────────────────────────
+
+const BOM = '\uFEFF';            // para que Excel lea tildes/ñ en UTF-8
+const CSV_EOL = '\r\n';          // CRLF (estándar / esperado por Excel)
+
+function csvEscape(value) {
+  if (value == null) return '';
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+// Convierte un array de rows a CSV usando el mismo COLUMNS que el xlsx.
+function rowsToCSV(rows) {
+  const headers = COLUMNS.map(c => c.header);
+  const keys = COLUMNS.map(c => c.key);
+
+  const lines = [headers.map(csvEscape).join(',')];
+  for (const row of rows) {
+    lines.push(keys.map(k => csvEscape(row[k])).join(','));
+  }
+  return BOM + lines.join(CSV_EOL) + CSV_EOL;
+}
+
 // ── Main export function ────────────────────────────────────────────────────
 
 /**
@@ -584,8 +612,25 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const latestRates = await getLatestExchangeRate();
   if (latestRates) {
     logger.info({ date: latestRates.date, uyu_usd: latestRates.uyu_usd, pyg_usd: latestRates.pyg_usd }, '[export] TC último cierre cargado');
+
+    // CHECK-4: frescura del TC. Si el último cierre es más viejo que el umbral,
+    // el reporte usaría cotizaciones obsoletas → avisar (no bloquea el reporte).
+    const ageDays = Math.floor((Date.now() - new Date(latestRates.date).getTime()) / 86_400_000);
+    if (ageDays > EXCHANGE_RATE_STALE_DAYS) {
+      logger.warn({ date: latestRates.date, ageDays, staleAfterDays: EXCHANGE_RATE_STALE_DAYS }, '[export] TC obsoleto — el reporte usará cotizaciones viejas');
+      sendAlert('warning', `Tipo de cambio obsoleto (${ageDays} días) al generar el reporte`, {
+        ultimaFecha: String(latestRates.date),
+        diasDeAntiguedad: ageDays,
+        umbralDias: EXCHANGE_RATE_STALE_DAYS,
+        uyu_usd: latestRates.uyu_usd,
+        pyg_usd: latestRates.pyg_usd,
+      }).catch(() => {});
+    }
   } else {
     logger.warn('[export] No se encontró TC en exchange_rates — columnas USD quedarán vacías');
+    sendAlert('warning', 'No hay tipos de cambio en exchange_rates al generar el reporte', {
+      detalle: 'Las columnas USD del reporte quedarán vacías. Revisar el cron de tasas (cronExchangeRates).',
+    }).catch(() => {});
   }
 
   // 1) Fetch all deals
@@ -596,7 +641,9 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   await resolveStageLabel('', '');
 
   // 3) Process each deal
-  const pipelineRows = [];
+  const pipelineBlandoRows = [];   // prob < 0.50  (5/10/25%)
+  const pipelineStrechRows = [];   // 0.50 <= prob < 0.75
+  const pipelineFirmeRows = [];    // 0.75 <= prob < 0.85
   const forecastRows = [];
   const listoRows = [];
   const facturadoRows = [];
@@ -636,10 +683,16 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
     }));
 
     if (prob < PROB_CORTE) {
-      // Pipeline: line items directos
+      // Pipeline (< 85%): subdividir por bucket de probabilidad.
+      // El bucket se decide a nivel deal (prob es del deal, no del LI).
+      let target;
+      if (prob < 0.50)      target = pipelineBlandoRows;   // 5/10/25%
+      else if (prob < 0.75) target = pipelineStrechRows;   // 50%
+      else                  target = pipelineFirmeRows;    // 75% (cap < 85)
+
       for (const li of lineItems) {
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
-        pipelineRows.push(buildLineItemRow(li, dealBase, deal, productName, latestRates));
+        target.push(buildLineItemRow(li, dealBase, deal, productName, latestRates));
       }
     } else {
       // Ganado: clasificar tickets
@@ -667,7 +720,9 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
 
   // 4) Build Excel
   const wb = new ExcelJS.Workbook();
-  addSheet(wb, 'Pipeline (< 85%)', pipelineRows);
+  addSheet(wb, 'FORECAST DEBIL', pipelineBlandoRows);
+  addSheet(wb, 'FORECAST En Strech', pipelineStrechRows);
+  addSheet(wb, 'FORECAST FIRME', pipelineFirmeRows);
   addSheet(wb, 'Forecast (pendiente)', forecastRows);
   addSheet(wb, 'Listo para Facturar', listoRows);
   addSheet(wb, 'Facturado', facturadoRows);
@@ -675,7 +730,10 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   const filename = `reporte_consolidado_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const rowCounts = {
-    pipeline: pipelineRows.length,
+    pipeline: pipelineBlandoRows.length + pipelineStrechRows.length + pipelineFirmeRows.length,
+    pipeline_blando: pipelineBlandoRows.length,
+    pipeline_strech: pipelineStrechRows.length,
+    pipeline_firme: pipelineFirmeRows.length,
     forecast: forecastRows.length,
     listo: listoRows.length,
     facturado: facturadoRows.length,
@@ -684,7 +742,17 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   logger.info({ filename, rowCounts, elapsedSec: elapsed }, '[export] Reporte generado');
 
-  return { buffer, filename, rowCounts };
+  return {
+    buffer, filename, rowCounts,
+    sheets: {
+      forecast_debil:     pipelineBlandoRows,
+      forecast_strech:    pipelineStrechRows,
+      forecast_firme:     pipelineFirmeRows,
+      forecast_pendiente: forecastRows,
+      listo:              listoRows,
+      facturado:          facturadoRows,
+    },
+  };
 }
 
 // ── POST to external URL with retry ─────────────────────────────────────────
@@ -725,10 +793,15 @@ export async function runExportCron({ dry = false, localOnly = false } = {}) {
   const result = { success: false };
 
   try {
-    const { buffer, filename, rowCounts } = await generateExportReporte();
+    const { buffer, filename, rowCounts, sheets } = await generateExportReporte();
     result.filename = filename;
     result.rowCounts = rowCounts;
     result.sizeKB = Math.round(buffer.length / 1024);
+
+    // Generar los 6 CSV desde los mismos arrays (sin re-fetch a HubSpot).
+    const csvData = Object.fromEntries(
+      Object.entries(sheets).map(([key, rows]) => [key, rowsToCSV(rows)])
+    );
 
     if (dry) {
       logger.info({ filename, rowCounts, sizeKB: result.sizeKB }, '[export] DRY RUN — no se guarda ni envía');
@@ -738,7 +811,7 @@ export async function runExportCron({ dry = false, localOnly = false } = {}) {
     }
 
     // Guardar en DB
-    await saveExportSnapshot({ filename, xlsxBuffer: buffer, rowCounts });
+    await saveExportSnapshot({ filename, xlsxBuffer: buffer, rowCounts, csvData });
     await setCronState('export_reporte_last_run', new Date().toISOString());
     result.savedToDB = true;
 

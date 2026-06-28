@@ -13,9 +13,10 @@ const CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET;
 const MAX_AGE_MS = 5 * 60 * 1000; // 5 minutos — ventana anti-replay
 
 export function verifyHubSpotSignature(req, res, next) {
+  // Fail-closed: sin secret no podemos verificar la firma → rechazamos.
   if (!CLIENT_SECRET) {
-    logger.warn({ module: 'hubspotSignature' }, 'HUBSPOT_CLIENT_SECRET no definido — verificación de firma omitida');
-    return next();
+    logger.error({ module: 'hubspotSignature' }, 'HUBSPOT_CLIENT_SECRET no definido — rechazando webhook (fail-closed)');
+    return res.status(503).json({ error: 'Webhook signature verification not configured' });
   }
 
   const sigV3 = req.headers['x-hubspot-signature-v3'];

@@ -1,6 +1,6 @@
 // src/billingEngine.js
 import { hubspotClient } from './hubspotClient.js';
-import { getTodayYMD, parseLocalDate, formatDateISO, addInterval } from "./utils/dateUtils.js";
+import { getTodayYMD, parseLocalDate, formatDateISO, addInterval, lastBusinessDayOfMonth } from "./utils/dateUtils.js";
 import logger from '../lib/logger.js';
 import { reportHubSpotWarn } from "./utils/hubspotErrorCollector.js";
 import { reportIfActionable } from "./utils/errorReporting.js";
@@ -16,12 +16,26 @@ import { reportIfActionable } from "./utils/errorReporting.js";
 // -----------------------------
 // Helpers de fechas / frecuencia
 // -----------------------------
+// fin_de_mes solo tiene sentido en intervalos mensuales+ (no semanal/quincenal):
+// el período debe caer en el último día HÁBIL del mes correspondiente.
+function isMonthBasedInterval(interval) {
+  return !!(interval && interval.months > 0) && !(interval && interval.days > 0);
+}
+
+// Ajusta una fecha al último día hábil de SU mes cuando aplica fin_de_mes.
+// El mes de `date` ya es el correcto (addInterval preserva el mes aunque el día
+// "derive" hacia 28/30); acá solo reemplazamos el día por el último hábil del mes.
+function snapEndOfMonth(date, interval, endOfMonth) {
+  if (!endOfMonth || !isMonthBasedInterval(interval)) return date;
+  return lastBusinessDayOfMonth(date);
+}
+
 // Helper: calcula la próxima fecha >= todayYmd usando startRaw e interval
-function computeNextFromInterval({ startRaw, interval, todayYmd, addInterval, formatDateISO, parseLocalDate }) {
+function computeNextFromInterval({ startRaw, interval, todayYmd, addInterval, formatDateISO, parseLocalDate, endOfMonth = false }) {
   if (!startRaw || !interval) return null;
   const start = parseLocalDate(startRaw);
   if (!start || Number.isNaN(start.getTime())) return null;
-  const startYmd = formatDateISO(start);
+  const startYmd = formatDateISO(snapEndOfMonth(start, interval, endOfMonth));
   if (startYmd >= todayYmd) return startYmd;
   let current = new Date(start.getTime());
   let prevMs = current.getTime();
@@ -29,7 +43,8 @@ function computeNextFromInterval({ startRaw, interval, todayYmd, addInterval, fo
     current = addInterval(current, interval);
     const ms = current.getTime();
     if (!Number.isFinite(ms)) return null;
-    const ymd = formatDateISO(current);
+    // Iteramos sobre la fecha CRUDA (preserva el mes) y snappeamos solo para comparar/devolver.
+    const ymd = formatDateISO(snapEndOfMonth(current, interval, endOfMonth));
     if (ymd >= todayYmd) return ymd;
     if (ms === prevMs) break; // no avanza
     prevMs = ms;
@@ -217,6 +232,11 @@ export function getEffectiveBillingConfig(lineItem) {
       ? numberOfPayments
       : null;
 
+  // ¿El momento de facturación es "fin de mes"? → cada período cae en el
+  // último día HÁBIL del mes. Solo aplica a intervalos mensuales+ (gate en uso).
+  const momentoFacturacion = (p.momento_de_facturacion ?? '').toString().trim().toLowerCase();
+  const isEndOfMonth = momentoFacturacion === 'fin_de_mes';
+
   logger.debug({
     module: 'billingEngine',
     fn: 'getEffectiveBillingConfig',
@@ -229,6 +249,7 @@ export function getEffectiveBillingConfig(lineItem) {
     maxOccurrences,
     isFacturarAhora,
     fechaIrregularPuntualRaw,
+    isEndOfMonth,
   }, '[getEffectiveBillingConfig] SUMMARY');
 
   return {
@@ -239,6 +260,7 @@ export function getEffectiveBillingConfig(lineItem) {
     interval,
     startDate,
     maxOccurrences,
+    isEndOfMonth,
   };
 }
 
@@ -290,6 +312,7 @@ export async function updateLineItemSchedule(lineItem, dealContext = {}) {
   const isIrregular = config?.isIrregular === true;
   const interval = config?.interval ?? null;
   const startDate = config?.startDate ?? null;
+  const isEndOfMonth = config?.isEndOfMonth === true;
 
   const isFacturarAhora =
     config?.isFacturarAhora ??
@@ -609,7 +632,8 @@ if (dealContext?.dealId) {
     for (let i = 1; i < maxOccurrences; i++) {
       cur = addInterval(cur, interval);
     }
-    lastPlannedYmd = formatDateISO(cur);
+    // fin_de_mes: el último período planificado también cae en último día hábil
+    lastPlannedYmd = formatDateISO(snapEndOfMonth(cur, interval, isEndOfMonth));
 
     if (lastTicketedYmd && lastTicketedYmd >= lastPlannedYmd) {
       updatesRecurring.billing_next_date = '';
@@ -635,6 +659,7 @@ if (dealContext?.dealId) {
       addInterval,
       formatDateISO,
       parseLocalDate,
+      endOfMonth: isEndOfMonth,
     });
 
     let cappedNext = nextYmd || '';
@@ -824,6 +849,7 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
     addInterval,
     formatDateISO,
     parseLocalDate,
+    endOfMonth: config?.isEndOfMonth === true,
   });
 
   return nextYmd ? parseLocalDate(nextYmd) : null;

@@ -144,3 +144,17 @@ vite.config.ts.timestamp-*
 # HubSpot config file
 hubspot.config.yml
 .vercel
+
+# Migration scripts / scratch files (not for the repo)
+scripts/migration/
+**/CONTEXTO_migracion*
+**/auditoria_tickets_migrados*
+
+# Data dumps / run artifacts with client data (PII) — NOT for the repo
+contactos_objetos.json
+empresas_objetos.json
+contactos_anomalias.md
+empresas_anomalias.md
+pasoC_resultado*.json
+seal-report-*.json
+test-seed-manifest.json
