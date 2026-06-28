@@ -43,6 +43,15 @@ const SINGLE_DEAL = getArg('deal');
 const CUTOFF      = getArg('cutoff') || '2025-01-01';
 const DRY_RUN     = !process.argv.includes('--execute');
 
+// AUTO seal (2026-06-28 — reconstrucción): el cron en vivo ya crea, por cada período
+// Mansoft AUTO, una invoice Pendiente (id_factura_nodum vacío) + ticket en pipeline AUTO.
+// La conducta correcta NO es crear una invoice (la vieja lógica duplicaba) sino
+// TRANSICIONAR la existente -> Emitida + id_factura_nodum=11, replicando Paso D:
+// PATCH a la factura + runInvoiceNodumPipeline (propaga factura->ticket->deal).
+const AUTO_NODUM_SENTINEL = process.env.AUTO_NODUM_SENTINEL || '11';
+const PIPELINE_PATH = process.env.PIPELINE_PATH || '../../src/services/invoiceNodumPipeline.js';
+let runInvoiceNodumPipeline = null; // import dinámico, solo si --execute
+
 // ─── Pipeline / Stage constants ───────────────────────────────────────────────
 
 // Automático
@@ -275,79 +284,15 @@ async function sealPostCutoff(ticket, dealId, dealCurrency) {
     return { action: 'MANUAL_FORECAST', ticketId, pipeline: 'MANUAL' };
   }
 
-  if (DRY_RUN) return { action: 'SEAL_POST', ticketId, pipeline: 'AUTO', dryRun: true };
-
-  if (!dealCurrency) {
-    addFinding('DEAL_SIN_CURRENCY', 'error', { ticketId, dealId, fecha: toYmd(tp.of_fecha_de_facturacion) });
-    throw new Error(`Deal ${dealId} sin deal_currency_code — no se puede crear invoice`);
-  }
-
-  const invoiceKey = tp.of_ticket_key || '';
-  const todayYmd = getTodayYMD();
-  const baseDate = new Date(todayYmd + 'T12:00:00Z');
-  baseDate.setUTCDate(baseDate.getUTCDate() + 10);
-  const dueDateYmd = baseDate.toISOString().slice(0, 10);
-
-const invoiceProps = {
-    hs_title: tp.subject || 'Factura migración Mansoft',
-    of_invoice_key: invoiceKey,
-    ticket_id: String(ticketId),
-    line_item_key: tp.of_line_item_key || '',
-    etapa_de_la_factura: 'Pendiente',
-    fecha_de_emision: todayYmd,
-    hs_invoice_date: todayYmd,
-    hs_due_date: dueDateYmd,
-    pais_operativo: tp.of_pais_operativo || '',
-    // FREEZE RULE: montos del ticket
-    monto_a_facturar: tp.total_real_a_facturar || '0',
-    hs_amount_billed: tp.total_real_a_facturar || '0',
-    cantidad: tp.cantidad_real || tp.of_cantidad || '1',
-    monto_unitario: tp.monto_unitario_real || '',
-    descuento: tp.descuento_en_porcentaje || '',
-    descuento_por_unidad: tp.descuento_por_unidad_real || '',
-    iva: tp.of_iva || 'false',
-    exonera_irae: tp.exonera_irae || '',
-    hs_currency: dealCurrency || '',
-  };
-
-  // Solo automático lleva id_factura_nodum = 11
-  if (isAuto) {
-    invoiceProps.id_factura_nodum = '11';
-  }
-
-  let invoiceId;
-  try {
-    const resp = await hubspot.crm.objects.basicApi.create('invoices', { properties: invoiceProps });
-    invoiceId = resp.id;
-  } catch (err) {
-    addFinding('INVOICE_CREATE_ERROR', 'error', { ticketId, dealId, error: err.message });
-    throw err;
-  }
-
-  // Actualizar ticket
-  await hubspot.crm.tickets.basicApi.update(String(ticketId), {
-    properties: {
-      hs_pipeline_stage: targetStage,
-      of_invoice_id: String(invoiceId),
-      of_invoice_key: invoiceKey,
-      fecha_real_de_facturacion: todayYmd,
-    },
-  });
-
-  // Asociaciones invoice → deal, invoice → ticket
-  try {
-    await hubspot.crm.associations.v4.basicApi.create('invoices', String(invoiceId), 'deals', String(dealId), []);
-  } catch (err) {
-    addFinding('INVOICE_ASSOC_ERROR', 'warn', { invoiceId, dealId, error: err.message });
-  }
-  try {
-    await hubspot.crm.associations.v4.basicApi.create('invoices', String(invoiceId), 'tickets', String(ticketId), []);
-  } catch (err) {
-    addFinding('INVOICE_ASSOC_ERROR', 'warn', { invoiceId, ticketId, error: err.message });
-  }
-
-  await sleep(150);
-  return { action: 'SEAL_POST', ticketId, invoiceId, pipeline: isAuto ? 'AUTO' : 'MANUAL' };
+  // AUTO (2026-06-28): la emisión AUTO ya NO crea invoices acá — la vieja lógica CREABA
+  // una invoice nueva y DUPLICABA con la que el cron en vivo ya genera. La invoice
+  // Pendiente la crea el cron y la transiciona sealAutoInvoicesForDeal (Pendiente →
+  // Emitida + id_factura_nodum). Si un ticket AUTO llega hasta acá (READY sin of_invoice_id),
+  // es una anomalía: el cron todavía no generó su invoice. Se registra y se SALTEA
+  // (no se crea nada, para no duplicar). `targetStage`/`dealCurrency` quedan sin uso.
+  void targetStage; void dealCurrency;
+  addFinding('AUTO_READY_SIN_INVOICE', 'warn', { ticketId, dealId, invoiceKey: tp.of_ticket_key || '' });
+  return { action: 'AUTO_SKIP_NO_INVOICE', ticketId, pipeline: 'AUTO', skipped: true };
 }
 
 // ─── Recalc counters ──────────────────────────────────────────────────────────
@@ -435,6 +380,110 @@ function validateLineItem(li, dealId) {
   return true;
 }
 
+// ─── AUTO invoice transition (Pendiente → Emitida + nodum=11) ───────────────────
+// Reemplaza el viejo sealPostCutoff AUTO (que CREABA invoices → duplicaba). Acá se
+// transiciona la invoice que YA creó el cron, replicando Paso D / el editor / el motor:
+// PATCH etapa=Emitida + id_factura_nodum=11, luego el pipeline de propagación.
+// Idempotente: si la invoice ya está Emitida, skip. No toca invoices de tickets MANUAL
+// (esas las emiten Paso C/D). No reescribe fechas (no hay fecha histórica en estos
+// objetos): solo rellena fecha_de_emision con la hs_invoice_date que puso el cron.
+
+const INVOICE_SEAL_PROPS = [
+  'etapa_de_la_factura', 'id_factura_nodum', 'numero_de_factura', 'ticket_id',
+  'of_invoice_key', 'line_item_key', 'hs_invoice_date', 'fecha_de_emision', 'hs_due_date',
+];
+
+async function getAllAssocIds(fromType, fromId, toType) {
+  const ids = [];
+  let after;
+  do {
+    const r = await hubspot.crm.associations.v4.basicApi.getPage(fromType, String(fromId), toType, after, 100);
+    for (const x of (r?.results || [])) ids.push(String(x.toObjectId));
+    after = r?.paging?.next?.after;
+    if (after) await sleep(150);
+  } while (after);
+  return ids;
+}
+
+async function batchReadObjects(objType, ids, properties) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const r = await hubspot.crm.objects.batchApi.read(objType, {
+      inputs: ids.slice(i, i + 100).map(id => ({ id })), properties,
+    });
+    out.push(...(r?.results || []));
+    if (i + 100 < ids.length) await sleep(150);
+  }
+  return out;
+}
+
+async function sealAutoInvoicesForDeal(dealId, dp, stats) {
+  let invoiceIds;
+  try {
+    invoiceIds = await getAllAssocIds('deals', dealId, 'invoices');
+  } catch (err) {
+    addFinding('AUTO_FETCH_INVOICES_ERROR', 'error', { dealId, error: err.message });
+    stats.errors++; return;
+  }
+  if (!invoiceIds.length) return;
+
+  let invoices, tickets;
+  try {
+    invoices = await batchReadObjects('invoices', invoiceIds, INVOICE_SEAL_PROPS);
+    const tIds = await getAllAssocIds('deals', dealId, 'tickets');
+    tickets = await batchReadObjects('tickets', tIds,
+      ['hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada', 'of_fecha_de_facturacion', 'subject']);
+  } catch (err) {
+    addFinding('AUTO_READ_ERROR', 'error', { dealId, error: err.message });
+    stats.errors++; return;
+  }
+  const tById = new Map(tickets.map(t => [String(t.id), t]));
+
+  for (const inv of invoices) {
+    const ip = inv.properties || {};
+    const etapa = String(ip.etapa_de_la_factura || '').trim();
+    const tkId = String(ip.ticket_id || '').trim();
+    const tk = tById.get(tkId);
+    const isAutoTicket = !!tk && String(tk.properties?.hs_pipeline || '') === AUTO_PIPELINE;
+
+    if (etapa === 'Emitida') { stats.autoAlready++; continue; }   // idempotente
+    if (etapa !== 'Pendiente') continue;                          // solo Pendiente
+    if (!tkId) { addFinding('AUTO_INV_SIN_TICKET_ID', 'warn', { dealId, invoiceId: inv.id }); stats.autoSkipped++; continue; }
+    if (!isAutoTicket) { stats.autoSkipped++; continue; }         // MANUAL → lo emiten Paso C/D
+
+    // fecha_de_emision = la fecha MIGRADA del período (no la del cron). Para AUTO (motor)
+    // vive en el ticket como fecha_resolucion_esperada (la misma que va en el título del
+    // ticket); fallback of_fecha_de_facturacion. NO se tocan hs_invoice_date / hs_due_date.
+    // Esto deja las AUTO consistentes con los manuales (Paso D usa la fecha histórica migrada).
+    const tp = tk.properties || {};
+    const periodo = toYmd(tp.fecha_resolucion_esperada) || toYmd(tp.of_fecha_de_facturacion);
+    const invPatch = { etapa_de_la_factura: 'Emitida', id_factura_nodum: AUTO_NODUM_SENTINEL };
+    if (periodo) {
+      invPatch.fecha_de_emision = periodo;
+    } else {
+      addFinding('AUTO_SIN_FECHA_PERIODO', 'warn', { dealId, invoiceId: inv.id, ticketId: tkId });
+    }
+    const emisionTxt = periodo || '⚠️sin-fecha-migrada';
+
+    if (DRY_RUN) {
+      console.log(`        [AUTO-EMIT] inv ${inv.id} (ticket ${tkId}) Pendiente → Emitida nodum=${AUTO_NODUM_SENTINEL} | emision=${emisionTxt} (dry)`);
+      stats.autoSealedDry++;
+      continue;
+    }
+
+    try {
+      await hubspot.crm.objects.basicApi.update('invoices', String(inv.id), { properties: invPatch });
+      await runInvoiceNodumPipeline(String(inv.id), { id_factura_nodum: AUTO_NODUM_SENTINEL });
+      console.log(`        [AUTO-EMIT] inv ${inv.id} (ticket ${tkId}) → Emitida nodum=${AUTO_NODUM_SENTINEL} | emision=${emisionTxt} ✓`);
+      stats.autoSealed++;
+    } catch (err) {
+      addFinding('AUTO_SEAL_ERROR', 'error', { dealId, invoiceId: inv.id, ticketId: tkId, error: err.message });
+      stats.errors++;
+    }
+    await sleep(200);
+  }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -449,9 +498,28 @@ async function main() {
   console.log('═'.repeat(70));
   console.log();
 
+  // El pipeline de propagación solo se necesita al escribir. Import dinámico tras
+  // dotenv/config (token correcto). Correr desde la raíz del repo.
+  if (!DRY_RUN) {
+    try {
+      ({ runInvoiceNodumPipeline } = await import(PIPELINE_PATH));
+    } catch (e) {
+      console.error(`❌ No pude importar runInvoiceNodumPipeline desde ${PIPELINE_PATH}: ${e.message}`);
+      console.error('   Corré el seal desde la raíz del repo: node scripts/migration/sealHistoricTickets.mjs ...');
+      process.exit(1);
+    }
+    if (typeof runInvoiceNodumPipeline !== 'function') {
+      console.error(`❌ ${PIPELINE_PATH} no exporta runInvoiceNodumPipeline.`); process.exit(1);
+    }
+  }
+
   const stats = {
     dealsProcessed: 0,
     dealsSkipped: 0,
+    autoSealed: 0,
+    autoSealedDry: 0,
+    autoAlready: 0,
+    autoSkipped: 0,
     lisProcessed: 0,
     lisSkipped: 0,
     ticketsSealedPreAuto: 0,
@@ -572,9 +640,13 @@ async function main() {
             console.log(`        [SEAL-PRE]  ${fechaBilling} [${pipeLabel}] → CREATED${nroStr}  ticket:${ticket.id}${result.dryRun ? ' (dry)' : ''}`);
           } else if (isAuto) {
             const result = await sealPostCutoff(ticket, dealId, dp.deal_currency_code);
-            stats.ticketsSealedPostAuto++;
-            const invStr = result.invoiceId ? ` inv:${result.invoiceId}` : '';
-            console.log(`        [SEAL-POST] ${fechaBilling} [AUTO] → invoice nodum=11${invStr}  ticket:${ticket.id}${result.dryRun ? ' (dry)' : ''}`);
+            if (result.skipped) {
+              console.log(`        [AUTO] ticket READY sin invoice (cron aún no la generó) → skip, ver findings  ticket:${ticket.id}`);
+            } else {
+              stats.ticketsSealedPostAuto++;
+              const invStr = result.invoiceId ? ` inv:${result.invoiceId}` : '';
+              console.log(`        [SEAL-POST] ${fechaBilling} [AUTO] → invoice nodum=11${invStr}  ticket:${ticket.id}${result.dryRun ? ' (dry)' : ''}`);
+            }
           } else {
             if (!DRY_RUN) {
               await hubspot.crm.tickets.basicApi.update(String(ticket.id), {
@@ -617,6 +689,11 @@ async function main() {
       stats.lisProcessed++;
       await sleep(300);
     }
+
+    // ── AUTO: transicionar las invoices Pendiente que creó el cron (Mansoft AUTO) ──
+    //    Pasada a nivel deal (invoice-driven), independiente del loop de LIs de arriba.
+    await sealAutoInvoicesForDeal(dealId, dp, stats);
+    await sleep(200);
   }
 
   // ─── Reporte JSON ──────────────────────────────────────────────────────────
@@ -650,13 +727,17 @@ async function main() {
   console.log(`  Sellados POST MANUAL:       ${stats.ticketsSealedPostManual}`);
   console.log(`  Ya sellados (skip):         ${stats.ticketsAlreadySealed}`);
   console.log(`  Forecast (no tocados):      ${stats.ticketsForecast}`);
+  console.log(`  ── AUTO invoices (Pendiente → Emitida + nodum=${AUTO_NODUM_SENTINEL}) ──`);
+  console.log(`  AUTO emitidas:              ${DRY_RUN ? stats.autoSealedDry + ' (dry)' : stats.autoSealed}`);
+  console.log(`  AUTO ya Emitida (skip):     ${stats.autoAlready}`);
+  console.log(`  AUTO skip (manual/sin tkt): ${stats.autoSkipped}`);
   console.log(`  Asociaciones reparadas:     ${stats.associationsRepaired}`);
   console.log(`  Errores:                    ${stats.errors}`);
   console.log(`  Hallazgos en reporte:       ${findings.length}`);
   console.log(`  Duración:                   ${elapsed}s`);
   console.log('═'.repeat(70));
 
-  if (DRY_RUN && (stats.ticketsSealedPreAuto + stats.ticketsSealedPreManual + stats.ticketsSealedPostAuto + stats.ticketsSealedPostManual) > 0) {
+  if (DRY_RUN && (stats.ticketsSealedPreAuto + stats.ticketsSealedPreManual + stats.ticketsSealedPostAuto + stats.ticketsSealedPostManual + stats.autoSealedDry) > 0) {
     console.log();
     console.log('  💡 Para ejecutar de verdad, agregá --execute');
   }
