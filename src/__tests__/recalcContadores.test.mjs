@@ -175,3 +175,28 @@ test('skip si no hay line_item_key', async () => {
   assert.equal(res.skipped, true);
   assert.equal(updates.length, 0);
 });
+
+test('dryRun: NO escribe ni alerta, pero devuelve el diff', async () => {
+  const { client, updates } = makeClient({
+    hs_recurring_billing_number_of_payments: '6',
+    fechas_completas: 'false',
+    facturas_restantes: '1',
+    facturas_por_derivar: '1',
+    progreso_pagos: buildPagoDisplay(5, 6),
+    line_item_key: 'LIK-DRY',
+  });
+  const alertSeal = noopAlert();
+  const res = await recalcContadores({
+    hubspotClient: client,
+    lineItemId: 'LI1',
+    dealId: 'DEAL1',
+    countTicketsFn: async () => ({ invoiced: 6, derived: 6 }),
+    alertFechasCompletasFn: alertSeal,
+    dryRun: true,
+  });
+
+  assert.equal(updates.length, 0, 'dryRun no escribe');
+  assert.equal(alertSeal.mock.callCount(), 0, 'dryRun no alerta');
+  assert.equal(res.update.fechas_completas, 'true', 'pero reporta el cambio que haría');
+  assert.equal(res.dryRun, true);
+});

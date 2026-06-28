@@ -109,7 +109,8 @@ async function countTicketsForLIK({ hubspotClient, lik }) {
  * @param {Function} [opts.alertFechasCompletasFn]   inyectable (tests)
  * @param {Function} [opts.alertDerivacionCompletaFn] inyectable (tests)
  * @param {Function} [opts.countTicketsFn]            inyectable (tests)
- * @returns {Promise<object>} resumen del recálculo
+ * @param {boolean}  [opts.dryRun]                    si true: no escribe ni alerta, solo computa el diff
+ * @returns {Promise<object>} resumen del recálculo (incluye `update` = diff)
  */
 export async function recalcContadores({
   hubspotClient,
@@ -118,6 +119,7 @@ export async function recalcContadores({
   alertFechasCompletasFn = alertFechasCompletas,
   alertDerivacionCompletaFn = alertDerivacionCompleta,
   countTicketsFn = countTicketsForLIK,
+  dryRun = false,
 }) {
   const id = String(lineItemId);
 
@@ -167,7 +169,9 @@ export async function recalcContadores({
   const derivacionTransition =
     want.mode === 'PLAN_FIJO' && want.porDerivar === '0' && norm(props.facturas_por_derivar) !== '0';
 
-  if (Object.keys(update).length > 0) {
+  const hasChanges = Object.keys(update).length > 0;
+
+  if (hasChanges && !dryRun) {
     try {
       await hubspotClient.crm.lineItems.basicApi.update(id, { properties: update });
       logger.info(
@@ -178,19 +182,21 @@ export async function recalcContadores({
       reportIfActionable({ objectType: 'line_item', objectId: id, message: 'Error al actualizar contadores (Phase R)', err });
       throw err;
     }
+  } else if (hasChanges && dryRun) {
+    logger.debug({ module: MOD, lineItemId: id, lik, mode: want.mode, update, dryRun: true }, 'DRY: cambios detectados (no escribe)');
   } else {
     logger.debug({ module: MOD, lineItemId: id, lik, mode: want.mode }, 'sin cambios, noop');
   }
 
-  // ── Alertas SOLO en transición (fire-and-forget) ──
-  if (sealedTransition) {
+  // ── Alertas SOLO en transición (fire-and-forget). En dry no se disparan. ──
+  if (sealedTransition && !dryRun) {
     alertFechasCompletasFn({ dealId, lineItemId: id, lineItemName: props.name || null, lik })
       .catch((err) => logger.warn({ module: MOD, lineItemId: id, err: err?.message }, 'alertFechasCompletas falló (no bloquea)'));
   }
-  if (derivacionTransition) {
+  if (derivacionTransition && !dryRun) {
     alertDerivacionCompletaFn({ dealId, lineItemId: id, lineItemName: props.name || null, lik })
       .catch((err) => logger.warn({ module: MOD, lineItemId: id, err: err?.message }, 'alertDerivacionCompleta falló (no bloquea)'));
   }
 
-  return { mode: want.mode, counts, updated: Object.keys(update), sealedTransition, derivacionTransition };
+  return { mode: want.mode, counts, update, updated: Object.keys(update), sealedTransition, derivacionTransition, dryRun };
 }

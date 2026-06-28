@@ -267,6 +267,12 @@ items, delegando cada uno en `recalcContadores` (`src/services/billing/recalcCon
 Cubre los tres entry points (Actualizar, cron, CLI) porque todos convergen en
 `runPhasesForDeal`.
 
+**Feature flag `PHASE_R_ENABLED`:** apagado por default. La llamada a `runPhaseR`
+en el flujo automático está gateada por `PHASE_R_ENABLED=true` (env). Permite
+deployar sin activar Phase R, validar puntualmente con
+`scripts/fix/recalcContadores.mjs` (independiente del flag, dry por defecto), y
+prenderlo en Railway cuando se confirme — sin redeploy ni merge.
+
 `recalcContadores` hace **1 sola búsqueda de tickets por LIK** y:
 1. escribe los **3 contadores COSMÉTICOS** (`facturas_restantes`, `facturas_por_derivar`,
    `progreso_pagos`) — PATCH solo si cambió;

@@ -489,18 +489,30 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     // fechas_completas, que Phase 1 lee para excluir LIs de P/2/3. Recomputar al
     // final hace que ese sello afecte la corrida siguiente, no la actual.
     // Lógica extraída a runPhaseR (testeable). Ver docs/SISTEMA_CONTADORES_BILLING.md.
-    try {
-      results.phaseR = await runPhaseR({ dealId, lineItems: currentLineItems, hubspotClient });
-      logger.info(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.phaseR },
-        'Phase R completada (contadores recalculados)'
+    //
+    // FEATURE FLAG: apagado por default. Se activa con PHASE_R_ENABLED=true (env).
+    // Permite deployar sin que Phase R corra en el flujo automático, validar
+    // puntualmente con scripts/fix/recalcContadores.mjs, y recién prenderlo en
+    // Railway cuando se confirme — sin redeploy ni merge.
+    if (parseBool(process.env.PHASE_R_ENABLED)) {
+      try {
+        results.phaseR = await runPhaseR({ dealId, lineItems: currentLineItems, hubspotClient });
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.phaseR },
+          'Phase R completada (contadores recalculados)'
+        );
+      } catch (err) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+          'Error en Phase R'
+        );
+        results.phaseR.error = err?.message || 'Error desconocido';
+      }
+    } else {
+      logger.debug(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+        'Phase R deshabilitado (PHASE_R_ENABLED != true), se saltea'
       );
-    } catch (err) {
-      logger.error(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
-        'Error en Phase R'
-      );
-      results.phaseR.error = err?.message || 'Error desconocido';
     }
 
     logger.info(
