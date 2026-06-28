@@ -135,6 +135,68 @@ function filterActiveLineItems(lineItems) {
   });
 }
 
+/**
+ * PHASE R: Recalcular contadores derivados (STATELESS) por line item.
+ *
+ * Recompone los contadores de conteo puro al final de la corrida, cuando las
+ * etapas de tickets ya están estables (tras promover/emitir). Resuelve el
+ * desfase reportado (ej: clon 12→6 pagos): ni "Actualizar" ni el cron
+ * recomputaban estos contadores; solo se actualizaban en un evento real de
+ * facturación. Ver docs/SISTEMA_CONTADORES_BILLING.md.
+ *
+ * Solo toca los tres STATELESS (idempotentes, PATCH solo si cambió):
+ *   - facturas_restantes  (+ fechas_completas=true al llegar a 0)  [syncBillingState → recalcFacturasRestantes]
+ *   - progreso_pagos                                               [syncBillingState]
+ *   - facturas_por_derivar                                         [recalcDerivedFacturas]
+ * NO toca pagos_restantes (stateful decremental, alimenta gating de Phase P y
+ * alertas) ni pagos_emitidos (sin writer; ver doc).
+ *
+ * Itera sobre TODOS los line items (no solo los activos): queremos corregir
+ * contadores incluso en líneas excluidas de P/2/3. Un error en una línea se
+ * loguea y NO bloquea el resto.
+ *
+ * Los writers son inyectables para poder testear la orquestación sin API.
+ *
+ * @returns {Promise<{processed:number, skipped:number, errors:number}>}
+ */
+export async function runPhaseR({
+  dealId,
+  lineItems,
+  hubspotClient: client = hubspotClient,
+  syncBillingStateFn = syncBillingState,
+  recalcDerivedFacturasFn = recalcDerivedFacturas,
+}) {
+  let processed = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const li of Array.isArray(lineItems) ? lineItems : []) {
+    const lp = li?.properties || {};
+    const liId = String(li?.id || lp.hs_object_id || '');
+    const lik = String(lp.line_item_key || '').trim();
+
+    if (!liId || !lik) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      // dealIsCanceled:false — el path de cancelación ya retornó antes de Phase R.
+      await syncBillingStateFn({ hubspotClient: client, lineItemId: liId, dealId, dealIsCanceled: false });
+      await recalcDerivedFacturasFn({ hubspotClient: client, lineItemId: liId, dealId });
+      processed++;
+    } catch (err) {
+      errors++;
+      logger.warn(
+        { module: 'phases/index', fn: 'runPhaseR', dealId, lineItemId: liId, lik, err },
+        'Phase R: recálculo de contadores falló para un line item (no bloquea)'
+      );
+    }
+  }
+
+  return { processed, skipped, errors };
+}
+
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
@@ -428,58 +490,14 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     }
 
     // ========== PHASE R: Recalcular contadores derivados ==========
-    // Recompone los contadores STATELESS por line item al final de la corrida,
-    // cuando las etapas de tickets ya están estables (tras promover/emitir).
-    // Resuelve el desfase reportado (ej: clon 12→6 pagos): ni "Actualizar" ni el
-    // cron recomputaban estos contadores; solo se actualizaban en un evento real
-    // de facturación. Ver docs/SISTEMA_CONTADORES_BILLING.md.
-    //
-    // Solo toca los tres STATELESS (conteo puro, idempotente):
-    //   - facturas_restantes   (+ fechas_completas=true al llegar a 0)  [recalcFacturasRestantes vía syncBillingState]
-    //   - progreso_pagos                                                [syncBillingState]
-    //   - facturas_por_derivar                                          [recalcDerivedFacturas]
-    // NO toca pagos_restantes (stateful decremental, alimenta gating de Phase P
-    // y alertas) ni pagos_emitidos (sin writer; ver doc).
-    //
     // Va DESPUÉS de Phase 3 a propósito: recalcFacturasRestantes sella
     // fechas_completas, que Phase 1 lee para excluir LIs de P/2/3. Recomputar al
     // final hace que ese sello afecte la corrida siguiente, no la actual.
-    //
-    // Itera sobre currentLineItems (todos, no solo los activos): queremos corregir
-    // contadores incluso en líneas excluidas de P/2/3. Los writers son idempotentes
-    // (PATCH solo si el valor cambió) y resuelven auto-renew / pago único / sin total.
+    // Lógica extraída a runPhaseR (testeable). Ver docs/SISTEMA_CONTADORES_BILLING.md.
     try {
-      let processed = 0;
-      let skipped = 0;
-      let errors = 0;
-
-      for (const li of currentLineItems) {
-        const lp = li?.properties || {};
-        const liId = String(li?.id || lp.hs_object_id || '');
-        const lik = String(lp.line_item_key || '').trim();
-
-        if (!liId || !lik) {
-          skipped++;
-          continue;
-        }
-
-        try {
-          // dealIsCanceled:false — el path de cancelación ya retornó antes de aquí.
-          await syncBillingState({ hubspotClient, lineItemId: liId, dealId, dealIsCanceled: false });
-          await recalcDerivedFacturas({ hubspotClient, lineItemId: liId, dealId });
-          processed++;
-        } catch (err) {
-          errors++;
-          logger.warn(
-            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, lineItemId: liId, lik, err },
-            'Phase R: recálculo de contadores falló para un line item (no bloquea)'
-          );
-        }
-      }
-
-      results.phaseR = { processed, skipped, errors };
+      results.phaseR = await runPhaseR({ dealId, lineItems: currentLineItems, hubspotClient });
       logger.info(
-        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, processed, skipped, errors },
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.phaseR },
         'Phase R completada (contadores recalculados)'
       );
     } catch (err) {
