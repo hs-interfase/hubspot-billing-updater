@@ -59,7 +59,10 @@ const INVOICE_OBJ_PROP  = 'of_invoice_id';
 const TOKEN = process.env.HUBSPOT_PRIVATE_TOKEN;
 if (!TOKEN) { console.error('❌ Falta HUBSPOT_PRIVATE_TOKEN'); process.exit(1); }
 
-const hubspot = new Client({ accessToken: TOKEN });
+// numberOfApiCallRetries: reintenta 429 + errores de red transitorios (ECONNRESET,
+// ETIMEDOUT, socket hang up / premature close) que antes abortaban el audit a mitad
+// de cargar los deals ("Error fatal: Premature close").
+const hubspot = new Client({ accessToken: TOKEN, numberOfApiCallRetries: 6 });
 
 const args = process.argv.slice(2);
 const pipelineFilter = (() => { const i = args.indexOf('--pipeline'); return i !== -1 ? args[i + 1] : null; })();
