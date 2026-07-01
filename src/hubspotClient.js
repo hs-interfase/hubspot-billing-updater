@@ -107,6 +107,37 @@ async function acquireToken() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Ruta axios para endpoints que node-fetch@2 (el HTTP del SDK) rompe
+// sistemáticamente en Railway con ERR_STREAM_PREMATURE_CLOSE.
+// Misma firma y misma respuesta JSON que el SDK; solo cambia el transporte.
+// El proxy las envuelve con el mismo acquireToken() + withRetry() que el resto.
+// ─────────────────────────────────────────────────────────────
+const axiosDirect = axios.create({
+  baseURL: 'https://api.hubapi.com',
+  timeout: Number(process.env.HS_HTTP_TIMEOUT_MS || 30_000),
+});
+
+// Firma idéntica a crm.associations.v4.basicApi.getPage del SDK.
+async function assocGetPageViaAxios(objectType, objectId, toObjectType, after, limit) {
+  const params = {};
+  if (after !== undefined && after !== null) params.after = after;
+  if (limit !== undefined && limit !== null) params.limit = limit;
+
+  const { data } = await axiosDirect.get(
+    `/crm/v4/objects/${encodeURIComponent(String(objectType))}/${encodeURIComponent(String(objectId))}/associations/${encodeURIComponent(String(toObjectType))}`,
+    {
+      params,
+      headers: { Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_TOKEN}` },
+    }
+  );
+  return data; // { results: [{ toObjectId, associationTypes }], paging? }
+}
+
+const AXIOS_SDK_ROUTES = {
+  'crm.associations.v4.basicApi.getPage': assocGetPageViaAxios,
+};
+
 function makeRetryProxy(target, path = '') {
   return new Proxy(target, {
     get(obj, prop) {
@@ -117,6 +148,13 @@ function makeRetryProxy(target, path = '') {
 
       if (typeof val === 'function') {
         const fullPath = path ? `${path}.${prop}` : String(prop);
+        const axiosRoute = AXIOS_SDK_ROUTES[fullPath];
+        if (axiosRoute) {
+          return (...args) => acquireToken().then(() => withRetry(
+            () => axiosRoute(...args),
+            { sdkPath: fullPath, transport: 'axios' }
+          ));
+        }
         // Devolvemos una función síncrona que retorna la Promise de withRetry.
         // Mantiene el this original con .apply(obj, args).
         return (...args) => acquireToken().then(() => withRetry(
