@@ -59,10 +59,44 @@ const INVOICE_OBJ_PROP  = 'of_invoice_id';
 const TOKEN = process.env.HUBSPOT_PRIVATE_TOKEN;
 if (!TOKEN) { console.error('❌ Falta HUBSPOT_PRIVATE_TOKEN'); process.exit(1); }
 
-// numberOfApiCallRetries: reintenta 429 + errores de red transitorios (ECONNRESET,
-// ETIMEDOUT, socket hang up / premature close) que antes abortaban el audit a mitad
-// de cargar los deals ("Error fatal: Premature close").
-const hubspot = new Client({ accessToken: TOKEN, numberOfApiCallRetries: 6 });
+// El audit abortaba con "Error fatal: Premature close" (error de stream de node-fetch
+// a mitad de deals/search). numberOfApiCallRetries del SDK NO cubre ese caso, así que
+// envolvemos el cliente en un Proxy recursivo que reintenta CUALQUIER error transitorio
+// (429, 5xx, y errores de red incl. ECONNRESET / socket hang up / premature close).
+// El audit es solo-lectura → reintentar es seguro.
+const rawHubspot = new Client({ accessToken: TOKEN, numberOfApiCallRetries: 6 });
+
+function isTransientErr(err) {
+  const msg    = String(err?.message || err?.cause?.message || '');
+  const code   = err?.code || err?.cause?.code || '';
+  const status = err?.response?.status ?? err?.statusCode;
+  if (status === 429 || (typeof status === 'number' && status >= 500 && status < 600)) return true;
+  if (['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE',
+       'ERR_STREAM_PREMATURE_CLOSE', 'UND_ERR_SOCKET', 'ECONNABORTED'].includes(code)) return true;
+  return /premature close|socket hang up|econnreset|etimedout|network|fetch failed|aborted|timeout/i.test(msg);
+}
+async function callWithRetry(fn, tries = 6) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fn(); }
+    catch (err) {
+      if (!isTransientErr(err) || attempt >= tries) throw err;
+      const delay = Math.min(600 * 2 ** attempt, 10_000);
+      process.stdout.write(`\n   ⚠️ red (${String(err?.message || err?.code).slice(0, 50)}) → reintento ${attempt + 1}/${tries} en ${delay}ms\n`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+function retryProxy(target) {
+  return new Proxy(target, {
+    get(t, prop) {
+      const v = t[prop];
+      if (typeof v === 'function') return (...args) => callWithRetry(() => v.apply(t, args));
+      if (v && typeof v === 'object') return retryProxy(v);
+      return v;
+    },
+  });
+}
+const hubspot = retryProxy(rawHubspot);
 
 const args = process.argv.slice(2);
 const pipelineFilter = (() => { const i = args.indexOf('--pipeline'); return i !== -1 ? args[i + 1] : null; })();
