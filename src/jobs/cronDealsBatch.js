@@ -273,7 +273,12 @@ if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
 }
 
   // ── Ventana horaria: solo ejecutar entre 03:40 y 07:00 UTC (00:40–04:00 UY) ──
-  if (!onlyDealId && !modeOverride) {
+  // Bypass manual: CRON_FORCE_RUN=true saltea el guard (uso puntual, revertir el env al terminar)
+  const FORCE_RUN = process.env.CRON_FORCE_RUN === 'true';
+  if (FORCE_RUN) {
+    logger.warn({ jobRunId, mode }, "[cronDealsBatch] CRON_FORCE_RUN activo -> guard de ventana omitido");
+  }
+  if (!onlyDealId && !modeOverride && !FORCE_RUN) {
     const now = new Date();
     const utcH = now.getUTCHours();
     const utcM = now.getUTCMinutes();
