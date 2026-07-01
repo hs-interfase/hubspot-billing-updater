@@ -251,7 +251,7 @@ const repetitivo = !!rawFreq && ![
     descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
-    of_margen: parseNumber(lp.hs_margin, 0),
+    of_margen: montoTotal - costoTotal, // ✅ margen bruto = subtotal pre-IVA (lp.amount) − costo total. Antes leía lp.hs_margin (no se fetchea → siempre 0).
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
