@@ -10,13 +10,27 @@ export const RETRY_CONFIG = {
 };
 
 /**
- * Devuelve true si el status HTTP justifica un reintento.
+ * Códigos de error de RED transitorios (sin status HTTP): el SDK/axios/node-fetch
+ * los expone como err.code. Un socket hang up / connection reset en medio de una
+ * call de HubSpot es transitorio → conviene reintentar (antes rompía la propagación
+ * y escribía billing_error). Visto en volumen alto: ECONNRESET / socket hang up.
+ */
+const RETRYABLE_NET_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND',
+  'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET', 'ERR_SOCKET_CONNECTION_TIMEOUT',
+]);
+
+/**
+ * Devuelve true si el error justifica un reintento.
  * - 429  → rate limit (secondly o daily)
  * - 5xx  → error transitorio de HubSpot
+ * - errores de red transitorios (ECONNRESET, socket hang up, etc.)
  * - 4xx ≠ 429 → error del caller, no reintentar
  */
 export function isRetryable(status) {
-  return status === 429 || (status >= 500 && status < 600);
+  if (status === 429) return true;
+  if (typeof status === 'number') return status >= 500 && status < 600;
+  return typeof status === 'string' && RETRYABLE_NET_CODES.has(status);
 }
 
 /** Extrae el status HTTP de cualquier forma que lo arroje el SDK o axios */
