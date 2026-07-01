@@ -1,6 +1,7 @@
 // src/hubspotClient.js
 import Hubspot from "@hubspot/api-client";
 import axios from 'axios';
+import https from 'node:https';
 import "dotenv/config";
 import logger from '../lib/logger.js';
 import { withRetry, isRetryable, calcDelay } from './utils/withRetry.js';
@@ -14,9 +15,36 @@ import { acquireRateToken } from './db.js';
 // sin necesidad de tocar cada call site.
 // ─────────────────────────────────────────────────────────────
 
-const rawHubspotClient = new Hubspot.Client({
+// ─────────────────────────────────────────────────────────────
+// Interruptores de red (env vars) para mitigar el "Premature close"
+// de Railway. AMBOS apagados por defecto → comportamiento IDÉNTICO a hoy.
+//   HS_DISABLE_GZIP=true → pide la respuesta SIN comprimir (Accept-Encoding:
+//     identity). Evita que un hipo de red rompa el stream gzip a mitad, que
+//     es como node-fetch@2 tira ERR_STREAM_PREMATURE_CLOSE.
+//   HS_NO_KEEPALIVE=true → socket nuevo por request (no reusa conexiones).
+// Para revertir: borrar/poner en false la env var y reiniciar. Sin deploy.
+// ─────────────────────────────────────────────────────────────
+const HS_DISABLE_GZIP = String(process.env.HS_DISABLE_GZIP || '').toLowerCase() === 'true';
+const HS_NO_KEEPALIVE = String(process.env.HS_NO_KEEPALIVE || '').toLowerCase() === 'true';
+
+const hubspotClientOpts = {
   accessToken: process.env.HUBSPOT_PRIVATE_TOKEN,
-});
+};
+if (HS_DISABLE_GZIP) {
+  hubspotClientOpts.defaultHeaders = { 'Accept-Encoding': 'identity' };
+}
+if (HS_NO_KEEPALIVE) {
+  hubspotClientOpts.httpAgent = new https.Agent({ keepAlive: false });
+}
+
+const rawHubspotClient = new Hubspot.Client(hubspotClientOpts);
+
+if (HS_DISABLE_GZIP || HS_NO_KEEPALIVE) {
+  logger.info(
+    { HS_DISABLE_GZIP, HS_NO_KEEPALIVE },
+    '[hubspotClient] interruptores de red activos (mitigación Premature close)'
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // Rate limiter global — balde de fichas compartido (Postgres)
