@@ -31,7 +31,10 @@ const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
 
 // Your deal properties (adjust if your portal uses different names)
-const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
+// OJO: la fecha de próxima facturación a NIVEL DEAL es `facturacion_proxima_fecha`.
+// `billing_next_date` es propiedad de LINE ITEM y NO existe en el deal → filtrar deals
+// por ella daba HTTP 400 (swallowed) y S1/S2 no traían nada. (default corregido)
+const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "facturacion_proxima_fecha";
 const PROP_AUTO = process.env.PROP_AUTO || "facturacion_automatica"; // or "auto" if that's your real prop
 
 // Mirror props (ajustado a tu portal real)
@@ -214,21 +217,24 @@ function baseFiltersNoMirrors() {
 }
 
 function weekdayFilters_set1_todayAutoTrue(todayYMD) {
-  // billing_next_date == today AND auto == true
+  // Deals cuya próxima fecha de facturación (facturacion_proxima_fecha) es HOY.
+  // Las propiedades `date` de HubSpot se filtran por epoch-ms (rango del día),
+  // NO por string "YYYY-MM-DD" (ese formato devuelve HTTP 400).
+  const dayStart = ymdToMsUTC(todayYMD);
+  const dayEnd   = String(Number(dayStart) + 86_399_999); // 23:59:59.999 del mismo día
   return [
   ...baseFiltersCancelled(),
   ...baseFiltersNoMirrors(),
-  { propertyName: PROP_BILLING_NEXT_DATE, operator: "EQ", value: String(todayYMD) },
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "BETWEEN", value: dayStart, highValue: dayEnd },
 ];
 }
 
 function weekdayFilters_set2_30daysAutoNotTrue(todayPlus30YMD) {
-  // billing_next_date >= today+30 AND auto != true (covers false/null/empty if stored as non-true)
-  // Note: HubSpot doesn't have "NOT_EQ true" for boolean in all cases, but NEQ should work for strings.
+  // Deals con próxima facturación a 30+ días. Idem: epoch-ms, no string YMD.
 return [
   ...baseFiltersCancelled(),
   ...baseFiltersNoMirrors(),
-  { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: String(todayPlus30YMD) },
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: ymdToMsUTC(todayPlus30YMD) },
 ];
 }
 
