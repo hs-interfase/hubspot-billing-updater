@@ -81,7 +81,9 @@ async function callWithRetry(fn, tries = 6) {
     catch (err) {
       if (!isTransientErr(err) || attempt >= tries) throw err;
       const delay = Math.min(600 * 2 ** attempt, 10_000);
-      process.stdout.write(`\n   ⚠️ red (${String(err?.message || err?.code).slice(0, 50)}) → reintento ${attempt + 1}/${tries} en ${delay}ms\n`);
+      const full  = err?.message || String(err?.code || err);
+      const extra = err?.cause?.message ? ` | cause: ${err.cause.message}` : (err?.code ? ` | code: ${err.code}` : '');
+      process.stdout.write(`\n   ⚠️ red (${full}${extra}) → reintento ${attempt + 1}/${tries} en ${delay}ms\n`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
