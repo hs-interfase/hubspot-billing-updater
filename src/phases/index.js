@@ -14,6 +14,7 @@ import {
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { recalcContadores } from '../services/billing/recalcContadores.js';
+import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
@@ -195,6 +196,10 @@ export async function runPhaseR({
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
+  // Buffer de escrituras de line items para todo el deal (batch con flag
+  // LI_BATCH_WRITES_ENABLED=true; modo inmediato idéntico al previo con flag off).
+  // Cada fase que lo usa flushea al terminar; el finally es red de seguridad.
+  const liWriteBuffer = createLineItemWriteBuffer({ context: { dealId } });
 
   try {
     let currentDeal = deal;
@@ -249,7 +254,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     // ========== PHASE 1: Fechas, calendario, cupo ==========
     try {
-      await runPhase1(dealId);
+      await runPhase1(dealId, { writeBuffer: liWriteBuffer });
       results.phase1.success = true;
       logger.info(
         { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
@@ -354,7 +359,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     // ========== PHASE P: Forecast/Promesa ==========
     try {
-      const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems });
+      const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems, writeBuffer: liWriteBuffer });
       results.phaseP = phasePResult;
       results.ticketsCreated += phasePResult?.created || 0;
 
@@ -522,7 +527,20 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     return results;
   } finally {
-// noop : el candado no libera el caller
+    // (el candado no lo libera este caller)
+    // Red de seguridad del buffer: si alguna fase salió por error sin flushear,
+    // persistir lo pendiente para no perder updates. Noop si está vacío.
+    try {
+      if (liWriteBuffer.pendingCount() > 0) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, pending: liWriteBuffer.pendingCount() },
+          'writeBuffer con updates pendientes al finalizar el deal — flush de seguridad (una fase salió sin flushear)'
+        );
+        await liWriteBuffer.flush();
+      }
+    } catch (err) {
+      logger.error({ module: 'phases/index', fn: 'runPhasesForDeal', dealId, err }, 'Error en flush de seguridad del writeBuffer');
+    }
   }
 }
 

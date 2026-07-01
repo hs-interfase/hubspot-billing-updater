@@ -4,6 +4,7 @@ import { getTodayYMD, parseLocalDate, formatDateISO, addInterval, lastBusinessDa
 import logger from '../lib/logger.js';
 import { reportHubSpotWarn } from "./utils/hubspotErrorCollector.js";
 import { reportIfActionable } from "./utils/errorReporting.js";
+import { createLineItemWriteBuffer } from './services/lineItems/lineItemWriteBuffer.js';
 
 /**
  * =============================================================================
@@ -275,6 +276,12 @@ export async function updateLineItemSchedule(lineItem, dealContext = {}) {
   const p = lineItem.properties || {};
   const config = getEffectiveBillingConfig(lineItem);
 
+  // Buffer de escrituras: si el caller no pasa uno, se usa un buffer en modo
+  // inmediato (enabled:false = comportamiento previo, update directo por LI),
+  // independientemente de la env flag LI_BATCH_WRITES_ENABLED.
+  const writeBuffer =
+    dealContext.writeBuffer ?? createLineItemWriteBuffer({ enabled: false });
+
   // =========================================================
   // REGLA PREDOMINANTE:
   // si fechas_completas = true => billing_next_date = '' y salir
@@ -292,9 +299,7 @@ export async function updateLineItemSchedule(lineItem, dealContext = {}) {
     }, 'fechas_completas=true => billing_next_date vacío, saliendo');
 
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(lineItem.id), {
-        properties: updates,
-      });
+      await writeBuffer.queueUpdate(String(lineItem.id), updates, { label: 'fechas_completas' });
     } catch (err) {
       logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: fechas_completas path');
       reportIfActionable({
@@ -343,9 +348,7 @@ export async function updateLineItemSchedule(lineItem, dealContext = {}) {
       }, 'irregular puntual → set billing_next_date');
 
       try {
-        await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-          properties: updatesIrregular,
-        });
+        await writeBuffer.queueUpdate(String(lineItem.id), updatesIrregular, { label: 'irregular_puntual' });
       } catch (err) {
         logger.error({ err, lineItemId: lineItem.id }, 'line_item_update_failed: irregular puntual path');
         reportIfActionable({
@@ -389,9 +392,7 @@ if (dealContext?.dealId) {
     const updatesError = { billing_error: msg };
 
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-        properties: updatesError,
-      });
+      await writeBuffer.queueUpdate(String(lineItem.id), updatesError, { label: 'irregular_sin_fecha' });
     } catch (err) {
       logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: irregular sin fecha puntual');
       reportIfActionable({
@@ -435,9 +436,7 @@ if (dealContext?.dealId) {
       }, 'pago único urgente sin startDate → usando HOY');
 
       try {
-        await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-          properties: updatesUrgentOneTime,
-        });
+        await writeBuffer.queueUpdate(String(lineItem.id), updatesUrgentOneTime, { label: 'pago_unico_urgente' });
       } catch (err) {
         logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: pago único urgente');
         reportIfActionable({
@@ -477,9 +476,7 @@ if (dealContext?.dealId) {
     const updatesError = { billing_error: msg };
 
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-        properties: updatesError,
-      });
+      await writeBuffer.queueUpdate(String(lineItem.id), updatesError, { label: 'falta_startdate' });
     } catch (err) {
       logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: falta startDate');
       reportIfActionable({
@@ -538,9 +535,7 @@ if (dealContext?.dealId) {
     }, '[billing_next_date] ONE_TIME');
 
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-        properties: updatesOneTime,
-      });
+      await writeBuffer.queueUpdate(String(lineItem.id), updatesOneTime, { label: 'pago_unico' });
     } catch (err) {
       logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: pago único con startDate');
       reportIfActionable({
@@ -705,9 +700,7 @@ if (dealContext?.dealId) {
   }
 
   try {
-    await hubspotClient.crm.lineItems.basicApi.update(lineItem.id, {
-      properties: updatesRecurring,
-    });
+    await writeBuffer.queueUpdate(String(lineItem.id), updatesRecurring, { label: 'recurrente_anchor' });
   } catch (err) {
     logger.error({ err, lineItemId: lineItem.id, dealId: dealContext?.dealId, dealName: dealContext?.dealName }, 'line_item_update_failed: recurrente anchor-based');
     reportIfActionable({
