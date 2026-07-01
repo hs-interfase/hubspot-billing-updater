@@ -423,6 +423,10 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
           await sleep(300);
           r3 = await searchDeals({ after: afterS3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
         } catch (e) {
+          logger.warn({
+            err: e?.message || String(e),
+            code: e?.code || e?.statusCode || e?.response?.status || null,
+          }, "[cronDealsBatch] searchDeals S1/S2/S3 falló → intento fallback solo S3");
           appendAudit({
             at: new Date().toISOString(),
             type: "error",
@@ -443,6 +447,10 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
               sorts: SORTS,
             });
           } catch (e2) {
+            logger.error({
+              err: e2?.message || String(e2),
+              code: e2?.code || e2?.statusCode || e2?.response?.status || null,
+            }, "[cronDealsBatch] fallback S3 TAMBIÉN falló → aborto el scan (0 procesados)");
             appendAudit({
               at: new Date().toISOString(),
               type: "error",
@@ -458,6 +466,15 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
         const a2 = r2?.results || [];
         const a3 = r3?.results || [];
         const merged = [...a1, ...a2, ...a3];
+
+        // Visibilidad: cuántos trae cada set en esta página y cuántos reporta el portal
+        // en total (totS*). Si totS1/2/3 vienen en 0/undefined, el token apunta a un
+        // portal vacío/equivocado; si vienen altos pero merged=0, el problema es otro.
+        logger.info({
+          s1: a1.length, s2: a2.length, s3: a3.length,
+          totS1: r1?.total, totS2: r2?.total, totS3: r3?.total,
+          afterS1, afterS2, afterS3,
+        }, "[cronDealsBatch] weekday_search_page");
 
         // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
        try {
