@@ -1,4 +1,7 @@
 // src/hubspotClient.js
+// IMPORTANTE: el patch debe evaluarse ANTES de cargar el SDK (reemplaza el
+// transporte node-fetch@2 por axios; ver src/utils/nodeFetchAxiosPatch.js).
+import "./utils/nodeFetchAxiosPatch.js";
 import Hubspot from "@hubspot/api-client";
 import axios from 'axios';
 import https from 'node:https';
