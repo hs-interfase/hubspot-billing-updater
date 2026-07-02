@@ -24,6 +24,7 @@ import { ensureForecastMetaOnLineItem } from '../services/forecast/forecastMetaS
 import logger from '../../lib/logger.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
@@ -212,16 +213,16 @@ function resolveTaxRateGroupId(lineItem, dealProps = {}) {
   return null;
 }
 
-async function normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps }) {
+async function normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps, writeBuffer }) {
   const currentTaxGroupId = String(li?.properties?.hs_tax_rate_group_id ?? '').trim();
   const nextTaxGroupId = resolveTaxRateGroupId(li, dealProps);
 
   if (!nextTaxGroupId || nextTaxGroupId === currentTaxGroupId) return;
 
   try {
-    await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-      properties: { hs_tax_rate_group_id: nextTaxGroupId },
-    });
+    await writeBuffer.queueUpdate(String(li.id), {
+      hs_tax_rate_group_id: nextTaxGroupId,
+    }, { label: 'tax_group' });
 
     li.properties = {
       ...(li.properties || {}),
@@ -272,10 +273,14 @@ function buildNextBillingMessage({ deal, nextDate, lineItems }) {
   return `Próxima facturación ${fmtYMD(nextDate)} · ${dealName} · ${count} line items`;
 }
 
-async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true, dealProps = {} } = {}) {
+async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo = true, dealProps = {}, writeBuffer = null } = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) return;
 
   const debug = process.env.DBG_PHASE1 === 'true';
+
+  // Buffer de escrituras de LIs: sin buffer del caller → modo inmediato
+  // (enabled:false = comportamiento previo), independiente de la env flag.
+  const buf = writeBuffer ?? createLineItemWriteBuffer({ enabled: false, context: { dealId } });
 
   function parseLineItemKey(lineItemKey) {
     if (!lineItemKey) return null;
@@ -375,7 +380,7 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
         logger.info({ module: 'phase1', fn: 'processLineItemsForPhase1', dealId, lineItemId: li.id, line_item_key: lineItemKey }, '[phase1][line_item_key] created');
       }
 
-      await normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps });
+      await normalizeLineItemTaxGroupIfNeeded({ dealId, li, dealProps, writeBuffer: buf });
 
       // 0.5) HARD STOP POR PROPERTY: si fechas_completas=true, no recalcular schedule
       const fechasCompletas =
@@ -384,9 +389,9 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
       if (fechasCompletas) {
         if ((li.properties?.billing_next_date ?? '') !== '') {
           try {
-            await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-              properties: { billing_next_date: '' },
-            });
+            await buf.queueUpdate(String(li.id), {
+              billing_next_date: '',
+            }, { label: 'fechas_completas_clear' });
           } catch (err) {
             logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, 'line_item_update_failed: limpiar billing_next_date (fechas_completas)');
             reportIfActionable({
@@ -405,6 +410,7 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
           dealId,
           dealName: dealProps.dealname,
           ownerId:  dealProps.hubspot_owner_id || null,
+          writeBuffer: buf,
         });
       }
 
@@ -425,9 +431,14 @@ async function processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCup
       logger.error({ module: 'phase1', fn: 'processLineItemsForPhase1', lineItemId: li.id, err }, '[phase1] Error en updateLineItemSchedule para line item');
     }
   }
+
+  // FLUSH POINT: persistir los updates bacheados de este deal antes de volver
+  // al caller (el refetch post-Phase1 de phases/index.js debe ver datos frescos).
+  // Noop con flag off (los updates ya salieron inmediatos). flush() nunca lanza.
+  await buf.flush();
 }
 
-export async function runPhase1(dealId) {
+export async function runPhase1(dealId, { writeBuffer = null } = {}) {
   if (!dealId) throw new Error('runPhase1 requiere un dealId');
 
   const { deal, lineItems } = await getDealWithLineItems(dealId);
@@ -544,7 +555,7 @@ export async function runPhase1(dealId) {
   }
 
   // 2) Procesar negocio original: calendario + contadores + cupo por línea
-await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, dealProps });
+await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, dealProps, writeBuffer });
 
   // 2.1) Procesar espejo UY (si existe)
   if (mirrorResult?.mirrored && mirrorResult?.targetDealId) {
@@ -566,7 +577,7 @@ await processLineItemsForPhase1(dealId, lineItems, today, { alsoInitCupo: true, 
       }
 
 // CORRECTO
-await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, today, { alsoInitCupo: true, dealProps: mirrorDeal.properties || {} });
+await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, today, { alsoInitCupo: true, dealProps: mirrorDeal.properties || {}, writeBuffer });
       try {
         await updateDealCupo(mirrorDeal, mirrorLineItems);
       } catch (err) {

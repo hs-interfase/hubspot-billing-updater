@@ -13,6 +13,7 @@ import { withRetry } from '../utils/withRetry.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import { notifyMirrorDealOnPauseChange } from '../services/mirrorUtils.js';
+import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import {
   buildMansoftSnapshot,
   parseMansoftSnapshot,
@@ -557,9 +558,13 @@ async function updateLineItemLastGeneratedAt(lineItemId) {
 /**
  * Phase P (por deal)
  */
-export async function runPhaseP({ deal, lineItems }) {
+export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
   const dealId = deal?.id || deal?.objectId || deal?.properties?.hs_object_id;
   const dealStage = deal?.properties?.dealstage || '';
+
+  // Buffer de escrituras de LIs (solo avisos mansoft): sin buffer del caller
+  // → modo inmediato (enabled:false = comportamiento previo).
+  const liBuf = writeBuffer ?? createLineItemWriteBuffer({ enabled: false, context: { dealId } });
 
   let created = 0, updated = 0, deleted = 0, skipped = 0;
 
@@ -693,12 +698,10 @@ export async function runPhaseP({ deal, lineItems }) {
                 tipoFinal = 'edicion';
               }
 
-              await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-                properties: {
-                  mansoft_pendiente: 'true',
-                  mansoft_tipo_aviso: tipoFinal,
-                },
-              });
+              await liBuf.queueUpdate(String(li.id), {
+                mansoft_pendiente: 'true',
+                mansoft_tipo_aviso: tipoFinal,
+              }, { label: 'mansoft_edicion' });
               logger.info(
                 {
                   module: 'phaseP',
@@ -754,12 +757,10 @@ export async function runPhaseP({ deal, lineItems }) {
 
       if (shouldMarkMantsoftAlta({ li, automated, dealStage, desiredCount })) {
   try {
-    await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
-      properties: {
-        mansoft_pendiente: 'true',
-        mansoft_tipo_aviso: 'alta',
-      },
-    });
+    await liBuf.queueUpdate(String(li.id), {
+      mansoft_pendiente: 'true',
+      mansoft_tipo_aviso: 'alta',
+    }, { label: 'mansoft_alta' });
 
     li.properties = {
       ...(li.properties || {}),
@@ -1070,6 +1071,10 @@ for (const t of allTickets) {
       logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, err }, 'unit_failed');
     }
   }
+
+  // FLUSH POINT: persistir los avisos mansoft bacheados antes de salir de
+  // Phase P. Noop con flag off. flush() nunca lanza.
+  await liBuf.flush();
 
   logger.info(
     { module: 'phaseP', fn: 'runPhaseP', dealId, created, updated, deleted, skipped },
