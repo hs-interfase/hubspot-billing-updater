@@ -278,7 +278,8 @@ if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
   return { skipped: true };
 }
 
-  // ── Ventana horaria: solo ejecutar entre 03:40 y 07:00 UTC (00:40–04:00 UY) ──
+  // ── Ventana horaria: solo ejecutar entre 03:00 y 07:00 UTC (00:00–04:00 UY) ──
+  // 03:00 (antes 03:40) para cubrir el schedule de testing 03:11 UTC sin FORCE_RUN.
   // Bypass manual: CRON_FORCE_RUN=true saltea el guard (uso puntual, revertir el env al terminar)
   const FORCE_RUN = process.env.CRON_FORCE_RUN === 'true';
   if (FORCE_RUN) {
@@ -289,7 +290,7 @@ if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
     const utcH = now.getUTCHours();
     const utcM = now.getUTCMinutes();
     const utcMinutes = utcH * 60 + utcM; // minutos desde medianoche UTC
-    const WINDOW_START = 3 * 60 + 40;    // 03:40 UTC
+    const WINDOW_START = 3 * 60;         // 03:00 UTC
     const WINDOW_END   = 7 * 60;         // 07:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
   await releaseCronLock("cronDealsBatch", jobRunId);
