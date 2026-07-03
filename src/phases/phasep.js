@@ -11,6 +11,7 @@ import { safeCreateTicket } from '../services/tickets/ticketService.js';
 import logger from '../../lib/logger.js';
 import { withRetry } from '../utils/withRetry.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import { reportHubSpotWarn } from '../utils/hubspotErrorCollector.js';
 import { syncBillingNextDateFromTickets } from '../services/billing/syncBillingNextDateFromTickets.js';
 import { notifyMirrorDealOnPauseChange } from '../services/mirrorUtils.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
@@ -272,6 +273,57 @@ function resolveForecastStage({ dealStage, automated }) {
   if (bucket === '95') return STAGE.AUTO_FORECAST_95;
   if (bucket === '100') return STAGE.AUTO_FORECAST_95; // 100% usa mismo stage que 95
   return STAGE.AUTO_FORECAST_25;
+}
+
+// ── Aviso al vendedor: facturación próxima/vencida en negocio no ganado ─────
+// Escribe billing_error en el deal (vía collector, con billing_error_at para
+// que el workflow de HubSpot notifique al vendedor) cuando un line item tiene
+// una fecha de facturación a ≤ N días, o ya vencida, y el negocio todavía no
+// está en Cierre ganado (buckets 25/50/75).
+const DIAS_AVISO_FACTURACION_NO_GANADO =
+  Number(process.env.DIAS_AVISO_FACTURACION_NO_GANADO || 10);
+
+const BUCKETS_GANADO = new Set(['85', '95', '100']);
+
+function diffDias(desdeYmd, hastaYmd) {
+  return Math.round((Date.parse(hastaYmd) - Date.parse(desdeYmd)) / 86400000);
+}
+
+export function warnFacturacionDealNoGanado({ deal, dealId, dealStage, li, dates, todayYmd, report = reportHubSpotWarn }) {
+  try {
+    const bucket = resolveBucketFromDealStage(dealStage);
+    if (!bucket || BUCKETS_GANADO.has(bucket)) return null;
+
+    const p = li?.properties || {};
+    if (parseBool(p.pausa)) return null;
+
+    const vencidas = (dates || []).filter(d => d <= todayYmd);
+    const proximas = (dates || []).filter(
+      d => d > todayYmd && diffDias(todayYmd, d) <= DIAS_AVISO_FACTURACION_NO_GANADO
+    );
+    if (!vencidas.length && !proximas.length) return null;
+
+    const dealName = deal?.properties?.dealname || `deal ${dealId}`;
+    const liName = p.name || `LI ${li.id}`;
+
+    const msg = vencidas.length
+      ? `La fecha de facturación ${vencidas[0]} del elemento de pedido "${liName}" (${li.id}) ya llegó y el negocio "${dealName}" no está en Cierre ganado. No se facturará hasta ganar el negocio y activar la facturación.`
+      : `El elemento de pedido "${liName}" (${li.id}) factura el ${proximas[0]} (en ${diffDias(todayYmd, proximas[0])} día(s)) y el negocio "${dealName}" no está en Cierre ganado. Ganar el negocio y activar la facturación antes de esa fecha.`;
+
+    report({ objectType: 'deal', objectId: String(dealId), message: msg });
+
+    logger.warn(
+      { module: 'phaseP', fn: 'warnFacturacionDealNoGanado', dealId, lineItemId: li?.id, dealStage, vencidas: vencidas.length, proximas: proximas.length },
+      'Facturación próxima/vencida en negocio no ganado — aviso en billing_error del deal'
+    );
+    return msg;
+  } catch (err) {
+    logger.warn(
+      { module: 'phaseP', fn: 'warnFacturacionDealNoGanado', dealId, lineItemId: li?.id, err },
+      'Error en aviso de facturación no ganado — no bloquea'
+    );
+    return null;
+  }
 }
 
 /**
@@ -561,6 +613,7 @@ async function updateLineItemLastGeneratedAt(lineItemId) {
 export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
   const dealId = deal?.id || deal?.objectId || deal?.properties?.hs_object_id;
   const dealStage = deal?.properties?.dealstage || '';
+  const dealFacturacionActiva = parseBool(deal?.properties?.facturacion_activa);
 
   // Buffer de escrituras de LIs (solo avisos mansoft): sin buffer del caller
   // → modo inmediato (enabled:false = comportamiento previo).
@@ -815,6 +868,12 @@ export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
         continue;
       }
 
+      // Aviso al vendedor: fecha de facturación próxima (≤10 días) o vencida
+      // con el negocio aún no ganado → billing_error en el deal.
+      warnFacturacionDealNoGanado({
+        deal, dealId, dealStage, li, dates, todayYmd: nowMontevideoYmd(),
+      });
+
       // 4) Armar set de keys deseadas
       const desiredKeys = new Set();
       const desiredByKey = new Map();
@@ -908,14 +967,24 @@ for (const t of allTickets) {
           const hsPipeline = automated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE;
 
           // Tickets automáticos del pasado nacen directo en "Listo para facturar"
+          // SOLO si el deal ya factura (facturacion_activa=true): Phase 3 no emite
+          // sin esa llave, y un ticket en READY que nunca se emitirá dispara la
+          // alerta zero-emission en loop.
           const todayForStage = nowMontevideoYmd();
           let effectiveStage = targetStage;
           if (automated && expectedYmd < todayForStage) {
-            effectiveStage = BILLING_AUTOMATED_READY;
-            logger.info(
-              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, expectedYmd, todayForStage },
-              'Ticket automático del pasado → nace en BILLING_AUTOMATED_READY'
-            );
+            if (dealFacturacionActiva) {
+              effectiveStage = BILLING_AUTOMATED_READY;
+              logger.info(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, expectedYmd, todayForStage },
+                'Ticket automático del pasado → nace en BILLING_AUTOMATED_READY'
+              );
+            } else {
+              logger.info(
+                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, expectedYmd, todayForStage, targetStage },
+                'Ticket automático del pasado pero deal sin facturacion_activa → nace en stage forecast'
+              );
+            }
           }
 
           const fullProps = await buildTicketFullProps({
