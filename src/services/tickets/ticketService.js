@@ -13,6 +13,7 @@ import {
   isDryRun,
   isForecastTicketStage,
   ASSOC_LABEL_EMPRESA_FACTURA,
+  ASSOC_LABEL_EMPRESA_PARTNER,
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
@@ -464,11 +465,13 @@ export async function buildTicketFullProps({
   let empresaId = '';
   let empresaNombre = '';
   let empresaQueFactura = ''; // empresa asociada al deal con la etiqueta "Empresa Factura"
+  let clientePartner = '';    // empresa asociada al deal con la etiqueta "Partner"
 
   try {
     // Una sola lectura de asociaciones deal→companies (con labels) para derivar:
     //  - empresa primaria (primera asociada) → empresa_id / nombre_empresa (comportamiento existente)
     //  - empresa con etiqueta "Empresa Factura" → empresa_que_factura
+    //  - empresa con etiqueta "Partner" → cliente_partner (ASSOC_LABEL_EMPRESA_PARTNER=0 → deshabilitado)
     const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
       String(dealId),
@@ -478,13 +481,16 @@ export async function buildTicketFullProps({
     const results = resp?.results || [];
 
     empresaId = results[0]?.toObjectId ? String(results[0].toObjectId) : '';
-    const facturaId = results.find(
-      (r) => r.associationTypes?.some((t) => t.typeId === ASSOC_LABEL_EMPRESA_FACTURA)
-    )?.toObjectId;
-    const facturaIdStr = facturaId ? String(facturaId) : '';
+    const idPorLabel = (typeId) => {
+      if (!(typeId > 0)) return '';
+      const hit = results.find((r) => r.associationTypes?.some((t) => t.typeId === typeId));
+      return hit?.toObjectId ? String(hit.toObjectId) : '';
+    };
+    const facturaIdStr = idPorLabel(ASSOC_LABEL_EMPRESA_FACTURA);
+    const partnerIdStr = idPorLabel(ASSOC_LABEL_EMPRESA_PARTNER);
 
     // Traer nombres necesarios (deduplicados)
-    const ids = [...new Set([empresaId, facturaIdStr].filter(Boolean))];
+    const ids = [...new Set([empresaId, facturaIdStr, partnerIdStr].filter(Boolean))];
     const names = {};
     await Promise.all(
       ids.map(async (id) => {
@@ -499,10 +505,12 @@ export async function buildTicketFullProps({
 
     empresaNombre = empresaId ? names[empresaId] || '' : '';
     empresaQueFactura = facturaIdStr ? names[facturaIdStr] || '' : '';
+    clientePartner = partnerIdStr ? names[partnerIdStr] || '' : '';
   } catch (_) {
     empresaId = '';
     empresaNombre = '';
     empresaQueFactura = '';
+    clientePartner = '';
   }
 
   const productoNombre = safeString(lp.name);
@@ -530,6 +538,7 @@ export async function buildTicketFullProps({
     empresa_id: empresaId,
     nombre_empresa: empresaNombre,
     empresa_que_factura: empresaQueFactura,
+    cliente_partner: clientePartner,
     of_pais_operativo: paisOperativo,
     unidad_de_negocio: unidadDeNegocio,
     of_rubro: servicio,

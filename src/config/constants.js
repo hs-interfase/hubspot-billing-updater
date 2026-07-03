@@ -67,6 +67,11 @@ export const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim(
 export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
 
 export const ASSOC_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPRESA_FACTURA || '2', 10);
+// Etiqueta "Partner" deal→company. typeId difiere por portal (PROD=2; sandbox se crea aparte).
+// Default 0 = deshabilitado (sin lookup). La comparte el pendiente de mirrors (Empresa Partner).
+// 0 = deshabilitado: en sandbox la etiqueta Partner no existe todavía (prod "Partner"=2).
+// La comparten cliente_partner (ticketService) y la doble etiqueta del mirror (dealMirroring).
+export const ASSOC_LABEL_EMPRESA_PARTNER = parseInt(process.env.ASSOC_LABEL_EMPRESA_PARTNER || '0', 10);
 
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
