@@ -26,6 +26,7 @@ import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
+import { syncLineItemAreaByCountry } from '../services/deal/syncLineItemAreaByCountry.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 
@@ -616,6 +617,15 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
     await updateDealCupo(deal, lineItems);
   } catch (err) {
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error updateDealCupo deal');
+  }
+
+  // 5.4) Regla de área por país operativo del negocio (PY → área 'Paraguay' en los LIs)
+  //       ANTES de subir los tags al deal, para que syncDealCatalogTags tome el área nueva.
+  //       Detrás del flag AREA_BY_COUNTRY_ENABLED (default OFF). Uruguay/Mixto: no-op.
+  try {
+    await syncLineItemAreaByCountry(deal, lineItems);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncLineItemAreaByCountry (deal original)');
   }
 
   // 5.5) Sincronizar tags de catálogo (producto/rubro/unidad_de_negocio/area) desde los line items
