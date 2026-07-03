@@ -404,6 +404,7 @@ export async function getDealWithLineItems(dealId) {
     "pais_operativo",
     "responsable_asignado",
     "unidad_de_negocio",
+    "empresa_que_factura", // select: entidad del grupo que emite (Interfase UY / ISA UY / ISA PY / Interfase PY) → espejo al ticket
     "uy",
   ];
 

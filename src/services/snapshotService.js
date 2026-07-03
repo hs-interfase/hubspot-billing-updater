@@ -259,6 +259,12 @@ const repetitivo = !!rawFreq && ![
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     nc: parseBool(lp.nc), // NC: se setea a mano en el LI y se propaga al ticket (solo registro)
     repetitivo,
+    // Entidad del grupo que emite: select del line item → select homónimo del ticket (mismas opciones: Interfase UY / ISA UY / ISA PY / Interfase PY)
+    entidad_facturadora: safeString(lp.empresa_que_factura),
+    // Fecha de inicio de facturación del line item (distinta de fecha_resolucion_esperada, que es la próxima)
+    fecha_inicio_de_facturacion: toHubSpotDateOnly(lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion),
+    // Facturación automática: espejo del checkbox del line item (enum booleancheckbox: "true"/"false")
+    facturacion_automatica: parseBool(lp.facturacion_automatica) ? 'true' : 'false',
   };
 
   logger.info({
