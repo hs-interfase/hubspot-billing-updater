@@ -27,6 +27,7 @@ import { reportIfActionable } from '../utils/errorReporting.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
 import { syncLineItemAreaByCountry } from '../services/deal/syncLineItemAreaByCountry.js';
+import { costoUsdEnabled, syncCostoUsdLineItems } from '../services/costoUsdService.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
 
@@ -508,6 +509,18 @@ export async function runPhase1(dealId, { writeBuffer = null } = {}) {
     await normalizeBillingStartDelay(lineItems, deal);
   } catch (err) {
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error normalizando retrasos de facturación');
+  }
+
+  // -- Costo/margen USD (flag COSTO_USD_ENABLED, off por default) --
+  // Asigna la prop `dolar` del deal (creación / cierre-ganado) y deriva
+  // hs_cost_of_goods_sold + monto_usd desde costo_total_usd. DEBE correr ANTES del
+  // mirroring: el espejo UY usa hs_cost_of_goods_sold como price de sus líneas.
+  if (costoUsdEnabled()) {
+    try {
+      await syncCostoUsdLineItems({ dealId, deal, lineItems, writeBuffer });
+    } catch (err) {
+      logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncCostoUsdLineItems');
+    }
   }
 
   // ===== DEBUG POST-NORMALIZE =====

@@ -300,6 +300,10 @@ export async function getDealWithLineItems(dealId) {
     "id_crm_origen",
     "id_cliente_nodum",
 
+    // --- costo/margen USD (COSTO_USD_ENABLED) ---
+    "dolar",
+    "dolar_cierre_asignado",
+
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -321,6 +325,8 @@ export async function getDealWithLineItems(dealId) {
     "description",
     "price",
     "hs_cost_of_goods_sold",
+    "costo_total_usd",
+    "dolar",
     "quantity",
     "amount",
     "discount",
