@@ -995,7 +995,13 @@ export async function findTicketByKey(ticketKey) {
 }
 
 /**
- * Determina el stage correcto del ticket según la fecha de facturación y flag "facturar ahora".
+ * @deprecated MUERTO (verificado 2026-07-01): sin call sites en todo el repo.
+ * manualTicketService fuerza stage=TICKET_STAGES.NEW incondicional y el ruteo
+ * por facturar_ahora lo hace urgentBillingService. NO reactivar: su lógica
+ * NEW/READY es pre-alias y mezcla "Próximos" con "Listo" según fecha.
+ * Cuerpo conservado por política del proyecto (lección invoices.js).
+ *
+ * (Doc original: determina el stage del ticket según fecha y flag "facturar ahora".)
  */
 export function getTicketStage(billingDate, lineItem) {
   const lp = lineItem?.properties || {};

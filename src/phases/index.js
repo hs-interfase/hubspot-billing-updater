@@ -433,7 +433,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
         if (catchUpPromoted > 0) {
           logger.info(
             { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
-            'Catch-up: tickets forecast atrasados promovidos a READY'
+            'Catch-up: tickets forecast atrasados promovidos (auto→READY / manual→PRÓXIMOS A FACTURAR)'
           );
         }
 
