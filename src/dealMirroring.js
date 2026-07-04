@@ -12,7 +12,8 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 import logger from '../lib/logger.js';
-import { PROMOTED_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from './config/constants.js';
+import { PROMOTED_STAGES, ASSOC_LABEL_EMPRESA_FACTURA, ASSOC_LABEL_EMPRESA_PARTNER } from './config/constants.js';
+import { reportHubSpotError } from './utils/hubspotErrorCollector.js';
 
 
 // Helper para obtener IDs de objetos asociados a un objeto dado.
@@ -271,6 +272,36 @@ function parseBoolFromHubspot(raw) {
   return v === 'true' || v === '1' || v === 'sí' || v === 'si' || v === 'yes';
 }
 
+// Prop (deal mirror) que setea la MIGRACIÓN: las LIs del mirror son históricas
+// y el motor no debe sincronizarlas desde el PY — solo avisar si el PY cambia.
+const MIRROR_SEAL_PROP = 'mig_espejo_independiente';
+// Prop (deal mirror) con el último snapshot conocido de costo/cantidad del PY,
+// para avisar UNA vez por cambio en lugar de en cada pasada del cron.
+const MIRROR_PY_SNAPSHOT_PROP = 'mig_py_li_snapshot';
+
+// Snapshot estable (orden por LI id) de costo/cantidad de las líneas UY del PY.
+function pyLiSnapshotValue(li) {
+  const p = li.properties || {};
+  return `${p[LINE_ITEM_COST_PROP] ?? ''}x${p.quantity ?? ''}`;
+}
+
+function buildPyLiSnapshot(uyLineItems) {
+  return uyLineItems
+    .map((li) => `${li.id}:${pyLiSnapshotValue(li)}`)
+    .sort()
+    .join('|');
+}
+
+function parsePyLiSnapshot(snapshot) {
+  const map = new Map();
+  for (const entry of String(snapshot || '').split('|')) {
+    if (!entry) continue;
+    const i = entry.indexOf(':');
+    if (i > 0) map.set(entry.slice(0, i), entry.slice(i + 1));
+  }
+  return map;
+}
+
 /**
  * Cuando el deal PY fue eliminado/archivado, busca su mirror UY
  * y pausa los LIs que tengan tickets promovidos, dejando aviso.
@@ -293,7 +324,7 @@ async function handleOrphanedMirrorDeal(sourceDealId) {
           { propertyName: 'deal_py_origen_id', operator: 'EQ', value: String(sourceDealId) },
         ],
       }],
-      properties: ['dealname', 'deal_py_origen_id'],
+      properties: ['dealname', 'deal_py_origen_id', 'mig_espejo_independiente'],
       limit: 5,
     });
     mirrors = resp.results || [];
@@ -310,6 +341,19 @@ async function handleOrphanedMirrorDeal(sourceDealId) {
   for (const mirror of mirrors) {
     const mirrorDealId = String(mirror.id);
     const mirrorName = mirror.properties?.dealname || mirrorDealId;
+
+    // Mirror migrado independiente: sus LIs históricas no se pausan ni archivan,
+    // solo se avisa que el PY origen desapareció.
+    if (parseBoolFromHubspot(mirror.properties?.mig_espejo_independiente)) {
+      reportHubSpotError({
+        level: 'warn',
+        objectType: 'deal',
+        objectId: mirrorDealId,
+        message: `Deal PY origen (${sourceDealId}) fue eliminado/archivado. Mirror migrado independiente: sus líneas quedaron intactas — revisar manualmente.`,
+      });
+      log.info({ mirrorDealId, mirrorName }, 'Mirror sellado huérfano: LIs intactas, solo aviso');
+      continue;
+    }
 
     // 2) Leer LIs del mirror
     let mirrorLiIds;
@@ -526,6 +570,7 @@ export async function mirrorDealToUruguay(sourceDealId, options = {}) {
   const existingMirrorId = srcProps.deal_uy_mirror_id;
   let targetDealId = null;
   let createdLineItems = 0;
+  let mirrorCreatedNow = false;
 
   if (existingMirrorId) {
     targetDealId = String(existingMirrorId);
@@ -658,7 +703,9 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
       pais_operativo: 'Uruguay',
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
-      ...(sourceCurrency ? { deal_currency_code: sourceCurrency } : {}),
+      // Los prices del mirror son costos intercompany, siempre en USD:
+      // no hereda la moneda del deal PY (decisión 2026-07-02).
+      deal_currency_code: 'USD',
     };
 
     logger.info(
@@ -671,6 +718,7 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
     });
 
     targetDealId = createResp.id;
+    mirrorCreatedNow = true;
 
     logger.info(
       { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId },
@@ -691,10 +739,121 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
     );
   }
 
-  // 4) Upsert en el espejo las líneas UY del negocio PY
-  const userAdminMirror = process.env.USER_ADMIN_MIRROR || '89701984';
+  // 3c) Mirror migrado independiente: sus LIs YA espejadas (históricas) NO se
+  // sincronizan desde el PY — si el PY cambia costo/cantidad o quita líneas, se
+  // emite un aviso en el mirror en lugar de tocarlas. Las líneas UY NUEVAS del
+  // PY (sin espejo todavía) SÍ se crean con el comportamiento normal del motor
+  // (decisión 2026-07-02/03).
+  let sealedMirror = false;
+  let sealedNuevasLIs = [];
+  if (!mirrorCreatedNow) {
+    let mirrorSealProps = null;
+    try {
+      const mirrorDeal = await hubspotClient.crm.deals.basicApi.getById(
+        String(targetDealId),
+        [MIRROR_SEAL_PROP, MIRROR_PY_SNAPSHOT_PROP]
+      );
+      mirrorSealProps = mirrorDeal?.properties || null;
+    } catch (err) {
+      logger.warn(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
+        'No se pudo leer el seal del mirror, se asume NO sellado'
+      );
+    }
 
-  for (const li of uyLineItems) {
+    if (mirrorSealProps && parseBoolFromHubspot(mirrorSealProps[MIRROR_SEAL_PROP])) {
+      sealedMirror = true;
+
+      // Qué líneas PY ya tienen espejo (of_line_item_py_origen_id en LIs del mirror).
+      // Si no se puede leer, no se crea nada (evita duplicados).
+      const mirroredPyIds = new Set();
+      let mirrorLisLeidas = false;
+      try {
+        const mirrorLiIds = await getAssocIdsV4('deals', String(targetDealId), 'line_items', 500);
+        if (mirrorLiIds.length) {
+          const br = await hubspotClient.crm.lineItems.batchApi.read({
+            inputs: mirrorLiIds.map((id) => ({ id: String(id) })),
+            properties: ['of_line_item_py_origen_id'],
+          });
+          for (const li of br.results || []) {
+            const origen = String(li.properties?.of_line_item_py_origen_id || '').trim();
+            if (origen) mirroredPyIds.add(origen);
+          }
+        }
+        mirrorLisLeidas = true;
+      } catch (err) {
+        logger.warn(
+          { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
+          'Mirror sellado: no se pudieron leer sus LIs — no se crearán líneas nuevas en esta pasada'
+        );
+      }
+
+      const existentes = uyLineItems.filter((li) => mirroredPyIds.has(String(li.id)));
+      sealedNuevasLIs = mirrorLisLeidas
+        ? uyLineItems.filter((li) => !mirroredPyIds.has(String(li.id)))
+        : [];
+
+      // Aviso por cambios sobre lo histórico: costo/cantidad de líneas ya espejadas,
+      // o líneas que estaban en el snapshot y desaparecieron (borradas o uy=false).
+      const snapshotGuardado = mirrorSealProps[MIRROR_PY_SNAPSHOT_PROP] || '';
+      const prev = parsePyLiSnapshot(snapshotGuardado);
+      const cambiadas = existentes.filter(
+        (li) => prev.has(String(li.id)) && prev.get(String(li.id)) !== pyLiSnapshotValue(li)
+      );
+      const idsActuales = new Set(uyLineItems.map((li) => String(li.id)));
+      const eliminadas = [...prev.keys()].filter((id) => !idsActuales.has(id));
+
+      if (snapshotGuardado && (cambiadas.length || eliminadas.length)) {
+        reportHubSpotError({
+          level: 'warn',
+          objectType: 'deal',
+          objectId: targetDealId,
+          message: `Mirror migrado independiente: el deal PY origen (${sourceDealId}) modificó sus líneas UY (${cambiadas.length} con cambio de costo/cantidad, ${eliminadas.length} quitada(s)/desmarcada(s)). Las líneas históricas del mirror NO se actualizaron — revisar manualmente.`,
+        });
+      }
+
+      // Snapshot nuevo = estado PY completo (incluye las nuevas que se crean abajo).
+      // Sin snapshot previo (primera pasada) se fija la línea base en silencio.
+      const snapshotActual = buildPyLiSnapshot(uyLineItems);
+      if (snapshotActual !== snapshotGuardado) {
+        try {
+          await hubspotClient.crm.deals.basicApi.update(String(targetDealId), {
+            properties: { [MIRROR_PY_SNAPSHOT_PROP]: snapshotActual },
+          });
+        } catch (err) {
+          logger.warn(
+            { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
+            'No se pudo guardar el snapshot PY en el mirror sellado'
+          );
+        }
+      }
+
+      logger.info(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId, cambiadas: cambiadas.length, eliminadas: eliminadas.length, nuevas: sealedNuevasLIs.length },
+        'Mirror sellado: LIs históricas intactas'
+      );
+
+      if (!sealedNuevasLIs.length) {
+        return {
+          mirrored: true,
+          sourceDealId: String(sourceDealId),
+          targetDealId: String(targetDealId),
+          uyLineItemsCount: uyLineItems.length,
+          createdLineItems: 0,
+          sealedMirrorLineItemsSkipped: true,
+        };
+      }
+      // Hay líneas PY nuevas: se dejan pasar al paso 4 (solo ellas) para crearlas
+      // con el comportamiento normal; prune/archive/asociaciones siguen omitidos.
+    }
+  }
+
+  // 4) Upsert en el espejo las líneas UY del negocio PY
+  // (mirror sellado: solo las líneas PY nuevas, las históricas no se tocan)
+  const userAdminMirror = process.env.USER_ADMIN_MIRROR || '89701984';
+  const lisParaSync = sealedMirror ? sealedNuevasLIs : uyLineItems;
+
+  for (const li of lisParaSync) {
      try {
     const srcPropsLi = li.properties || {};
 
@@ -782,6 +941,18 @@ const allowedProps = new Set([
     'Upsert de líneas completado'
   );
 
+  // Mirror sellado: ya se crearon las líneas nuevas; prune/archive/asociaciones no corren.
+  if (sealedMirror) {
+    return {
+      mirrored: true,
+      sourceDealId: String(sourceDealId),
+      targetDealId: String(targetDealId),
+      uyLineItemsCount: uyLineItems.length,
+      createdLineItems,
+      sealedMirrorLineItemsSkipped: true,
+      sealedNewLineItems: sealedNuevasLIs.length,
+    };
+  }
 
   // 4b) PRUNE: Eliminar del espejo los line items UY que ya no existen en el PY
   try {
@@ -820,10 +991,27 @@ const allowedProps = new Set([
   const ASSOC_LABEL_PRIMARY          = 5; // HUBSPOT_DEFINED
   
 
-  // 5) Determinar empresa beneficiaria (primera empresa asociada al deal PY)
-  const companyIds = await getAssocIdsV4('deals', String(sourceDealId), 'companies');
-  const beneficiaryCompanyId =
-    companyIds && companyIds.length > 0 ? String(companyIds[0]) : null;
+  // 5) Determinar empresa beneficiaria: la asociada con label "Primary" (typeId 5).
+  // El orden de las asociaciones NO está garantizado: si el deal PY tiene además
+  // empresas con etiquetas (Partner / Empresa Factura), la primera puede ser cualquiera.
+  // Fallback: primera asociada (comportamiento previo).
+  let beneficiaryCompanyId = null;
+  try {
+    const companyAssocs = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'deals', String(sourceDealId), 'companies', 100
+    );
+    const assocResults = companyAssocs?.results || [];
+    const primaryAssoc = assocResults.find((r) =>
+      r.associationTypes?.some((t) => t.category === 'HUBSPOT_DEFINED' && t.typeId === ASSOC_LABEL_PRIMARY)
+    );
+    const pick = primaryAssoc || assocResults[0];
+    beneficiaryCompanyId = pick?.toObjectId ? String(pick.toObjectId) : null;
+  } catch (err) {
+    logger.warn(
+      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, err },
+      'No se pudieron leer las empresas del deal PY — mirror sin beneficiaria'
+    );
+  }
 
   // 6) Asociar empresa beneficiaria como PRIMARY del mirror UY
   if (beneficiaryCompanyId) {
@@ -917,11 +1105,16 @@ const allowedProps = new Set([
         String(targetDealId),
         'companies',
         String(interfaseCompanyId),
-        [{ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_LABEL_EMPRESA_FACTURA }]
+        [
+          { associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_LABEL_EMPRESA_FACTURA },
+          ...(ASSOC_LABEL_EMPRESA_PARTNER
+            ? [{ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_LABEL_EMPRESA_PARTNER }]
+            : []),
+        ]
       );
       logger.info(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId },
-        'Interfase PY asociada como Empresa Factura del mirror UY'
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, interfaseCompanyId, conPartner: Boolean(ASSOC_LABEL_EMPRESA_PARTNER) },
+        'Interfase PY asociada como Empresa Factura (y Partner si está configurada) del mirror UY'
       );
     } catch (err) {
       logger.warn(
