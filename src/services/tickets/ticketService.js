@@ -480,7 +480,13 @@ export async function buildTicketFullProps({
     );
     const results = resp?.results || [];
 
-    empresaId = results[0]?.toObjectId ? String(results[0].toObjectId) : '';
+    // Empresa primaria = asociación con label HubSpot "Primary" (HUBSPOT_DEFINED typeId 5).
+    // El orden de results NO está garantizado: con etiquetas Partner/Empresa Factura el deal
+    // tiene varias empresas y results[0] puede ser cualquiera. Fallback: primera asociada.
+    const primary = results.find((r) =>
+      r.associationTypes?.some((t) => t.category === 'HUBSPOT_DEFINED' && t.typeId === 5)
+    );
+    empresaId = (primary || results[0])?.toObjectId ? String((primary || results[0]).toObjectId) : '';
     const idPorLabel = (typeId) => {
       if (!(typeId > 0)) return '';
       const hit = results.find((r) => r.associationTypes?.some((t) => t.typeId === typeId));
