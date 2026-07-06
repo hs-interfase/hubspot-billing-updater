@@ -11,7 +11,7 @@
 | 0 | Verificación | Editar ticket emitido (confirmar que ya funciona) | ½ día | — |
 | 1 | Código | Eliminar "facturar ahora" del line item | 2 días | — |
 | 2 | Código | Editar ticket desde LI con ticket en estado editable | 2-3 días | Stack de propiedades (correo 6-jul) |
-| 3 | Investigación → decisión | Tickets visibles desde el negocio recién al cierre ganado | 1 día investigación; 5-8 días si hay que diferir la asociación | Resultado de la investigación UI + decisión todos-vs-manuales |
+| 3 | Código | Tickets asociados al negocio al cierre ganado | 2-3 días (diagnóstico corregido 5-jul: cambio ADITIVO) | Decisión todos-vs-manuales (no bloquea el arranque) |
 | 4 | Evaluación (CAUTELA) | Cambio de moneda del ticket | sin compromiso | Decisión de negocio; NO prometer a Paola |
 
 Camino crítico: Fase 3. Fases 0 y 1 arrancan ya; la 2 apenas esté el stack.
@@ -70,20 +70,24 @@ Camino crítico: Fase 3. Fases 0 y 1 arrancan ya; la 2 apenas esté el stack.
 
 ---
 
-## Fase 3 — Tickets visibles desde el negocio recién al cierre ganado
+## Fase 3 — Tickets asociados al negocio al cierre ganado (2-3 días)
 
-**Aclaración usuaria 5-jul:** los tickets forecast siguen naciendo en cualquier etapa; lo que se quiere es que **no se vean/asocien en el negocio hasta closedwon**. Pendiente decidir: al cierre, ¿se asocian TODOS o solo los manuales?
+**⚠ DIAGNÓSTICO CORREGIDO 5-jul (inventario exhaustivo de asociaciones, verificado en código):** la versión anterior de esta fase estaba mal dimensionada. La realidad:
+- Los tickets forecast **YA nacen SIN asociación** al deal (`safeCreateTicket` sin associations, `phasep.js:1001`) → hoy NO se ven desde el negocio antes del cierre. La mitad "no verlos pre-cierre" **ya está garantizada**.
+- La asociación se crea recién al **promover/emitir** (`createTicketAssociations` en phase2:170, phase3:176/332, urgente:562, manual:229, recalc:193) — todos flujos gateados por `facturacion_activa` (= closedwon).
+- El descubrimiento del motor NO depende de la asociación: Phase P, CSV forecast, contadores, catch-up, phase2/3, invoice, avisos — todo va por **Search** (`of_deal_id` / `of_line_item_key` / `of_ticket_key`). Solo hay 3 lectores-por-asociación productivos (`getTicketsForDeal` para ensure24/dedup clones, `auditLineItemTickets` de cronWeekendFull, `ticketCleanupService`).
 
-**⚠ Riesgo estructural (por qué NO se apura):** el motor descubre los tickets de un deal por la asociación CRM (`getTicketsForDeal`, `src/services/tickets/ticketService.js:587`), igual que el export CSV (`fetchTicketsForDeal`, `cronExportReporte.js:291`). Ticket sin asociación = invisible para Phase P (dedup → duplicados), contadores, CSV y Paso C/D — exactamente la falla vivida en la corrida sandbox del 4-jul (49% huérfanos por 429).
+**La tarea REAL es aditiva:** al detectar closedwon/`facturacion_activa`, asociar de una vez TODOS los tickets del deal (o solo los del pipeline manual — decisión pendiente), en vez de que aparezcan de a uno a medida que se promueven. Patrón ya probado en el repo: `scripts/fix/fixTicketAssociations.mjs` (Search por `of_deal_id` → asociar faltantes, idempotente).
 
-**Paso 3a — Investigación UI (1 día, PRIMERO):**
-- [ ] Probar en el portal de pruebas (51101688) si la tarjeta/tabla de tickets del registro de negocio se puede FILTRAR por pipeline o etapa (personalización de registro / association card). Los forecast ya viven en stages propios → si la tarjeta filtra, el problema de visibilidad se resuelve por configuración.
-- [ ] Si funciona: replicar en prod, documentar, FIN (~1 día total, riesgo cero, sin tocar el motor).
+**Pasos:**
+- [ ] **Prerrequisito (ya era bug crítico §2 del checklist):** endurecer `associateTicketToDealWithRetry` (`ticketService.js:1076`) — backoff 429-aware + que `createTicketAssociations` no trague el fallo (causa del 49% huérfanos del 4-jul). Mismo paquete.
+- [ ] Hook al closedwon (phase1/orquestador): Search tickets por `of_deal_id` → crear asociaciones faltantes (deal + companies/contacts como en promoción), idempotente, con flag `ASSOC_ALL_ON_CLOSEDWON` (o filtro por pipeline manual según decisión).
+- [ ] Decisión usuaria/Paola: **todos vs solo manuales** (es un filtro por pipeline; no cambia la estimación).
+- [ ] **Interacción migración (único cuidado real):** Paso C asume "asociado = promovido" para editar solo promovidos (`migracion_pasoC:13,251`). Si el motor asocia forecast de deals ganados antes de C → C debe filtrar por stage además de asociación. Ajuste chico en C (ambas copias) o secuenciar.
+- [ ] `auditLineItemTickets` (`cronWeekendFull.js:210`) cuenta por asociación: revisar que los conteos queden coherentes (hoy está sesgado a promovidos; con esto probablemente mejora).
+- [ ] Tests + validación sandbox e2e: deal no ganado → 0 tickets visibles; pasar a closedwon → cronograma completo asociado; regresión promoción/emisión.
 
-**Paso 3b — Solo si la UI no alcanza (5-8 días, idealmente POST go-live):**
-- [ ] Diseño: descubrimiento alternativo (candidata: Search por prop `of_deal_id`, ya existe en el ticket; contemplar el indexing lag conocido de la Search API) o asociación con etiqueta diferenciada.
-- [ ] Decisión todos-vs-solo-manuales al cierre.
-- [ ] Regresión completa en sandbox: Phase P dedup, catch-up, recalc contadores, CSV forecast (los pre-cierre DEBEN seguir saliendo en FORECAST/BACKLOG), VALOR (§5). Migración no afectada (históricos entran ganados).
+**Estimación REAL: 2-3 días** (incluye el fix del retry, el ajuste de Paso C y la validación). La investigación de UI (filtrar tarjeta) ya NO hace falta: el comportamiento pre-cierre deseado ya existe.
 
 ---
 
@@ -101,7 +105,7 @@ Camino crítico: Fase 3. Fases 0 y 1 arrancan ya; la 2 apenas esté el stack.
 |-------|----------|
 | 2026-07-05 | Tareas 1-4 acordadas como esenciales; moneda con cautela (no comprometer). |
 | 2026-07-05 | Estimaciones ajustadas: T1=2d · T2≈0 (solo permitir editar) · T3=2-3d · T4=investigar UI primero. |
-| 2026-07-05 | T4 no se apura: la asociación deal→ticket es el mecanismo de descubrimiento del motor (falla ya vivida 4-jul). |
+| 2026-07-05 | ~~T4 no se apura: la asociación es el mecanismo de descubrimiento~~ **CORREGIDO mismo día tras inventario**: el descubrimiento es por Search; los forecast ya nacen sin asociar; T4 = agregar asociación masiva al closedwon (aditivo, 2-3 días). |
 | (pendiente) | Stack de propiedades T3 (correo usuaria 6-jul). |
 | (pendiente) | Campos editables post-emisión (Paola) — define si T2 crece. |
 | (pendiente) | T4: todos vs solo manuales al cierre. |
