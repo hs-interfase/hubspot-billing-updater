@@ -1,8 +1,20 @@
 # PLAN DE ACCIÓN — Nuevas features de tickets
 
-> Rama: `feat/features-tickets` (nace de `pruebas` @ 2026-07-05).
+> Ramas: `feat/features-tickets` (plan) · **`feat/assoc-closedwon` (implementación Fase 3, arranca 6-jul)** — ambas desde `pruebas` @ 2026-07-05.
 > Origen: revisión 5-jul con mapa de código completo (checklist maestro §4bis en `definitivos/TAREAS_PENDIENTES.md`).
-> Documento vivo: se va marcando `[x]` y anotando decisiones a medida que armamos cada fase en esta rama.
+> Documento vivo: se va marcando `[x]` y anotando decisiones a medida que armamos cada fase.
+
+## Cronología comprometida (2026-07-05)
+- Usuaria envía correo con las tareas → **los plazos corren desde la APROBACIÓN**.
+- Ventana comprometida en cola de tareas: **15 al 30 de agosto 2026**.
+- Objetivo interno: **entregar antes del 20 de agosto**.
+- **Migración PROD: entre el 20 y el 25 de agosto 2026** (las features deben estar entregadas antes).
+- El desarrollo arranca YA en ramas sin mergear (la aprobación gatea el deploy, no el desarrollo).
+
+## Arranque 6-jul (rama `feat/assoc-closedwon`)
+1. Fix retry 429 de `associateTicketToDealWithRetry` + propagación del fallo en `createTicketAssociations` (prerrequisito; además es el bug crítico §2 del checklist y sirve para PROD por sí solo).
+2. Hook al closedwon: Search por `of_deal_id` → asociar faltantes, idempotente, flag.
+3. Tests + seed sandbox (validación nocturna).
 
 ## Resumen y orden propuesto
 
