@@ -21,7 +21,8 @@ import {
   BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,  
   FORECAST_MANUAL_STAGES,
-  DEAL_STAGE_FINALIZADO 
+  DEAL_STAGE_FINALIZADO,
+  PROXIMOS_A_FACTURAR_STAGE
 } from '../config/constants.js';
 
 /**
@@ -29,17 +30,17 @@ import {
  * - Requiere deal.facturacion_activa=true
  * - Solo aplica a line items manuales (facturacion_automatica != true)
  * - Si la próxima fecha (planYMD) está en la ventana de lookahead (ej. 30 días),
- *   NO crea tickets: PROMUEVE el ticket forecast existente a READY (entrada al flujo real manual).
+ *   NO crea tickets: PROMUEVE el ticket forecast existente a PRÓXIMOS A FACTURAR
+ *   (TICKET_STAGES.NEW, ventana editable por admin — NO es "Listo para Facturar").
  *
  * Idempotencia:
  * - El ticket se identifica por of_ticket_key = dealId::LIK::YYYY-MM-DD
  * - Si ya fue promovido (ya no está en forecast stage), no se toca.
  */
 
-// Stage destino de Phase 2: "Próximos a Facturar".
+// Stage destino de Phase 2: "Próximos a Facturar" (alias exportado por constants.js).
 // Phase 2 promueve aquí el ticket forecast manual cuando faltan ≤MANUAL_TICKET_LOOKAHEAD_DAYS días.
 // El admin puede editar el ticket en este stage antes de confirmarlo como "Listo para Facturar".
-const PROXIMOS_A_FACTURAR_STAGE = TICKET_STAGES.NEW;
 
 function buildTicketKey(dealId, lineItemKey, ymd) {
   return `${String(dealId)}::${String(lineItemKey)}::${String(ymd)}`;
@@ -95,9 +96,11 @@ async function moveTicketToStage(ticketId, stageId) {
 }
 
 /**
- * Promueve un ticket forecast manual a READY (entrada al flujo real).
+ * Promueve un ticket forecast manual a PRÓXIMOS A FACTURAR (TICKET_STAGES.NEW),
+ * la ventana editable por admin. NO es "Listo para Facturar" (TICKET_STAGES.READY):
+ * la emisión sigue requiriendo confirmación del admin.
  */
-async function promoteManualForecastTicketToReady({
+async function promoteManualForecastTicketToProximos({
   dealId,
   dealStage,
   lineItemKey,
@@ -113,7 +116,7 @@ async function promoteManualForecastTicketToReady({
 
   if (ticketKeyUsed !== ticketKeyNew) {
     logger.info(
-      { module: 'phase2', fn: 'promoteManualForecastTicketToReady', ticketKeyNew, ticketKeyUsed },
+      { module: 'phase2', fn: 'promoteManualForecastTicketToProximos', ticketKeyNew, ticketKeyUsed },
       'Lookup: usado fallback key'
     );
   }
@@ -125,7 +128,7 @@ async function promoteManualForecastTicketToReady({
   const currentStage = String(t?.properties?.hs_pipeline_stage || '');
 
   if (currentStage === PROXIMOS_A_FACTURAR_STAGE) {
-    return { moved: false, reason: 'already_ready_entry', ticketId: t.id };
+    return { moved: false, reason: 'already_proximos', ticketId: t.id };
   }
 
   if (!FORECAST_MANUAL_STAGES.has(currentStage)) {
@@ -149,7 +152,7 @@ async function promoteManualForecastTicketToReady({
       moved = true;
       reason = `moved_from_unexpected_forecast_stage:${currentStage}_expected:${expectedForecastStage}`;
     } catch (err) {
-      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket a READY_ENTRY desde stage inesperado', err });
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket a PRÓXIMOS A FACTURAR (TICKET_STAGES.NEW) desde stage inesperado', err });
       throw err;
     }
   } else {
@@ -158,7 +161,7 @@ async function promoteManualForecastTicketToReady({
       moved = true;
       reason = 'moved';
     } catch (err) {
-      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket forecast a READY_ENTRY', err });
+      reportIfActionable({ objectType: 'ticket', objectId: String(t.id), message: 'Error al mover ticket forecast a PRÓXIMOS A FACTURAR (TICKET_STAGES.NEW)', err });
       throw err;
     }
   }
@@ -193,7 +196,7 @@ if (moved) {
       });
     } catch (err) {
       logger.warn(
-        { module: 'phase2', fn: 'promoteManualForecastTicketToReady', dealId, lineItemId, err },
+        { module: 'phase2', fn: 'promoteManualForecastTicketToProximos', dealId, lineItemId, err },
         'recalcFromTickets falló (no bloquea promoción)'
       );
     }
@@ -315,7 +318,7 @@ export async function runPhase2({ deal, lineItems }) {
           const daysUntil = diffDays(today, ftDate);
           if (daysUntil === null || daysUntil > MANUAL_TICKET_LOOKAHEAD_DAYS) continue;
 
-          const promoted = await promoteManualForecastTicketToReady({
+          const promoted = await promoteManualForecastTicketToProximos({
             dealId,
             dealStage,
             lineItemKey: mirrorLineItemKey,
@@ -328,7 +331,7 @@ export async function runPhase2({ deal, lineItems }) {
             ticketsCreated++;
             logger.info(
               { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, ticketId: promoted.ticketId, ftDate, reason: 'mirror_manual_scan' },
-              'Ticket mirror manual promovido a READY (scan por LIK)'
+              'Ticket mirror manual promovido a PRÓXIMOS A FACTURAR (scan por LIK)'
             );
           }
         }
@@ -384,7 +387,7 @@ export async function runPhase2({ deal, lineItems }) {
         continue;
       }
 
-      const promoted = await promoteManualForecastTicketToReady({
+      const promoted = await promoteManualForecastTicketToProximos({
         dealId,
         dealStage,
         lineItemKey,
@@ -396,7 +399,7 @@ export async function runPhase2({ deal, lineItems }) {
         ticketsCreated++;
         logger.info(
           { module: 'phase2', fn: 'runPhase2', dealId, lineItemId, ticketId: promoted.ticketId, reason: promoted.reason },
-          'Ticket promovido a READY'
+          'Ticket promovido a PRÓXIMOS A FACTURAR'
         );
       } else {
         logger.debug(

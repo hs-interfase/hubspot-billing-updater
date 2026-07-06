@@ -1,6 +1,10 @@
 // src/hubspotClient.js
+// IMPORTANTE: el patch debe evaluarse ANTES de cargar el SDK (reemplaza el
+// transporte node-fetch@2 por axios; ver src/utils/nodeFetchAxiosPatch.js).
+import "./utils/nodeFetchAxiosPatch.js";
 import Hubspot from "@hubspot/api-client";
 import axios from 'axios';
+import https from 'node:https';
 import "dotenv/config";
 import logger from '../lib/logger.js';
 import { withRetry, isRetryable, calcDelay } from './utils/withRetry.js';
@@ -14,9 +18,36 @@ import { acquireRateToken } from './db.js';
 // sin necesidad de tocar cada call site.
 // ─────────────────────────────────────────────────────────────
 
-const rawHubspotClient = new Hubspot.Client({
+// ─────────────────────────────────────────────────────────────
+// Interruptores de red (env vars) para mitigar el "Premature close"
+// de Railway. AMBOS apagados por defecto → comportamiento IDÉNTICO a hoy.
+//   HS_DISABLE_GZIP=true → pide la respuesta SIN comprimir (Accept-Encoding:
+//     identity). Evita que un hipo de red rompa el stream gzip a mitad, que
+//     es como node-fetch@2 tira ERR_STREAM_PREMATURE_CLOSE.
+//   HS_NO_KEEPALIVE=true → socket nuevo por request (no reusa conexiones).
+// Para revertir: borrar/poner en false la env var y reiniciar. Sin deploy.
+// ─────────────────────────────────────────────────────────────
+const HS_DISABLE_GZIP = String(process.env.HS_DISABLE_GZIP || '').toLowerCase() === 'true';
+const HS_NO_KEEPALIVE = String(process.env.HS_NO_KEEPALIVE || '').toLowerCase() === 'true';
+
+const hubspotClientOpts = {
   accessToken: process.env.HUBSPOT_PRIVATE_TOKEN,
-});
+};
+if (HS_DISABLE_GZIP) {
+  hubspotClientOpts.defaultHeaders = { 'Accept-Encoding': 'identity' };
+}
+if (HS_NO_KEEPALIVE) {
+  hubspotClientOpts.httpAgent = new https.Agent({ keepAlive: false });
+}
+
+const rawHubspotClient = new Hubspot.Client(hubspotClientOpts);
+
+if (HS_DISABLE_GZIP || HS_NO_KEEPALIVE) {
+  logger.info(
+    { HS_DISABLE_GZIP, HS_NO_KEEPALIVE },
+    '[hubspotClient] interruptores de red activos (mitigación Premature close)'
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // Rate limiter global — balde de fichas compartido (Postgres)
@@ -79,6 +110,37 @@ async function acquireToken() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Ruta axios para endpoints que node-fetch@2 (el HTTP del SDK) rompe
+// sistemáticamente en Railway con ERR_STREAM_PREMATURE_CLOSE.
+// Misma firma y misma respuesta JSON que el SDK; solo cambia el transporte.
+// El proxy las envuelve con el mismo acquireToken() + withRetry() que el resto.
+// ─────────────────────────────────────────────────────────────
+const axiosDirect = axios.create({
+  baseURL: 'https://api.hubapi.com',
+  timeout: Number(process.env.HS_HTTP_TIMEOUT_MS || 30_000),
+});
+
+// Firma idéntica a crm.associations.v4.basicApi.getPage del SDK.
+async function assocGetPageViaAxios(objectType, objectId, toObjectType, after, limit) {
+  const params = {};
+  if (after !== undefined && after !== null) params.after = after;
+  if (limit !== undefined && limit !== null) params.limit = limit;
+
+  const { data } = await axiosDirect.get(
+    `/crm/v4/objects/${encodeURIComponent(String(objectType))}/${encodeURIComponent(String(objectId))}/associations/${encodeURIComponent(String(toObjectType))}`,
+    {
+      params,
+      headers: { Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_TOKEN}` },
+    }
+  );
+  return data; // { results: [{ toObjectId, associationTypes }], paging? }
+}
+
+const AXIOS_SDK_ROUTES = {
+  'crm.associations.v4.basicApi.getPage': assocGetPageViaAxios,
+};
+
 function makeRetryProxy(target, path = '') {
   return new Proxy(target, {
     get(obj, prop) {
@@ -89,6 +151,13 @@ function makeRetryProxy(target, path = '') {
 
       if (typeof val === 'function') {
         const fullPath = path ? `${path}.${prop}` : String(prop);
+        const axiosRoute = AXIOS_SDK_ROUTES[fullPath];
+        if (axiosRoute) {
+          return (...args) => acquireToken().then(() => withRetry(
+            () => axiosRoute(...args),
+            { sdkPath: fullPath, transport: 'axios' }
+          ));
+        }
         // Devolvemos una función síncrona que retorna la Promise de withRetry.
         // Mantiene el this original con .apply(obj, args).
         return (...args) => acquireToken().then(() => withRetry(
@@ -231,6 +300,10 @@ export async function getDealWithLineItems(dealId) {
     "id_crm_origen",
     "id_cliente_nodum",
 
+    // --- costo/margen USD (COSTO_USD_ENABLED) ---
+    "dolar",
+    "dolar_cierre_asignado",
+
   ];
 
   const deal = await hubspotClient.crm.deals.basicApi.getById(
@@ -252,6 +325,8 @@ export async function getDealWithLineItems(dealId) {
     "description",
     "price",
     "hs_cost_of_goods_sold",
+    "costo_total_usd",
+    "dolar",
     "quantity",
     "amount",
     "discount",
@@ -335,6 +410,7 @@ export async function getDealWithLineItems(dealId) {
     "pais_operativo",
     "responsable_asignado",
     "unidad_de_negocio",
+    "empresa_que_factura", // select: entidad del grupo que emite (Interfase UY / ISA UY / ISA PY / Interfase PY) → espejo al ticket
     "uy",
   ];
 

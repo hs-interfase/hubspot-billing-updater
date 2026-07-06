@@ -496,8 +496,8 @@ if (!lik) throw new Error('Urgent billing: line_item_key sigue vacío (guardrail
           const fechaPendiente = (primerPendiente?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
           const ticketPendienteId = primerPendiente.id;
           const msg =
-            `⚠️ Hay un período pendiente de facturación (período ${fechaPendiente}, ticket ${ticketPendienteId}). ` +
-            `Facturar desde el ticket o resolver antes de avanzar.`;
+            `Ya tenés un pago esperando a ser facturado en el ticket ${ticketPendienteId} ` +
+            `(período ${fechaPendiente}). Facturá desde ese ticket en lugar de "facturar ahora".`;
           logger.info(
             { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', lineItemId, lik, ticketPendienteId, fechaPendiente },
             msg

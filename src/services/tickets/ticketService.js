@@ -12,6 +12,8 @@ import {
   AUTOMATED_TICKET_INITIAL_STAGE,
   isDryRun,
   isForecastTicketStage,
+  ASSOC_LABEL_EMPRESA_FACTURA,
+  ASSOC_LABEL_EMPRESA_PARTNER,
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
@@ -462,21 +464,59 @@ export async function buildTicketFullProps({
 
   let empresaId = '';
   let empresaNombre = '';
+  let empresaQueFactura = ''; // empresa asociada al deal con la etiqueta "Empresa Factura"
+  let clientePartner = '';    // empresa asociada al deal con la etiqueta "Partner"
 
   try {
-    const companyIds = await getDealCompanies(String(dealId));
-    empresaId = companyIds?.[0] ? String(companyIds[0]) : '';
+    // Una sola lectura de asociaciones deal→companies (con labels) para derivar:
+    //  - empresa primaria (primera asociada) → empresa_id / nombre_empresa (comportamiento existente)
+    //  - empresa con etiqueta "Empresa Factura" → empresa_que_factura
+    //  - empresa con etiqueta "Partner" → cliente_partner (ASSOC_LABEL_EMPRESA_PARTNER=0 → deshabilitado)
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'deals',
+      String(dealId),
+      'companies',
+      100
+    );
+    const results = resp?.results || [];
 
-    if (empresaId) {
-      const c = await hubspotClient.crm.companies.basicApi.getById(
-        empresaId,
-        ['name']
-      );
-      empresaNombre = c?.properties?.name || '';
-    }
+    // Empresa primaria = asociación con label HubSpot "Primary" (HUBSPOT_DEFINED typeId 5).
+    // El orden de results NO está garantizado: con etiquetas Partner/Empresa Factura el deal
+    // tiene varias empresas y results[0] puede ser cualquiera. Fallback: primera asociada.
+    const primary = results.find((r) =>
+      r.associationTypes?.some((t) => t.category === 'HUBSPOT_DEFINED' && t.typeId === 5)
+    );
+    empresaId = (primary || results[0])?.toObjectId ? String((primary || results[0]).toObjectId) : '';
+    const idPorLabel = (typeId) => {
+      if (!(typeId > 0)) return '';
+      const hit = results.find((r) => r.associationTypes?.some((t) => t.typeId === typeId));
+      return hit?.toObjectId ? String(hit.toObjectId) : '';
+    };
+    const facturaIdStr = idPorLabel(ASSOC_LABEL_EMPRESA_FACTURA);
+    const partnerIdStr = idPorLabel(ASSOC_LABEL_EMPRESA_PARTNER);
+
+    // Traer nombres necesarios (deduplicados)
+    const ids = [...new Set([empresaId, facturaIdStr, partnerIdStr].filter(Boolean))];
+    const names = {};
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const c = await hubspotClient.crm.companies.basicApi.getById(id, ['name']);
+          names[id] = c?.properties?.name || '';
+        } catch (_) {
+          names[id] = '';
+        }
+      })
+    );
+
+    empresaNombre = empresaId ? names[empresaId] || '' : '';
+    empresaQueFactura = facturaIdStr ? names[facturaIdStr] || '' : '';
+    clientePartner = partnerIdStr ? names[partnerIdStr] || '' : '';
   } catch (_) {
     empresaId = '';
     empresaNombre = '';
+    empresaQueFactura = '';
+    clientePartner = '';
   }
 
   const productoNombre = safeString(lp.name);
@@ -503,6 +543,8 @@ export async function buildTicketFullProps({
     of_ticket_key: String(ticketKey || ''),
     empresa_id: empresaId,
     nombre_empresa: empresaNombre,
+    empresa_que_factura: empresaQueFactura,
+    cliente_partner: clientePartner,
     of_pais_operativo: paisOperativo,
     unidad_de_negocio: unidadDeNegocio,
     of_rubro: servicio,
@@ -959,7 +1001,13 @@ export async function findTicketByKey(ticketKey) {
 }
 
 /**
- * Determina el stage correcto del ticket según la fecha de facturación y flag "facturar ahora".
+ * @deprecated MUERTO (verificado 2026-07-01): sin call sites en todo el repo.
+ * manualTicketService fuerza stage=TICKET_STAGES.NEW incondicional y el ruteo
+ * por facturar_ahora lo hace urgentBillingService. NO reactivar: su lógica
+ * NEW/READY es pre-alias y mezcla "Próximos" con "Listo" según fecha.
+ * Cuerpo conservado por política del proyecto (lección invoices.js).
+ *
+ * (Doc original: determina el stage del ticket según fecha y flag "facturar ahora".)
  */
 export function getTicketStage(billingDate, lineItem) {
   const lp = lineItem?.properties || {};

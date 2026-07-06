@@ -18,6 +18,7 @@
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { fetchProductName } from '../../utils/productNames.js';
+
 import logger from '../../../lib/logger.js';
 
 const DEAL_OBJECT = 'deals';

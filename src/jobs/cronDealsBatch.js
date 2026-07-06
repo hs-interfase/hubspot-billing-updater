@@ -31,7 +31,10 @@ const PAGE_LIMIT = Number(process.env.CRON_PAGE_LIMIT || 100);
 const DEAL_PAUSE_MS = Number(process.env.CRON_DEAL_PAUSE_MS || 150);
 
 // Your deal properties (adjust if your portal uses different names)
-const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "billing_next_date";
+// OJO: la fecha de próxima facturación a NIVEL DEAL es `facturacion_proxima_fecha`.
+// `billing_next_date` es propiedad de LINE ITEM y NO existe en el deal → filtrar deals
+// por ella daba HTTP 400 (swallowed) y S1/S2 no traían nada. (default corregido)
+const PROP_BILLING_NEXT_DATE = process.env.PROP_BILLING_NEXT_DATE || "facturacion_proxima_fecha";
 const PROP_AUTO = process.env.PROP_AUTO || "facturacion_automatica"; // or "auto" if that's your real prop
 
 // Mirror props (ajustado a tu portal real)
@@ -214,21 +217,24 @@ function baseFiltersNoMirrors() {
 }
 
 function weekdayFilters_set1_todayAutoTrue(todayYMD) {
-  // billing_next_date == today AND auto == true
+  // Deals cuya próxima fecha de facturación (facturacion_proxima_fecha) es HOY.
+  // Las propiedades `date` de HubSpot se filtran por epoch-ms (rango del día),
+  // NO por string "YYYY-MM-DD" (ese formato devuelve HTTP 400).
+  const dayStart = ymdToMsUTC(todayYMD);
+  const dayEnd   = String(Number(dayStart) + 86_399_999); // 23:59:59.999 del mismo día
   return [
   ...baseFiltersCancelled(),
   ...baseFiltersNoMirrors(),
-  { propertyName: PROP_BILLING_NEXT_DATE, operator: "EQ", value: String(todayYMD) },
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "BETWEEN", value: dayStart, highValue: dayEnd },
 ];
 }
 
 function weekdayFilters_set2_30daysAutoNotTrue(todayPlus30YMD) {
-  // billing_next_date >= today+30 AND auto != true (covers false/null/empty if stored as non-true)
-  // Note: HubSpot doesn't have "NOT_EQ true" for boolean in all cases, but NEQ should work for strings.
+  // Deals con próxima facturación a 30+ días. Idem: epoch-ms, no string YMD.
 return [
   ...baseFiltersCancelled(),
   ...baseFiltersNoMirrors(),
-  { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: String(todayPlus30YMD) },
+  { propertyName: PROP_BILLING_NEXT_DATE, operator: "GTE", value: ymdToMsUTC(todayPlus30YMD) },
 ];
 }
 
@@ -272,13 +278,19 @@ if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
   return { skipped: true };
 }
 
-  // ── Ventana horaria: solo ejecutar entre 03:40 y 07:00 UTC (00:40–04:00 UY) ──
-  if (!onlyDealId && !modeOverride) {
+  // ── Ventana horaria: solo ejecutar entre 03:00 y 07:00 UTC (00:00–04:00 UY) ──
+  // 03:00 (antes 03:40) para cubrir el schedule de testing 03:11 UTC sin FORCE_RUN.
+  // Bypass manual: CRON_FORCE_RUN=true saltea el guard (uso puntual, revertir el env al terminar)
+  const FORCE_RUN = process.env.CRON_FORCE_RUN === 'true';
+  if (FORCE_RUN) {
+    logger.warn({ jobRunId, mode }, "[cronDealsBatch] CRON_FORCE_RUN activo -> guard de ventana omitido");
+  }
+  if (!onlyDealId && !modeOverride && !FORCE_RUN) {
     const now = new Date();
     const utcH = now.getUTCHours();
     const utcM = now.getUTCMinutes();
     const utcMinutes = utcH * 60 + utcM; // minutos desde medianoche UTC
-    const WINDOW_START = 3 * 60 + 40;    // 03:40 UTC
+    const WINDOW_START = 3 * 60;         // 03:00 UTC
     const WINDOW_END   = 7 * 60;         // 07:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
   await releaseCronLock("cronDealsBatch", jobRunId);
@@ -412,6 +424,10 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
           await sleep(300);
           r3 = await searchDeals({ after: afterS3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
         } catch (e) {
+          logger.warn({
+            err: e?.message || String(e),
+            code: e?.code || e?.statusCode || e?.response?.status || null,
+          }, "[cronDealsBatch] searchDeals S1/S2/S3 falló → intento fallback solo S3");
           appendAudit({
             at: new Date().toISOString(),
             type: "error",
@@ -432,6 +448,10 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
               sorts: SORTS,
             });
           } catch (e2) {
+            logger.error({
+              err: e2?.message || String(e2),
+              code: e2?.code || e2?.statusCode || e2?.response?.status || null,
+            }, "[cronDealsBatch] fallback S3 TAMBIÉN falló → aborto el scan (0 procesados)");
             appendAudit({
               at: new Date().toISOString(),
               type: "error",
@@ -447,6 +467,15 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
         const a2 = r2?.results || [];
         const a3 = r3?.results || [];
         const merged = [...a1, ...a2, ...a3];
+
+        // Visibilidad: cuántos trae cada set en esta página y cuántos reporta el portal
+        // en total (totS*). Si totS1/2/3 vienen en 0/undefined, el token apunta a un
+        // portal vacío/equivocado; si vienen altos pero merged=0, el problema es otro.
+        logger.info({
+          s1: a1.length, s2: a2.length, s3: a3.length,
+          totS1: r1?.total, totS2: r2?.total, totS3: r3?.total,
+          afterS1, afterS2, afterS3,
+        }, "[cronDealsBatch] weekday_search_page");
 
         // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
        try {

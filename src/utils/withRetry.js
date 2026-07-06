@@ -10,18 +10,42 @@ export const RETRY_CONFIG = {
 };
 
 /**
- * Devuelve true si el status HTTP justifica un reintento.
+ * Códigos de error de RED transitorios (sin status HTTP): el SDK/axios/node-fetch
+ * los expone como err.code. Un socket hang up / connection reset en medio de una
+ * call de HubSpot es transitorio → conviene reintentar (antes rompía la propagación
+ * y escribía billing_error). Visto en volumen alto: ECONNRESET / socket hang up.
+ */
+const RETRYABLE_NET_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND',
+  'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET', 'ERR_SOCKET_CONNECTION_TIMEOUT',
+  // Railway → api.hubapi.com corta el body a mitad de respuesta (node-fetch/undici).
+  // "Invalid response body while trying to fetch ...: Premature close". Es transitorio
+  // (frecuente en cold-start del contenedor) → reintentar con socket nuevo lo resuelve.
+  'ERR_STREAM_PREMATURE_CLOSE', 'UND_ERR_SOCKET', 'ECONNABORTED',
+]);
+
+/**
+ * Devuelve true si el error justifica un reintento.
  * - 429  → rate limit (secondly o daily)
  * - 5xx  → error transitorio de HubSpot
+ * - errores de red transitorios (ECONNRESET, socket hang up, etc.)
  * - 4xx ≠ 429 → error del caller, no reintentar
  */
 export function isRetryable(status) {
-  return status === 429 || (status >= 500 && status < 600);
+  if (status === 429) return true;
+  if (typeof status === 'number') return status >= 500 && status < 600;
+  return typeof status === 'string' && RETRYABLE_NET_CODES.has(status);
 }
 
 /** Extrae el status HTTP de cualquier forma que lo arroje el SDK o axios */
 export function extractStatus(err) {
-  return err?.response?.status ?? err?.statusCode ?? err?.status ?? err?.code ?? null;
+  return err?.response?.status ?? err?.statusCode ?? err?.status ?? err?.code ?? err?.cause?.code ?? null;
+}
+
+/** Red transitoria detectada por MENSAJE (cuando no viene un code claro). */
+export function isTransientNetworkMessage(err) {
+  const msg = String(err?.message || err?.cause?.message || '');
+  return /premature close|socket hang up|fetch failed|econnreset|etimedout|network|aborted|timeout/i.test(msg);
 }
 
 /**
@@ -67,7 +91,7 @@ export async function withRetry(fn, context = {}) {
       return await fn();
     } catch (err) {
       const status     = extractStatus(err);
-      const retryable  = isRetryable(status);
+      const retryable  = isRetryable(status) || isTransientNetworkMessage(err);
 
       // No reintentar: error del caller (4xx ≠ 429) o ya agotamos reintentos
       if (!retryable || attempt === maxRetries) throw err;

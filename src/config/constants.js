@@ -18,8 +18,8 @@
  *   → "PRÓXIMOS A FACTURAR" (manual).
  *     Phase 2 promueve el ticket forecast aquí cuando faltan ≤30 días para facturar.
  *     Queda EDITABLE por el equipo de administración durante esa ventana.
- *     ⚠️  En phase2.js se llama localmente BILLING_TICKET_STAGE_READY_ENTRY
- *         pero apunta a TICKET_STAGES.NEW — no confundir con TICKET_STAGES.READY.
+ *     phase2.js importa el alias exportado PROXIMOS_A_FACTURAR_STAGE (abajo)
+ *     — no confundir con TICKET_STAGES.READY ("Listo para Facturar").
  *
  * TICKET_STAGES.READY  (env: BILLING_TICKET_STAGE_READY)
  *   → "LISTO PARA FACTURAR" (manual).
@@ -50,14 +50,22 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * PUNTOS DE MEZCLA CONOCIDOS
  * ─────────────────────────────────────────────────────────────────────────────
- * 1. El término "READY" en el código puede referirse a dos cosas distintas:
+ * 1. HISTÓRICO (saneado 2026-07-01): el término "READY" se usaba para dos cosas:
  *    - TICKET_STAGES.NEW: "Próximos a Facturar" — Phase 2 promueve aquí
  *    - TICKET_STAGES.READY / TICKET_STAGE_LISTO_MANUAL: "Listo para Facturar" — admin confirma
- *    Usar siempre los alias explícitos (PROXIMOS_A_FACTURAR_STAGE, TICKET_STAGE_LISTO_MANUAL)
- *    en lugar de TICKET_STAGES.NEW / TICKET_STAGES.READY directamente.
+ *    Hoy phase2.js usa el alias PROXIMOS_A_FACTURAR_STAGE y su función se llama
+ *    promoteManualForecastTicketToProximos; recalcFromTickets.js resuelve el destino
+ *    con resolveTargetPromotionStage (auto→BILLING_AUTOMATED_READY emisible /
+ *    manual→PRÓXIMOS, asimetría intencional). Regla vigente: usar siempre los alias
+ *    explícitos (PROXIMOS_A_FACTURAR_STAGE, TICKET_STAGE_LISTO_MANUAL) en lugar de
+ *    TICKET_STAGES.NEW / TICKET_STAGES.READY directamente, y no nombrar "READY"
+ *    nada que apunte a NEW.
  *
  * 2. El pipeline automático NO tiene etapa "Próximos a Facturar": Phase 3 promueve
  *    directo a BILLING_AUTOMATED_READY y emite la factura en el mismo paso.
+ *
+ * 3. getTicketStage (ticketService.js) está @deprecated y MUERTA (sin call sites,
+ *    verificado 2026-07-01). Su lógica NEW/READY es pre-alias — NO revivirla.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -67,6 +75,9 @@ export const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim(
 export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
 
 export const ASSOC_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPRESA_FACTURA || '2', 10);
+// Etiqueta "Partner" deal→company. typeId difiere por portal (PROD=2; SANDBOX=3, creada 2026-07-02).
+// Default 0 = deshabilitado. La comparten cliente_partner (ticketService) y la doble etiqueta del mirror (dealMirroring).
+export const ASSOC_LABEL_EMPRESA_PARTNER = parseInt(process.env.ASSOC_LABEL_EMPRESA_PARTNER || '0', 10);
 
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';

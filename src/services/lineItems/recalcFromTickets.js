@@ -31,6 +31,7 @@ import {
   PROMOTED_STAGES,
   DERIVED_STAGES,
   BILLING_AUTOMATED_CANCELLED,
+  PROXIMOS_A_FACTURAR_STAGE,
 } from '../../config/constants.js';
 import { parseBool } from '../../utils/parsers.js'
 import { getTodayYMD } from '../../utils/dateUtils.js';
@@ -143,41 +144,46 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
 }
 
 // ─────────────────────────────────────────────
-// I1: Promover forecasts con fecha pasada a READY
+// I1: Promover forecasts con fecha pasada
+//     (auto→READY emisible / manual→PRÓXIMOS A FACTURAR)
 // ─────────────────────────────────────────────
 
 /**
- * Resuelve el stage READY destino según el pipeline del ticket.
+ * Resuelve el stage destino de promoción según el pipeline del ticket.
+ * ASIMETRÍA INTENCIONAL — no "unificar":
+ *   - auto   → BILLING_AUTOMATED_READY (emisible: promueve y emite en el mismo paso)
+ *   - manual → PRÓXIMOS A FACTURAR (TICKET_STAGES.NEW; NO emisible,
+ *              requiere confirmación del admin para pasar a "Listo para Facturar")
  */
-function resolveReadyStage(pipelineId) {
+function resolveTargetPromotionStage(pipelineId) {
   if (String(pipelineId) === String(AUTOMATED_TICKET_PIPELINE)) {
     return BILLING_AUTOMATED_READY;
   }
-  // Manual pipeline → TICKET_STAGES.NEW (entrada al flujo manual)
-  return TICKET_STAGES.NEW;
+  // Manual pipeline → "Próximos a Facturar" (entrada al flujo manual)
+  return PROXIMOS_A_FACTURAR_STAGE;
 }
 
 /**
- * Promueve un ticket forecast con fecha pasada a READY.
+ * Promueve un ticket forecast con fecha pasada (auto→READY / manual→PRÓXIMOS).
  * Retorna true si se promovió, false si falló.
  */
 async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId, lineItemId }) {
-  const readyStage = resolveReadyStage(pipelineId);
-  if (!readyStage) {
+  const targetStage = resolveTargetPromotionStage(pipelineId);
+  if (!targetStage) {
     logger.warn({ module: MOD, fn: 'promotePastDueForecast', ticketId, pipelineId },
-      'No se pudo resolver READY stage para pipeline');
+      'No se pudo resolver stage destino para pipeline');
     return false;
   }
 
   try {
     await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-      properties: { hs_pipeline_stage: String(readyStage) },
+      properties: { hs_pipeline_stage: String(targetStage) },
     });
 
     logger.warn({
       module: MOD, fn: 'promotePastDueForecast',
-      ticketId, pipelineId, readyStage, fechaEsperada, lineItemKey, dealId,
-    }, 'FORECAST_PAST_DUE_PROMOTED: ticket forecast con fecha pasada promovido a READY');
+      ticketId, pipelineId, targetStage, fechaEsperada, lineItemKey, dealId,
+    }, 'FORECAST_PAST_DUE_PROMOTED: forecast con fecha pasada promovido (auto→READY emisible / manual→PRÓXIMOS A FACTURAR)');
 
     // Asociar al deal + line item (igual que Phase 2)
     if (dealId && lineItemId) {
@@ -334,7 +340,7 @@ export async function recalcFromTickets({
 
       if (promoted) {
         // Reclasificar en memoria para que el cálculo de abajo lo trate como PROMOTED
-        t.stage = resolveReadyStage(t.pipelineId);
+        t.stage = resolveTargetPromotionStage(t.pipelineId);
         pastDuePromoted++;
       }
     }

@@ -161,13 +161,17 @@ Propiedad: facturar_ahora
 
 URL:
 
-https://tu-dominio/api/facturar-ahora
+https://tu-dominio/api/escuchar-cambios
+
+(la ruta filtra por propertyName=facturar_ahora; no existe /api/facturar-ahora)
+
+Nota: el disparo "facturar ahora" desde line item está EN PAUSA por decisión de la empresa (2026-07). El endpoint sigue activo en el motor; solo no se usa desde la UI.
 
 🧪 Testing e Idempotencia
 
 Clave única de ticket y factura:
 
-<dealId>::<lineItemId>::<fecha>
+<dealId>::LIK:<lineItemKey>::<fechaYMD>   (of_ticket_key, ver src/utils/ticketKey.js)
 
 
 Ejecutar dos veces no crea duplicados.
@@ -405,13 +409,17 @@ Propiedad: facturar_ahora
 
 URL:
 
-https://tu-dominio/api/facturar-ahora
+https://tu-dominio/api/escuchar-cambios
+
+(la ruta filtra por propertyName=facturar_ahora; no existe /api/facturar-ahora)
+
+Nota: el disparo "facturar ahora" desde line item está EN PAUSA por decisión de la empresa (2026-07). El endpoint sigue activo en el motor; solo no se usa desde la UI.
 
 🧪 Testing e Idempotencia
 
 Clave única de ticket y factura:
 
-<dealId>::<lineItemId>::<fecha>
+<dealId>::LIK:<lineItemKey>::<fechaYMD>   (of_ticket_key, ver src/utils/ticketKey.js)
 
 
 Ejecutar dos veces no crea duplicados.

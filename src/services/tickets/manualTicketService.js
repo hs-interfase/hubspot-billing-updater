@@ -10,7 +10,6 @@ import logger from '../../../lib/logger.js';
 
 import {
   ensureTicketCanonical,
-  getTicketStage,
   getDealCompanies,
   getDealContacts,
   createTicketAssociations,

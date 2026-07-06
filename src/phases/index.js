@@ -13,6 +13,8 @@ import {
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
+import { recalcContadores } from '../services/billing/recalcContadores.js';
+import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
 import { propagateCancelledInvoicesForDeal } from '../propagacion/invoice.js';
 import { propagateDealCancellation } from '../propagacion/deals/cancelDeal.js';
@@ -133,9 +135,71 @@ function filterActiveLineItems(lineItems) {
   });
 }
 
+/**
+ * PHASE R: Recalcular contadores derivados (STATELESS) por line item.
+ *
+ * Recompone los contadores de conteo puro al final de la corrida, cuando las
+ * etapas de tickets ya están estables (tras promover/emitir). Resuelve el
+ * desfase reportado (ej: clon 12→6 pagos): ni "Actualizar" ni el cron
+ * recomputaban estos contadores; solo se actualizaban en un evento real de
+ * facturación. Ver docs/SISTEMA_CONTADORES_BILLING.md.
+ *
+ * Delega cada línea en recalcContadores (1 búsqueda de tickets por LIK), que:
+ *   - escribe los 3 contadores COSMÉTICOS (facturas_restantes, facturas_por_derivar, progreso_pagos);
+ *   - reconcilia fechas_completas de forma SEGURA y BIDIRECCIONAL (espejo del estado real);
+ *   - dispara alertas solo en la transición (sin spam).
+ * NO toca pagos_restantes (stateful) ni pagos_emitidos (sin writer; ver doc).
+ *
+ * Itera sobre TODOS los line items (no solo los activos): queremos corregir
+ * contadores incluso en líneas excluidas de P/2/3. Un error en una línea se
+ * loguea y NO bloquea el resto.
+ *
+ * recalcContadores es inyectable para testear la orquestación sin API.
+ *
+ * @returns {Promise<{processed:number, skipped:number, errors:number}>}
+ */
+export async function runPhaseR({
+  dealId,
+  lineItems,
+  hubspotClient: client = hubspotClient,
+  recalcContadoresFn = recalcContadores,
+}) {
+  let processed = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const li of Array.isArray(lineItems) ? lineItems : []) {
+    const lp = li?.properties || {};
+    const liId = String(li?.id || lp.hs_object_id || '');
+    const lik = String(lp.line_item_key || '').trim();
+
+    if (!liId || !lik) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      await recalcContadoresFn({ hubspotClient: client, lineItemId: liId, dealId });
+      processed++;
+    } catch (err) {
+      errors++;
+      logger.warn(
+        { module: 'phases/index', fn: 'runPhaseR', dealId, lineItemId: liId, lik, err },
+        'Phase R: recálculo de contadores falló para un line item (no bloquea)'
+      );
+    }
+  }
+
+  return { processed, skipped, errors };
+}
+
 export async function runPhasesForDeal({ deal, lineItems }) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
+  // Buffer de escrituras de line items para todo el deal (batch con flag
+  // LI_BATCH_WRITES_ENABLED=true; modo inmediato idéntico al previo con flag off).
+  // Cada fase que lo usa flushea al terminar; el finally es red de seguridad.
+  const liWriteBuffer = createLineItemWriteBuffer({ context: { dealId } });
 
   try {
     let currentDeal = deal;
@@ -164,6 +228,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       phaseP: { success: false },
       phase2: { ticketsCreated: 0 },
       phase3: { invoicesEmitted: 0, ticketsEnsured: 0 },
+      phaseR: { processed: 0, skipped: 0, errors: 0 },
       ticketsCreated: 0,
       autoInvoicesEmitted: 0,
     };
@@ -189,7 +254,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     // ========== PHASE 1: Fechas, calendario, cupo ==========
     try {
-      await runPhase1(dealId);
+      await runPhase1(dealId, { writeBuffer: liWriteBuffer });
       results.phase1.success = true;
       logger.info(
         { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
@@ -294,7 +359,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     // ========== PHASE P: Forecast/Promesa ==========
     try {
-      const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems });
+      const phasePResult = await runPhaseP({ deal: currentDeal, lineItems: activeLineItems, writeBuffer: liWriteBuffer });
       results.phaseP = phasePResult;
       results.ticketsCreated += phasePResult?.created || 0;
 
@@ -368,7 +433,7 @@ export async function runPhasesForDeal({ deal, lineItems }) {
         if (catchUpPromoted > 0) {
           logger.info(
             { module: 'phases/index', fn: 'runPhasesForDeal', dealId, catchUpPromoted },
-            'Catch-up: tickets forecast atrasados promovidos a READY'
+            'Catch-up: tickets forecast atrasados promovidos (auto→READY / manual→PRÓXIMOS A FACTURAR)'
           );
         }
 
@@ -424,6 +489,37 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       results.phase3.error = err?.message || 'Error desconocido';
     }
 
+    // ========== PHASE R: Recalcular contadores derivados ==========
+    // Va DESPUÉS de Phase 3 a propósito: recalcFacturasRestantes sella
+    // fechas_completas, que Phase 1 lee para excluir LIs de P/2/3. Recomputar al
+    // final hace que ese sello afecte la corrida siguiente, no la actual.
+    // Lógica extraída a runPhaseR (testeable). Ver docs/SISTEMA_CONTADORES_BILLING.md.
+    //
+    // FEATURE FLAG: apagado por default. Se activa con PHASE_R_ENABLED=true (env).
+    // Permite deployar sin que Phase R corra en el flujo automático, validar
+    // puntualmente con scripts/fix/recalcContadores.mjs, y recién prenderlo en
+    // Railway cuando se confirme — sin redeploy ni merge.
+    if (parseBool(process.env.PHASE_R_ENABLED)) {
+      try {
+        results.phaseR = await runPhaseR({ dealId, lineItems: currentLineItems, hubspotClient });
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.phaseR },
+          'Phase R completada (contadores recalculados)'
+        );
+      } catch (err) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+          'Error en Phase R'
+        );
+        results.phaseR.error = err?.message || 'Error desconocido';
+      }
+    } else {
+      logger.debug(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId },
+        'Phase R deshabilitado (PHASE_R_ENABLED != true), se saltea'
+      );
+    }
+
     logger.info(
       { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
       'Deal completado'
@@ -431,7 +527,20 @@ export async function runPhasesForDeal({ deal, lineItems }) {
 
     return results;
   } finally {
-// noop : el candado no libera el caller
+    // (el candado no lo libera este caller)
+    // Red de seguridad del buffer: si alguna fase salió por error sin flushear,
+    // persistir lo pendiente para no perder updates. Noop si está vacío.
+    try {
+      if (liWriteBuffer.pendingCount() > 0) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, pending: liWriteBuffer.pendingCount() },
+          'writeBuffer con updates pendientes al finalizar el deal — flush de seguridad (una fase salió sin flushear)'
+        );
+        await liWriteBuffer.flush();
+      }
+    } catch (err) {
+      logger.error({ module: 'phases/index', fn: 'runPhasesForDeal', dealId, err }, 'Error en flush de seguridad del writeBuffer');
+    }
   }
 }
 
