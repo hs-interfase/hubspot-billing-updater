@@ -301,8 +301,8 @@ if (!(await acquireCronLock("cronWeekendFull", jobRunId))) {
   if (!onlyDealId && !FORCE_RUN) {
     const now = new Date();
     const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-    const WINDOW_START = 3 * 60;       // 03:00 UTC
-    const WINDOW_END   = 9 * 60 + 20;  // 09:20 UTC
+    const WINDOW_START = 3 * 60 + 1;   // 03:01 UTC
+    const WINDOW_END   = 10 * 60;      // 10:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
       await releaseCronLock("cronWeekendFull", jobRunId);
       logger.info({ jobRunId, utcH: now.getUTCHours(), utcM: now.getUTCMinutes(), reason: "fuera_de_ventana" }, "[cronWeekend] Skipped (fuera de ventana horaria)");
