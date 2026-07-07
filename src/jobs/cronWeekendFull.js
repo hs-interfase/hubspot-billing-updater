@@ -15,6 +15,7 @@ import {
   FORECAST_MANUAL_STAGES,
 } from '../config/constants.js';
 import { acquireCronLock, releaseCronLock } from "../utils/cronLock.js";
+import { getAllAssociatedIds, readTicketsInChunks } from "../utils/hubspotAssociations.js";
 
 // -------------------- Paths / Config --------------------
 // const STATE_PATH =
@@ -204,24 +205,17 @@ async function auditLineItemTickets(deal, lineItems) {
   const dealId = String(deal.id || deal.properties?.hs_object_id);
   const dealname = deal.properties?.dealname || dealId;
 
-  // Buscar todos los tickets asociados al deal
+  // Buscar todos los tickets asociados al deal (asociaciones paginadas + batch read troceado a <=100)
   let allTickets = [];
   try {
-  const assoc = await withRetry(() =>
-    hubspotClient.crm.associations.v4.basicApi.getPage(
-      'deals', dealId, 'tickets', 500
-    )
-  );
-  const ticketIds = (assoc?.results || []).map(a => String(a.toObjectId));
+    const ticketIds = await getAllAssociatedIds(hubspotClient, 'deals', dealId, 'tickets', { wrap: withRetry });
     if (ticketIds.length > 0) {
-      // Traer propiedades de cada ticket en batch
-      const batchResp = await withRetry(() =>
-        hubspotClient.crm.tickets.batchApi.read({
-          inputs: ticketIds.map(id => ({ id })),
-          properties: ['of_line_item_key', 'hs_pipeline_stage'],
-        })
+      allTickets = await readTicketsInChunks(
+        hubspotClient,
+        ticketIds,
+        ['of_line_item_key', 'hs_pipeline_stage'],
+        { wrap: withRetry }
       );
-      allTickets = batchResp?.results || [];
     }
   } catch (e) {
     logger.warn({ dealId, err: e?.message }, '[cronWeekend] auditLineItemTickets: no se pudieron obtener tickets');
