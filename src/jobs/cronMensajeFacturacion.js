@@ -29,6 +29,7 @@ import {
 } from '../config/constants.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
+import { pingHeartbeat } from '../../lib/alertService.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
 import { getPortalId } from '../utils/hubspotPortal.js';
@@ -454,6 +455,8 @@ if (isDirectRun) {
   try {
     const result = await runCronMensajeFacturacion({ onlyDealId: deal, dry });
     console.log('\nResultado:', JSON.stringify(result, null, 2));
+    // Heartbeat solo en la corrida programada completa (no en dry ni con --deal targeteado)
+    if (!dry && !deal) await pingHeartbeat('msjFacturacion');
   } catch (e) {
     logger.error(
       { module: 'cronMensajeFacturacion', error: e?.message || String(e), stack: e?.stack },

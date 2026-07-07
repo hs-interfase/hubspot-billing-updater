@@ -20,7 +20,7 @@ import logger from '../../lib/logger.js';
 import { initExportSnapshotsTable, saveExportSnapshot } from '../db-export.js';
 import { setCronState } from '../db.js';
 import pool from '../db.js';
-import { sendAlert } from '../../lib/alertService.js';
+import { sendAlert, pingHeartbeat } from '../../lib/alertService.js';
 import { EXCHANGE_RATE_STALE_DAYS } from '../config/constants.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -845,6 +845,10 @@ if (isDirectRun) {
 
   await initExportSnapshotsTable();
   const result = await runExportCron({ dry, localOnly });
+
+  // Heartbeat solo en la corrida programada real (no en --dry ni --local-only).
+  // Marca "el cron corrió a fin"; si generó con error, eso va por el exit code / logs.
+  if (!dry && !localOnly) await pingHeartbeat('export');
 
   if (result.success) {
     logger.info({ result }, '[export] Cron completado OK');

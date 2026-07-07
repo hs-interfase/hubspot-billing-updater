@@ -11,6 +11,7 @@ import axios from 'axios'
 import { pathToFileURL } from 'node:url'
 import pool, { initExchangeRatesTable } from '../db.js'
 import logger from '../../lib/logger.js'
+import { pingHeartbeat } from '../../lib/alertService.js'
 
 // --- Constantes ---------------------------------------------------------------
 
@@ -194,5 +195,6 @@ const isDirectRun =
 if (isDirectRun) {
   await initExchangeRatesTable()
   const result = await runExchangeRatesCron()
+  await pingHeartbeat('fx')   // corrió hasta el final (BCU/BCP caídos van por su propio log/exit code)
   if (!result.success) process.exitCode = 1
 }

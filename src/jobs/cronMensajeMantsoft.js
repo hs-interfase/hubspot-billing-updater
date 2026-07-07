@@ -30,6 +30,7 @@ import {
 } from '../services/billing/mansoftSnapshot.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
+import { pingHeartbeat } from '../../lib/alertService.js';
 import { pathToFileURL } from 'url';
 import { setCronState } from '../db.js';
 import { BILLING_ACTIVE_DEAL_STAGES, ASSOC_LABEL_EMPRESA_FACTURA } from '../config/constants.js';
@@ -465,6 +466,8 @@ if (isDirectRun) {
   try {
     const result = await runCronMensajeMantsoft({ onlyDealId: deal, dry });
     console.log('\nResultado:', JSON.stringify(result, null, 2));
+    // Heartbeat solo en la corrida programada completa (no en dry ni con --deal targeteado)
+    if (!dry && !deal) await pingHeartbeat('msjMantsoft');
   } catch (e) {
     logger.error(
       { module: 'cronMensajeMantsoft', error: e?.message || String(e), stack: e?.stack },
