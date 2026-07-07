@@ -5,6 +5,7 @@ import { syncBillingState } from '../billing/syncBillingState.js';
 import { isDryRun } from "../../config/constants.js";
 import logger from "../../../lib/logger.js";
 import { reportIfActionable } from '../../utils/errorReporting.js';
+import { readTicketsInChunks } from '../../utils/hubspotAssociations.js';
 
 const CANCELLED_STAGE_ID = process.env.BILLING_TICKET_STAGE_CANCELLED;
 
@@ -64,11 +65,8 @@ async function getAssocIdsV4(fromType, fromId, toType, limit = 100) {
 async function readTickets(ticketIds) {
   if (!ticketIds || ticketIds.length === 0) return [];
 
-  const resp = await hubspotClient.crm.tickets.batchApi.read({
-    inputs: ticketIds.map((id) => ({ id })),
-    properties: READ_PROPS,
-  });
-  return resp?.results || [];
+  // Trocea a <=100 por batch read (getAssocIdsV4 ya pagina las asociaciones)
+  return await readTicketsInChunks(hubspotClient, ticketIds, READ_PROPS);
 }
 
 /**

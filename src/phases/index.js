@@ -22,6 +22,7 @@ import * as dateUtils from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
 import logger from '../../lib/logger.js';
 import { assignTicketOwners } from '../services/tickets/assignTicketOwners.js';
+import { associateAllTicketsOnClosedWon } from '../services/tickets/associateOnClosedWon.js';
 import { acquireDealLock, releaseDealLock } from '../db.js';
 
 /**
@@ -487,6 +488,34 @@ export async function runPhasesForDeal({ deal, lineItems }) {
         'Error en Phase 3'
       );
       results.phase3.error = err?.message || 'Error desconocido';
+    }
+
+    // ========== ASOCIAR TICKETS AL NEGOCIO (CIERRE GANADO) ==========
+    // Fase 3. Cuando el negocio está ganado (facturacion_activa), asocia de una
+    // vez todos los tickets del deal que aún no lo estén, para que el cronograma
+    // completo se vea desde el negocio (los forecast nacen sin asociar). Aditivo:
+    // el descubrimiento del motor es por Search, no por asociación.
+    //
+    // FEATURE FLAG: apagado por default (ASSOC_ALL_ON_CLOSEDWON=true para prender).
+    // Se puede acotar a solo el pipeline manual con ASSOC_CLOSEDWON_ONLY_MANUAL=true
+    // (decisión todos-vs-manuales pendiente de la usuaria/Paola). No bloquea la corrida.
+    if (parseBool(process.env.ASSOC_ALL_ON_CLOSEDWON)) {
+      try {
+        results.assocClosedWon = await associateAllTicketsOnClosedWon({
+          dealId,
+          dealProps: currentDeal?.properties,
+        });
+        logger.info(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.assocClosedWon },
+          'Asociación de tickets al cierre ganado completada'
+        );
+      } catch (err) {
+        logger.error(
+          { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+          'Error asociando tickets al cierre ganado (no bloquea)'
+        );
+        results.assocClosedWon = { error: err?.message };
+      }
     }
 
     // ========== PHASE R: Recalcular contadores derivados ==========

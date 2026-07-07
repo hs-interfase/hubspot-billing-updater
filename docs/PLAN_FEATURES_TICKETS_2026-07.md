@@ -12,9 +12,12 @@
 - El desarrollo arranca YA en ramas sin mergear (la aprobación gatea el deploy, no el desarrollo).
 
 ## Arranque 6-jul (rama `feat/assoc-closedwon`)
-1. Fix retry 429 de `associateTicketToDealWithRetry` + propagación del fallo en `createTicketAssociations` (prerrequisito; además es el bug crítico §2 del checklist y sirve para PROD por sí solo).
-2. Hook al closedwon: Search por `of_deal_id` → asociar faltantes, idempotente, flag.
-3. Tests + seed sandbox (validación nocturna).
+1. [x] Fix retry de `associateTicketToDealWithRetry` (backoff más largo para el lag de indexación; 429/5xx ya los cubre el proxy `hubspotClient`/`withRetry`) + `createTicketAssociations` **ya no traga el fallo**: si la asociación ticket→deal falla tras los reintentos, reporta accionable y devuelve `false` (causa del ~49% de huérfanos del 4-jul). `src/services/tickets/ticketService.js`.
+2. [x] Hook al closedwon: `associateAllTicketsOnClosedWon` (`src/services/tickets/associateOnClosedWon.js`) — Search por `of_deal_id` → asocia faltantes al deal + companies/contacts, idempotente. Gateado por `facturacion_activa` (ganado). Cableado en `runPhasesForDeal` tras Phase 3, detrás de flag `ASSOC_ALL_ON_CLOSEDWON` (off por default). Seam `ASSOC_CLOSEDWON_ONLY_MANUAL` para el filtro todos-vs-manuales.
+3. [x] Tests unitarios sin red (fakes + inyección de deps): `src/__tests__/associateOnClosedWon.test.mjs` — gate, happy path (solo faltantes), idempotencia, filtro por pipeline, resiliencia ante error, y el fix de `createTicketAssociations`. 7/7 verde.
+4. [ ] Seed sandbox e2e + validación nocturna (deal no ganado → 0 asociados; pasar a closedwon → cronograma completo asociado).
+5. [ ] Ajuste Paso C de migración (filtrar por stage además de asociación) — ambas copias. Revisar `auditLineItemTickets`.
+6. [ ] Commitear en `feat/assoc-closedwon` SOLO los archivos de la feature (no barrer los cambios de `pruebas` sin commitear: mirrors, audit-log).
 
 ## Resumen y orden propuesto
 
@@ -92,14 +95,28 @@ Camino crítico: Fase 3. Fases 0 y 1 arrancan ya; la 2 apenas esté el stack.
 **La tarea REAL es aditiva:** al detectar closedwon/`facturacion_activa`, asociar de una vez TODOS los tickets del deal (o solo los del pipeline manual — decisión pendiente), en vez de que aparezcan de a uno a medida que se promueven. Patrón ya probado en el repo: `scripts/fix/fixTicketAssociations.mjs` (Search por `of_deal_id` → asociar faltantes, idempotente).
 
 **Pasos:**
-- [ ] **Prerrequisito (ya era bug crítico §2 del checklist):** endurecer `associateTicketToDealWithRetry` (`ticketService.js:1076`) — backoff 429-aware + que `createTicketAssociations` no trague el fallo (causa del 49% huérfanos del 4-jul). Mismo paquete.
-- [ ] Hook al closedwon (phase1/orquestador): Search tickets por `of_deal_id` → crear asociaciones faltantes (deal + companies/contacts como en promoción), idempotente, con flag `ASSOC_ALL_ON_CLOSEDWON` (o filtro por pipeline manual según decisión).
-- [ ] Decisión usuaria/Paola: **todos vs solo manuales** (es un filtro por pipeline; no cambia la estimación).
+- [x] **Prerrequisito (ya era bug crítico §2 del checklist):** endurecido `associateTicketToDealWithRetry` (backoff creciente [0,500,1500,3000,5000] para el lag de indexación; 429/5xx los cubre el proxy) + `createTicketAssociations` **ya no traga el fallo** (reporta accionable + devuelve `false`). `ticketService.js`.
+- [x] Hook al closedwon (`associateOnClosedWon.js`, cableado en `phases/index.js` tras Phase 3): Search por `of_deal_id` → asocia faltantes (deal + companies/contacts), idempotente, flag `ASSOC_ALL_ON_CLOSEDWON`, seam `ASSOC_CLOSEDWON_ONLY_MANUAL`.
+- [ ] Decisión usuaria/Paola: **todos vs solo manuales** (implementado como flag `ASSOC_CLOSEDWON_ONLY_MANUAL`; default = todos).
 - [ ] **Interacción migración (único cuidado real):** Paso C asume "asociado = promovido" para editar solo promovidos (`migracion_pasoC:13,251`). Si el motor asocia forecast de deals ganados antes de C → C debe filtrar por stage además de asociación. Ajuste chico en C (ambas copias) o secuenciar.
 - [ ] `auditLineItemTickets` (`cronWeekendFull.js:210`) cuenta por asociación: revisar que los conteos queden coherentes (hoy está sesgado a promovidos; con esto probablemente mejora).
-- [ ] Tests + validación sandbox e2e: deal no ganado → 0 tickets visibles; pasar a closedwon → cronograma completo asociado; regresión promoción/emisión.
+- [x] Tests unitarios sin red (7/7 verde). [ ] Falta validación sandbox e2e: deal no ganado → 0 tickets visibles; pasar a closedwon → cronograma completo asociado; regresión promoción/emisión.
 
 **Estimación REAL: 2-3 días** (incluye el fix del retry, el ajuste de Paso C y la validación). La investigación de UI (filtrar tarjeta) ya NO hace falta: el comportamiento pre-cierre deseado ya existe.
+
+### Revisión de riesgos futuros (6-jul) — impacto de asociar forecast al ganar
+
+Antes "asociado = promovido/cerca de facturar"; ahora un ganado asocia TODO su cronograma. Se auditaron los lectores-por-asociación que **actúan**:
+
+- **`cleanupClonedTicketsForDeal`** (PRE de cada pasada, `ticketCleanupService.js`): PASO A deprecia solo `source_type=CLONE_OBJECTS` (los forecast NO lo son) · PASO B mismatch (solo si el LI de la key ya no está en el deal) · PASO C dedup por `of_ticket_key` (keys de forecast son únicas por fecha). **No toca forecast por error.** Su `getAssocIdsV4` SÍ pagina.
+- **`getTicketsForDeal`** (usa ensure24 / findCanonical / `archiveClonedTicketsByKey`): chequeos de existencia/dedup → **más completos = más seguro** (menos duplicados). `archiveClonedTicketsByKey` (destructivo) solo archiva tickets con la MISMA key → no afecta a otros forecast.
+- **`auditLineItemTickets`** (`cronWeekendFull.js`): **solo REPORTA** (mismatches/missingForecast); el conteo se vuelve más preciso para ganados. No dispara acción.
+
+**Conclusión:** ningún guard destructivo se dispara mal. El cambio es aditivo y en varios casos MEJORA la precisión.
+
+**⚠ PERO expone un límite de escala latente (BLOQUEA prender el flag):** `getTicketsForDeal` (`ticketService.js:587`) y `readTickets` (`ticketCleanupService.js`) hacen `batchApi.read` **sin trocear a 100** y `getTicketsForDeal` lee asociaciones con `getPage(...,100)` **sin paginar**. Nunca falló porque "asociado=promovido" daba <100 tickets/deal. Con la feature, un ganado grande (varias líneas × ~24 forecast) puede pasar 100 asociados → **HubSpot 400 en el batch read** (protegido por try/catch: no rompe la pasada, pero deja cleanup/dedup parcial de ese deal). `auditLineItemTickets` usa `getPage(...,500)` sin paginar (tope holgado, conviene paginar igual).
+
+- [x] **ANTES de `ASSOC_ALL_ON_CLOSEDWON=true` — HECHO 6-jul:** helper `readTicketsInChunks` (trocea `batchApi.read` a ≤100) + `getAllAssociatedIds` extendido con `wrap` opcional (ya paginaba), ambos en `src/utils/hubspotAssociations.js`. Aplicados en `getTicketsForDeal` (`ticketService.js`, ahora pagina + trocea), `readTickets` (`ticketCleanupService.js`, trocea; sus asociaciones ya paginaban en `getAssocIdsV4`) y `auditLineItemTickets` (`cronWeekendFull.js`, pagina + trocea, con `withRetry` como `wrap`). Tests `src/__tests__/hubspotAssociations.test.mjs` 5/5 verde; suite `*.test.mjs` 79/79 sin regresión.
 
 ---
 
