@@ -694,7 +694,7 @@ sendSummary({
         : null,
     }).catch(() => {})
 
-    pingHeartbeat().catch(() => {})
+    pingHeartbeat('weekend').catch(() => {})
     try{
       const orphanResult = await auditOrphanTickets({ deleteTickets: false });
       logger.info({ module: 'cronWeekend', ...orphanResult }, 'Audit de huérfanos completado');
