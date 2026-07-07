@@ -290,8 +290,8 @@ if (!(await acquireCronLock("cronDealsBatch", jobRunId))) {
     const utcH = now.getUTCHours();
     const utcM = now.getUTCMinutes();
     const utcMinutes = utcH * 60 + utcM; // minutos desde medianoche UTC
-    const WINDOW_START = 3 * 60;         // 03:00 UTC
-    const WINDOW_END   = 7 * 60;         // 07:00 UTC
+    const WINDOW_START = 3 * 60 + 1;     // 03:01 UTC
+    const WINDOW_END   = 10 * 60;        // 10:00 UTC
     if (utcMinutes < WINDOW_START || utcMinutes >= WINDOW_END) {
   await releaseCronLock("cronDealsBatch", jobRunId);
       logger.info({ jobRunId, utcH, utcM, reason: "fuera_de_ventana" }, "[cronDealsBatch] Skipped (fuera de ventana horaria)");
