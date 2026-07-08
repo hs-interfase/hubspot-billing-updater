@@ -178,7 +178,9 @@ async function fase2() {
     name:                            `${PREFIX} K-LI2: PY+UY nueva post-mirror`,
     price:                           '900',
     quantity:                        '1',
-    hs_cost_of_goods_sold:           '300',
+    costo_total_usd:                 '300', // fuente de verdad: total de la línea, USD
+    dolar:                           '1',
+    hs_cost_of_goods_sold:           '300', // derivada: costo_total_usd × dolar ÷ qty
     hs_recurring_billing_start_date: TODAY,
     facturacion_automatica:          'false',
     facturacion_activa:              'true',
@@ -190,7 +192,7 @@ async function fase2() {
   dealK.lineItemIds.push(li.id);
   if (!DRY_RUN) fs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2));
   console.log(`\n▶️  Ahora: node src/jobs/cronDealsBatch.js --deal ${dealK.dealId}`);
-  console.log('   Esperado: K-LI2 aparece espejada en el deal UY (price = cogs/qty = 300).');
+  console.log('   Esperado: K-LI2 aparece espejada en el deal UY (price = costo_total_usd/qty = 300).');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -360,8 +362,8 @@ async function main() {
   results.push({ escenario: 'J', ...dealJ });
 
   // ── K — Mirror PY→UY + Partner en mirror ────────────────────────────────────
-  // Motor crea el deal UY espejo (price = cogs/qty). Con el cambio nuevo, la
-  // Interfase PY del mirror lleva Empresa Factura (2) + Partner (3).
+  // Motor crea el deal UY espejo (price = costo_total_usd/qty). Con el cambio
+  // nuevo, la Interfase PY del mirror lleva Empresa Factura (2) + Partner (3).
   results.push({ escenario: 'K', ...await seedDeal(
     'K — Mirror PY→UY',
     { pais_operativo: 'Paraguay' },
@@ -370,7 +372,9 @@ async function main() {
         name: `${PREFIX} K-LI1: PY+UY manual mensual 3p`,
         price:                           '1500',
         quantity:                        '3',
-        hs_cost_of_goods_sold:           '500',
+        costo_total_usd:                 '1500', // fuente de verdad: total de la línea, USD
+        dolar:                           '1',
+        hs_cost_of_goods_sold:           '500',  // derivada: costo_total_usd × dolar ÷ qty
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: TODAY,
         hs_recurring_billing_period:     'P3M',

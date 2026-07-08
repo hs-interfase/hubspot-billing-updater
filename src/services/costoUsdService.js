@@ -18,7 +18,9 @@
 //
 // El valor convertido queda FIJO: solo cambia si editan costo_total_usd o si cambia el
 // dolar aplicado (creación / cierre-ganado) — no sigue la cotización del día.
-// Se engancha en runPhase1 ANTES del mirroring (el espejo UY usa cogs como price).
+// Se engancha en runPhase1 ANTES del mirroring (el espejo UY lee costo_total_usd
+// como fuente del price; definición 2026-07-07: costo_total_usd = fuente de verdad,
+// hs_cost_of_goods_sold = derivada en moneda del deal, solo para hs_margin nativo).
 
 import { hubspotClient } from '../hubspotClient.js';
 import { parseBool, parseNumber } from '../utils/parsers.js';
@@ -91,11 +93,11 @@ export async function syncCostoUsdLineItems({ dealId, deal, lineItems, writeBuff
       liDolar = dealDolar;
     }
 
-    // LIs espejados (uy='true'): NO tocar cogs — ahí el COGS va en la MONEDA DEL TWIN porque
-    // dealMirroring lo usa como price de la línea del mirror UY (regla "costo PY = monto UY").
-    // costo_total_usd (USD del twin) sí queda y alimenta margen_usd.
-    const esEspejado = parseBool(lp.uy);
-    if (liDolar > 0 && !esEspejado) {
+    // Definición 2026-07-07: cogs se deriva para TODOS los LIs, incluidos los espejados
+    // (uy='true'). Antes se salteaban porque dealMirroring usaba cogs como price del
+    // mirror; ahora el mirror lee costo_total_usd directo, así que cogs puede (y debe)
+    // ir en la moneda del deal para que hs_margin del PY salga bien.
+    if (liDolar > 0) {
       const costoUsd = parseNumber(lp.costo_total_usd, NaN);
       if (Number.isFinite(costoUsd)) {
         const cogs = +((costoUsd * liDolar) / qty).toFixed(6);

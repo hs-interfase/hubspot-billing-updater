@@ -62,6 +62,7 @@ async function main() {
       inputs: liIds.map(id => ({ id })),
       properties: [
         'name', 'price', 'quantity', 'amount',
+        'costo_total_usd', 'dolar',
         'hs_cost_of_goods_sold', 'hs_margin', 'porcentaje_margen',
         'facturacion_automatica', 'hubspot_owner_id',
       ],
@@ -72,7 +73,9 @@ async function main() {
       console.log('  price:', lp.price);
       console.log('  quantity:', lp.quantity);
       console.log('  amount:', lp.amount);
-      console.log('  hs_cost_of_goods_sold:', lp.hs_cost_of_goods_sold, '← costo unitario');
+      console.log('  costo_total_usd:', lp.costo_total_usd, '← FUENTE DE VERDAD del costo (total de línea, USD)');
+      console.log('  dolar:', lp.dolar, '← TC sellado del LI');
+      console.log('  hs_cost_of_goods_sold:', lp.hs_cost_of_goods_sold, '← DERIVADA: costo_total_usd × dolar ÷ qty (unitario, moneda del deal)');
       console.log('  hs_margin:', lp.hs_margin, '← margen nativo HubSpot');
       console.log('  porcentaje_margen:', lp.porcentaje_margen, '← campo custom');
       console.log('  hubspot_owner_id:', lp.hubspot_owner_id, '← owner del LI');
