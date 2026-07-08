@@ -160,12 +160,9 @@
     <button class="btn-export" id="btn-download-export" disabled>⬇ Descargar Excel completo</button>
 
     <div id="csv-buttons" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:14px;">
-      <a class="btn-export" href="/api/export/csv/forecast_debil"     download>⬇ Forecast Débil</a>
-      <a class="btn-export" href="/api/export/csv/forecast_strech"    download>⬇ Forecast En Strech</a>
-      <a class="btn-export" href="/api/export/csv/forecast_firme"     download>⬇ Forecast Firme</a>
-      <a class="btn-export" href="/api/export/csv/forecast_pendiente" download>⬇ Forecast (Pendiente)</a>
-      <a class="btn-export" href="/api/export/csv/listo"              download>⬇ Listo para Facturar</a>
-      <a class="btn-export" href="/api/export/csv/facturado"          download>⬇ Facturado</a>
+      <a class="btn-export" href="/api/export/csv/forecast"  download>⬇ Forecast</a>
+      <a class="btn-export" href="/api/export/csv/backlog"   download>⬇ Backlog</a>
+      <a class="btn-export" href="/api/export/csv/facturado" download>⬇ Facturado</a>
     </div>
   </div>
   
@@ -192,7 +189,8 @@
         hour: '2-digit', minute: '2-digit',
       })
       const rc = data.rowCounts || {}
-      const totalRows = (rc.pipeline||0) + (rc.forecast||0) + (rc.listo||0) + (rc.facturado||0)
+      // Claves nuevas (forecast/backlog/facturado); pipeline y listo cubren snapshots viejos.
+      const totalRows = (rc.forecast||0) + (rc.backlog||0) + (rc.facturado||0) + (rc.pipeline||0) + (rc.listo||0)
       infoEl.innerHTML = `<strong>${data.filename}</strong><br>Generado: ${fechaStr} · ${totalRows} filas · ${data.sizeKB} KB`
       btn.disabled = false
     } catch (err) {
