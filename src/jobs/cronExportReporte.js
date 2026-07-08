@@ -4,6 +4,17 @@
 // Genera el xlsx, lo guarda en PostgreSQL (sobreescribiendo cada día),
 // y opcionalmente lo envía por POST a una URL externa (EXPORT_TARGET_URL).
 //
+// Estructura (spec Paola / commercial controller, jul-2026): 3 grandes conceptos,
+// cada uno una pestaña del xlsx y un CSV descargable propio:
+//   FORECAST  = deals en pipeline (prob < 85%), unificados, con columna
+//               "Tipo de Forecast" (Forecast / Forecast en Strech / Forecast Firme).
+//   BACKLOG   = tickets de negocios ganados SIN facturar, con columna
+//               "Estado Backlog" (Pendiente de notificar / Notificado / Solicitado a facturar).
+//   FACTURADO = tickets con número de factura de Nodum.
+// Intercompany (negocio mirror PY→UY, es_mirror_de_py=true): la facturación NO se
+// considera (Monto/Monto USD = 0) para no duplicar contra la facturación al cliente
+// del deal PY; el margen SÍ conserva su valor. Columna "Intercompany" = SI/NO.
+//
 // Railway: comando  = node src/jobs/cronExportReporte.js
 //          schedule = 0 8 * * 1-5   (5 AM MVD lunes a viernes)
 //
@@ -52,6 +63,22 @@ const INVOICED_STAGES = new Set([
   process.env.BILLING_AUTOMATED_LATE,
   process.env.BILLING_AUTOMATED_PAID,
 ].filter(Boolean));
+
+// "Próximos a Facturar" (solo pipeline manual): Phase 2 promueve acá cuando faltan
+// ≤30 días. Para el Estado Backlog equivale a "Notificado".
+const PROXIMOS_STAGES = new Set([
+  process.env.BILLING_TICKET_STAGE_ID,
+].filter(Boolean));
+
+// Estado del backlog (solo tickets SIN número de factura):
+//   forecast (a +30 días)                → Pendiente de notificar
+//   Próximos a Facturar (≤30 días)       → Notificado
+//   Listo para Facturar / Emitido sin nº → Solicitado a facturar
+function estadoBacklog(stageId) {
+  if (LISTO_STAGES.has(stageId) || INVOICED_STAGES.has(stageId)) return 'Solicitado a facturar';
+  if (PROXIMOS_STAGES.has(stageId)) return 'Notificado';
+  return 'Pendiente de notificar';
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -162,10 +189,12 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
+  'condiciones_de_pago',
 ];
 
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
+  'costo_total_usd', 'dolar',
   'discount', 'hs_discount_percentage', 'hs_margin',
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
@@ -175,15 +204,16 @@ const LI_PROPS = [
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo', 'hubspot_owner_id',
+  'momento_de_facturacion',
 ];
 
 const TICKET_PROPS = [
   'of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_estado',
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
-  'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
+  'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
-  'of_pais_operativo', 'of_moneda',
+  'of_pais_operativo', 'of_moneda', 'momento_de_facturacion',
 ];
 
 async function fetchAllDeals(pipelineFilter) {
@@ -377,10 +407,12 @@ function buildDealBase(deal, companies, ownerName) {
     'ID Negocio': deal.id,
     'Ejecutivo Asignado': ownerName,
     'País Operativo': safe(dp.pais_operativo),
-    'Estado': '',
+    'Ciclo de Negocio': '',
     'Probabilidad': safeNum(dp.hs_deal_stage_probability),
     'Fecha de Cierre': ymd(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
+    'Condiciones de Pago': safe(dp.condiciones_de_pago),
+    'Intercompany': safe(dp.es_mirror_de_py) === 'true' ? 'SI' : 'NO',
   };
 }
 
@@ -396,9 +428,15 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   const { mes, anio } = mesAnio(fechaFact);
 
   const monto = safeNum(lp.amount);
-  const costo = safeNum(lp.hs_cost_of_goods_sold) != null
-    ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
-    : null;
+  // Definición 2026-07-07: costo_total_usd = fuente de verdad (total, USD).
+  // Costo (moneda del negocio) = costo_total_usd × dolar(LI); fallback legacy cogs × qty.
+  const costoUsdFuente = safeNum(lp.costo_total_usd);
+  const dolarLi = safeNum(lp.dolar);
+  const costo = (costoUsdFuente != null && dolarLi > 0)
+    ? costoUsdFuente * dolarLi
+    : safeNum(lp.hs_cost_of_goods_sold) != null
+      ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
+      : (costoUsdFuente != null ? costoUsdFuente : null); // sin dolar: al menos en deals USD es el valor correcto
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
   const margenPct = monto > 0
     ? Math.round((safeNum(lp.hs_margin) / monto) * 10000) / 100
@@ -407,6 +445,10 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   // TC: último cierre para line items (no facturados)
   const moneda = dealBase['Moneda'];
   const tc = getTCForCurrency(moneda, latestRates);
+  // USD directo cuando existe la fuente; si no, re-conversión con TC como antes.
+  const costoUSD = costoUsdFuente != null ? costoUsdFuente : convertToUSD(costo, moneda, tc);
+  const montoUSD = convertToUSD(monto, moneda, tc);
+  const margenBrutoUSD = (montoUSD != null && costoUSD != null) ? Math.round((montoUSD - costoUSD) * 100) / 100 : null;
 
   return {
     ...dealBase,
@@ -420,10 +462,11 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': margenPct,
-    'TC Aplicado': tc,
-    'Monto USD': convertToUSD(monto, moneda, tc),
-    'Costo USD': convertToUSD(costo, moneda, tc),
-    'Margen Bruto USD': convertToUSD(margenBruto, moneda, tc),
+    'TC Dólar a Pesos': tc,
+    'Monto USD': montoUSD,
+    'Costo USD': costoUSD,
+    'Margen Bruto USD': margenBrutoUSD,
+    'Cuando se Factura': safe(lp.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
@@ -469,6 +512,16 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     ? tcNodum
     : getTCForCurrency(moneda, latestRates);
 
+  // Definición 2026-07-07: of_costo_usd (snapshot del costo_total_usd del LI) es la
+  // fuente directa del costo en USD; la re-conversión con TC queda como fallback legacy.
+  const costoUSD = safeNum(tp.of_costo_usd) != null
+    ? safeNum(tp.of_costo_usd)
+    : convertToUSD(costo, moneda, tc);
+  const montoUSD = convertToUSD(monto, moneda, tc);
+  const margenBrutoUSD = (montoUSD != null && costoUSD != null)
+    ? Math.round((montoUSD - costoUSD) * 100) / 100
+    : null;
+
   return {
     ...dealBase,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
@@ -481,10 +534,11 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': safeNum(tp.of_margen),
-    'TC Aplicado': tc,
-    'Monto USD': convertToUSD(monto, moneda, tc),
-    'Costo USD': convertToUSD(costo, moneda, tc),
-    'Margen Bruto USD': convertToUSD(margenBruto, moneda, tc),
+    'TC Dólar a Pesos': tc,
+    'Monto USD': montoUSD,
+    'Costo USD': costoUSD,
+    'Margen Bruto USD': margenBrutoUSD,
+    'Cuando se Factura': safe(tp.momento_de_facturacion || lp?.momento_de_facturacion || ''),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
@@ -519,7 +573,10 @@ const COLUMNS = [
   { header: 'Ejecutivo Asignado', key: 'Ejecutivo Asignado', width: 22 },
   { header: 'País Operativo', key: 'País Operativo', width: 15 },
   { header: 'Incluye UY', key: 'Incluye UY', width: 12 },
-  { header: 'Estado', key: 'Estado', width: 22 },
+  { header: 'Ciclo de Negocio', key: 'Ciclo de Negocio', width: 22 },
+  { header: 'Tipo de Forecast', key: 'Tipo de Forecast', width: 18 },
+  { header: 'Estado Backlog', key: 'Estado Backlog', width: 20 },
+  { header: 'Intercompany', key: 'Intercompany', width: 13 },
   { header: 'Probabilidad', key: 'Probabilidad', width: 13 },
   { header: 'Fecha de Cierre', key: 'Fecha de Cierre', width: 15 },
   { header: 'Moneda', key: 'Moneda', width: 10 },
@@ -533,7 +590,7 @@ const COLUMNS = [
   { header: 'Costo', key: 'Costo', width: 15 },
   { header: 'Margen Bruto', key: 'Margen Bruto', width: 15 },
   { header: 'Margen %', key: 'Margen %', width: 12 },
-  { header: 'TC Aplicado', key: 'TC Aplicado', width: 12 },
+  { header: 'TC Dólar a Pesos', key: 'TC Dólar a Pesos', width: 15 },
   { header: 'Monto USD', key: 'Monto USD', width: 15 },
   { header: 'Costo USD', key: 'Costo USD', width: 15 },
   { header: 'Margen Bruto USD', key: 'Margen Bruto USD', width: 15 },
@@ -542,6 +599,8 @@ const COLUMNS = [
   { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
   { header: 'N Factura', key: 'N Factura', width: 15 },
   { header: 'Fuente', key: 'Fuente', width: 12 },
+  { header: 'Cuando se Factura', key: 'Cuando se Factura', width: 18 },
+  { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
   { header: 'Facturación Automática', key: 'Facturación Automática', width: 20 },
   { header: 'Fecha Inicio Contrato', key: 'Fecha Inicio Contrato', width: 18 },
   { header: 'Frecuencia', key: 'Frecuencia', width: 15 },
@@ -565,7 +624,8 @@ function addSheet(wb, name, rows) {
     ws.addRow(row);
   }
 
-  ws.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + COLUMNS.length)}1` };
+  // Forma objeto: con 26+ columnas el cálculo por letra (A..Z) se rompía.
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: COLUMNS.length } };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 }
 
@@ -663,7 +723,15 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
     const ownerName = await fetchOwnerName(safe(dp.hubspot_owner_id));
 
     const dealBase = buildDealBase(deal, companies, ownerName);
-    dealBase['Estado'] = stageLabel;
+    dealBase['Ciclo de Negocio'] = stageLabel;
+
+    // Intercompany (mirror PY→UY): la facturación no se considera — FACT 0 — para no
+    // duplicar contra la facturación al cliente del deal PY. El margen conserva su valor.
+    const esIntercompany = dealBase['Intercompany'] === 'SI';
+    const aplicarIntercompany = (row) => {
+      if (esIntercompany) { row['Monto'] = 0; row['Monto USD'] = 0; }
+      return row;
+    };
 
     const lineItems = await fetchLineItems(dealId);
     const liKeyMap = new Map();
@@ -685,14 +753,16 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
     if (prob < PROB_CORTE) {
       // Pipeline (< 85%): subdividir por bucket de probabilidad.
       // El bucket se decide a nivel deal (prob es del deal, no del LI).
-      let target;
-      if (prob < 0.50)      target = pipelineBlandoRows;   // 5/10/25%
-      else if (prob < 0.75) target = pipelineStrechRows;   // 50%
-      else                  target = pipelineFirmeRows;    // 75% (cap < 85)
+      let target, tipoForecast;
+      if (prob < 0.50)      { target = pipelineBlandoRows; tipoForecast = 'Forecast'; }           // 5/10/25%
+      else if (prob < 0.75) { target = pipelineStrechRows; tipoForecast = 'Forecast en Strech'; } // 50%
+      else                  { target = pipelineFirmeRows;  tipoForecast = 'Forecast Firme'; }     // 75% (cap < 85)
 
       for (const li of lineItems) {
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
-        target.push(buildLineItemRow(li, dealBase, deal, productName, latestRates));
+        const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
+        row['Tipo de Forecast'] = tipoForecast;
+        target.push(aplicarIntercompany(row));
       }
     } else {
       // Ganado: clasificar tickets
@@ -703,39 +773,46 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
         const tp = ticket.properties || {};
         const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap, latestRates);
         const tieneFactura = safe(tp.numero_de_factura) !== '';
+        aplicarIntercompany(row);
 
         if (tieneFactura) {
           // Facturado = tiene número de factura de Nodum
           facturadoRows.push(row);
-        } else if (LISTO_STAGES.has(safe(tp.hs_pipeline_stage)) || INVOICED_STAGES.has(safe(tp.hs_pipeline_stage))) {
-          // Listo para facturar = stages de "ready" + stages avanzados sin N° factura
-          listoRows.push(row);
         } else {
-          // Forecast = todo lo demás (pendiente)
-          forecastRows.push(row);
+          // Backlog = ticket de negocio ganado sin nº de factura.
+          row['Estado Backlog'] = estadoBacklog(safe(tp.hs_pipeline_stage));
+          if (LISTO_STAGES.has(safe(tp.hs_pipeline_stage)) || INVOICED_STAGES.has(safe(tp.hs_pipeline_stage))) {
+            // Solicitado a facturar = stages de "ready" + stages avanzados sin N° factura
+            listoRows.push(row);
+          } else {
+            // Pendiente/Notificado = todo lo demás
+            forecastRows.push(row);
+          }
         }
       }
     }
   }
 
-  // 4) Build Excel
+  // 4) Consolidar en los 3 grandes conceptos (spec Paola jul-2026)
+  const forecastUnificado = [...pipelineBlandoRows, ...pipelineStrechRows, ...pipelineFirmeRows];
+  const backlogRows = [...forecastRows, ...listoRows];
+
+  // 5) Build Excel — una pestaña por concepto
   const wb = new ExcelJS.Workbook();
-  addSheet(wb, 'FORECAST DEBIL', pipelineBlandoRows);
-  addSheet(wb, 'FORECAST En Strech', pipelineStrechRows);
-  addSheet(wb, 'FORECAST FIRME', pipelineFirmeRows);
-  addSheet(wb, 'Forecast (pendiente)', forecastRows);
-  addSheet(wb, 'Listo para Facturar', listoRows);
+  addSheet(wb, 'Forecast', forecastUnificado);
+  addSheet(wb, 'Backlog', backlogRows);
   addSheet(wb, 'Facturado', facturadoRows);
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   const filename = `reporte_consolidado_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const rowCounts = {
-    pipeline: pipelineBlandoRows.length + pipelineStrechRows.length + pipelineFirmeRows.length,
-    pipeline_blando: pipelineBlandoRows.length,
-    pipeline_strech: pipelineStrechRows.length,
-    pipeline_firme: pipelineFirmeRows.length,
-    forecast: forecastRows.length,
-    listo: listoRows.length,
+    forecast: forecastUnificado.length,
+    forecast_debil: pipelineBlandoRows.length,
+    forecast_strech: pipelineStrechRows.length,
+    forecast_firme: pipelineFirmeRows.length,
+    backlog: backlogRows.length,
+    backlog_pendiente: forecastRows.length,
+    backlog_solicitado: listoRows.length,
     facturado: facturadoRows.length,
   };
 
@@ -745,12 +822,9 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   return {
     buffer, filename, rowCounts,
     sheets: {
-      forecast_debil:     pipelineBlandoRows,
-      forecast_strech:    pipelineStrechRows,
-      forecast_firme:     pipelineFirmeRows,
-      forecast_pendiente: forecastRows,
-      listo:              listoRows,
-      facturado:          facturadoRows,
+      forecast:  forecastUnificado,
+      backlog:   backlogRows,
+      facturado: facturadoRows,
     },
   };
 }
@@ -798,7 +872,7 @@ export async function runExportCron({ dry = false, localOnly = false } = {}) {
     result.rowCounts = rowCounts;
     result.sizeKB = Math.round(buffer.length / 1024);
 
-    // Generar los 6 CSV desde los mismos arrays (sin re-fetch a HubSpot).
+    // Generar los 3 CSV (Forecast / Backlog / Facturado) desde los mismos arrays (sin re-fetch a HubSpot).
     const csvData = Object.fromEntries(
       Object.entries(sheets).map(([key, rows]) => [key, rowsToCSV(rows)])
     );

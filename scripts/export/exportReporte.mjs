@@ -38,6 +38,18 @@ const INVOICED_STAGES = new Set([
   process.env.BILLING_AUTOMATED_PAID,
 ].filter(Boolean));
 
+// "Próximos a Facturar" (solo pipeline manual) → Estado Backlog "Notificado".
+const PROXIMOS_STAGES = new Set([
+  process.env.BILLING_TICKET_STAGE_ID,
+].filter(Boolean));
+
+// Estado del backlog (solo tickets SIN número de factura) — mismo criterio que el cron.
+function estadoBacklog(stageId) {
+  if (LISTO_STAGES.has(stageId) || INVOICED_STAGES.has(stageId)) return 'Solicitado a facturar';
+  if (PROXIMOS_STAGES.has(stageId)) return 'Notificado';
+  return 'Pendiente de notificar';
+}
+
 // ── Helpers ──
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const safe = (v) => (v ?? '').toString().trim();
@@ -158,10 +170,12 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
+  'condiciones_de_pago',
 ];
 
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
+  'costo_total_usd', 'dolar',
   'discount', 'hs_discount_percentage', 'hs_margin',
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
@@ -171,15 +185,16 @@ const LI_PROPS = [
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo', 'hubspot_owner_id',
+  'momento_de_facturacion',
 ];
 
 const TICKET_PROPS = [
   'of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_estado',
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto',
-  'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_margen',
+  'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
-  'of_pais_operativo', 'of_moneda',
+  'of_pais_operativo', 'of_moneda', 'momento_de_facturacion',
 ];
 
 async function fetchAllDeals(pipelineFilter) {
@@ -385,10 +400,12 @@ function buildDealBase(deal, companies, ownerName) {
     'ID Negocio': deal.id,
     'Ejecutivo Asignado': ownerName,
     'País Operativo': safe(dp.pais_operativo),
-    'Estado': '',
+    'Ciclo de Negocio': '',
     'Probabilidad': safeNum(dp.hs_deal_stage_probability),
     'Fecha de Cierre': ymd(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
+    'Condiciones de Pago': safe(dp.condiciones_de_pago),
+    'Intercompany': safe(dp.es_mirror_de_py) === 'true' ? 'SI' : 'NO',
   };
 }
 
@@ -404,9 +421,15 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   const { mes, anio } = mesAnio(fechaFact);
 
   const monto = safeNum(lp.amount);
-  const costo = safeNum(lp.hs_cost_of_goods_sold) != null
-    ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
-    : null;
+  // Definición 2026-07-07: costo_total_usd = fuente de verdad (total, USD).
+  // Costo (moneda del negocio) = costo_total_usd × dolar(LI); fallback legacy cogs × qty.
+  const costoUsdFuente = safeNum(lp.costo_total_usd);
+  const dolarLi = safeNum(lp.dolar);
+  const costo = (costoUsdFuente != null && dolarLi > 0)
+    ? costoUsdFuente * dolarLi
+    : safeNum(lp.hs_cost_of_goods_sold) != null
+      ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
+      : (costoUsdFuente != null ? costoUsdFuente : null); // sin dolar: al menos en deals USD es el valor correcto
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
   const margenPct = monto > 0
     ? Math.round((safeNum(lp.hs_margin) / monto) * 10000) / 100
@@ -414,6 +437,10 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
 
   const moneda = dealBase['Moneda'];
   const tc = getTCForCurrency(moneda, latestRates);
+  // USD directo cuando existe la fuente; si no, re-conversión con TC como antes.
+  const costoUSD = costoUsdFuente != null ? costoUsdFuente : convertToUSD(costo, moneda, tc);
+  const montoUSD = convertToUSD(monto, moneda, tc);
+  const margenBrutoUSD = (montoUSD != null && costoUSD != null) ? Math.round((montoUSD - costoUSD) * 100) / 100 : null;
 
   return {
     ...dealBase,
@@ -427,10 +454,11 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': margenPct,
-    'TC Aplicado': tc,
-    'Monto USD': convertToUSD(monto, moneda, tc),
-    'Costo USD': convertToUSD(costo, moneda, tc),
-    'Margen Bruto USD': convertToUSD(margenBruto, moneda, tc),
+    'TC Dólar a Pesos': tc,
+    'Monto USD': montoUSD,
+    'Costo USD': costoUSD,
+    'Margen Bruto USD': margenBrutoUSD,
+    'Cuando se Factura': safe(lp.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
@@ -474,6 +502,16 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
       ? tcNodum
       : getTCForCurrency(moneda, latestRates);
 
+  // Definición 2026-07-07: of_costo_usd (snapshot del costo_total_usd del LI) es la
+  // fuente directa del costo en USD; la re-conversión con TC queda como fallback legacy.
+  const costoUSD = safeNum(tp.of_costo_usd) != null
+    ? safeNum(tp.of_costo_usd)
+    : convertToUSD(costo, moneda, tc);
+  const montoUSD = convertToUSD(monto, moneda, tc);
+  const margenBrutoUSD = (montoUSD != null && costoUSD != null)
+    ? Math.round((montoUSD - costoUSD) * 100) / 100
+    : null;
+
   return {
     ...dealBase,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
@@ -486,10 +524,11 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': safeNum(tp.of_margen),
-    'TC Aplicado': tc,
-    'Monto USD': convertToUSD(monto, moneda, tc),
-    'Costo USD': convertToUSD(costo, moneda, tc),
-    'Margen Bruto USD': convertToUSD(margenBruto, moneda, tc),
+    'TC Dólar a Pesos': tc,
+    'Monto USD': montoUSD,
+    'Costo USD': costoUSD,
+    'Margen Bruto USD': margenBrutoUSD,
+    'Cuando se Factura': safe(tp.momento_de_facturacion || lp?.momento_de_facturacion || ''),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
@@ -557,7 +596,14 @@ async function main() {
     const ownerName = await fetchOwnerName(safe(dp.hubspot_owner_id));
 
     const dealBase = buildDealBase(deal, companies, ownerName);
-    dealBase['Estado'] = stageLabel;
+    dealBase['Ciclo de Negocio'] = stageLabel;
+
+    // Intercompany (mirror PY→UY): FACT 0 para no duplicar; el margen conserva su valor.
+    const esIntercompany = dealBase['Intercompany'] === 'SI';
+    const aplicarIntercompany = (row) => {
+      if (esIntercompany) { row['Monto'] = 0; row['Monto USD'] = 0; }
+      return row;
+    };
 
     const lineItems = await fetchLineItems(dealId);
 
@@ -578,9 +624,13 @@ async function main() {
     }));
 
     if (prob < PROB_CORTE) {
+      // Tipo de Forecast por bucket de probabilidad del deal (spec Paola jul-2026).
+      const tipoForecast = prob < 0.50 ? 'Forecast' : prob < 0.75 ? 'Forecast en Strech' : 'Forecast Firme';
       for (const li of lineItems) {
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
-        pipelineRows.push(buildLineItemRow(li, dealBase, deal, productName, latestRates));
+        const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
+        row['Tipo de Forecast'] = tipoForecast;
+        pipelineRows.push(aplicarIntercompany(row));
       }
     } else {
       const tickets = await fetchTicketsForDeal(dealId);
@@ -590,13 +640,17 @@ async function main() {
         const tp = ticket.properties || {};
         const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap, latestRates);
         const tieneFactura = safe(tp.numero_de_factura) !== '';
+        aplicarIntercompany(row);
 
         if (tieneFactura) {
           facturadoRows.push(row);
-        } else if (LISTO_STAGES.has(safe(tp.hs_pipeline_stage)) || INVOICED_STAGES.has(safe(tp.hs_pipeline_stage))) {
-          listoRows.push(row);
         } else {
-          forecastRows.push(row);
+          row['Estado Backlog'] = estadoBacklog(safe(tp.hs_pipeline_stage));
+          if (LISTO_STAGES.has(safe(tp.hs_pipeline_stage)) || INVOICED_STAGES.has(safe(tp.hs_pipeline_stage))) {
+            listoRows.push(row);
+          } else {
+            forecastRows.push(row);
+          }
         }
       }
     }
@@ -624,7 +678,10 @@ async function main() {
     { header: 'Ejecutivo Asignado', key: 'Ejecutivo Asignado', width: 22 },
     { header: 'País Operativo', key: 'País Operativo', width: 15 },
     { header: 'Incluye UY', key: 'Incluye UY', width: 12 },
-    { header: 'Estado', key: 'Estado', width: 22 },
+    { header: 'Ciclo de Negocio', key: 'Ciclo de Negocio', width: 22 },
+    { header: 'Tipo de Forecast', key: 'Tipo de Forecast', width: 18 },
+    { header: 'Estado Backlog', key: 'Estado Backlog', width: 20 },
+    { header: 'Intercompany', key: 'Intercompany', width: 13 },
     { header: 'Probabilidad', key: 'Probabilidad', width: 13 },
     { header: 'Fecha de Cierre', key: 'Fecha de Cierre', width: 15 },
     { header: 'Moneda', key: 'Moneda', width: 10 },
@@ -638,7 +695,7 @@ async function main() {
     { header: 'Costo', key: 'Costo', width: 15 },
     { header: 'Margen Bruto', key: 'Margen Bruto', width: 15 },
     { header: 'Margen %', key: 'Margen %', width: 12 },
-    { header: 'TC Aplicado', key: 'TC Aplicado', width: 12 },
+    { header: 'TC Dólar a Pesos', key: 'TC Dólar a Pesos', width: 15 },
     { header: 'Monto USD', key: 'Monto USD', width: 15 },
     { header: 'Costo USD', key: 'Costo USD', width: 15 },
     { header: 'Margen Bruto USD', key: 'Margen Bruto USD', width: 15 },
@@ -647,6 +704,8 @@ async function main() {
     { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
     { header: 'N Factura', key: 'N Factura', width: 15 },
     { header: 'Fuente', key: 'Fuente', width: 12 },
+    { header: 'Cuando se Factura', key: 'Cuando se Factura', width: 18 },
+    { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
     { header: 'Facturación Automática', key: 'Facturación Automática', width: 20 },
     { header: 'Fecha Inicio Contrato', key: 'Fecha Inicio Contrato', width: 18 },
     { header: 'Frecuencia', key: 'Frecuencia', width: 15 },
@@ -670,23 +729,24 @@ async function main() {
       ws.addRow(row);
     }
 
-    ws.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + COLUMNS.length)}1` };
+    // Forma objeto: con 26+ columnas el cálculo por letra (A..Z) se rompía.
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: COLUMNS.length } };
     ws.views = [{ state: 'frozen', ySplit: 1 }];
   }
 
-  addSheet('Pipeline (< 85%)', pipelineRows);
-  addSheet('Forecast (pendiente)', forecastRows);
-  addSheet('Listo para Facturar', listoRows);
+  // 3 grandes conceptos (spec Paola jul-2026): Forecast / Backlog / Facturado
+  const backlogRows = [...forecastRows, ...listoRows];
+  addSheet('Forecast', pipelineRows);
+  addSheet('Backlog', backlogRows);
   addSheet('Facturado', facturadoRows);
 
   const outPath = `reporte_consolidado_${new Date().toISOString().slice(0, 10)}.xlsx`;
   await wb.xlsx.writeFile(outPath);
 
   console.log(`\n✅ Reporte generado: ${outPath}`);
-  console.log(`   Pipeline          : ${pipelineRows.length} filas`);
-  console.log(`   Forecast          : ${forecastRows.length} filas`);
-  console.log(`   Listo para Facturar: ${listoRows.length} filas`);
-  console.log(`   Facturado         : ${facturadoRows.length} filas`);
+  console.log(`   Forecast : ${pipelineRows.length} filas`);
+  console.log(`   Backlog  : ${backlogRows.length} filas (pendiente ${forecastRows.length} + solicitado ${listoRows.length})`);
+  console.log(`   Facturado: ${facturadoRows.length} filas`);
 }
 
 main().catch(err => {
