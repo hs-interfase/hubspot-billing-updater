@@ -12,7 +12,7 @@
  * Flujo de prueba:
  *   1. node seedTestDeals.mjs              → deal PY + 2 LIs
  *   2. node src/jobs/cronDealsBatch.js --deal <DEAL_ID>  → mirror UY creado
- *   3. Verificar: price mirror = cogs/qty, empresas, editar costo mirror
+ *   3. Verificar: price mirror = costo_total_usd/qty, empresas, editar costo mirror
  *   4. Cambiar fecha_inicio_facturacion de E-LI2 a hoy en HubSpot
  *   5. Correr cron de nuevo → Phase 3 factura PY, ticket UY promovido + nota
  *
@@ -41,8 +41,10 @@ const DRY_RUN    = process.argv.includes('--dry');
 // mensaje Mantsoft, vía EMPRESA_EMISORA_MAP en
 // src/services/billing/buildMensajeMantsoft.js. Ambos resuelven a "ISA".
 // (Los IDs 4201…/4194… que aparecen en scripts/migration son del sandbox, NO se usan acá.)
-const PRODUCTO_PORTAL = '33695807329'; // Portal → manual     → E-LI1
-const PRODUCTO_IJSERV = '33688695870'; // iJServ → automático → E-LI2
+// IDs de producto: default = producción; override por env para sandbox
+// (sandbox: Portal=42010181660, iJServ=41943895217).
+const PRODUCTO_PORTAL = process.env.TEST_PRODUCTO_PORTAL || '33695807329'; // Portal → manual     → E-LI1
+const PRODUCTO_IJSERV = process.env.TEST_PRODUCTO_IJSERV || '33688695870'; // iJServ → automático → E-LI2
 
 // Espejo mínimo del EMPRESA_EMISORA_MAP, solo para el self-check de este seed
 // (loguea la emisora esperada; si un id no está acá ni en el mapa real, sale "-").
@@ -156,18 +158,20 @@ async function main() {
   // El motor crea el deal UY espejo automáticamente.
   //
   // E-LI1: Manual, cupo por monto, mensual 3p
-  //   PY: price=1500, qty=3, cogs=500, parte_del_cupo=true
-  //   Mirror UY esperado: price = cogs/qty = 500/3 ≈ 167, sin cupo, manual
+  //   PY: price=1500, qty=3, costo_total_usd=1500 (fuente de verdad, total USD),
+  //       dolar=1, cogs=500 (derivada: costo_total_usd × dolar ÷ qty), parte_del_cupo=true
+  //   Mirror UY esperado: price = costo_total_usd/qty = 1500/3 = 500, sin cupo, manual
   //   Verifica:
   //     - Cupo se calcula correctamente al cambiar cantidad
   //     - Mirror copia sin cupo (parte_del_cupo no se copia)
   //     - Costo editable en mirror no se sobreescribe en siguiente corrida
-  //     - Margen positivo: revenue 1500×3=4500, costo 500 → margen 4000
+  //     - Margen positivo: revenue 1500×3=4500, costo total 1500 → margen 3000
   //
   // E-LI2: Automático en PY, auto-renew, fecha inicio +5 días
-  //   PY: price=2000, qty=1, cogs=800, facturacion_automatica=true
+  //   PY: price=2000, qty=1, costo_total_usd=800, dolar=1, cogs=800 (derivada),
+  //       facturacion_automatica=true
   //   Auto-renew: sin hs_recurring_billing_period, vencimiento=2099-12-31
-  //   Mirror UY esperado: price = cogs/qty = 800, manual, auto-renew
+  //   Mirror UY esperado: price = costo_total_usd/qty = 800, manual, auto-renew
   //   Verifica:
   //     - Mirror queda manual (facturacion_automatica=false forzado)
   //     - Phase P genera ventana de tickets (hasta 36)
@@ -197,7 +201,9 @@ async function main() {
         hs_product_id:                   PRODUCTO_PORTAL, // Portal → emisora ISA
         price:                           '1500',
         quantity:                        '3',
-        hs_cost_of_goods_sold:           '500',
+        costo_total_usd:                 '1500', // fuente de verdad: total de la línea, USD
+        dolar:                           '1',
+        hs_cost_of_goods_sold:           '500',  // derivada: costo_total_usd × dolar ÷ qty
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: TODAY,
         hs_recurring_billing_period:     'P3M',
@@ -214,7 +220,9 @@ async function main() {
         hs_product_id:                   PRODUCTO_IJSERV, // iJServ → emisora ISA
         price:                           '2000',
         quantity:                        '1',
-        hs_cost_of_goods_sold:           '800',
+        costo_total_usd:                 '800', // fuente de verdad: total de la línea, USD
+        dolar:                           '1',
+        hs_cost_of_goods_sold:           '800', // derivada: costo_total_usd × dolar ÷ qty
         recurringbillingfrequency:       'monthly',
         hs_recurring_billing_start_date: PLUS_5,
         facturacion_automatica:          'true',
@@ -263,8 +271,8 @@ async function main() {
            (start=${PLUS_5}, Phase 3 no ejecuta aún porque fecha futura)
 
   Mirror UY (creado por el motor):
-    E-LI1 mirror: price ≈ 167 (cogs 500 / qty 3), manual, SIN cupo
-    E-LI2 mirror: price = 800 (cogs 800 / qty 1), manual, auto-renew
+    E-LI1 mirror: price = 500 (costo_total_usd 1500 / qty 3), manual, SIN cupo
+    E-LI2 mirror: price = 800 (costo_total_usd 800 / qty 1), manual, auto-renew
 
   Empresas UY:
     Primary = cliente final (${COMPANY_ID})

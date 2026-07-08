@@ -207,8 +207,29 @@ export function extractLineItemSnapshots(lineItem, deal) {
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
-  // Calcular costo total (unitario × cantidad)
-  const costoTotal = costoUnitario * cantidad;
+  // Definición 2026-07-07: costo_total_usd (LI) = FUENTE DE VERDAD del costo (total, USD).
+  //   of_costo (moneda del negocio) = costo_total_usd × dolar(LI)
+  //   of_costo_usd (nueva)          = costo_total_usd
+  // Fallback legacy (LI sin costo_total_usd): cogs × cantidad como siempre; el USD solo
+  // se deriva si hay dolar o el negocio ya es USD (si no, of_costo_usd no se escribe).
+  // Bonus: al leer costo_total_usd directo, el ticket ya no nace con costo 0 cuando el
+  // cogs se deriva en la misma corrida (hallazgo escenario F).
+  const tieneCostoUsd = lp.costo_total_usd != null && lp.costo_total_usd !== '';
+  const costoTotalUsdLi = parseNumber(lp.costo_total_usd, 0);
+  const dolarLi = parseNumber(lp.dolar, 0);
+  const dealCurrency = String(deal?.properties?.deal_currency_code || '').toUpperCase();
+
+  let costoTotal;     // en moneda del negocio → of_costo
+  let costoTotalUsd;  // en USD → of_costo_usd (null = no derivable, no se escribe)
+  if (tieneCostoUsd) {
+    costoTotalUsd = costoTotalUsdLi;
+    costoTotal = dolarLi > 0 ? costoTotalUsdLi * dolarLi
+      : (dealCurrency === 'USD' || !dealCurrency ? costoTotalUsdLi : costoUnitario * cantidad);
+  } else {
+    costoTotal = costoUnitario * cantidad;
+    costoTotalUsd = dolarLi > 0 ? costoTotal / dolarLi
+      : (dealCurrency === 'USD' ? costoTotal : null);
+  }
 
   // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
@@ -250,7 +271,8 @@ const repetitivo = !!rawFreq && ![
     descuento_en_porcentaje: descuentoPorcentaje,
     descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
-    of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
+    of_costo: costoTotal, // ✅ costo total en moneda del negocio (fuente: costo_total_usd × dolar; fallback cogs × cantidad)
+    ...(costoTotalUsd != null ? { of_costo_usd: costoTotalUsd } : {}), // ✅ espejo del costo en USD (G5, definición 2026-07-07)
     of_margen: montoTotal - costoTotal, // ✅ margen bruto = subtotal pre-IVA (lp.amount) − costo total. Antes leía lp.hs_margin (no se fetchea → siempre 0).
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
@@ -265,6 +287,10 @@ const repetitivo = !!rawFreq && ![
     fecha_inicio_de_facturacion: toHubSpotDateOnly(lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion),
     // Facturación automática: espejo del checkbox del line item (enum booleancheckbox: "true"/"false")
     facturacion_automatica: parseBool(lp.facturacion_automatica) ? 'true' : 'false',
+    // Intercompany (regla informes 2026-07-07): el deal UY espejo factura al grupo (su monto
+    // = costo del PY), así que su facturación NO cuenta para informes (FACT 0 vía calc prop
+    // of_facturacion_usd); su MARGEN sí (monto UY − costo real UY). Fuente: es_mirror_de_py.
+    of_intercompany: parseBool(deal?.properties?.es_mirror_de_py) ? 'true' : 'false',
   };
 
   logger.info({

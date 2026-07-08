@@ -513,8 +513,9 @@ export async function runPhase1(dealId, { writeBuffer = null } = {}) {
 
   // -- Costo/margen USD (flag COSTO_USD_ENABLED, off por default) --
   // Asigna la prop `dolar` del deal (creación / cierre-ganado) y deriva
-  // hs_cost_of_goods_sold + monto_usd desde costo_total_usd. DEBE correr ANTES del
-  // mirroring: el espejo UY usa hs_cost_of_goods_sold como price de sus líneas.
+  // hs_cost_of_goods_sold desde costo_total_usd (fuente de verdad, siempre USD).
+  // DEBE correr ANTES del mirroring: el espejo UY lee costo_total_usd/dolar frescos
+  // para el price de sus líneas (definición 2026-07-07).
   if (costoUsdEnabled()) {
     try {
       await syncCostoUsdLineItems({ dealId, deal, lineItems, writeBuffer });

@@ -174,15 +174,16 @@ async function main() {
       check('mirror.deal_currency_code = USD (hardcode nuevo)', String(mp.deal_currency_code || '') === 'USD', `currency=${mp.deal_currency_code}`);
       info(`mirror sellado (mig_espejo_independiente)=${mp.mig_espejo_independiente || '(vacío)'} | billing_error="${mp.billing_error || ''}"`);
 
-      // LIs del mirror: K-LI1 price = cogs/qty = 500/3 ≈ 166.67; K-LI2 (fase2) = 300
+      // LIs del mirror: price = costo_total_usd/qty (definición 2026-07-07):
+      // K-LI1 = 1500/3 = 500; K-LI2 (fase2) = 300/1 = 300
       const liAssoc = await getAssocIds('deals', mirrorId, 'line_items');
       const mirrorLis = await getLIs(liAssoc.map(r => r.toObjectId), ['name', 'price', 'quantity', 'of_line_item_py_origen_id', 'facturacion_automatica']);
       info(`${mirrorLis.length} LI(s) en el mirror`);
       for (const li of mirrorLis) {
         const p = li.properties;
         if (p.name?.includes('K-LI1')) {
-          // price mirror = hs_cost_of_goods_sold directo (COGS UNITARIO, épica 2026-07-02)
-          check('mirror K-LI1 price = 500 (cogs unitario)', aprox(p.price, 500, 0.05), `price=${p.price}`);
+          // price mirror = costo_total_usd ÷ qty (fuente de verdad USD, definición 2026-07-07)
+          check('mirror K-LI1 price = 500 (costo_total_usd 1500 / qty 3)', aprox(p.price, 500, 0.05), `price=${p.price}`);
         }
         if (p.name?.includes('K-LI2')) {
           check('mirror K-LI2 price = 300 (LI nueva espejada)', aprox(p.price, 300, 0.05), `price=${p.price}`);

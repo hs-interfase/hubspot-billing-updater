@@ -280,9 +280,15 @@ const MIRROR_SEAL_PROP = 'mig_espejo_independiente';
 const MIRROR_PY_SNAPSHOT_PROP = 'mig_py_li_snapshot';
 
 // Snapshot estable (orden por LI id) de costo/cantidad de las líneas UY del PY.
+// Definición 2026-07-07: el costo se compara por costo_total_usd (fuente de verdad,
+// siempre USD) y NO por hs_cost_of_goods_sold (derivada en moneda del deal: un
+// refresh del dólar la cambia sin que el costo real haya cambiado → falsa alarma).
+// Fallback legacy a cogs para LIs viejos sin costo_total_usd. Nota: los mirrors ya
+// sellados con snapshot cogs-based avisan UNA vez al re-comparar y se re-guardan.
 function pyLiSnapshotValue(li) {
   const p = li.properties || {};
-  return `${p[LINE_ITEM_COST_PROP] ?? ''}x${p.quantity ?? ''}`;
+  const costo = (p.costo_total_usd ?? '') !== '' ? p.costo_total_usd : (p[LINE_ITEM_COST_PROP] ?? '');
+  return `${costo}x${p.quantity ?? ''}`;
 }
 
 function buildPyLiSnapshot(uyLineItems) {
@@ -892,12 +898,36 @@ const allowedProps = new Set([
     props.of_line_item_py_origen_id = String(li.id).trim();
     props.facturacion_automatica = 'false'; // mirrors UY siempre manuales
 
-    const unitCost = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
+    // PY3 (María 7-jul) + definición 2026-07-07: costo_total_usd es la FUENTE DE VERDAD
+    // del costo (total de la línea, siempre USD). El price del mirror va SIEMPRE en USD
+    // (el mirror se crea con deal_currency_code='USD'), así que sale de ahí:
+    //   price = costo_total_usd ÷ quantity.
+    // hs_cost_of_goods_sold es DERIVADA (costo_total_usd × dolar ÷ qty, en moneda del
+    // deal PY) — usarla directo inflaba el mirror ×TC en deals en guaraníes.
+    // Fallbacks legacy: cogs ÷ dolar del LI; cogs directo SOLO si el deal PY es USD.
+    // Deal en moneda ≠ USD sin dato USD confiable → NO se adivina: MISSING_COST.
+    const qtyLi = parseFloat(srcPropsLi.quantity) || 1;
+    const costoTotalUsd = parseFloat(srcPropsLi.costo_total_usd);
+    const cogsMonedaDeal = parseFloat(srcPropsLi.hs_cost_of_goods_sold);
+    const dolarLi = parseFloat(srcPropsLi.dolar);
+
+    let unitCost = NaN;
+    let costSource = null;
+    if (costoTotalUsd > 0) {
+      unitCost = costoTotalUsd / qtyLi;
+      costSource = 'costo_total_usd/qty';
+    } else if (cogsMonedaDeal > 0 && dolarLi > 0) {
+      unitCost = cogsMonedaDeal / dolarLi;
+      costSource = 'cogs/dolar';
+    } else if (cogsMonedaDeal > 0 && String(sourceCurrency || 'USD').toUpperCase() === 'USD') {
+      unitCost = cogsMonedaDeal; // deal ya en USD: cogs es USD (comportamiento histórico)
+      costSource = 'cogs';
+    }
 
     if (isNaN(unitCost) || unitCost <= 0) {
       logger.warn(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, hs_cost_of_goods_sold: srcPropsLi.hs_cost_of_goods_sold },
-        'Línea UY sin hs_cost_of_goods_sold válido, price=0'
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, costo_total_usd: srcPropsLi.costo_total_usd, hs_cost_of_goods_sold: srcPropsLi.hs_cost_of_goods_sold, dolar: srcPropsLi.dolar, currency: sourceCurrency },
+        'Línea UY sin costo USD válido (costo_total_usd/cogs), price=0'
       );
 
       props.price = '0';
@@ -912,8 +942,8 @@ const allowedProps = new Set([
       props.price = String(unitCost);
 
       logger.debug(
-        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, unitCost, unitPrice: unitCost },
-        'Línea UY espejada: price = hs_cost_of_goods_sold (costo directo)'
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', lineItemId: li.id, name: srcPropsLi.name, unitCost, costSource },
+        `Línea UY espejada: price USD (${costSource})`
       );
     }
 
