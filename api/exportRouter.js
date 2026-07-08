@@ -15,12 +15,16 @@ const router = Router();
 // Lista blanca: clave de URL → nombre de hoja (solo informativo).
 // El :sheet de la URL debe existir como clave acá, si no → 404.
 const SHEET_KEYS = {
+  // 3 grandes conceptos (spec Paola jul-2026)
+  forecast:  'Forecast',
+  backlog:   'Backlog',
+  facturado: 'Facturado',
+  // claves legacy: siguen sirviendo snapshots viejos (pre-reestructura) que aún estén en DB
   forecast_debil:     'FORECAST DEBIL',
   forecast_strech:    'FORECAST En Strech',
   forecast_firme:     'FORECAST FIRME',
   forecast_pendiente: 'Forecast (pendiente)',
   listo:              'Listo para Facturar',
-  facturado:          'Facturado',
 };
 
 // ── Descargar último reporte (xlsx) ─────────────────────────────────────────

@@ -1,6 +1,6 @@
 // src/db-export.js
 //
-// Tabla export_snapshots — almacena el último xlsx + los 6 CSV generados
+// Tabla export_snapshots — almacena el último xlsx + los CSV generados (Forecast/Backlog/Facturado)
 // por cronExportReporte. Una sola fila (id=1) que se sobreescribe cada día.
 
 import pool from './db.js';
@@ -32,8 +32,8 @@ export async function initExportSnapshotsTable() {
  * @param {Object} params
  * @param {string} params.filename   - Ej: "reporte_consolidado_2026-04-30.xlsx"
  * @param {Buffer} params.xlsxBuffer - Buffer del archivo xlsx
- * @param {Object} params.rowCounts  - { pipeline, forecast, listo, facturado, ... }
- * @param {Object} [params.csvData]  - { forecast_debil, forecast_strech, ... } strings CSV
+ * @param {Object} params.rowCounts  - { forecast, backlog, facturado, ... }
+ * @param {Object} [params.csvData]  - { forecast, backlog, facturado } strings CSV
  */
 export async function saveExportSnapshot({ filename, xlsxBuffer, rowCounts, csvData = {} }) {
   await pool.query(
