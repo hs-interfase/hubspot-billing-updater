@@ -43,10 +43,11 @@ const RETRY_BASE_MS = 5_000;
 // Probabilidad de corte para separar hojas
 const PROB_CORTE = 0.85;
 
-// Association type IDs (deal → company)
+// Association type IDs (deal → company). Etiquetas por portal (mismos envs que el motor):
+// Empresa Factura prod=9 / sandbox=2 · Partner prod=2 / sandbox=3.
 const ASSOC_PRIMARY_COMPANY = 5;
-const ASSOC_EMPRESA_FACTURA = 9;
-const ASSOC_PARTNER = 1;
+const ASSOC_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPRESA_FACTURA || '9', 10);
+const ASSOC_PARTNER = parseInt(process.env.ASSOC_LABEL_EMPRESA_PARTNER || '2', 10);
 
 // Stage sets para clasificación de tickets
 const LISTO_STAGES = new Set([
@@ -204,7 +205,7 @@ const LI_PROPS = [
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo', 'hubspot_owner_id',
-  'momento_de_facturacion',
+  'momento_de_facturacion', 'area',
 ];
 
 const TICKET_PROPS = [
@@ -213,7 +214,7 @@ const TICKET_PROPS = [
   'of_producto_nombres', 'of_descripcion_producto',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
-  'of_pais_operativo', 'of_moneda', 'momento_de_facturacion',
+  'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
 ];
 
 async function fetchAllDeals(pipelineFilter) {
@@ -421,7 +422,6 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   const freq = safe(lp.recurringbillingfrequency || lp.hs_recurring_billing_frequency);
   const fechaInicio = ymd(lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion);
   const fechaVenc = ymd(lp.fecha_vencimiento_contrato);
-  const ancla = ymd(lp.billing_anchor_date);
   const esAuto = safe(lp.facturacion_automatica).toLowerCase() === 'true';
   const incluyeUY = safe(lp.uy).toLowerCase() === 'true';
   const fechaFact = fechaInicio;
@@ -453,7 +453,9 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   return {
     ...dealBase,
     'Rubro': safe(lp.servicio),
-    'Área de Negocio': productName || safe(lp.name),
+    // Área de Negocio = prop `area` del LI (la puebla la regla por país, p.ej. Paraguay);
+    // fallback legacy: nombre del producto / nombre del LI.
+    'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción': safe(lp.description),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': fechaFact,
@@ -466,7 +468,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Monto USD': montoUSD,
     'Costo USD': costoUSD,
     'Margen Bruto USD': margenBrutoUSD,
-    'Cuando se Factura': safe(lp.momento_de_facturacion),
+    'Momento de Facturación': safe(lp.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
@@ -476,7 +478,6 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Fecha Inicio Contrato': fechaInicio,
     'Frecuencia': freq,
     'Fecha Fin Contrato': fechaVenc,
-    'Fecha Ancla': ancla !== fechaInicio ? ancla : '',
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -493,7 +494,6 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const esAuto = safe(lp?.facturacion_automatica || '').toLowerCase() === 'true';
   const fechaInicio = ymd(lp?.hs_recurring_billing_start_date || lp?.fecha_inicio_de_facturacion || '');
   const fechaVenc = ymd(lp?.fecha_vencimiento_contrato || '');
-  const ancla = ymd(lp?.billing_anchor_date || '');
   const incluyeUY = safe(lp?.uy || '').toLowerCase() === 'true';
 
   const monto = safeNum(tp.subtotal_real);
@@ -502,7 +502,8 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
 
   // TC: si tiene numero_de_factura → usar tp.dolar (TC de Nodum).
   //     si no → usar último cierre de exchange_rates.
-  const moneda = dealBase['Moneda'];
+  // Moneda: la del TICKET (of_moneda, sellada al crear la OF); fallback moneda del deal.
+  const moneda = safe(tp.of_moneda) || dealBase['Moneda'];
   const tieneFactura = safe(tp.numero_de_factura) !== '';
   const tcNodum = safeNum(tp.dolar);
   const monedaUpper = safe(moneda).toUpperCase();
@@ -524,8 +525,11 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
 
   return {
     ...dealBase,
+    'Moneda': moneda,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
-    'Área de Negocio': productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
+    // Área de Negocio = prop `area` del ticket (snapshot del LI, regla por país);
+    // fallback legacy: producto / of_producto_nombres / nombre del LI.
+    'Área de Negocio': safe(tp.area || lp?.area || '') || productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
     'Descripción': safe(tp.of_descripcion_producto || lp?.description || ''),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': fechaFact,
@@ -538,7 +542,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Monto USD': montoUSD,
     'Costo USD': costoUSD,
     'Margen Bruto USD': margenBrutoUSD,
-    'Cuando se Factura': safe(tp.momento_de_facturacion || lp?.momento_de_facturacion || ''),
+    'Momento de Facturación': safe(tp.momento_de_facturacion || lp?.momento_de_facturacion || ''),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
@@ -548,7 +552,6 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Fecha Inicio Contrato': fechaInicio,
     'Frecuencia': freq,
     'Fecha Fin Contrato': fechaVenc,
-    'Fecha Ancla': ancla !== fechaInicio ? ancla : '',
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -599,13 +602,12 @@ const COLUMNS = [
   { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
   { header: 'N Factura', key: 'N Factura', width: 15 },
   { header: 'Fuente', key: 'Fuente', width: 12 },
-  { header: 'Cuando se Factura', key: 'Cuando se Factura', width: 18 },
+  { header: 'Momento de Facturación', key: 'Momento de Facturación', width: 20 },
   { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
   { header: 'Facturación Automática', key: 'Facturación Automática', width: 20 },
   { header: 'Fecha Inicio Contrato', key: 'Fecha Inicio Contrato', width: 18 },
   { header: 'Frecuencia', key: 'Frecuencia', width: 15 },
   { header: 'Fecha Fin Contrato', key: 'Fecha Fin Contrato', width: 18 },
-  { header: 'Fecha Ancla', key: 'Fecha Ancla', width: 15 },
   { header: 'Renovación Automática', key: 'Renovación Automática', width: 20 },
 ];
 
