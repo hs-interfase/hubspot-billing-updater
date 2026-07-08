@@ -196,6 +196,7 @@ const TICKET_PROPS = [
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
+  'nombre_empresa', 'empresa_id', 'empresa_que_factura', 'cliente_partner',
 ];
 
 async function fetchAllDeals(pipelineFilter) {
@@ -514,6 +515,13 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
 
   return {
     ...dealBase,
+    // Empresas: si la etiqueta de asociación todavía no existe (p.ej. estados tempranos),
+    // caer a las props que el motor sella en el ticket: nombre_empresa / empresa_id /
+    // empresa_que_factura / cliente_partner.
+    'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
+    'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
+    'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
+    'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
     // Área de Negocio = prop `area` del ticket (snapshot del LI, regla por país); fallback legacy.
