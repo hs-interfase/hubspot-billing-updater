@@ -638,9 +638,21 @@ const updateProps = {
       );
 
     } catch (err) {
+      // Distinguir 404 (el mirror ya no existe → recrear) de un fallo TRANSITORIO (429/5xx/timeout
+      // sobre un mirror VÁLIDO). Si anuláramos targetDealId ante un transitorio, caeríamos al
+      // backstop `search`, que por lag de indexado podría no ver el mirror y CREAR UN DUPLICADO.
+      const status = err?.statusCode || err?.code || err?.response?.status;
+      const isNotFound = status === 404 || /not found|no longer exists|archived/i.test(err?.message || '');
+      if (!isNotFound) {
+        logger.error(
+          { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, status, err },
+          'Fallo transitorio actualizando el mirror existente — se relanza para reintentar (NO se recrea, evita duplicado)'
+        );
+        throw err;
+      }
       logger.warn(
         { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
-        'Deal espejo UY no existe o no se pudo actualizar, se creará uno nuevo'
+        'Deal espejo UY no existe (404), se creará uno nuevo'
       );
       targetDealId = null;
     }
@@ -709,6 +721,10 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
       pais_operativo: 'Uruguay',
       es_mirror_de_py: 'true',
       deal_py_origen_id: String(sourceDealId),
+      // R1 (2026-07-05): el mirror UY se creaba SIN fecha de cierre. Es la misma oportunidad
+      // que el PY → copiamos su closedate. (El `amount`/valor lo fija Paso B' desde los prices
+      // reales del twin, porque al crear el mirror sus line items todavía no existen.)
+      ...(srcProps.closedate ? { closedate: srcProps.closedate } : {}),
       // Los prices del mirror son costos intercompany, siempre en USD:
       // no hereda la moneda del deal PY (decisión 2026-07-02).
       deal_currency_code: 'USD',
@@ -731,18 +747,33 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
       'Espejo creado'
     );
 
-    // Actualizar negocio PY: mantener Paraguay, guardar ID del espejo
-    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-      properties: {
-        pais_operativo: 'Paraguay',
-        deal_uy_mirror_id: String(targetDealId),
-      },
-    });
-
-    logger.info(
-      { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId },
-      'Deal PY actualizado: mantiene Paraguay, guardó mirror_id'
-    );
+    // Actualizar negocio PY: mantener Paraguay, guardar ID del espejo.
+    // Si esta escritura falla, el PY queda SIN deal_uy_mirror_id → en la próxima pasada el backstop
+    // podría no ver este mirror recién creado (lag del Search API) y DUPLICARLO. Por eso el fallo
+    // se avisa FUERTE (no se traga en silencio) para resolverlo antes de re-procesar.
+    try {
+      await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
+        properties: {
+          pais_operativo: 'Paraguay',
+          deal_uy_mirror_id: String(targetDealId),
+        },
+      });
+      logger.info(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId },
+        'Deal PY actualizado: mantiene Paraguay, guardó mirror_id'
+      );
+    } catch (err) {
+      logger.error(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId, err },
+        'Mirror CREADO pero NO se pudo guardar deal_uy_mirror_id en el PY — riesgo de duplicado al re-procesar; revisar manualmente'
+      );
+      reportHubSpotError({
+        level: 'warn',
+        objectType: 'deal',
+        objectId: sourceDealId,
+        message: `Mirror ${targetDealId} creado pero no se guardó deal_uy_mirror_id en el PY (${sourceDealId}). Riesgo de mirror duplicado al re-procesar — asociar el id a mano antes de la próxima pasada.`,
+      });
+    }
   }
 
   // 3c) Mirror migrado independiente: sus LIs YA espejadas (históricas) NO se
