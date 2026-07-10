@@ -259,6 +259,7 @@ export async function getDealWithLineItems(dealId) {
     "deal_currency_code",
     "hubspot_owner_id",
     "createdate",
+    "closedate",
     "hs_lastmodifieddate",
 
     // --- país / negocio ---
