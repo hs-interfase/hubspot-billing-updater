@@ -624,7 +624,7 @@ const C = {
     <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Ponele precio <strong>0</strong> y facturación <strong>manual</strong></div><div class="sd">La cantidad negativa no va en la línea (no acepta negativos) — va en el ticket.</div></div></div>
     <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Marcá <strong>NC = Sí</strong> en la línea de pedido</div><div class="sd">Con eso alcanza: el sistema lo copia al ticket solo. Marcalo antes de que se genere el ticket.</div></div></div>
     <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Guardá — se genera el ticket</div></div></div>
-    <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">Poné la <strong>cantidad</strong> del ticket en <strong>negativo</strong></div><div class="sd">Siempre la cantidad (ej. <code>-10</code>). No importa si el cupo es por monto o por horas: con eso el cupo se ajusta solo y los subtotales y totales quedan correctos.</div></div></div>
+    <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">En el ticket, poné el <strong>monto</strong> que querés acreditar y la <strong>cantidad</strong> en <strong>negativo</strong></div><div class="sd">En <strong>Monto unitario</strong> va el importe (en positivo) que querés usar en la nota de crédito — puede ser menor al original si la NC es parcial. La cantidad va siempre en negativo (ej. <code>-10</code>): no importa si el cupo es por monto o por horas, con eso el cupo se ajusta solo y los subtotales y totales quedan correctos.</div></div></div>
     <div class="step"><div class="sn">6</div><div class="sb2"><div class="st">Mandá a facturar el ticket</div><div class="sd">Se emite la factura negativa y, si aplica, se devuelve el cupo.</div></div></div>
   </div>
   <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
@@ -637,7 +637,7 @@ const C = {
   <div class="sl">Ticket <span class="tag ttk">Ticket</span></div>
   <div class="pb">${CAB}
     ${fila('Cantidad','Número','usuario','Ponela <strong>siempre en negativo</strong> (ej. <code>-10</code>). Con eso alcanza: sea cupo por monto o por horas, el cupo se ajusta correctamente y los subtotales y totales quedan con los valores correctos.')}
-    ${fila('Monto unitario','Número','usuario','Dejalo <strong>positivo</strong>, igual que en la factura original.')}
+    ${fila('Monto unitario','Número','usuario','Poné el <strong>monto que querés usar en la nota de crédito</strong>, en <strong>positivo</strong>. Puede ser menor al de la factura original si la NC es parcial.')}
     ${fila('NC','Sí/No','sistema','Llega solo desde la línea de pedido. Es solo registro.')}
     ${fila('Facturar Ahora','Sí/No','usuario','Tocar <strong>Sí</strong> para emitir la nota de crédito.')}
   </div>
