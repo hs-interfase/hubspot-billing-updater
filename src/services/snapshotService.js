@@ -207,29 +207,31 @@ export function extractLineItemSnapshots(lineItem, deal) {
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
-  // Definición 2026-07-07: costo_total_usd (LI) = FUENTE DE VERDAD del costo (total, USD).
-  //   of_costo (moneda del negocio) = costo_total_usd × dolar(LI)
-  //   of_costo_usd (nueva)          = costo_total_usd
-  // Fallback legacy (LI sin costo_total_usd): cogs × cantidad como siempre; el USD solo
-  // se deriva si hay dolar o el negocio ya es USD (si no, of_costo_usd no se escribe).
-  // Bonus: al leer costo_total_usd directo, el ticket ya no nace con costo 0 cuando el
-  // cogs se deriva en la misma corrida (hallazgo escenario F).
+  // Definición 2026-07-07 (+ copia-directa 2026-07-10): costo_total_usd (LI) = FUENTE DE VERDAD del costo (total, USD).
+  //   of_costo (moneda del negocio) = costo_total_usd × dolar(LI); fallback legacy cogs × cantidad.
+  //   of_costo_usd                  = COPIA DIRECTA de costo_total_usd (null si no está; NO se deriva del cogs).
+  // Al leer costo_total_usd directo, el ticket ya no nace con costo 0 cuando el cogs se
+  // deriva en la misma corrida (hallazgo escenario F).
   const tieneCostoUsd = lp.costo_total_usd != null && lp.costo_total_usd !== '';
   const costoTotalUsdLi = parseNumber(lp.costo_total_usd, 0);
   const dolarLi = parseNumber(lp.dolar, 0);
   const dealCurrency = String(deal?.properties?.deal_currency_code || '').toUpperCase();
 
-  let costoTotal;     // en moneda del negocio → of_costo
-  let costoTotalUsd;  // en USD → of_costo_usd (null = no derivable, no se escribe)
+  let costoTotal; // en moneda del negocio → of_costo
   if (tieneCostoUsd) {
-    costoTotalUsd = costoTotalUsdLi;
     costoTotal = dolarLi > 0 ? costoTotalUsdLi * dolarLi
       : (dealCurrency === 'USD' || !dealCurrency ? costoTotalUsdLi : costoUnitario * cantidad);
   } else {
     costoTotal = costoUnitario * cantidad;
-    costoTotalUsd = dolarLi > 0 ? costoTotal / dolarLi
-      : (dealCurrency === 'USD' ? costoTotal : null);
   }
+
+  // TC sellado del ticket: el dólar de la LÍNEA (por línea; en migrados = el Dolar de su OF)
+  // con fallback al dólar del negocio. Alimenta las props calculadas of_costo_usd/of_margen_usd
+  // (of_costo ÷ dolar). Al facturar, propagateInvoiceStateToTicket lo pisa con el dólar de la
+  // factura de Nodum (dólar real del momento de facturación).
+  const liDolar = parseNumber(lp.dolar, 0);
+  const dealDolar = parseNumber(deal?.properties?.dolar, 0);
+  const dolarTicket = liDolar > 0 ? liDolar : (dealDolar > 0 ? dealDolar : null);
 
   // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
@@ -272,8 +274,14 @@ const repetitivo = !!rawFreq && ![
     descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total en moneda del negocio (fuente: costo_total_usd × dolar; fallback cogs × cantidad)
-    ...(costoTotalUsd != null ? { of_costo_usd: costoTotalUsd } : {}), // ✅ espejo del costo en USD (G5, definición 2026-07-07)
     of_margen: montoTotal - costoTotal, // ✅ margen bruto = subtotal pre-IVA (lp.amount) − costo total. Antes leía lp.hs_margin (no se fetchea → siempre 0).
+    // Costo en USD del ticket: COPIA DIRECTA de costo_total_usd del LI (fuente de verdad, ya en USD,
+    // presente al crear el ticket). Directo = sin la carrera de timing que tenía la versión derivada
+    // de cogs/dólar. Es un número EDITABLE en el ticket (alguien puede corregirlo a mano); of_margen_usd
+    // (calc) lo referencia, así una corrección manual del costo reajusta el margen sola.
+    of_costo_usd: parseNumber(lp.costo_total_usd, null),
+    dolar: dolarTicket, // TC sellado del ticket (LI.dolar → deal.dolar); alimenta la conversión USD de facturación/margen
+
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
@@ -354,6 +362,22 @@ export function extractDealSnapshots(deal) {
 }
 
 /**
+ * Deriva el producto del ticket desde deal.producto (checkbox múltiple, valores
+ * separados por ";"). Con un solo valor lo usa directo; con varios intenta
+ * matchear contra el nombre del line item y si no matchea toma el primero.
+ * Los valores del catálogo coinciden con las opciones de ticket.of_producto
+ * (alineadas en ambos portales el 2026-07-07).
+ */
+export function deriveProductoTicket(dealProducto, liName) {
+  const values = safeString(dealProducto).split(';').map(v => v.trim()).filter(Boolean);
+  if (!values.length) return '';
+  if (values.length === 1) return values[0];
+  const name = safeString(liName).toLowerCase();
+  const hit = values.find(v => name.includes(v.toLowerCase()));
+  return hit || values[0];
+}
+
+/**
  * Combina snapshots de Deal y Line Item en un objeto listo para el Ticket.
  *
  * NUEVO MODELO DE FECHAS (sin período):
@@ -376,6 +400,9 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
+  // Producto del ticket (select of_producto, mismo catálogo que deal.producto)
+  const ofProducto = deriveProductoTicket(dp.producto, lp.name);
+
   // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
   const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
 
@@ -395,6 +422,9 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     // of_fecha_facturacion_real: (se setea después)
 
     motivo_cancelacion_del_ticket: motivoCancelacion,
+
+    // Producto (select con catálogo, para vistas por producto)
+    of_producto: ofProducto,
 
     // ✅ C) Título del invoice para usar después
     subject: invoiceTitle,

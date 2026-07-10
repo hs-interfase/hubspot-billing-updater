@@ -156,7 +156,7 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     invoice = await hubspotClient.crm.objects.basicApi.getById(
       INVOICE_OBJECT_TYPE,
       invoiceId,
-      ['etapa_de_la_factura', 'of_invoice_key', 'ticket_id', 'id_factura_nodum', 'fecha_de_emision', 'hs_createdate']    );
+      ['etapa_de_la_factura', 'of_invoice_key', 'ticket_id', 'id_factura_nodum', 'fecha_de_emision', 'hs_createdate', 'dolar']    );
   } catch (err) {
     logger.error({ module: mod, fn, invoiceId, err }, 'Error al obtener invoice');
     throw err;
@@ -242,6 +242,14 @@ export async function propagateInvoiceStateToTicket(invoiceId) {
     if (tp.fecha_real_de_facturacion !== fechaHubSpot) {
       ticketUpdate.fecha_real_de_facturacion = fechaHubSpot;
     }
+  }
+
+  // Dólar de facturación: cuando la factura viene de Nodum (nodumId presente), su `dolar`
+  // es el TC real del momento de facturación → pisa el TC sellado del ticket. Así lo ya
+  // facturado se valúa al dólar del día de la factura y lo pendiente sigue con el sellado.
+  const dolarFactura = Number(ip.dolar);
+  if (nodumId && dolarFactura > 0) {
+    ticketUpdate.dolar = dolarFactura;
   }
 
   // 5. Aplicar update en ticket

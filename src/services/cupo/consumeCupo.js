@@ -7,6 +7,63 @@ import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 
 /**
+ * CÁLCULO PURO DEL CONSUMO DE CUPO (sin HubSpot, testeable).
+ *
+ * Detección de NOTA DE CRÉDITO por SIGNO: un consumo negativo DEVUELVE cupo
+ * (resta), no depende de la marca `nc`. Solo 0 y NaN se consideran inválidos.
+ *
+ * @param {{tipoCupo:string, ticketProps?:object, dealProps?:object}} params
+ * @returns {{ok:boolean, reason?:string, consumo?:number, cupoConsumidoActual?:number,
+ *            cupoTotal?:number, cupoConsumidoNuevo?:number, cupoRestanteNuevo?:number,
+ *            cupoDeactivated?:boolean}}
+ */
+export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {} }) {
+  const tp = ticketProps || {};
+  const dp = dealProps || {};
+
+  const cupoConsumidoActual = parseNumber(dp.cupo_consumido, 0);
+  const cupoTotal = tipoCupo === 'Por Horas'
+    ? parseNumber(dp.cupo_total, 0)
+    : parseNumber(dp.cupo_total_monto ?? dp.cupo_total, 0);
+
+  let consumo = 0;
+  if (tipoCupo === 'Por Horas') {
+    const horas = parseNumber(tp.total_de_horas_consumidas, 0);
+    const cantidad = parseNumber(tp.cantidad_real, 0);
+    // NC por horas: la cantidad negativa (edición manual) manda, así devolvemos
+    // horas al cupo aunque total_de_horas_consumidas traiga un valor viejo/positivo.
+    if (cantidad < 0) {
+      consumo = cantidad;
+    } else {
+      consumo = horas !== 0 ? horas : cantidad;
+    }
+  } else if (tipoCupo === 'Por Monto') {
+    consumo = parseNumber(tp.subtotal_real, 0);
+  } else {
+    return { ok: false, reason: `tipo_de_cupo desconocido: "${tipoCupo}"` };
+  }
+
+  // NC: un consumo NEGATIVO es válido y DEVUELVE cupo. Solo se rechazan 0 y NaN.
+  if (consumo === 0 || isNaN(consumo)) {
+    return { ok: false, reason: `consumo inválido: ${consumo} (NaN o cero)` };
+  }
+
+  const cupoConsumidoNuevo = cupoConsumidoActual + consumo;
+  const cupoRestanteNuevo = cupoTotal - cupoConsumidoNuevo;
+  const cupoDeactivated = cupoRestanteNuevo <= 0;
+
+  return {
+    ok: true,
+    consumo,
+    cupoConsumidoActual,
+    cupoTotal,
+    cupoConsumidoNuevo,
+    cupoRestanteNuevo,
+    cupoDeactivated,
+  };
+}
+
+/**
  * CONSUMO IDEMPOTENTE DE CUPO POST-FACTURACIÓN
  *
  * REGLAS
@@ -122,48 +179,18 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     return { consumed: false, reason: 'tipo_de_cupo vacío' };
   }
 
-  const cupoConsumidoActual = parseNumber(dp.cupo_consumido, 0);
-  const cupoTotal = tipoCupo === 'Por Horas'
-    ? parseNumber(dp.cupo_total, 0)
-    : parseNumber(dp.cupo_total_monto ?? dp.cupo_total, 0);
-
-  // ========== CALCULAR CONSUMO SEGÚN TIPO ==========
-  let consumo = 0;
-
-if (tipoCupo === 'Por Horas') {
-    const horas = parseNumber(tp.total_de_horas_consumidas, 0);
-    const cantidad = parseNumber(tp.cantidad_real, 0);
-    // NC por horas: la cantidad negativa (edición manual) manda, así devolvemos
-    // horas al cupo aunque total_de_horas_consumidas traiga un valor viejo/positivo.
-    if (cantidad < 0) {
-      consumo = cantidad;
-    } else {
-      consumo = horas !== 0 ? horas : cantidad;
-    }
-  } else if (tipoCupo === 'Por Monto') {
-    consumo = parseNumber(tp.subtotal_real, 0);
-  } else {
-    const reason = `tipo_de_cupo desconocido: "${tipoCupo}"`;
-    logger.info({ module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, reason }, 'SKIP consumo de cupo');
-    return { consumed: false, reason };
-  }
-
-  // ========== VALIDACIÓN 5: Consumo válido ==========
-  // NOTA DE CRÉDITO: un consumo NEGATIVO es válido y DEVUELVE cupo (resta).
-  // Solo se rechazan 0 y NaN. El negativo solo puede llegar por edición manual
-  // del ticket (el LI valida price/cantidad >= 0), así que negativo = NC deliberada.
-  if (consumo === 0 || isNaN(consumo)) {
-    const reason = `consumo inválido: ${consumo} (NaN o cero)`;
+  // ========== CALCULAR CONSUMO (helper puro, testeable) ==========
+  // NC por signo: consumo negativo devuelve cupo. Detalle en calcularConsumoCupo.
+  const calc = calcularConsumoCupo({ tipoCupo, ticketProps: tp, dealProps: dp });
+  if (!calc.ok) {
     logger.info(
-      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, tipoCupo, consumo, cantidad_real: tp.cantidad_real, total_de_horas_consumidas: tp.total_de_horas_consumidas, total_real_a_facturar: tp.total_real_a_facturar, reason },
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, tipoCupo, consumo: calc.consumo, cantidad_real: tp.cantidad_real, total_de_horas_consumidas: tp.total_de_horas_consumidas, total_real_a_facturar: tp.total_real_a_facturar, reason: calc.reason },
       'SKIP consumo de cupo'
     );
-    return { consumed: false, reason };
+    return { consumed: false, reason: calc.reason };
   }
 
-  // ========== CALCULAR NUEVO ESTADO ==========
-  const cupoConsumidoNuevo = cupoConsumidoActual + consumo;
-  const cupoRestanteNuevo = cupoTotal - cupoConsumidoNuevo;
+  const { consumo, cupoConsumidoActual, cupoTotal, cupoConsumidoNuevo, cupoRestanteNuevo } = calc;
 
   logger.debug(
     { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, cupoTotal, cupoConsumidoActual, cupoConsumidoNuevo, cupoRestanteNuevo, consumo },

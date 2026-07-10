@@ -14,6 +14,8 @@ import {
   isForecastTicketStage,
   ASSOC_LABEL_EMPRESA_FACTURA,
   ASSOC_LABEL_EMPRESA_PARTNER,
+  ASSOC_TICKET_LABEL_EMPRESA_FACTURA,
+  ASSOC_TICKET_LABEL_PARTNER,
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
@@ -21,6 +23,7 @@ import { parseBool, safeString } from '../../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
+import { getAllAssociatedIds, readTicketsInChunks } from '../../utils/hubspotAssociations.js';
 
 /**
  * Garantiza que existan 24 tickets futuros para un line item en modo AUTO_RENEW.
@@ -586,35 +589,27 @@ export async function buildTicketFullProps({
  */
 async function getTicketsForDeal(dealId) {
   try {
-    const assoc = await hubspotClient.crm.associations.v4.basicApi.getPage(
-      'deals',
-      String(dealId),
-      'tickets',
-      100
-    );
-
-    const ticketIds = (assoc.results || []).map(r => String(r.toObjectId));
+    // Pagina las asociaciones (>100 posibles al asociar todo el forecast de un ganado)
+    const ticketIds = await getAllAssociatedIds(hubspotClient, 'deals', String(dealId), 'tickets');
     if (!ticketIds.length) return [];
 
-    const resp = await hubspotClient.crm.tickets.batchApi.read({
-      inputs: ticketIds.map(id => ({ id })),
-      properties: [
-        'hs_object_id',
-        'subject',
-        'of_ticket_key',
-        'of_fecha_de_facturacion',
-        'of_line_item_ids',
-        'of_estado',
-        'of_es_duplicado_clon',
-        'of_deal_id',
-        'hs_pipeline_stage',
-        'nota',
-        'createdate',
-        'hs_createdate',
-      ],
-    });
+    // Batch read troceado a <=100 para no romper con deals de muchos tickets
+    const results = await readTicketsInChunks(hubspotClient, ticketIds, [
+      'hs_object_id',
+      'subject',
+      'of_ticket_key',
+      'of_fecha_de_facturacion',
+      'of_line_item_ids',
+      'of_estado',
+      'of_es_duplicado_clon',
+      'of_deal_id',
+      'hs_pipeline_stage',
+      'nota',
+      'createdate',
+      'hs_createdate',
+    ]);
 
-    return (resp.results || []).map(t => ({
+    return results.map(t => ({
       id: String(t.id),
       properties: t.properties || {},
       createdate: t.properties?.createdate || null,
@@ -1027,7 +1022,10 @@ export function getTicketStage(billingDate, lineItem) {
 }
 
 /**
- * Obtiene los IDs de empresas asociadas al deal.
+ * Obtiene las empresas asociadas al deal, identificando por etiqueta cuál es
+ * la Empresa Factura y cuál el Partner (etiquetas deal→company).
+ * Devuelve { ids, facturaId, partnerId }; createTicketAssociations y
+ * associateAllTicketsOnClosedWon aceptan también el array legacy de ids.
  */
 export async function getDealCompanies(dealId) {
   try {
@@ -1037,14 +1035,30 @@ export async function getDealCompanies(dealId) {
       'companies',
       100
     );
-    return (resp.results || []).map(r => String(r.toObjectId));
+    const results = resp.results || [];
+    const idPorLabel = (typeId) => {
+      if (!typeId) return null;
+      const hit = results.find((r) => r.associationTypes?.some((t) => t.typeId === typeId));
+      return hit?.toObjectId ? String(hit.toObjectId) : null;
+    };
+    return {
+      ids: results.map(r => String(r.toObjectId)),
+      facturaId: idPorLabel(ASSOC_LABEL_EMPRESA_FACTURA),
+      partnerId: idPorLabel(ASSOC_LABEL_EMPRESA_PARTNER),
+    };
   } catch (err) {
     logger.warn(
       { module: 'ticketService', fn: 'getDealCompanies', dealId, err },
       'Error obteniendo companies del deal'
     );
-    return [];
+    return { ids: [], facturaId: null, partnerId: null };
   }
+}
+
+/** Normaliza el parámetro companies: array legacy de ids u objeto de getDealCompanies. */
+export function normalizeCompaniesInfo(companies) {
+  if (Array.isArray(companies)) return { ids: companies, facturaId: null, partnerId: null };
+  return companies || { ids: [], facturaId: null, partnerId: null };
 }
 
 /**
@@ -1070,19 +1084,26 @@ export async function getDealContacts(dealId) {
 
 // Asocia ticket→deal con reintento. El ticket recién creado por Phase P puede
 // no estar indexado cuando la promoción intenta asociarlo (el create falla con
-// 404/no encontrado). Reintentamos con delay para que HubSpot lo indexe.
+// 404/no encontrado). Reintentamos con backoff creciente para darle tiempo a
+// HubSpot a indexarlo. Los 429/5xx/red transitoria ya los cubre el proxy
+// hubspotClient (withRetry); este loop cubre específicamente el lag de indexación.
 // Las demás asociaciones (line item, company, contact) apuntan a objetos ya
 // existentes y no sufren este lag, por eso van directas.
-async function associateTicketToDealWithRetry(ticketId, dealId) {
-  for (const delay of [0, 500, 1000]) {
-    if (delay) await new Promise(r => setTimeout(r, delay));
+// Devuelve true si la asociación quedó creada; false si se agotaron los reintentos.
+// `client` y `backoffsMs` son inyectables solo para tests (defaults = producción).
+async function associateTicketToDealWithRetry(ticketId, dealId, { client = hubspotClient, backoffsMs } = {}) {
+  // Backoff creciente (~10s acumulados): el índice de asociaciones de HubSpot
+  // puede tardar varios segundos en ver un ticket recién creado.
+  const delays = backoffsMs || [0, 500, 1500, 3000, 5000];
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) await new Promise(r => setTimeout(r, delays[i]));
     try {
-      await hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, []);
+      await client.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, []);
       return true;
     } catch (err) {
-      const last = delay === 1000;
+      const last = i === delays.length - 1;
       logger[last ? 'warn' : 'debug'](
-        { module: 'ticketService', fn: 'associateTicketToDealWithRetry', ticketId, dealId, delay, err },
+        { module: 'ticketService', fn: 'associateTicketToDealWithRetry', ticketId, dealId, attempt: i + 1, err },
         last ? 'Error asociando deal (agotados los reintentos)' : 'Asociación ticket→deal falló, reintentando'
       );
     }
@@ -1090,31 +1111,75 @@ async function associateTicketToDealWithRetry(ticketId, dealId) {
   return false;
 }
 
-export async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds) {
-  const associations = [];
+// Crea las asociaciones nativas del ticket. La asociación ticket→deal es la
+// CRÍTICA (visibilidad del ticket desde el negocio + lectores por asociación +
+// Paso C de la migración): NO se traga su fallo. Si tras los reintentos no
+// queda creada, se reporta como accionable para que no quede huérfana en
+// silencio (fue la causa del ~49% de huérfanos del 4-jul). El hook de
+// closedwon (associateAllTicketsOnClosedWon) es la red de seguridad que
+// re-asocia lo que aún falte al ganar el negocio.
+// Devuelve true si la asociación ticket→deal quedó creada.
+// `deps` es inyectable solo para tests (client / report / backoffsMs).
+export async function createTicketAssociations(ticketId, dealId, lineItemId, companies, contactIds, deps = {}) {
+  const client = deps.hubspotClient || hubspotClient;
+  const report = deps.reportIfActionable || reportIfActionable;
+  const { ids: companyIds, facturaId, partnerId } = normalizeCompaniesInfo(companies);
 
-  associations.push(associateTicketToDealWithRetry(ticketId, dealId));
+  // La asociación al deal corre en paralelo con el resto pero capturamos su
+  // resultado (las demás traen su propio catch → warn y no bloquean).
+  const dealAssocPromise = associateTicketToDealWithRetry(ticketId, dealId, { client, backoffsMs: deps.backoffsMs });
 
-  associations.push(
-    hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'line_items', lineItemId, [])
+  const others = [];
+  others.push(
+    client.crm.associations.v4.basicApi.create('tickets', ticketId, 'line_items', lineItemId, [])
       .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, lineItemId, err }, 'Error asociando line item'))
   );
 
+  // Etiquetas ticket→company: la empresa con label "Empresa Factura"/"Partner"
+  // en el deal recibe la misma etiqueta en el ticket (además de la asociación
+  // sin etiqueta, que se mantiene para todas).
+  const labelSpec = (companyId) => {
+    const specs = [];
+    if (ASSOC_TICKET_LABEL_EMPRESA_FACTURA > 0 && companyId === facturaId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_EMPRESA_FACTURA });
+    }
+    if (ASSOC_TICKET_LABEL_PARTNER > 0 && companyId === partnerId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_PARTNER });
+    }
+    return specs;
+  };
+
   for (const companyId of companyIds) {
-    associations.push(
-      hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, [])
+    others.push(
+      client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, [])
+        .then(() => {
+          const specs = labelSpec(companyId);
+          if (!specs.length) return undefined;
+          return client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, specs);
+        })
         .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, companyId, err }, 'Error asociando company'))
     );
   }
 
   for (const contactId of contactIds) {
-    associations.push(
-      hubspotClient.crm.associations.v4.basicApi.create('tickets', ticketId, 'contacts', contactId, [])
+    others.push(
+      client.crm.associations.v4.basicApi.create('tickets', ticketId, 'contacts', contactId, [])
         .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, contactId, err }, 'Error asociando contact'))
     );
   }
 
-  await Promise.all(associations);
+  const [dealAssocOk] = await Promise.all([dealAssocPromise, ...others]);
+
+  if (!dealAssocOk) {
+    report({
+      objectType: 'ticket',
+      objectId: String(ticketId),
+      message: `No se pudo asociar el ticket al negocio ${dealId} (quedaría huérfano)`,
+      err: new Error('associateTicketToDealWithRetry agotó los reintentos'),
+    });
+  }
+
+  return dealAssocOk;
 }
 
 /**

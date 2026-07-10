@@ -44,9 +44,12 @@ async function findUnownedTicketsForLineItem(lineItemId) {
 
 /**
  * Asigna hubspot_owner_id a todos los tickets (sin owner) de cada line item,
- * tomando el valor de responsable_asignado del line item.
+ * tomando el valor de responsable_asignado del line item; si el LI no tiene
+ * responsable, cae al vendedor del negocio (hubspot_owner_id del deal —
+ * regla confirmada por la usuaria 2026-07-08).
  *
- * Solo corre si el deal califica (closedwon o posterior).
+ * Solo corre si el deal califica (closedwon o posterior) — así la notificación
+ * de asignación de HubSpot le llega al vendedor recién al ganar el negocio.
  *
  * @param {string} dealId
  * @param {Array}  lineItems - line items del deal (con properties)
@@ -64,16 +67,21 @@ export async function assignTicketOwners({ dealId, lineItems, dealProps }) {
   let assigned = 0;
   let skipped = 0;
 
+  const vendedorDeal = dealProps?.hubspot_owner_id
+    ? String(dealProps.hubspot_owner_id).trim()
+    : null;
+
   for (const lineItem of lineItems) {
     const lineItemId = String(lineItem?.id || lineItem?.properties?.hs_object_id);
-    const responsable = lineItem?.properties?.responsable_asignado
+    const responsableLi = lineItem?.properties?.responsable_asignado
       ? String(lineItem.properties.responsable_asignado).trim()
       : null;
+    const responsable = responsableLi || vendedorDeal;
 
     if (!responsable) {
       logger.debug(
         { module: 'assignTicketOwners', dealId, lineItemId },
-        'Line item sin responsable_asignado, omitiendo'
+        'Line item sin responsable_asignado y deal sin vendedor, omitiendo'
       );
       skipped++;
       continue;

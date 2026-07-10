@@ -36,7 +36,7 @@ test('sin costo → margen = monto completo (caso a vigilar: costo no cargado)',
   assert.equal(snap.of_margen, 500); // sobreestimado por falta de costo
 });
 
-// ── Definición 2026-07-07: costo_total_usd = fuente de verdad ──────────────
+// ── Definición 2026-07-07 + copia-directa 2026-07-10: costo_total_usd = fuente de verdad ──
 
 test('negocio PYG: of_costo = costo_total_usd × dolar, of_costo_usd = costo_total_usd', () => {
   const dealPyg = { properties: { deal_currency_code: 'PYG' } };
@@ -64,16 +64,11 @@ test('escenario F resuelto: cogs aún 0 pero costo_total_usd presente → of_cos
   assert.equal(snap.of_margen, 1900);
 });
 
-test('legacy sin costo_total_usd: deal USD deriva of_costo_usd desde cogs; deal UYU sin dolar NO lo escribe', () => {
+test('sin costo_total_usd: of_costo = cogs × cantidad; of_costo_usd = null (NO se deriva del cogs)', () => {
   const liUsd = makeLI({ price: '100', quantity: '2', hs_cost_of_goods_sold: '40', amount: '200' });
   const snapUsd = extractLineItemSnapshots(liUsd, { properties: { deal_currency_code: 'USD' } });
-  assert.equal(snapUsd.of_costo, 80);
-  assert.equal(snapUsd.of_costo_usd, 80); // USD: cogs ya es USD
-
-  const liUyu = makeLI({ price: '4000', quantity: '1', hs_cost_of_goods_sold: '1600', amount: '4000' });
-  const snapUyu = extractLineItemSnapshots(liUyu, { properties: { deal_currency_code: 'UYU' } });
-  assert.equal(snapUyu.of_costo, 1600);            // moneda del negocio, como siempre
-  assert.equal('of_costo_usd' in snapUyu, false);  // sin dolar no se adivina el USD
+  assert.equal(snapUsd.of_costo, 80);        // cogs × cantidad, moneda del negocio
+  assert.equal(snapUsd.of_costo_usd, null);  // copia-directa: sin costo_total_usd no se adivina el USD
 });
 
 // ── Intercompany (regla informes 2026-07-07): FACT 0 / MB con valor ─────────
@@ -91,4 +86,37 @@ test('deal normal → of_intercompany=false explícito', () => {
   const li = makeLI({ price: '100', quantity: '1', amount: '100' });
   assert.equal(extractLineItemSnapshots(li, deal).of_intercompany, 'false');
   assert.equal(extractLineItemSnapshots(li, { properties: { es_mirror_de_py: 'false' } }).of_intercompany, 'false');
+});
+
+// of_costo_usd = copia DIRECTA de costo_total_usd del LI (editable; sin derivar → sin carrera).
+test('of_costo_usd = costo_total_usd del line item (copia directa)', () => {
+  const li = makeLI({ price: '100', quantity: '10', amount: '1000', costo_total_usd: '305' });
+  const snap = extractLineItemSnapshots(li, deal);
+  assert.equal(snap.of_costo_usd, 305);
+});
+
+test('of_costo_usd = null si el LI no tiene costo_total_usd (costo no cargado, editable)', () => {
+  const li = makeLI({ price: '100', quantity: '1', amount: '100' });
+  const snap = extractLineItemSnapshots(li, deal);
+  assert.equal(snap.of_costo_usd, null);
+});
+
+// TC sellado del ticket: alimenta la conversión USD de facturación/margen (of_margen_usd calc).
+test('dolar del ticket = dolar de la LÍNEA', () => {
+  const li = makeLI({ price: '100', quantity: '1', amount: '100', dolar: '40.17' });
+  const snap = extractLineItemSnapshots(li, deal);
+  assert.equal(snap.dolar, 40.17);
+});
+
+test('dolar del ticket cae al dolar del NEGOCIO si la línea no lo tiene', () => {
+  const li = makeLI({ price: '100', quantity: '1', amount: '100' }); // sin dolar en el LI
+  const dealConDolar = { properties: { dolar: '6043.31' } };
+  const snap = extractLineItemSnapshots(li, dealConDolar);
+  assert.equal(snap.dolar, 6043.31);
+});
+
+test('dolar del ticket = null si no hay ni en línea ni en negocio (calc cae al fallback fx)', () => {
+  const li = makeLI({ price: '100', quantity: '1', amount: '100' });
+  const snap = extractLineItemSnapshots(li, deal);
+  assert.equal(snap.dolar, null);
 });
