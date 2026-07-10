@@ -79,6 +79,12 @@ export const ASSOC_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_LABEL_EMPR
 // Default 0 = deshabilitado. La comparten cliente_partner (ticketService) y la doble etiqueta del mirror (dealMirroring).
 export const ASSOC_LABEL_EMPRESA_PARTNER = parseInt(process.env.ASSOC_LABEL_EMPRESA_PARTNER || '0', 10);
 
+// Etiquetas ticket→company (par USER_DEFINED creado 2026-07-07 en ambos portales).
+// typeId por portal: "Empresa Factura" SANDBOX=5 / PROD=13; "Partner" SANDBOX=7 / PROD=11.
+// Default 0 = deshabilitado (el ticket se asocia igual, pero sin etiqueta).
+export const ASSOC_TICKET_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_TICKET_LABEL_EMPRESA_FACTURA || '0', 10);
+export const ASSOC_TICKET_LABEL_PARTNER = parseInt(process.env.ASSOC_TICKET_LABEL_PARTNER || '0', 10);
+
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
 

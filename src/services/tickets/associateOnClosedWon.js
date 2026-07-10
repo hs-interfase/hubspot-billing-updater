@@ -17,8 +17,12 @@
 // del motor (rate-limit + retry del proxy).
 
 import { hubspotClient } from '../../hubspotClient.js';
-import { getDealCompanies, getDealContacts } from './ticketService.js';
-import { TICKET_PIPELINE } from '../../config/constants.js';
+import { getDealCompanies, getDealContacts, normalizeCompaniesInfo } from './ticketService.js';
+import {
+  TICKET_PIPELINE,
+  ASSOC_TICKET_LABEL_EMPRESA_FACTURA,
+  ASSOC_TICKET_LABEL_PARTNER,
+} from '../../config/constants.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { parseBool } from '../../utils/parsers.js';
 import logger from '../../../lib/logger.js';
@@ -139,10 +143,25 @@ export async function associateAllTicketsOnClosedWon({
   if (!tickets.length) return stats;
 
   // Companies/contacts del deal: una sola lectura, se reutiliza para todos.
-  let companyIds = [];
+  // getDealCompanies devuelve { ids, facturaId, partnerId }; los tests legacy
+  // inyectan arrays de ids → normalizeCompaniesInfo acepta ambas formas.
+  let companiesInfo = { ids: [], facturaId: null, partnerId: null };
   let contactIds = [];
-  try { companyIds = await getDealCompaniesFn(dealId); } catch { /* getDealCompanies ya loguea */ }
+  try { companiesInfo = normalizeCompaniesInfo(await getDealCompaniesFn(dealId)); } catch { /* getDealCompanies ya loguea */ }
   try { contactIds = await getDealContactsFn(dealId); } catch { /* getDealContacts ya loguea */ }
+  const companyIds = companiesInfo.ids;
+
+  // Specs de etiqueta ticket→company para Empresa Factura / Partner.
+  const companyLabelSpecs = (companyId) => {
+    const specs = [];
+    if (ASSOC_TICKET_LABEL_EMPRESA_FACTURA > 0 && companyId === companiesInfo.facturaId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_EMPRESA_FACTURA });
+    }
+    if (ASSOC_TICKET_LABEL_PARTNER > 0 && companyId === companiesInfo.partnerId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_PARTNER });
+    }
+    return specs;
+  };
 
   for (const t of tickets) {
     const ticketId = String(t.id);
@@ -168,6 +187,10 @@ export async function associateAllTicketsOnClosedWon({
           const compSet = await ticketAssocSet(client, ticketId, 'companies');
           for (const c of companyIds) {
             if (await ensureAssoc(client, ticketId, 'companies', c, compSet)) stats.companyLinked++;
+            const specs = companyLabelSpecs(String(c));
+            if (specs.length) {
+              await client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', String(c), specs);
+            }
           }
         }
         if (contactIds.length) {

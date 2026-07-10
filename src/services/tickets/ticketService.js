@@ -14,6 +14,8 @@ import {
   isForecastTicketStage,
   ASSOC_LABEL_EMPRESA_FACTURA,
   ASSOC_LABEL_EMPRESA_PARTNER,
+  ASSOC_TICKET_LABEL_EMPRESA_FACTURA,
+  ASSOC_TICKET_LABEL_PARTNER,
 } from '../../config/constants.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
@@ -1020,7 +1022,10 @@ export function getTicketStage(billingDate, lineItem) {
 }
 
 /**
- * Obtiene los IDs de empresas asociadas al deal.
+ * Obtiene las empresas asociadas al deal, identificando por etiqueta cuál es
+ * la Empresa Factura y cuál el Partner (etiquetas deal→company).
+ * Devuelve { ids, facturaId, partnerId }; createTicketAssociations y
+ * associateAllTicketsOnClosedWon aceptan también el array legacy de ids.
  */
 export async function getDealCompanies(dealId) {
   try {
@@ -1030,14 +1035,30 @@ export async function getDealCompanies(dealId) {
       'companies',
       100
     );
-    return (resp.results || []).map(r => String(r.toObjectId));
+    const results = resp.results || [];
+    const idPorLabel = (typeId) => {
+      if (!typeId) return null;
+      const hit = results.find((r) => r.associationTypes?.some((t) => t.typeId === typeId));
+      return hit?.toObjectId ? String(hit.toObjectId) : null;
+    };
+    return {
+      ids: results.map(r => String(r.toObjectId)),
+      facturaId: idPorLabel(ASSOC_LABEL_EMPRESA_FACTURA),
+      partnerId: idPorLabel(ASSOC_LABEL_EMPRESA_PARTNER),
+    };
   } catch (err) {
     logger.warn(
       { module: 'ticketService', fn: 'getDealCompanies', dealId, err },
       'Error obteniendo companies del deal'
     );
-    return [];
+    return { ids: [], facturaId: null, partnerId: null };
   }
+}
+
+/** Normaliza el parámetro companies: array legacy de ids u objeto de getDealCompanies. */
+export function normalizeCompaniesInfo(companies) {
+  if (Array.isArray(companies)) return { ids: companies, facturaId: null, partnerId: null };
+  return companies || { ids: [], facturaId: null, partnerId: null };
 }
 
 /**
@@ -1080,7 +1101,7 @@ async function associateTicketToDealWithRetry(ticketId, dealId, { client = hubsp
       await client.crm.associations.v4.basicApi.create('tickets', ticketId, 'deals', dealId, []);
       return true;
     } catch (err) {
-      const last = i === backoffsMs.length - 1;
+      const last = i === delays.length - 1;
       logger[last ? 'warn' : 'debug'](
         { module: 'ticketService', fn: 'associateTicketToDealWithRetry', ticketId, dealId, attempt: i + 1, err },
         last ? 'Error asociando deal (agotados los reintentos)' : 'Asociación ticket→deal falló, reintentando'
@@ -1099,9 +1120,10 @@ async function associateTicketToDealWithRetry(ticketId, dealId, { client = hubsp
 // re-asocia lo que aún falte al ganar el negocio.
 // Devuelve true si la asociación ticket→deal quedó creada.
 // `deps` es inyectable solo para tests (client / report / backoffsMs).
-export async function createTicketAssociations(ticketId, dealId, lineItemId, companyIds, contactIds, deps = {}) {
+export async function createTicketAssociations(ticketId, dealId, lineItemId, companies, contactIds, deps = {}) {
   const client = deps.hubspotClient || hubspotClient;
   const report = deps.reportIfActionable || reportIfActionable;
+  const { ids: companyIds, facturaId, partnerId } = normalizeCompaniesInfo(companies);
 
   // La asociación al deal corre en paralelo con el resto pero capturamos su
   // resultado (las demás traen su propio catch → warn y no bloquean).
@@ -1113,9 +1135,28 @@ export async function createTicketAssociations(ticketId, dealId, lineItemId, com
       .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, lineItemId, err }, 'Error asociando line item'))
   );
 
+  // Etiquetas ticket→company: la empresa con label "Empresa Factura"/"Partner"
+  // en el deal recibe la misma etiqueta en el ticket (además de la asociación
+  // sin etiqueta, que se mantiene para todas).
+  const labelSpec = (companyId) => {
+    const specs = [];
+    if (ASSOC_TICKET_LABEL_EMPRESA_FACTURA > 0 && companyId === facturaId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_EMPRESA_FACTURA });
+    }
+    if (ASSOC_TICKET_LABEL_PARTNER > 0 && companyId === partnerId) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_TICKET_LABEL_PARTNER });
+    }
+    return specs;
+  };
+
   for (const companyId of companyIds) {
     others.push(
       client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, [])
+        .then(() => {
+          const specs = labelSpec(companyId);
+          if (!specs.length) return undefined;
+          return client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', companyId, specs);
+        })
         .catch(err => logger.warn({ module: 'ticketService', fn: 'createTicketAssociations', ticketId, companyId, err }, 'Error asociando company'))
     );
   }
