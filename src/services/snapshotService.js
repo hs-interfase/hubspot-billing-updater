@@ -210,6 +210,14 @@ export function extractLineItemSnapshots(lineItem, deal) {
   // Calcular costo total (unitario × cantidad)
   const costoTotal = costoUnitario * cantidad;
 
+  // TC sellado del ticket: el dólar de la LÍNEA (por línea; en migrados = el Dolar de su OF)
+  // con fallback al dólar del negocio. Alimenta las props calculadas of_costo_usd/of_margen_usd
+  // (of_costo ÷ dolar). Al facturar, propagateInvoiceStateToTicket lo pisa con el dólar de la
+  // factura de Nodum (dólar real del momento de facturación).
+  const liDolar = parseNumber(lp.dolar, 0);
+  const dealDolar = parseNumber(deal?.properties?.dolar, 0);
+  const dolarTicket = liDolar > 0 ? liDolar : (dealDolar > 0 ? dealDolar : null);
+
   // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
 
@@ -252,6 +260,13 @@ const repetitivo = !!rawFreq && ![
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total (unitario × cantidad)
     of_margen: montoTotal - costoTotal, // ✅ margen bruto = subtotal pre-IVA (lp.amount) − costo total. Antes leía lp.hs_margin (no se fetchea → siempre 0).
+    // Costo en USD del ticket: COPIA DIRECTA de costo_total_usd del LI (fuente de verdad, ya en USD,
+    // presente al crear el ticket). Directo = sin la carrera de timing que tenía la versión derivada
+    // de cogs/dólar. Es un número EDITABLE en el ticket (alguien puede corregirlo a mano); of_margen_usd
+    // (calc) lo referencia, así una corrección manual del costo reajusta el margen sola.
+    of_costo_usd: parseNumber(lp.costo_total_usd, null),
+    dolar: dolarTicket, // TC sellado del ticket (LI.dolar → deal.dolar); alimenta la conversión USD de facturación/margen
+
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
@@ -328,6 +343,22 @@ export function extractDealSnapshots(deal) {
 }
 
 /**
+ * Deriva el producto del ticket desde deal.producto (checkbox múltiple, valores
+ * separados por ";"). Con un solo valor lo usa directo; con varios intenta
+ * matchear contra el nombre del line item y si no matchea toma el primero.
+ * Los valores del catálogo coinciden con las opciones de ticket.of_producto
+ * (alineadas en ambos portales el 2026-07-07).
+ */
+export function deriveProductoTicket(dealProducto, liName) {
+  const values = safeString(dealProducto).split(';').map(v => v.trim()).filter(Boolean);
+  if (!values.length) return '';
+  if (values.length === 1) return values[0];
+  const name = safeString(liName).toLowerCase();
+  const hit = values.find(v => name.includes(v.toLowerCase()));
+  return hit || values[0];
+}
+
+/**
  * Combina snapshots de Deal y Line Item en un objeto listo para el Ticket.
  *
  * NUEVO MODELO DE FECHAS (sin período):
@@ -350,6 +381,9 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
+  // Producto del ticket (select of_producto, mismo catálogo que deal.producto)
+  const ofProducto = deriveProductoTicket(dp.producto, lp.name);
+
   // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
   const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
 
@@ -369,6 +403,9 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
     // of_fecha_facturacion_real: (se setea después)
 
     motivo_cancelacion_del_ticket: motivoCancelacion,
+
+    // Producto (select con catálogo, para vistas por producto)
+    of_producto: ofProducto,
 
     // ✅ C) Título del invoice para usar después
     subject: invoiceTitle,
