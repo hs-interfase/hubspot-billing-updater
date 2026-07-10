@@ -23,6 +23,9 @@ import { initNodumUploadsTable } from './api/nodum/nodumUpload.js'
 import invoiceEditorRouter from './api/invoice-editor/invoices.js'
 import { invoiceEditorAuth } from './api/invoice-editor/auth.js'
 
+// ── Registro de auditoría HubSpot ───────────────
+import auditLogRouter from './api/audit-log/auditLog.js'
+
 // ── Export Reporte ──────────────────────────────
 import exportRouter from './api/exportRouter.js'
 import { initExportSnapshotsTable } from './src/db-export.js'
@@ -72,6 +75,12 @@ app.get('/nodum', invoiceEditorAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'nodum-upload.html'))
 })
 app.use('/nodum', invoiceEditorAuth, nodumUploadRouter)
+
+// ── Registro de auditoría HubSpot (con auth) ──
+app.use('/audit-log/api', invoiceEditorAuth, auditLogRouter)
+app.get('/audit-log', invoiceEditorAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'audit-log.html'))
+})
 
 // ── Export Reporte ──
 app.use('/api/export', invoiceEditorAuth, exportRouter)

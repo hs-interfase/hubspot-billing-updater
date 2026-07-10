@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro de auditoría · HubSpot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2e3248;
+      --accent:   #ff7a59;
+      --accent-d: #cc5e40;
+      --text:     #e2e4ef;
+      --muted:    #7b7f9e;
+      --green:    #3ecf8e;
+      --radius:   8px;
+    }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; min-height: 100vh;
+    }
+
+    /* ── Nav bar (shared) ── */
+    .topnav {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 24px; display: flex; align-items: center; gap: 0;
+      position: sticky; top: 0; z-index: 100; height: 48px;
+    }
+    .topnav .brand {
+      font-size: 14px; font-weight: 700; color: var(--accent);
+      margin-right: 24px; text-decoration: none;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .topnav .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .topnav a {
+      color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
+      padding: 14px 14px; border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { color: var(--text); border-bottom-color: var(--accent); }
+    .topnav a.ext { margin-left: auto; opacity: .7; }
+    .topnav a.ext:hover { opacity: 1; }
+
+    /* ── Content ── */
+    .content { padding: 28px 24px; max-width: 1200px; margin: 0 auto; }
+
+    /* ── Filtros ── */
+    .filters {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
+      display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end;
+      margin-bottom: 20px;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .filter-group label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--muted);
+    }
+    .filter-group input, .filter-group select {
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); border-radius: 6px; padding: 8px 12px;
+      font-size: 13px; width: 180px; transition: border-color .2s;
+    }
+    .filter-group input:focus, .filter-group select:focus { outline: none; border-color: var(--accent); }
+    .filter-group input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.6); cursor: pointer; }
+    .check-group { display: flex; align-items: center; gap: 8px; padding-bottom: 9px; color: var(--muted); font-size: 13px; }
+    .check-group input { accent-color: var(--accent); cursor: pointer; }
+    .btn {
+      padding: 8px 18px; border-radius: 6px; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: none; transition: background .2s, opacity .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-d); }
+    .btn-primary:disabled { opacity: .5; cursor: default; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    /* ── Stats bar ── */
+    .stats { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .stats strong { color: var(--text); }
+    .stats .rec-name {
+      font-family: monospace; font-size: 12px; background: var(--surface2);
+      border: 1px solid var(--border); padding: 3px 8px; border-radius: 4px; color: var(--accent);
+    }
+    .stats .btn { margin-left: auto; }
+
+    /* ── Tabla ── */
+    .table-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: var(--surface2); padding: 12px 16px; text-align: left;
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: 10px 16px; vertical-align: top; }
+    .ts { white-space: nowrap; color: var(--muted); font-size: 13px; }
+    .ts strong { color: var(--text); font-weight: 600; }
+    .prop-label { font-weight: 600; }
+    .prop-code { display: block; font-family: monospace; font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .val { max-width: 320px; word-break: break-word; font-size: 13px; }
+    .val-empty { color: var(--muted); font-style: italic; }
+    .val-before { color: #ff8f8f; }
+    .val-after  { color: var(--green); }
+    .badge {
+      display: inline-block; background: var(--surface2); border: 1px solid var(--border);
+      padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .badge.b-ui   { color: var(--green); }
+    .badge.b-api  { color: var(--muted); }
+    .user-tag { color: var(--green); font-size: 12px; font-weight: 600; white-space: nowrap; }
+
+    /* ── Empty / Loading / Error ── */
+    .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
+    .empty-state .icon { font-size: 36px; margin-bottom: 12px; }
+    .loading { text-align: center; padding: 40px; color: var(--muted); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 20px; height: 20px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite; margin-bottom: 10px;
+    }
+    @media (max-width: 600px) { .topnav { overflow-x: auto; } }
+  </style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/admin" class="brand"><span class="dot"></span> Interfase</a>
+  <a href="/admin">Panel</a>
+  <a href="/invoice-editor">Editor</a>
+  <a href="/invoice-editor/audit">Auditoría</a>
+  <a href="/audit-log" class="active">Registro HubSpot</a>
+  <a href="/nodum">Nodum</a>
+  <a href="/guia" target="_blank" class="ext">📖 Guía ↗</a>
+</nav>
+
+<div class="content">
+  <!-- Filtros -->
+  <div class="filters">
+    <div class="filter-group">
+      <label>Objeto</label>
+      <select id="f-objeto">
+        <option value="deal">Negocio (deal)</option>
+        <option value="lineitem">Line item</option>
+        <option value="ticket">Ticket (OF)</option>
+        <option value="factura">Factura</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>ID del registro</label>
+      <input type="text" id="f-id" placeholder="ej. 62205651238" inputmode="numeric" />
+    </div>
+    <div class="filter-group">
+      <label>Desde</label>
+      <input type="date" id="f-desde" />
+    </div>
+    <div class="filter-group">
+      <label>Hasta</label>
+      <input type="date" id="f-hasta" />
+    </div>
+    <div class="check-group">
+      <input type="checkbox" id="f-todo" />
+      <label for="f-todo" style="text-transform:none;letter-spacing:0;font-size:13px;">Incluir cambios de sistema</label>
+    </div>
+    <button class="btn btn-primary" id="btn-search">Buscar</button>
+    <button class="btn btn-ghost" id="btn-clear">Limpiar</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats" id="stats"></div>
+
+  <!-- Tabla -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Fecha / Hora</th>
+          <th>Propiedad</th>
+          <th>Antes</th>
+          <th>Después</th>
+          <th>Origen</th>
+          <th>Usuario</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="6"><div class="empty-state"><div class="icon">🔎</div><p>Elegí el objeto, ingresá el ID y presioná Buscar.</p></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const API = '/audit-log/api'
+  let ultimoResultado = null
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const valHtml = (v, cls) => v === '' ? '<span class="val-empty">(vacío)</span>' : `<span class="${cls}">${esc(v)}</span>`
+
+  async function buscar() {
+    const objeto = document.getElementById('f-objeto').value
+    const id = document.getElementById('f-id').value.trim()
+    const desde = document.getElementById('f-desde').value
+    const hasta = document.getElementById('f-hasta').value
+    const todo = document.getElementById('f-todo').checked
+
+    const tbody = document.getElementById('tbody')
+    const stats = document.getElementById('stats')
+
+    if (!/^\d+$/.test(id)) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="icon">⚠️</div><p>Ingresá el ID numérico del registro.</p></div></td></tr>`
+      return
+    }
+
+    const btn = document.getElementById('btn-search')
+    btn.disabled = true
+    ultimoResultado = null
+    stats.textContent = ''
+    tbody.innerHTML = `<tr><td colspan="6"><div class="loading"><div class="spinner"></div><br>Consultando historial en HubSpot…</div></td></tr>`
+
+    const p = new URLSearchParams({ objeto, id })
+    if (desde) p.set('desde', desde)
+    if (hasta) p.set('hasta', hasta)
+    if (todo) p.set('todo', '1')
+
+    try {
+      const res = await fetch(`${API}?${p.toString()}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      ultimoResultado = json
+      render(json)
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="icon">⚠️</div><p>${esc(err.message)}</p></div></td></tr>`
+    } finally {
+      btn.disabled = false
+    }
+  }
+
+  function render(json) {
+    const tbody = document.getElementById('tbody')
+    const stats = document.getElementById('stats')
+    stats.innerHTML = `<span class="badge">${esc(json.objeto)} ${esc(json.id)}</span>` +
+      `<span class="rec-name">${esc(json.nombre)}</span>` +
+      `<span><strong>${json.total}</strong> ${json.total === 1 ? 'cambio' : 'cambios'}</span>` +
+      (json.total > 0 ? `<button class="btn btn-ghost" id="btn-csv">⬇ Descargar CSV</button>` : '')
+    document.getElementById('btn-csv')?.addEventListener('click', descargarCsv)
+
+    if (!json.cambios.length) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="icon">📭</div><p>Sin cambios en el rango pedido.</p></div></td></tr>`
+      return
+    }
+    tbody.innerHTML = json.cambios.map((c) => `
+      <tr>
+        <td class="ts"><strong>${esc(c.fecha)}</strong> ${esc(c.hora)}</td>
+        <td><span class="prop-label">${esc(c.label)}</span><span class="prop-code">${esc(c.prop)}</span></td>
+        <td class="val">${valHtml(c.anterior, 'val-before')}</td>
+        <td class="val">${valHtml(c.nuevo, 'val-after')}</td>
+        <td><span class="badge ${c.origen === 'Usuario (UI)' ? 'b-ui' : 'b-api'}">${esc(c.origen)}</span></td>
+        <td>${c.usuario ? `<span class="user-tag">${esc(c.usuario)}</span>` : '<span class="val-empty">—</span>'}</td>
+      </tr>`).join('')
+  }
+
+  function descargarCsv() {
+    if (!ultimoResultado) return
+    const escCsv = (s) => { s = String(s ?? ''); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+    const lineas = [
+      'fecha;hora;propiedad;etiqueta;valor_anterior;valor_nuevo;origen;usuario',
+      ...ultimoResultado.cambios.map((c) =>
+        [c.fecha, c.hora, c.prop, c.label, c.anterior, c.nuevo, c.origen, c.usuario].map(escCsv).join(';')),
+    ]
+    // BOM para que Excel abra el UTF-8 bien
+    const blob = new Blob(['﻿' + lineas.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `registro_auditoria_${ultimoResultado.objeto.replace(/\s+/g, '_')}_${ultimoResultado.id}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  document.getElementById('btn-search').addEventListener('click', buscar)
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    document.getElementById('f-id').value = ''
+    document.getElementById('f-desde').value = ''
+    document.getElementById('f-hasta').value = ''
+    document.getElementById('f-todo').checked = false
+    document.getElementById('stats').textContent = ''
+    ultimoResultado = null
+    document.getElementById('tbody').innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="icon">🔎</div><p>Elegí el objeto, ingresá el ID y presioná Buscar.</p></div></td></tr>`
+  })
+  ;['f-id', 'f-desde', 'f-hasta'].forEach((id) => {
+    document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') buscar() })
+  })
+</script>
+</body>
+</html>
