@@ -18,6 +18,7 @@
 import logger from '../../../lib/logger.js';
 import { parseBool } from '../../utils/parsers.js';
 import { buildDealUrl } from '../../utils/hubspotPortal.js';
+import { EMPRESA_EMISORA_MAP } from './empresaEmisora.js'; // dedupe con buildMensajeFacturacion
 
 // Flag de debug temporal: si SHOW_NULLS=true, las filas sin dato se muestran
 // igual con su título y "(sin datos)", para verificar que las propiedades llegan.
@@ -44,22 +45,7 @@ function resolveTaxLabel(taxGroupId) {
   return TAX_GROUP_LABELS[raw] || raw || '-';
 }
 
-// ────────────────────────────────────────────────────────────
-// Mapeo hs_product_id → empresa emisora
-// ────────────────────────────────────────────────────────────
-
-const EMPRESA_EMISORA_MAP = {
-  '33688819739': 'ISA',
-  '33695807329': 'ISA',
-  '33695559578': 'ISA',
-  '33688695870': 'ISA',
-  '33688695865': 'Interfase',
-  '33688819740': 'Interfase',
-  '33695559590': 'ISA PY',
-  '33688695889': 'ISA PY',
-  '33695559589': 'ISA PY',
-  '33688943634': 'ISA PY',
-};
+// EMPRESA_EMISORA_MAP → importado de ./empresaEmisora.js (dedupe con buildMensajeFacturacion, 2026-07-09)
 
 function resolverEmpresaEmisora(lp) {
   const productId = String(lp.hs_product_id || '').trim();
