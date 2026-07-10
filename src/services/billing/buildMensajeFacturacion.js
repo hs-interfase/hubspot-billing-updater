@@ -8,27 +8,13 @@
 import { TICKET_PIPELINE } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
 import { buildTicketUrl } from '../../utils/hubspotPortal.js';
+import { EMPRESA_EMISORA_MAP } from './empresaEmisora.js'; // dedupe con buildMensajeMantsoft
 
 // Flag de debug temporal: si SHOW_NULLS=true, las filas sin dato se muestran
 // igual con su título y "(sin datos)", para verificar que las propiedades llegan.
 const SHOW_NULLS = String(process.env.SHOW_NULLS || '').toLowerCase() === 'true';
 
-// ────────────────────────────────────────────────────────────
-// Mapeo product_id → empresa emisora
-// ────────────────────────────────────────────────────────────
-
-const EMPRESA_EMISORA_MAP = {
-  '33688819739': 'ISA',       // iGdoc
-  '33695807329': 'ISA',       // Portal
-  '33695559578': 'ISA',       // Flota
-  '33688695870': 'ISA',       // iJServ
-  '33688695865': 'Interfase', // PayRoll
-  '33688819740': 'Interfase', // iSCert
-  '33695559590': 'ISA PY',    // i2
-  '33688695889': 'ISA PY',    // MiRecibo
-  '33695559589': 'ISA PY',    // MiFactura
-  '33688943634': 'ISA PY',    // Proyectos
-};
+// EMPRESA_EMISORA_MAP → importado de ./empresaEmisora.js (dedupe con buildMensajeMantsoft, 2026-07-09)
 
 function esUrgente(ticket) {
   return String(ticket?.properties?.facturacion_urgente || '')
