@@ -158,3 +158,6 @@ empresas_anomalias.md
 pasoC_resultado*.json
 seal-report-*.json
 test-seed-manifest.json
+
+# salidas CSV del registro de auditoria (scripts/audit-log)
+scripts/audit-log/salidas/
