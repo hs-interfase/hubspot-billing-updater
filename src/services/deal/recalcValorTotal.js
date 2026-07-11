@@ -19,6 +19,11 @@
 // Un mismo negocio puede mezclar LIs Caso 1 y Caso 2 → se clasifica POR LINE ITEM
 // con el helper canónico `isAutoRenew` (src/services/billing/mode.js).
 //
+//   Caso MIRROR (intercompany, es_mirror_de_py=true):
+//       VALOR = Σ costo_total_usd de los LIs (el costo en USD). NO se usa el price
+//       (el mirror no lleva precio de venta) ni se fuerza a 0. Ver valorMirrorUsd()
+//       para el porqué — no confundir con la facturación intercompany (esa sí es 0).
+//
 // Moneda: se escriben DOS propiedades del deal (Michelle 2026-07-10):
 //   - `valor_total`                  → VALOR en USD  (principal, para reporting)
 //   - `valor_total_moneda_original`  → VALOR en la moneda del negocio
@@ -156,15 +161,42 @@ export async function getDealTicketIds(dealId) {
   return [...ids];
 }
 
-// Props del deal necesarias para convertir y comparar.
+// Props del deal necesarias para convertir, clasificar (mirror) y comparar.
 const DEAL_PROPS = [
   'dolar',
   'deal_currency_code',
   'dealstage',
   'dolar_cierre_asignado',
+  'es_mirror_de_py',
   PROP_DEAL_TOTAL_USD,
   PROP_DEAL_TOTAL_LOCAL,
 ];
+
+/**
+ * VALOR en USD de un deal MIRROR (intercompany, es_mirror_de_py=true).
+ *
+ * ⚠️ NO CONFUNDIR (este error ya se cometió una vez, 2026-07-10):
+ *   - La FACTURACIÓN intercompany del mirror sí es 0 para informes (of_facturacion_usd),
+ *     para no duplicar el ingreso — la venta al cliente vive en el deal PY.
+ *   - Pero el VALOR del negocio NO es 0: el mirror vale su COSTO. El mirror no lleva
+ *     precio de venta (su `price` suele ser 0), así que su valor sale de
+ *     `costo_total_usd` (fuente de verdad del costo, YA en USD; cogs es derivada).
+ *
+ * @returns {number} Σ costo_total_usd de los LIs (USD).
+ */
+export function valorMirrorUsd(lis, log) {
+  let usd = 0;
+  let sinCosto = 0;
+  for (const li of lis) {
+    const c = num(li?.properties?.costo_total_usd, NaN);
+    if (Number.isFinite(c)) usd += c;
+    else sinCosto++;
+  }
+  if (sinCosto > 0) {
+    log?.warn({ sinCosto, total: lis.length }, 'Mirror con LIs sin costo_total_usd cargado');
+  }
+  return round2(usd);
+}
 
 /**
  * Recalcula el VALOR del deal desde sus line items y escribe las dos props.
@@ -190,12 +222,7 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     lis = dwli.lineItems || [];
   }
 
-  // 2) Total en moneda del negocio.
-  let totalLocal = 0;
-  for (const li of lis) totalLocal += valorLineItemLocal(li, log);
-  totalLocal = round2(totalLocal);
-
-  // 3) Props del deal (para el dólar y para comparar antes de escribir).
+  // 2) Props del deal (para el dólar, clasificar mirror y comparar antes de escribir).
   let dp = {};
   try {
     const cur = await hubspotClient.crm.deals.basicApi.getById(String(dealId), DEAL_PROPS);
@@ -204,44 +231,60 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     log.warn({ err }, 'No se pudieron leer props del deal; se intentará igual');
   }
 
-  // 4) Dólar del deal (1 USD → moneda local). Si falta y vamos a escribir, se
+  // 3) Dólar del deal (1 USD → moneda local). Si falta y vamos a escribir, se
   // establece con ensureDealDolar. En modo dry (applyUpdate=false) NO se toca nada:
-  // si no hay dólar, el VALOR USD queda sin calcular (null).
+  // si no hay dólar, el VALOR en la moneda que falte queda sin calcular (null).
   let dolar = num(dp.dolar, 0);
   if (!(dolar > 0) && applyUpdate) {
     try {
       const r = await ensureDealDolar({ id: String(dealId), properties: dp });
       dolar = num(r?.dolar, 0);
     } catch (err) {
-      log.warn({ err }, 'ensureDealDolar falló; VALOR USD quedará sin calcular');
+      log.warn({ err }, 'ensureDealDolar falló; VALOR quedará sin calcular en la moneda faltante');
     }
   }
 
-  const totalUsd = convertirAUsd(totalLocal, dolar);
+  // 4) VALOR según el tipo de deal:
+  //    - MIRROR (intercompany): su valor es el COSTO en USD (costo_total_usd). Ver
+  //      valorMirrorUsd() para el porqué (no es el price, NO es 0). El local = USD×dolar.
+  //    - Resto: desde el price del LI (fórmula Paola). El USD = local/dolar.
+  const esMirror = String(dp.es_mirror_de_py || '').trim().toLowerCase() === 'true';
+  let totalUsd;
+  let totalLocal;
+  if (esMirror) {
+    totalUsd = valorMirrorUsd(lis, log);
+    if (dolar > 0) totalLocal = round2(totalUsd * dolar);
+    else if (String(dp.deal_currency_code || '').toUpperCase() === 'USD') totalLocal = totalUsd;
+    else totalLocal = null; // sin dólar y moneda ≠ USD: no se puede expresar en local
+  } else {
+    totalLocal = 0;
+    for (const li of lis) totalLocal += valorLineItemLocal(li, log);
+    totalLocal = round2(totalLocal);
+    totalUsd = convertirAUsd(totalLocal, dolar);
+  }
 
-  // 5) Escribir solo lo que cambió.
+  // 5) Escribir solo lo que cambió (y solo valores calculables, nunca null).
   let changed = false;
   if (applyUpdate) {
     const properties = {};
-    const prevLocal = num(dp[PROP_DEAL_TOTAL_LOCAL], NaN);
-    if (prevLocal !== totalLocal) properties[PROP_DEAL_TOTAL_LOCAL] = String(totalLocal);
-
-    if (totalUsd !== null) {
-      const prevUsd = num(dp[PROP_DEAL_TOTAL_USD], NaN);
-      if (prevUsd !== totalUsd) properties[PROP_DEAL_TOTAL_USD] = String(totalUsd);
+    if (totalLocal !== null && num(dp[PROP_DEAL_TOTAL_LOCAL], NaN) !== totalLocal) {
+      properties[PROP_DEAL_TOTAL_LOCAL] = String(totalLocal);
+    }
+    if (totalUsd !== null && num(dp[PROP_DEAL_TOTAL_USD], NaN) !== totalUsd) {
+      properties[PROP_DEAL_TOTAL_USD] = String(totalUsd);
     }
 
     if (Object.keys(properties).length > 0) {
       await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties });
       changed = true;
       log.info(
-        { totalUsd, totalLocal, dolar, lineItems: lis.length, wrote: Object.keys(properties) },
+        { esMirror, totalUsd, totalLocal, dolar, lineItems: lis.length, wrote: Object.keys(properties) },
         'VALOR actualizado'
       );
     } else {
-      log.debug({ totalUsd, totalLocal, lineItems: lis.length }, 'VALOR sin cambios');
+      log.debug({ esMirror, totalUsd, totalLocal, lineItems: lis.length }, 'VALOR sin cambios');
     }
   }
 
-  return { total: totalUsd, totalUsd, totalLocal, lineItemCount: lis.length, changed };
+  return { total: totalUsd, totalUsd, totalLocal, esMirror, lineItemCount: lis.length, changed };
 }
