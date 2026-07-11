@@ -13,6 +13,7 @@ import {
 } from '../config/constants.js';
 import { cleanupClonedTicketsForDeal } from '../services/tickets/ticketCleanupService.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
+import { recalcValorTotal } from '../services/deal/recalcValorTotal.js';
 import { recalcContadores } from '../services/billing/recalcContadores.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { hubspotClient, getDealWithLineItems } from '../hubspotClient.js';
@@ -549,8 +550,23 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       );
     }
 
+    // ========== DEAL TOTAL: VALOR del negocio desde line items ==========
+    // Caso 1 (fin definido) = Σ flujos (price×qty×term); Caso 2 (auto-renew) =
+    // run-rate anual (price×qty×mult. anual). Escribe valor_total (USD) +
+    // valor_total_moneda_original (local). Dinámico: se recalcula en cada corrida.
+    // No bloquea el ciclo si falla.
+    try {
+      const { total } = await recalcValorTotal({ dealId, lineItems: currentLineItems });
+      results.valorTotal = total;
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en recalcValorTotal (no bloquea)'
+      );
+    }
+
     logger.info(
-      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted },
+      { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ticketsCreated: results.ticketsCreated, autoInvoicesEmitted: results.autoInvoicesEmitted, valorTotal: results.valorTotal },
       'Deal completado'
     );
 
