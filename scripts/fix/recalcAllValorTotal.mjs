@@ -1,10 +1,11 @@
 // scripts/fix/recalcAllValorTotal.mjs
 //
-// Recalcula `valor_total` en TODOS los deals del portal usando la lógica
-// corregida (busca tickets por of_deal_id ∪ asociaciones).
+// Recalcula el VALOR del negocio en TODOS los deals del portal desde sus LINE
+// ITEMS (Caso 1 = Σ price×qty×term; Caso 2 auto-renew = run-rate anual), y escribe
+// valor_total (USD) + valor_total_moneda_original (local).
 //
-// SOLO escribe la propiedad valor_total. NO corre fases, NO crea tickets,
-// NO emite facturas. Reutilizable para re-sincronizar cuando haga falta.
+// SOLO escribe esas props. NO corre fases, NO crea tickets, NO emite facturas.
+// Reutilizable para re-sincronizar cuando haga falta.
 //
 // Uso:
 //   node ./scripts/fix/recalcAllValorTotal.mjs            (aplica cambios)

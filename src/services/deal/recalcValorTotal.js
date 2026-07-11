@@ -204,9 +204,11 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     log.warn({ err }, 'No se pudieron leer props del deal; se intentará igual');
   }
 
-  // 4) Dólar del deal (1 USD → moneda local). Si falta, se establece con ensureDealDolar.
+  // 4) Dólar del deal (1 USD → moneda local). Si falta y vamos a escribir, se
+  // establece con ensureDealDolar. En modo dry (applyUpdate=false) NO se toca nada:
+  // si no hay dólar, el VALOR USD queda sin calcular (null).
   let dolar = num(dp.dolar, 0);
-  if (!(dolar > 0)) {
+  if (!(dolar > 0) && applyUpdate) {
     try {
       const r = await ensureDealDolar({ id: String(dealId), properties: dp });
       dolar = num(r?.dolar, 0);
