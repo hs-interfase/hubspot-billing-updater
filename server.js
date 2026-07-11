@@ -26,6 +26,10 @@ import { invoiceEditorAuth } from './api/invoice-editor/auth.js'
 // ── Registro de auditoría HubSpot ───────────────
 import auditLogRouter from './api/audit-log/auditLog.js'
 
+// ── Paramétricas (ajuste de precio iJServ) ──────
+import parametricaRouter from './api/parametrica/router.js'
+import { initParametricaTables } from './api/parametrica/Db.js'
+
 // ── Export Reporte ──────────────────────────────
 import exportRouter from './api/exportRouter.js'
 import { initExportSnapshotsTable } from './src/db-export.js'
@@ -82,6 +86,12 @@ app.get('/audit-log', invoiceEditorAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'audit-log.html'))
 })
 
+// ── Paramétricas: ajuste de precio iJServ (con auth) ──
+app.use('/parametrica/api', invoiceEditorAuth, parametricaRouter)
+app.get('/parametrica', invoiceEditorAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'parametrica.html'))
+})
+
 // ── Export Reporte ──
 app.use('/api/export', invoiceEditorAuth, exportRouter)
 
@@ -103,6 +113,7 @@ await initExportSnapshotsTable()
 await initWebhookQueueTable()
 await initDealLocksTable()
 await initRateBucketTable()
+await initParametricaTables()
 
 const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => {
