@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Paramétricas · Ajuste de precio iJServ</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22263a;
+      --border:   #2e3248;
+      --accent:   #ff7a59;
+      --accent-d: #cc5e40;
+      --text:     #e2e4ef;
+      --muted:    #7b7f9e;
+      --green:    #3ecf8e;
+      --red:      #ff8f8f;
+      --yellow:   #ffd166;
+      --radius:   8px;
+    }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; min-height: 100vh;
+    }
+
+    /* ── Nav bar (shared) ── */
+    .topnav {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 24px; display: flex; align-items: center; gap: 0;
+      position: sticky; top: 0; z-index: 100; height: 48px;
+    }
+    .topnav .brand {
+      font-size: 14px; font-weight: 700; color: var(--accent);
+      margin-right: 24px; text-decoration: none;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .topnav .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .topnav a {
+      color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
+      padding: 14px 14px; border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { color: var(--text); border-bottom-color: var(--accent); }
+    .topnav a.ext { margin-left: auto; opacity: .7; }
+    .topnav a.ext:hover { opacity: 1; }
+
+    .content { padding: 28px 24px; max-width: 1280px; margin: 0 auto; }
+    h2 { font-size: 17px; margin-bottom: 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+
+    /* ── Panel de acción ── */
+    .panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
+      display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end;
+      margin-bottom: 20px;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .filter-group label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--muted);
+    }
+    .filter-group input {
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); border-radius: 6px; padding: 8px 12px;
+      font-size: 13px; width: 140px; transition: border-color .2s;
+    }
+    .filter-group input:focus { outline: none; border-color: var(--accent); }
+    .check-group { display: flex; align-items: center; gap: 8px; padding-bottom: 9px; color: var(--muted); font-size: 13px; }
+    .check-group input { accent-color: var(--accent); cursor: pointer; }
+    .btn {
+      padding: 8px 18px; border-radius: 6px; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: none; transition: background .2s, opacity .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-d); }
+    .btn:disabled { opacity: .4; cursor: default; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+    .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+    .btn-danger:hover:not(:disabled) { background: rgba(255,143,143,.12); }
+    .btn-sm { padding: 4px 12px; font-size: 12px; }
+
+    /* ── Avisos ── */
+    .alert {
+      border-radius: var(--radius); padding: 12px 16px; margin-bottom: 14px;
+      font-size: 13px; border: 1px solid;
+    }
+    .alert-warn { background: rgba(255,209,102,.08); border-color: rgba(255,209,102,.4); color: var(--yellow); }
+    .alert-err  { background: rgba(255,143,143,.08); border-color: rgba(255,143,143,.4); color: var(--red); }
+    .alert-ok   { background: rgba(62,207,142,.08);  border-color: rgba(62,207,142,.4);  color: var(--green); }
+
+    .stats { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .stats strong { color: var(--text); }
+    .stats .btn { margin-left: auto; }
+
+    /* ── Tabla ── */
+    .table-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow-x: auto; margin-bottom: 24px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: var(--surface2); padding: 12px 14px; text-align: left;
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: 9px 14px; vertical-align: top; font-size: 13px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .val-empty { color: var(--muted); font-style: italic; }
+    .val-before { color: var(--red); }
+    .val-after  { color: var(--green); }
+    .badge {
+      display: inline-block; background: var(--surface2); border: 1px solid var(--border);
+      padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap;
+    }
+    .b-ok   { color: var(--green); }
+    .b-err  { color: var(--red); }
+    .b-warn { color: var(--yellow); }
+    .li-id { font-family: monospace; font-size: 11px; color: var(--muted); }
+
+    details.section { margin-bottom: 24px; }
+    details.section > summary {
+      cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600;
+      padding: 8px 0; user-select: none;
+    }
+    details.section > summary:hover { color: var(--text); }
+
+    .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
+    .empty-state .icon { font-size: 36px; margin-bottom: 12px; }
+    .loading { text-align: center; padding: 40px; color: var(--muted); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 20px; height: 20px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite; margin-bottom: 10px;
+    }
+    @media (max-width: 600px) { .topnav { overflow-x: auto; } }
+  </style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/admin" class="brand"><span class="dot"></span> Interfase</a>
+  <a href="/admin">Panel</a>
+  <a href="/invoice-editor">Editor</a>
+  <a href="/invoice-editor/audit">Auditoría</a>
+  <a href="/audit-log">Registro HubSpot</a>
+  <a href="/parametrica" class="active">Paramétricas</a>
+  <a href="/nodum">Nodum</a>
+  <a href="/guia" target="_blank" class="ext">📖 Guía ↗</a>
+</nav>
+
+<div class="content">
+  <h2>Ajuste de precio por paramétrica — iJServ (Petróleo)</h2>
+  <p class="sub">Aplica un porcentaje al monto unitario de <strong>todos</strong> los line items iJServ elegibles. Espejos intercompany y negocios no activos quedan excluidos automáticamente.</p>
+
+  <div id="alerts"></div>
+
+  <!-- Panel: % + preview -->
+  <div class="panel">
+    <div class="filter-group">
+      <label>Porcentaje de ajuste</label>
+      <input type="text" id="f-pct" placeholder="ej. 4,26 o -2,5" />
+    </div>
+    <button class="btn btn-primary" id="btn-preview">Previsualizar</button>
+    <div class="check-group" id="confirm-wrap" style="display:none">
+      <input type="checkbox" id="chk-revisado" />
+      <label for="chk-revisado" style="text-transform:none;letter-spacing:0;font-size:13px;">Revisé el preview y confirmo el ajuste</label>
+    </div>
+    <button class="btn btn-primary" id="btn-apply" style="display:none" disabled>Confirmar ajuste</button>
+    <button class="btn btn-ghost" id="btn-cancel-preview" style="display:none">Cancelar</button>
+  </div>
+
+  <!-- Stats + tabla principal (lista o preview) -->
+  <div class="stats" id="stats"></div>
+  <div class="table-wrap">
+    <table>
+      <thead id="thead"></thead>
+      <tbody id="tbody">
+        <tr><td colspan="8"><div class="loading"><div class="spinner"></div><br>Cargando line items iJServ…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Excluidos -->
+  <details class="section" id="sec-excluidos" style="display:none">
+    <summary id="sum-excluidos"></summary>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Negocio</th><th>Empresa</th><th>Servicio</th><th class="num">Importe</th><th>Motivo</th></tr>
+        </thead>
+        <tbody id="tbody-excluidos"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <!-- Historial / Reversa -->
+  <h2 style="margin-top:8px">Historial de ajustes</h2>
+  <p class="sub">Cada lote guarda el precio anterior de cada line item — la reversa restaura ese valor exacto.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Fecha</th><th class="num">%</th><th>Usuario</th><th>Estado</th>
+          <th class="num">Items</th><th class="num">Aplicados</th><th class="num">Revertidos</th><th class="num">Fallidos</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody-batches">
+        <tr><td colspan="10"><div class="empty-state">Sin ajustes registrados todavía.</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div id="batch-detalle"></div>
+</div>
+
+<script>
+  const API = '/parametrica/api'
+  let previewActual = null   // {batchId, rows, ...}
+  let modo = 'lista'         // lista | preview | resultado
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const $ = (id) => document.getElementById(id)
+
+  function setAlert(html, cls) {
+    $('alerts').innerHTML = html ? `<div class="alert ${cls}">${html}</div>` : ''
+  }
+
+  // ── Lista inicial ──────────────────────────────────────────
+  async function cargarLista() {
+    modo = 'lista'
+    $('thead').innerHTML = `<tr>
+      <th>Negocio</th><th>Empresa</th><th>Área</th><th>Producto</th><th>Servicio</th>
+      <th class="num">Importe s/IVA</th><th>Moneda</th><th>Últ. ajuste</th></tr>`
+    $('tbody').innerHTML = `<tr><td colspan="8"><div class="loading"><div class="spinner"></div><br>Cargando line items iJServ…</div></td></tr>`
+    try {
+      const res = await fetch(`${API}/line-items`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+
+      $('stats').innerHTML = `<span><strong>${json.elegibles.length}</strong> line items elegibles</span>` +
+        (json.excluidos.length ? `<span>· <strong>${json.excluidos.length}</strong> excluidos</span>` : '')
+
+      if (!json.elegibles.length) {
+        $('tbody').innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">📭</div><p>No hay line items iJServ elegibles.</p></div></td></tr>`
+      } else {
+        $('tbody').innerHTML = json.elegibles.map(li => `
+          <tr>
+            <td>${esc(li.dealName)}<span class="li-id"> ${esc(li.dealId)}</span></td>
+            <td>${esc(li.empresa) || '<span class="val-empty">—</span>'}</td>
+            <td>${esc(li.area) || '—'}</td>
+            <td>${esc(li.producto)}</td>
+            <td>${esc(li.servicio)}<br><span class="li-id">LI ${esc(li.lineItemId)}</span>${li.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>
+            <td class="num">${fmt(li.price)}</td>
+            <td>${esc(li.moneda) || '—'}</td>
+            <td>${li.fechaUltimoAjuste ? `${esc(li.fechaUltimoAjuste)} (${esc(li.porcentajeUltimoAjuste)}%)` : '<span class="val-empty">nunca</span>'}</td>
+          </tr>`).join('')
+      }
+
+      if (json.excluidos.length) {
+        $('sec-excluidos').style.display = ''
+        const motivos = { espejo_intercompany: 'Espejo intercompany (el mirroring pisaría el cambio)', deal_no_activo: 'Negocio no activo', sin_deal: 'Sin negocio asociado', sin_precio: 'Sin precio' }
+        $('sum-excluidos').textContent = `Excluidos del ajuste (${json.excluidos.length}) — espejos / negocios no activos`
+        $('tbody-excluidos').innerHTML = json.excluidos.map(li => `
+          <tr>
+            <td>${esc(li.dealName) || '—'}<span class="li-id"> ${esc(li.dealId ?? '')}</span></td>
+            <td>${esc(li.empresa) || '—'}</td>
+            <td>${esc(li.servicio)}<br><span class="li-id">LI ${esc(li.lineItemId)}</span></td>
+            <td class="num">${fmt(li.price)}</td>
+            <td><span class="badge b-warn">${esc(motivos[li.motivo] || li.motivo)}</span></td>
+          </tr>`).join('')
+      } else {
+        $('sec-excluidos').style.display = 'none'
+      }
+    } catch (err) {
+      $('tbody').innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">⚠️</div><p>${esc(err.message)}</p></div></td></tr>`
+    }
+  }
+
+  // ── Preview ────────────────────────────────────────────────
+  async function previsualizar() {
+    const pct = $('f-pct').value.trim()
+    if (!pct) { setAlert('Ingresá el porcentaje de ajuste.', 'alert-warn'); return }
+    setAlert('')
+    $('btn-preview').disabled = true
+    try {
+      const res = await fetch(`${API}/preview`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ porcentaje: pct }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      previewActual = json
+      modo = 'preview'
+
+      const avisos = []
+      if (json.dryRun) avisos.push('⚠ El motor está en DRY_RUN: al confirmar NO se escribirá en HubSpot.')
+      if (json.warning) avisos.push('⚠ ' + json.warning)
+      const conTickets = json.rows.filter(r => r.ticketsProtegidos)
+      if (conTickets.length) avisos.push(`⚠ ${conTickets.length} line item(s) tienen tickets ya promovidos con fecha futura que <strong>conservarán el precio viejo</strong> (marcados en la tabla). Revisalos a mano si corresponde.`)
+      const pausados = json.rows.filter(r => r.pausa)
+      if (pausados.length) avisos.push(`⚠ ${pausados.length} line item(s) están pausados — el ajuste igual se aplicará.`)
+      setAlert(avisos.join('<br>'), 'alert-warn')
+
+      $('stats').innerHTML = `<span class="badge">PREVIEW — batch ${json.batchId}</span>` +
+        `<span>Ajuste <strong>${json.porcentaje}%</strong> sobre <strong>${json.totalLis}</strong> line items</span>`
+
+      $('thead').innerHTML = `<tr>
+        <th>Negocio</th><th>Empresa</th><th>Servicio</th><th>Moneda</th>
+        <th class="num">Precio actual</th><th class="num">Precio nuevo</th><th>Avisos</th></tr>`
+      $('tbody').innerHTML = json.rows.map(r => `
+        <tr>
+          <td>${esc(r.dealName)}</td>
+          <td>${esc(r.empresa) || '—'}</td>
+          <td>${esc(r.servicio)}<br><span class="li-id">LI ${esc(r.lineItemId)}</span></td>
+          <td>${esc(r.moneda) || '—'}</td>
+          <td class="num"><span class="val-before">${fmt(r.priceViejo)}</span></td>
+          <td class="num"><span class="val-after">${fmt(r.priceNuevo)}</span></td>
+          <td>${r.ticketsProtegidos ? `<span class="badge b-warn">${r.ticketsProtegidos.count} ticket(s) promovidos futuros</span>` : ''}${r.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>
+        </tr>`).join('')
+
+      $('confirm-wrap').style.display = ''
+      $('btn-apply').style.display = ''
+      $('btn-cancel-preview').style.display = ''
+      $('chk-revisado').checked = false
+      $('btn-apply').disabled = true
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    } finally {
+      $('btn-preview').disabled = false
+    }
+  }
+
+  function salirPreview() {
+    previewActual = null
+    $('confirm-wrap').style.display = 'none'
+    $('btn-apply').style.display = 'none'
+    $('btn-cancel-preview').style.display = 'none'
+    setAlert('')
+    cargarLista()
+  }
+
+  // ── Apply ──────────────────────────────────────────────────
+  async function aplicar() {
+    if (!previewActual || !$('chk-revisado').checked) return
+    if (!window.confirm(`¿Aplicar ${previewActual.porcentaje}% a ${previewActual.totalLis} line items iJServ? Esta acción escribe en HubSpot.`)) return
+    $('btn-apply').disabled = true
+    $('btn-preview').disabled = true
+    setAlert('Aplicando ajuste… no cierres la pestaña.', 'alert-warn')
+    try {
+      const res = await fetch(`${API}/apply`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId: previewActual.batchId, confirm: true }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      modo = 'resultado'
+
+      setAlert(json.fallidos === 0
+        ? `✔ Ajuste aplicado a ${json.aplicados} line items. Se envió el extracto por email.`
+        : `Ajuste terminado con fallos: ${json.aplicados} aplicados, ${json.fallidos} fallidos. Se envió el extracto por email.`,
+        json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
+
+      $('stats').innerHTML = `<span class="badge">RESULTADO — batch ${previewActual.batchId}</span>` +
+        `<span><strong>${json.aplicados}</strong> aplicados · <strong>${json.fallidos}</strong> fallidos</span>` +
+        `<button class="btn btn-ghost" id="btn-csv-res">⬇ Descargar CSV extracto</button>`
+      $('btn-csv-res').addEventListener('click', () => descargarCsvBatch(previewActual.batchId))
+
+      $('thead').innerHTML = `<tr>
+        <th>Negocio</th><th>Empresa</th><th>Servicio</th>
+        <th class="num">Precio viejo</th><th class="num">Precio nuevo</th><th>Estado</th></tr>`
+      $('tbody').innerHTML = json.items.map(i => `
+        <tr>
+          <td>${esc(i.dealName)}</td>
+          <td>${esc(i.empresa) || '—'}</td>
+          <td>${esc(i.servicio)}<br><span class="li-id">LI ${esc(i.lineItemId)}</span></td>
+          <td class="num">${fmt(i.priceViejo)}</td>
+          <td class="num">${fmt(i.priceNuevo)}</td>
+          <td><span class="badge ${i.estado === 'applied' ? 'b-ok' : 'b-err'}">${esc(i.estado)}</span>${i.error ? `<br><span class="li-id">${esc(i.error)}</span>` : ''}</td>
+        </tr>`).join('')
+
+      $('confirm-wrap').style.display = 'none'
+      $('btn-apply').style.display = 'none'
+      $('btn-cancel-preview').style.display = 'none'
+      $('f-pct').value = ''
+      previewActual = null
+      cargarBatches()
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+      $('btn-apply').disabled = false
+    } finally {
+      $('btn-preview').disabled = false
+    }
+  }
+
+  // ── Historial / reversa ────────────────────────────────────
+  const ESTADOS_BATCH = {
+    preview: 'b-warn', applying: 'b-warn', applied: 'b-ok', partial: 'b-warn',
+    failed: 'b-err', reverted: 'b-err', reverted_partial: 'b-warn',
+  }
+
+  async function cargarBatches() {
+    try {
+      const res = await fetch(`${API}/batches`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      if (!json.batches.length) return
+      $('tbody-batches').innerHTML = json.batches.map(b => {
+        const puedeRevertir = ['applied', 'partial', 'reverted_partial'].includes(b.estado) && b.aplicados > 0
+        return `
+        <tr>
+          <td>${b.id}</td>
+          <td>${esc(new Date(b.created_at).toLocaleString('es-UY'))}</td>
+          <td class="num">${esc(b.porcentaje)}%</td>
+          <td>${esc(b.usuario)}</td>
+          <td><span class="badge ${ESTADOS_BATCH[b.estado] || ''}">${esc(b.estado)}${b.dry_run ? ' · dry-run' : ''}</span></td>
+          <td class="num">${b.total_items}</td>
+          <td class="num">${b.aplicados}</td>
+          <td class="num">${b.revertidos}</td>
+          <td class="num">${b.fallidos}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-ghost btn-sm" onclick="verDetalle(${b.id})">Detalle</button>
+            <button class="btn btn-ghost btn-sm" onclick="descargarCsvBatch(${b.id})">CSV</button>
+            ${puedeRevertir ? `<button class="btn btn-danger btn-sm" onclick="revertirLote(${b.id})">Revertir lote</button>` : ''}
+          </td>
+        </tr>`
+      }).join('')
+    } catch { /* silencioso: el historial no bloquea la pantalla */ }
+  }
+
+  window.verDetalle = async function (batchId) {
+    try {
+      const res = await fetch(`${API}/batches/${batchId}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const puedeRevertirItem = ['applied', 'partial', 'reverted_partial'].includes(json.batch.estado)
+      $('batch-detalle').innerHTML = `
+        <h2 style="margin:16px 0 8px">Detalle batch ${batchId} — ${esc(json.batch.porcentaje)}% (${esc(json.batch.estado)})</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Negocio</th><th>Empresa</th><th>Servicio</th>
+              <th class="num">Precio viejo</th><th class="num">Precio nuevo</th><th>Estado</th><th></th>
+            </tr></thead>
+            <tbody>${json.items.map(i => `
+              <tr>
+                <td>${esc(i.deal_name)}<span class="li-id"> ${esc(i.deal_id ?? '')}</span></td>
+                <td>${esc(i.empresa) || '—'}</td>
+                <td>${esc(i.servicio)}<br><span class="li-id">LI ${esc(i.line_item_id)}</span></td>
+                <td class="num">${fmt(i.price_viejo)}</td>
+                <td class="num">${fmt(i.price_nuevo)}</td>
+                <td><span class="badge ${i.estado === 'applied' ? 'b-ok' : i.estado === 'reverted' ? 'b-err' : i.estado.includes('failed') ? 'b-err' : ''}">${esc(i.estado)}</span>${i.error ? `<br><span class="li-id">${esc(i.error)}</span>` : ''}</td>
+                <td>${puedeRevertirItem && i.estado === 'applied' ? `<button class="btn btn-danger btn-sm" onclick="revertirItem(${batchId}, '${esc(i.line_item_id)}')">Revertir este LI</button>` : ''}</td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>`
+      $('batch-detalle').scrollIntoView({ behavior: 'smooth' })
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    }
+  }
+
+  async function ejecutarReversa(body, msjConfirm) {
+    if (!window.confirm(msjConfirm)) return
+    try {
+      const res = await fetch(`${API}/revert`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setAlert(`Reversa: ${json.revertidos} revertidos, ${json.fallidos} fallidos. Se envió el extracto por email.`,
+        json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
+      cargarBatches()
+      if (body.batchId) window.verDetalle(body.batchId)
+      if (modo === 'lista') cargarLista()
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    }
+  }
+
+  window.revertirLote = (batchId) =>
+    ejecutarReversa({ batchId }, `¿Revertir TODO el lote ${batchId}? Cada line item vuelve a su precio anterior exacto.`)
+  window.revertirItem = (batchId, lineItemId) =>
+    ejecutarReversa({ batchId, lineItemId }, `¿Revertir el line item ${lineItemId} a su precio anterior?`)
+
+  window.descargarCsvBatch = async function (batchId) {
+    try {
+      const res = await fetch(`${API}/batches/${batchId}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const escCsv = (s) => { s = String(s ?? ''); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+      const lineas = [
+        'empresa;negocio;deal_id;line_item_id;servicio;moneda;precio_viejo;precio_nuevo;porcentaje;usuario;fecha;estado;error',
+        ...json.items.map(i => [
+          i.empresa, i.deal_name, i.deal_id, i.line_item_id, i.servicio, i.moneda,
+          i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.usuario,
+          json.batch.applied_at || json.batch.created_at, i.estado, i.error,
+        ].map(escCsv).join(';')),
+      ]
+      const blob = new Blob(['﻿' + lineas.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `parametrica_ijserv_batch_${batchId}.csv`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    }
+  }
+
+  // ── Wiring ─────────────────────────────────────────────────
+  $('btn-preview').addEventListener('click', previsualizar)
+  $('btn-apply').addEventListener('click', aplicar)
+  $('btn-cancel-preview').addEventListener('click', salirPreview)
+  $('chk-revisado').addEventListener('change', () => { $('btn-apply').disabled = !$('chk-revisado').checked })
+  $('f-pct').addEventListener('keydown', (e) => { if (e.key === 'Enter') previsualizar() })
+
+  cargarLista()
+  cargarBatches()
+</script>
+</body>
+</html>
