@@ -207,28 +207,22 @@ export function extractLineItemSnapshots(lineItem, deal) {
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
   }, '[DBG][SNAPSHOT] Tax/Discount TARGET (ticket)');
 
-  // Definición 2026-07-07: costo_total_usd (LI) = FUENTE DE VERDAD del costo (total, USD).
-  //   of_costo (moneda del negocio) = costo_total_usd × dolar(LI)
-  //   of_costo_usd (nueva)          = costo_total_usd
-  // Fallback legacy (LI sin costo_total_usd): cogs × cantidad como siempre; el USD solo
-  // se deriva si hay dolar o el negocio ya es USD (si no, of_costo_usd no se escribe).
-  // Bonus: al leer costo_total_usd directo, el ticket ya no nace con costo 0 cuando el
-  // cogs se deriva en la misma corrida (hallazgo escenario F).
+  // Definición 2026-07-07 (+ copia-directa 2026-07-10): costo_total_usd (LI) = FUENTE DE VERDAD del costo (total, USD).
+  //   of_costo (moneda del negocio) = costo_total_usd × dolar(LI); fallback legacy cogs × cantidad.
+  //   of_costo_usd                  = COPIA DIRECTA de costo_total_usd (null si no está; NO se deriva del cogs).
+  // Al leer costo_total_usd directo, el ticket ya no nace con costo 0 cuando el cogs se
+  // deriva en la misma corrida (hallazgo escenario F).
   const tieneCostoUsd = lp.costo_total_usd != null && lp.costo_total_usd !== '';
   const costoTotalUsdLi = parseNumber(lp.costo_total_usd, 0);
   const dolarLi = parseNumber(lp.dolar, 0);
   const dealCurrency = String(deal?.properties?.deal_currency_code || '').toUpperCase();
 
-  let costoTotal;     // en moneda del negocio → of_costo
-  let costoTotalUsd;  // en USD → of_costo_usd (null = no derivable, no se escribe)
+  let costoTotal; // en moneda del negocio → of_costo
   if (tieneCostoUsd) {
-    costoTotalUsd = costoTotalUsdLi;
     costoTotal = dolarLi > 0 ? costoTotalUsdLi * dolarLi
       : (dealCurrency === 'USD' || !dealCurrency ? costoTotalUsdLi : costoUnitario * cantidad);
   } else {
     costoTotal = costoUnitario * cantidad;
-    costoTotalUsd = dolarLi > 0 ? costoTotal / dolarLi
-      : (dealCurrency === 'USD' ? costoTotal : null);
   }
 
   // TC sellado del ticket: el dólar de la LÍNEA (por línea; en migrados = el Dolar de su OF)
@@ -280,7 +274,6 @@ const repetitivo = !!rawFreq && ![
     descuento_por_unidad_real: descuentoMonto,
     of_aplica_para_cupo: getCupoType(lineItem, deal), // "Por Horas", "Por Monto" o null
     of_costo: costoTotal, // ✅ costo total en moneda del negocio (fuente: costo_total_usd × dolar; fallback cogs × cantidad)
-    ...(costoTotalUsd != null ? { of_costo_usd: costoTotalUsd } : {}), // ✅ espejo del costo en USD (G5, definición 2026-07-07)
     of_margen: montoTotal - costoTotal, // ✅ margen bruto = subtotal pre-IVA (lp.amount) − costo total. Antes leía lp.hs_margin (no se fetchea → siempre 0).
     // Costo en USD del ticket: COPIA DIRECTA de costo_total_usd del LI (fuente de verdad, ya en USD,
     // presente al crear el ticket). Directo = sin la carrera de timing que tenía la versión derivada
