@@ -414,15 +414,35 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
       const props = dealPropsForSearch();
 
       // Weekday: fetch a page from each set, merge-sort by hs_lastmodifieddate (desc), yield.
+      // Cada set agotado (sin paging.next) queda marcado done EN ESTA CORRIDA y no se
+      // re-consulta; la próxima corrida arranca de página 1 (cursores persistidos en null).
+      let doneS1 = false, doneS2 = false, doneS3 = false, doneS4 = false;
+
       while (Date.now() < deadline) {
        let r1, r2, r3;
+       let fetchedS1 = false, fetchedS2 = false, fetchedS3 = false;
 
         try {
-          r1 = await searchDeals({ after: afterS1, limit: PAGE_LIMIT, filters: weekdayFilters_set1_todayAutoTrue(today), properties: props, sorts: SORTS });
-          await sleep(300);
-          r2 = await searchDeals({ after: afterS2, limit: PAGE_LIMIT, filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30), properties: props, sorts: SORTS });
-          await sleep(300);
-          r3 = await searchDeals({ after: afterS3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
+          if (doneS1) {
+            r1 = { results: [], paging: {} };
+          } else {
+            r1 = await searchDeals({ after: afterS1, limit: PAGE_LIMIT, filters: weekdayFilters_set1_todayAutoTrue(today), properties: props, sorts: SORTS });
+            fetchedS1 = true;
+            await sleep(300);
+          }
+          if (doneS2) {
+            r2 = { results: [], paging: {} };
+          } else {
+            r2 = await searchDeals({ after: afterS2, limit: PAGE_LIMIT, filters: weekdayFilters_set2_30daysAutoNotTrue(todayPlus30), properties: props, sorts: SORTS });
+            fetchedS2 = true;
+            await sleep(300);
+          }
+          if (doneS3) {
+            r3 = { results: [], paging: {} };
+          } else {
+            r3 = await searchDeals({ after: afterS3, limit: PAGE_LIMIT, filters: weekdayFilters_set3_modifiedLookback(CRON_LOOKBACK_DAYS), properties: props, sorts: SORTS });
+            fetchedS3 = true;
+          }
         } catch (e) {
           logger.warn({
             err: e?.message || String(e),
@@ -436,8 +456,10 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
             status: e?.code || e?.statusCode || e?.response?.status || null,
           });
 
+          // Vacíos por error, NO agotados: no marcar done (reintentan en la próxima corrida)
           r1 = { results: [], paging: {} };
           r2 = { results: [], paging: {} };
+          fetchedS1 = false; fetchedS2 = false; fetchedS3 = false;
 
           try {
             r3 = await searchDeals({
@@ -447,6 +469,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
               properties: props,
               sorts: SORTS,
             });
+            fetchedS3 = true;
           } catch (e2) {
             logger.error({
               err: e2?.message || String(e2),
@@ -478,6 +501,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
         }, "[cronDealsBatch] weekday_search_page");
 
         // S4: tickets forecast manuales con fecha_resolucion_esperada vencida
+       if (!doneS4) {
        try {
          const r4 = await searchOverdueForecasts({ after: afterS4, limit: PAGE_LIMIT });
          for (const t of r4?.results || []) {
@@ -487,6 +511,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
            yield { id: dealId, summary: null };
          }
          afterS4 = r4?.paging?.next?.after || null;
+         if (!afterS4) doneS4 = true;
          await setCronState('weekday_after_s4', afterS4);
        } catch (e4) {
          appendAudit({
@@ -496,9 +521,12 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
            msg: e4?.message || String(e4),
            status: e4?.code || e4?.statusCode || e4?.response?.status || null,
          });
-       } 
+       }
+       }
 
-        if (merged.length === 0) {
+        // Solo cortar por página vacía si S4 también terminó; si no, seguimos
+        // iterando (los sets done ya no se re-consultan) hasta agotar S4.
+        if (merged.length === 0 && doneS4) {
           afterS1 = null; afterS2 = null; afterS3 = null; afterS4 = null;
           await setCronState('weekday_after_s1', null);
           await setCronState('weekday_after_s2', null);
@@ -520,15 +548,18 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
           yield { id, summary: d };
         }
 
-        // advance cursors
+        // advance cursors (un set fetcheado sin paging.next quedó agotado ESTA corrida)
         afterS1 = r1?.paging?.next?.after || null;
         afterS2 = r2?.paging?.next?.after || null;
         afterS3 = r3?.paging?.next?.after || null;
+        if (fetchedS1 && !afterS1) doneS1 = true;
+        if (fetchedS2 && !afterS2) doneS2 = true;
+        if (fetchedS3 && !afterS3) doneS3 = true;
         await setCronState('weekday_after_s1', afterS1);
         await setCronState('weekday_after_s2', afterS2);
         await setCronState('weekday_after_s3', afterS3);
 
-        if (!afterS1 && !afterS2 && !afterS3 && !afterS4) {
+        if (doneS1 && doneS2 && doneS3 && doneS4) {
           break;
         }
       }
