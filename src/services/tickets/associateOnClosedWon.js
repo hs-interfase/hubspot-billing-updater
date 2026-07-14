@@ -15,6 +15,11 @@
 // Idempotente (solo asocia lo que falta) y gateado por flag ASSOC_ALL_ON_CLOSEDWON.
 // Patrón probado en scripts/fix/fixTicketAssociations.mjs, acá vía el hubspotClient
 // del motor (rate-limit + retry del proxy).
+//
+// DECISIÓN reunión 13-jul (resuelve "todos vs solo manuales"): SOLO el pipeline
+// MANUAL se asocia al ganar (ASSOC_CLOSEDWON_ONLY_MANUAL=true). Los tickets del
+// pipeline AUTOMÁTICO NO se asocian; se muestran ordenados por fecha en la vista
+// del negocio (facturados / listo-notificado / próximo-sin-notificar).
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { getDealCompanies, getDealContacts, normalizeCompaniesInfo } from './ticketService.js';

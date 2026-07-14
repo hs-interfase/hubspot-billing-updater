@@ -498,8 +498,9 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     // el descubrimiento del motor es por Search, no por asociación.
     //
     // FEATURE FLAG: apagado por default (ASSOC_ALL_ON_CLOSEDWON=true para prender).
-    // Se puede acotar a solo el pipeline manual con ASSOC_CLOSEDWON_ONLY_MANUAL=true
-    // (decisión todos-vs-manuales pendiente de la usuaria/Paola). No bloquea la corrida.
+    // DECISIÓN reunión 13-jul (resuelto "todos vs manuales"): solo el pipeline MANUAL
+    // se asocia al ganar (ASSOC_CLOSEDWON_ONLY_MANUAL=true); el AUTOMÁTICO NO se asocia
+    // y se muestra ordenado por fecha en la vista del negocio. No bloquea la corrida.
     if (parseBool(process.env.ASSOC_ALL_ON_CLOSEDWON)) {
       try {
         results.assocClosedWon = await associateAllTicketsOnClosedWon({
