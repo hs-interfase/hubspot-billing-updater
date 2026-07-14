@@ -15,7 +15,7 @@ import {
   syncLineItemPropToTickets,
   TRANSFER_EXCLUDED_LI_PROPS,
 } from '../services/lineItems/syncLineItemPropToTicket.js';
-import { TICKET_STAGES } from '../config/constants.js';
+import { TICKET_PIPELINE, PROXIMOS_A_FACTURAR_STAGE } from '../config/constants.js';
 
 // ── Partes puras ─────────────────────────────────────────────────────────────
 test('isTransferableLiProp: excluidas (Frecuencia/Término/NºPagos/Momento) → false', () => {
@@ -47,11 +47,13 @@ test('pickAffectedTicketProps: toma solo las claves de ticket influidas por la p
 });
 
 // ── Handler con client falso ─────────────────────────────────────────────────
-const PENDING = TICKET_STAGES.NEW;      // garantizado ∈ PENDING_STAGES
-const EMITTED = 'ZZZ_STAGE_NO_PENDING'; // garantizado ∉ PENDING_STAGES
+// Target = "Próximos a Facturar" del pipeline MANUAL. Cualquier otra combinación se saltea.
+const MANUAL = TICKET_PIPELINE;
+const PROXIMOS = PROXIMOS_A_FACTURAR_STAGE;
 
-function makeCtx({ tickets }) {
+function makeCtx({ tickets, mirror = null }) {
   const updateCalls = [];
+  const avisos = [];
   const client = {
     crm: {
       lineItems: { basicApi: { async getById() { return { id: 'LI1', properties: { line_item_key: 'LIK1', area: 'Petróleo' } }; } } },
@@ -61,42 +63,76 @@ function makeCtx({ tickets }) {
   };
   const extractFn = () => ({ area: 'Petróleo', of_producto_nombres: 'N' });
   const updateTicketFn = async (id, patch) => { updateCalls.push({ id: String(id), patch }); };
-  return { client, extractFn, updateTicketFn, updateCalls };
+  const findMirrorFn = async () => mirror;                 // null = sin mirror
+  const reportErrorFn = (arg) => { avisos.push(arg); };
+  return { client, extractFn, updateTicketFn, findMirrorFn, reportErrorFn, updateCalls, avisos };
 }
 
-const tk = (id, stage, props = {}) => ({ id: String(id), properties: { hs_pipeline_stage: stage, of_line_item_key: 'LIK1', ...props } });
-
-test('excluida: no aplica, no busca ni escribe', async () => {
-  const { client, extractFn, updateTicketFn, updateCalls } = makeCtx({ tickets: [] });
-  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'momento_de_facturacion', dealId: 'D1', client, extractFn, updateTicketFn });
-  assert.equal(r.applies, false);
-  assert.equal(r.reason, 'excluded');
-  assert.equal(updateCalls.length, 0);
+// tk(id, stage, pipeline, props) — por default pipeline MANUAL
+const tk = (id, stage, pipeline = MANUAL, props = {}) => ({
+  id: String(id),
+  properties: { hs_pipeline: pipeline, hs_pipeline_stage: stage, of_line_item_key: 'LIK1', ...props },
 });
 
-test('mapeada: actualiza tickets pendientes, saltea emitidos, y solo si el valor difiere', async () => {
+test('excluida: no aplica, no busca ni escribe', async () => {
+  const ctx = makeCtx({ tickets: [] });
+  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'momento_de_facturacion', dealId: 'D1', ...ctx });
+  assert.equal(r.applies, false);
+  assert.equal(r.reason, 'excluded');
+  assert.equal(ctx.updateCalls.length, 0);
+});
+
+test('mapeada: actualiza SOLO "Próximos a Facturar" manual, saltea el resto, y solo si difiere', async () => {
   const tickets = [
-    tk('T1', PENDING, { area: 'Otra' }),      // difiere → update
-    tk('T2', EMITTED, { area: 'Otra' }),      // emitido → skip
-    tk('T3', PENDING, { area: 'Petróleo' }),  // igual → sin cambio
+    tk('T1', PROXIMOS, MANUAL, { area: 'Otra' }),          // target, difiere → update
+    tk('T2', 'FORECAST_STAGE', MANUAL, { area: 'Otra' }),  // manual pero NO próximos → skip
+    tk('T3', PROXIMOS, 'PIPE_AUTO', { area: 'Otra' }),     // próximos pero pipeline auto → skip
+    tk('T4', PROXIMOS, MANUAL, { area: 'Petróleo' }),      // target pero igual → sin cambio
   ];
-  const { client, extractFn, updateTicketFn, updateCalls } = makeCtx({ tickets });
-  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', client, extractFn, updateTicketFn });
+  const ctx = makeCtx({ tickets });
+  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', ...ctx });
 
   assert.equal(r.applies, true);
   assert.deepEqual(r.keys, ['area']);
-  assert.equal(r.ticketsScanned, 3);
+  assert.equal(r.ticketsScanned, 4);
   assert.equal(r.ticketsUpdated, 1);      // solo T1
-  assert.equal(r.skippedEmitted, 1);      // T2
+  assert.equal(r.skipped, 2);             // T2 (stage) + T3 (pipeline)
   assert.equal(r.errors, 0);
+  assert.equal(r.mirrorNotified, false);  // sin mirror
 
-  assert.equal(updateCalls.length, 1);
-  assert.equal(updateCalls[0].id, 'T1');
-  assert.deepEqual(updateCalls[0].patch, { area: 'Petróleo' });
+  assert.equal(ctx.updateCalls.length, 1);
+  assert.equal(ctx.updateCalls[0].id, 'T1');
+  assert.deepEqual(ctx.updateCalls[0].patch, { area: 'Petróleo' });
+  assert.equal(ctx.avisos.length, 0);
+});
+
+test('aviso al mirror: si el original tiene mirror y se actualizó un ticket, avisa al deal UY', async () => {
+  const tickets = [tk('T1', PROXIMOS, MANUAL, { area: 'Otra' })];
+  const mirror = { mirrorDealId: 'DUY', mirrorLineItemId: 'LIUY', pyDealId: 'DPY' };
+  const ctx = makeCtx({ tickets, mirror });
+  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', ...ctx });
+
+  assert.equal(r.ticketsUpdated, 1);
+  assert.equal(r.mirrorNotified, true);
+  assert.equal(ctx.avisos.length, 1);
+  assert.equal(ctx.avisos[0].objectType, 'deal');
+  assert.equal(ctx.avisos[0].objectId, 'DUY');
+  assert.match(ctx.avisos[0].message, /area/);
+});
+
+test('aviso al mirror: NO se dispara si no se actualizó ningún ticket', async () => {
+  const tickets = [tk('T1', PROXIMOS, MANUAL, { area: 'Petróleo' })]; // igual → sin cambio
+  const mirror = { mirrorDealId: 'DUY', mirrorLineItemId: 'LIUY', pyDealId: 'DPY' };
+  const ctx = makeCtx({ tickets, mirror });
+  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', ...ctx });
+
+  assert.equal(r.ticketsUpdated, 0);
+  assert.equal(r.mirrorNotified, false);
+  assert.equal(ctx.avisos.length, 0);
 });
 
 test('sin line_item_key: no hace nada', async () => {
-  const { extractFn, updateTicketFn, updateCalls } = makeCtx({ tickets: [] });
+  const ctx = makeCtx({ tickets: [] });
   const client = {
     crm: {
       lineItems: { basicApi: { async getById() { return { id: 'LI1', properties: {} }; } } },
@@ -104,7 +140,7 @@ test('sin line_item_key: no hace nada', async () => {
       tickets: { searchApi: { async doSearch() { return { results: [] }; } } },
     },
   };
-  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', client, extractFn, updateTicketFn });
+  const r = await syncLineItemPropToTickets({ lineItemId: 'LI1', propertyName: 'area', dealId: 'D1', ...ctx, client });
   assert.equal(r.reason, 'sin_line_item_key');
-  assert.equal(updateCalls.length, 0);
+  assert.equal(ctx.updateCalls.length, 0);
 });
