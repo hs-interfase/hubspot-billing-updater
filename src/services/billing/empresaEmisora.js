@@ -12,7 +12,8 @@ export const EMPRESA_EMISORA_MAP = {
   '33695559578': 'ISA',       // Flota
   '33688695870': 'ISA',       // iJServ
   '33688695865': 'Interfase', // PayRoll
-  '33688819740': 'Interfase', // iSCert
+  '33688819740': 'Interfase', // iSCert (INT → Interfase)
+  '46035674794': 'ISA',       // iSCert ISA (split 13-jul, D §1: ISA Cert → ISA UY)
   '33695559590': 'ISA PY',    // i2
   '33688695889': 'ISA PY',    // MiRecibo
   '33695559589': 'ISA PY',    // MiFactura
