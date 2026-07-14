@@ -392,6 +392,7 @@ export async function getDealWithLineItems(dealId) {
     "area",
     "reventa",
     "hs_product_id",
+    "nombre_producto", // select: producto elegido por el vendedor (autocompleta del hs_product_id; al cambiarlo, el motor reasocia el ID)
     "billing_error",
 
     // --- mirror --

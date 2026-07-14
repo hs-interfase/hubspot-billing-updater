@@ -4,6 +4,8 @@ import { hubspotClient } from '../src/hubspotClient.js';
 import { enqueue } from '../src/webhookQueue.js';
 import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
+import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
+import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
 
 const MODULE = 'escuchar-cambios';
 
@@ -160,6 +162,48 @@ export default async function handler(req, res) {
 
         return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'recalc' });
       }
+    }
+
+    // ====== RUTA 3: CAMBIO DE PRODUCTO EN EL LINE ITEM (select nombre_producto) ======
+    // Split producto 13-jul (D §3): el vendedor cambia el select `nombre_producto` del LI;
+    // el motor reasocia el hs_product_id al producto elegido y re-corre las phases (de ahí
+    // el producto del ticket, área, emisora y factura se recalculan solos).
+    if (propertyName === LI_NOMBRE_PRODUCTO_PROP && objectType === 'line_item') {
+      const dealId = await getDealIdForLineItem(objectId);
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId,
+        actionType: 'product_reassign',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'product_reassign' });
+    }
+
+    // ====== RUTA 4: SYNC QUIRÚRGICO LI→TICKET (prop editable del vendedor) ======
+    // Tarea C (13-jul): el vendedor edita una prop del LI (sección de edición) que debe
+    // reflejarse en el/los ticket(s) NO emitidos, pero SOLO esa prop (no re-snapshot del
+    // ticket entero → no pisa lo que editó el responsable). Detrás de flag; con flag OFF
+    // estas props caen al "skipped" de abajo (comportamiento actual). Excluye Frecuencia /
+    // Término / Nº Pagos / Momento (isTransferableLiProp) y las props ya ruteadas arriba.
+    if (
+      objectType === 'line_item' &&
+      parseBool(process.env.LI_PROP_SYNC_ENABLED) &&
+      isTransferableLiProp(propertyName)
+    ) {
+      const dealId = await getDealIdForLineItem(objectId);
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId,
+        actionType: 'li_prop_sync',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'li_prop_sync' });
     }
 
     // ====== PROPIEDAD NO RECONOCIDA ======

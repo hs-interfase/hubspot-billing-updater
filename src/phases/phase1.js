@@ -27,6 +27,7 @@ import { reportIfActionable } from '../utils/errorReporting.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
 import { syncLineItemAreaByCountry } from '../services/deal/syncLineItemAreaByCountry.js';
+import { syncNombreProductoFromProductId } from '../services/billing/nombreProductoSelect.js';
 import { costoUsdEnabled, syncCostoUsdLineItems } from '../services/costoUsdService.js';
 
 const CANCELLED_STAGE_ID = process.env.CANCELLED_STAGE_ID || "";
@@ -640,6 +641,15 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
     await syncLineItemAreaByCountry(deal, lineItems);
   } catch (err) {
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncLineItemAreaByCountry (deal original)');
+  }
+
+  // 5.45) Sincronizar nombre_producto del LI ← hs_product_id (invariante: el select refleja el
+  //        product id; sobrescribe si difiere, no-op si coincide). El cambio deliberado del
+  //        vendedor lo maneja product_reassign (usa el valor del evento) y converge. (D §3)
+  try {
+    await syncNombreProductoFromProductId(lineItems);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncNombreProductoFromProductId');
   }
 
   // 5.5) Sincronizar tags de catálogo (producto/rubro/unidad_de_negocio/area) desde los line items

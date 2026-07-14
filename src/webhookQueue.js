@@ -9,6 +9,8 @@ import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
 import { parseBool } from './utils/parsers.js';
 import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
+import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
+import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
 
 const MODULE = 'webhookQueue';
 
@@ -210,7 +212,7 @@ async function processNext() {
 // ─── Ejecución por action_type ───────────────────────────────────────────────
 
 async function executeJob(job) {
-  const { action_type, object_id, object_type, deal_id, property_name } = job;
+  const { action_type, object_id, object_type, deal_id, property_name, property_value } = job;
 
   switch (action_type) {
     case 'urgent_line_item': {
@@ -407,6 +409,83 @@ async function executeJob(job) {
       } finally {
         await releaseDealLock(dealId, token);
       }
+    }
+
+    case 'product_reassign': {
+      // Split producto 13-jul (D §3): el vendedor cambió el select nombre_producto del LI.
+      // Reasociar hs_product_id al producto elegido y, si cambió, re-correr las phases del
+      // deal para que producto del ticket / área / emisora / factura se recalculen.
+      // Usar el valor del evento (property_value): evita que una corrida de cron que
+      // sincronizó nombre_producto←ID en el ínterin pise el cambio deliberado del vendedor.
+      const swap = await reassignLineItemProduct(object_id, property_value);
+      if (!swap.changed) {
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, reason: swap.reason, nombre: swap.nombre },
+          'product_reassign sin cambio (no se recalcula)'
+        );
+        return { skipped: true, reason: swap.reason };
+      }
+
+      // Resolver dealId si no vino
+      let resolvedDealId = deal_id;
+      if (!resolvedDealId) {
+        resolvedDealId = await getDealIdForLineItem(object_id);
+        if (!resolvedDealId) {
+          throw new Error(`No se encontró deal asociado al line item ${object_id}`);
+        }
+        await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
+      }
+
+      // Verificar facturación activa (mismo criterio que recalc)
+      const deal = await hubspotClient.crm.deals.basicApi.getById(String(resolvedDealId), [
+        'facturacion_activa', 'dealname', 'hubspot_owner_id',
+      ]);
+      const dProps = deal?.properties || {};
+      if (dProps.hubspot_owner_id) {
+        await pool.query(`UPDATE webhook_queue SET owner_id = $2 WHERE id = $1`, [job.id, dProps.hubspot_owner_id]);
+      }
+      if (!parseBool(dProps.facturacion_activa)) {
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId },
+          'product_reassign: deal con facturación inactiva, producto reasignado sin recalcular'
+        );
+        return { reassigned: true, recalculated: false, reason: 'facturacion_inactiva', ...swap };
+      }
+
+      const dealWithLineItems = await getDealWithLineItems(resolvedDealId);
+      const billingResult = await runPhasesForDealLocked(dealWithLineItems, 'webhook_queue');
+      logger.info(
+        {
+          module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId,
+          oldProductId: swap.oldId, newProductId: swap.newId, nombre: swap.nombre,
+          ticketsCreated: billingResult.ticketsCreated || 0,
+        },
+        'product_reassign completado (producto reasignado + phases re-corridas)'
+      );
+      return { reassigned: true, recalculated: true, ...swap, ...billingResult };
+    }
+
+    case 'li_prop_sync': {
+      // Tarea C (13-jul): el vendedor editó una prop del LI; sincronizar SOLO esa prop a
+      // los tickets NO emitidos del LI (quirúrgico, sin re-snapshot). El dealId solo se usa
+      // para leer moneda/país/cupo del deal (contexto del snapshot); si falta, se resuelve.
+      let resolvedDealId = deal_id;
+      if (!resolvedDealId) {
+        resolvedDealId = await getDealIdForLineItem(object_id);
+        if (resolvedDealId) {
+          await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
+        }
+      }
+      const result = await syncLineItemPropToTickets({
+        lineItemId: object_id,
+        propertyName: property_name,
+        dealId: resolvedDealId,
+      });
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, lineItemId: object_id, propertyName: property_name, ...result },
+        'li_prop_sync completado'
+      );
+      return result;
     }
 
     default:
