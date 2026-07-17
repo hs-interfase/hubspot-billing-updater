@@ -5,12 +5,15 @@
 // Fuentes, en orden:
 //   1) Override por env: DOLAR_UYU / DOLAR_PYG / DOLAR_EUR / DOLAR_<CUR> (numérico).
 //      Para contingencia o pruebas sin red.
-//   2) UYU → BCU (cotización oficial, SOAP awsultimocierre, Dólar USA billete cód. 2225).
+//   2) Tasa de cambio a nivel CUENTA de HubSpot (GET /settings/v3/currencies/exchange-rates).
+//      FUENTE PREFERIDA (2026-07-16): la usuaria la mantiene en Configuración → Monedas y es la
+//      misma tasa que HubSpot usa de forma nativa. ⚠️ HubSpot guarda la tasa como `moneda→USD`
+//      (conversionRate; p.ej. PYG=0.000141) → nuestro `dolar` (unidades por 1 USD) es el INVERSO
+//      1/conversionRate. Se toma el `effectiveAt` más reciente (HubSpot guarda historial diario).
+//   3) UYU → BCU (cotización oficial, SOAP awsultimocierre, Dólar USA billete cód. 2225).
 //      ⚠️ Se toma el PROMEDIO compra/venta; confirmar con Paola si corresponde venta (TCV).
-//      ⚠️ 2026-07-02: el BCU devuelve 403 (WAF) desde el entorno local; se deja el intento
-//      por si Railway sí puede, y si no cae al punto 3. Revisar fuente oficial con Paola.
-//   3) Resto (PYG / EUR / ...) → open.er-api.com (referencia diaria, sin API key).
-//      El BCP oficial para PYG queda pendiente de definición (misma reunión que el resto de la épica).
+//      ⚠️ 2026-07-02: el BCU devuelve 403 (WAF) desde el entorno local; queda como fallback.
+//   4) Resto (PYG / EUR / ...) → open.er-api.com (referencia diaria, sin API key). Fallback.
 //
 // Cache en memoria por moneda (TTL 6 h): el dólar del negocio se fija en eventos puntuales
 // (creación / cierre-ganado), no necesita más frescura y evita pegarle al BCU en cada deal.
@@ -53,6 +56,29 @@ async function fetchDolarErApi(currencyCode) {
   return +rate.toFixed(4);
 }
 
+// Tasa a nivel cuenta de HubSpot (Configuración → Monedas). HubSpot guarda `moneda→USD`
+// (conversionRate); nuestro `dolar` es el INVERSO (unidades de la moneda por 1 USD). Se toma
+// el effectiveAt más reciente (guarda historial diario). Requiere HUBSPOT_PRIVATE_TOKEN.
+async function fetchDolarHubspot(currencyCode) {
+  const token = process.env.HUBSPOT_PRIVATE_TOKEN;
+  if (!token) throw new Error('HubSpot exchange-rates: falta HUBSPOT_PRIVATE_TOKEN');
+  const { data } = await axios.get('https://api.hubapi.com/settings/v3/currencies/exchange-rates', {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 15000,
+  });
+  const results = Array.isArray(data?.results) ? data.results : [];
+  let best = null;
+  for (const r of results) {
+    if (String(r.fromCurrencyCode).toUpperCase() !== currencyCode) continue;
+    if (String(r.toCurrencyCode).toUpperCase() !== 'USD') continue;
+    const conv = Number(r.conversionRate);
+    if (!(conv > 0)) continue;
+    if (!best || String(r.effectiveAt) > String(best.effectiveAt)) best = r;
+  }
+  if (!best) throw new Error(`HubSpot: sin tasa ${currencyCode}→USD configurada`);
+  return +(1 / Number(best.conversionRate)).toFixed(4);
+}
+
 /**
  * Devuelve la cotización 1 USD → `currencyCode` (número > 0) o null si no se pudo obtener.
  * USD → 1 siempre.
@@ -68,8 +94,8 @@ export async function getDolar(currencyCode) {
   if (hit && Date.now() - hit.ts < TTL_MS) return hit.value;
 
   const intentos = cur === 'UYU'
-    ? [['BCU', fetchDolarBcu], ['er-api', () => fetchDolarErApi(cur)]]
-    : [['er-api', () => fetchDolarErApi(cur)]];
+    ? [['hubspot', () => fetchDolarHubspot(cur)], ['BCU', fetchDolarBcu], ['er-api', () => fetchDolarErApi(cur)]]
+    : [['hubspot', () => fetchDolarHubspot(cur)], ['er-api', () => fetchDolarErApi(cur)]];
 
   for (const [source, fn] of intentos) {
     try {
