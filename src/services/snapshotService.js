@@ -106,7 +106,7 @@ function parseYesNoBool(value) {
   return null;
 }
 
-function detectIVA(lineItem) {
+export function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
 
   let result;
@@ -157,7 +157,7 @@ function detectIVA(lineItem) {
       objectType: 'line_item',
       objectId: String(lineItem?.id ?? ''),
       message: taxGroupPresente
-        ? `IVA indeterminado: el tax group "${raw}" NO coincide con ninguno configurado (IVA_UY/PY/EXENTO_TAX_GROUP_ID). of_iva queda "" → la factura saldría con el NETO SIN IVA. Revisar que la env var del portal apunte a este tax group, o corregir el tax group del line item ANTES de emitir.`
+        ? `IVA indeterminado: el tax group "${raw}" NO coincide con ninguno configurado (IVA_UY_TAX_GROUP_ID / IVA_PY_TAX_GROUP_ID / IVA_EXENTO_TAX_GROUP_ID). of_iva queda "" → la factura saldría con el NETO SIN IVA. Revisar que la env var del portal apunte a este tax group, o corregir el tax group del line item ANTES de emitir.`
         : `IVA indeterminado: el line item no tiene tax group asignado (hs_tax_rate_group_id vacío). of_iva queda "" → la factura saldría sin IVA. Asignar el tax group correcto antes de emitir.`,
     });
   }

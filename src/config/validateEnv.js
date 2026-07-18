@@ -26,7 +26,7 @@ const IMPORTANT = [
   // (sandbox/prod), así que un swap sin estas vars rompe el IVA en silencio.
   'IVA_UY_TAX_GROUP_ID',
   'IVA_PY_TAX_GROUP_ID',
-  'EXENTO_TAX_GROUP_ID',
+  'IVA_EXENTO_TAX_GROUP_ID',
 ];
 
 export function validateEnv() {
