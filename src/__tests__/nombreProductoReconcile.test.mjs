@@ -11,7 +11,17 @@ import {
   decideProductoReconciliation,
   reconcileLineItemsProducto,
   NOMBRE_PRODUCTO_TO_ID,
+  NOMBRE_PRODUCTO_TO_ID_BY_ENV,
 } from '../services/billing/nombreProductoSelect.js';
+
+// ── Mapa de IDs por portal (fuente: PRODUCTS de la migración) ────────────────
+test('IDs por portal: iSCert ISA sandbox/prod correctos; 13 productos con ambos entornos', () => {
+  assert.deepEqual(NOMBRE_PRODUCTO_TO_ID_BY_ENV['ISCert ISA'], { sandbox: '46035551908', prod: '46035674794' });
+  assert.deepEqual(NOMBRE_PRODUCTO_TO_ID_BY_ENV['ISCert'], { sandbox: '41948442381', prod: '33688819740' });
+  const all = Object.values(NOMBRE_PRODUCTO_TO_ID_BY_ENV);
+  assert.equal(all.length, 13);
+  assert.ok(all.every(x => x.sandbox && x.prod), 'cada producto tiene sandbox y prod');
+});
 
 const ID_ISCERT = NOMBRE_PRODUCTO_TO_ID['ISCert'];        // 33688819740
 const ID_ISCERT_ISA = NOMBRE_PRODUCTO_TO_ID['ISCert ISA']; // 46035674794

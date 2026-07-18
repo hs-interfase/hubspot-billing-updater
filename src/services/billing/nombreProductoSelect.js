@@ -22,22 +22,36 @@ const MODULE = 'nombreProductoSelect';
 
 export const LI_NOMBRE_PRODUCTO_PROP = 'nombre_producto';
 
-// Valor interno de la opción del select `nombre_producto` (LI) → hs_product_id (PROD).
-export const NOMBRE_PRODUCTO_TO_ID = {
-  'ISCert':     '33688819740', // iSCert (Interfase)
-  'ISCert ISA': '46035674794', // iSCert ISA (ISA) — split 13-jul
-  'i2':         '33695559590',
-  'MiFactura':  '33695559589',
-  'MiRecibo':   '33688695889',
-  'IJServ':     '33688695870', // iJServ
-  'Flota':      '33695559578',
-  'Proyectos':  '33688943634',
-  'iGDoc':      '33688819739',
-  'Liferay':    '45054899755',
-  'NNDD Ops':   '45054899756',
-  'Portal':     '33695807329',
-  'PayRoll':    '33688695865',
+// Valor interno de la opción del select `nombre_producto` (LI) → hs_product_id, POR PORTAL.
+// IDs tomados de `PRODUCTS` de la migración (definitivos/4_PROGRAMAS/migracion_pasoA_dryrun.mjs)
+// — misma fuente que usa la carga → garantiza que coincidan en ambos entornos.
+// OJO casing: los VALORES del select son ISCert / ISCert ISA / IJServ (I mayúscula), distinto
+// de la biblioteca (iSCert…). El mapa usa el valor EXACTO del select (lo que manda el webhook).
+export const NOMBRE_PRODUCTO_TO_ID_BY_ENV = {
+  'ISCert':     { sandbox: '41948442381', prod: '33688819740' }, // iSCert (Interfase)
+  'ISCert ISA': { sandbox: '46035551908', prod: '46035674794' }, // iSCert ISA (ISA) — split 13-jul
+  'i2':         { sandbox: '42010181658', prod: '33695559590' },
+  'MiFactura':  { sandbox: '42010181659', prod: '33695559589' },
+  'MiRecibo':   { sandbox: '42004648587', prod: '33688695889' },
+  'IJServ':     { sandbox: '41943895217', prod: '33688695870' }, // iJServ
+  'Flota':      { sandbox: '41943895219', prod: '33695559578' },
+  'Proyectos':  { sandbox: '41943709577', prod: '33688943634' },
+  'iGDoc':      { sandbox: '42010367402', prod: '33688819739' },
+  'Liferay':    { sandbox: '45055023516', prod: '45054899755' },
+  'NNDD Ops':   { sandbox: '45054899742', prod: '45054899756' },
+  'Portal':     { sandbox: '42010181660', prod: '33695807329' },
+  'PayRoll':    { sandbox: '42010367404', prod: '33688695865' },
 };
+
+// Entorno del deployment: HUBSPOT_ENV=sandbox usa IDs de pruebas; cualquier otro valor
+// (o ausente) cae a PROD (default seguro para producción).
+const PRODUCTO_ENV = String(process.env.HUBSPOT_ENV || 'production').toLowerCase() === 'sandbox'
+  ? 'sandbox' : 'prod';
+
+// Mapa resuelto para ESTE entorno (valor select → hs_product_id del portal actual).
+export const NOMBRE_PRODUCTO_TO_ID = Object.fromEntries(
+  Object.entries(NOMBRE_PRODUCTO_TO_ID_BY_ENV).map(([nombre, ids]) => [nombre, ids[PRODUCTO_ENV]])
+);
 
 // Inverso: hs_product_id → valor del select `nombre_producto`. Sin colisiones (cada
 // opción → un ID distinto). Se usa para autocompletar el select al crear el LI.
