@@ -4,7 +4,6 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
-import { reportIfActionable } from '../../utils/errorReporting.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
 /**
@@ -321,12 +320,24 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
       );
     }
   } catch (err) {
-    reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error actualizando ticket con consumo de cupo', err });
-    logger.warn(
-      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, err },
-      'Error actualizando ticket con consumo de cupo (no interrumpe facturación)'
+    // OJO: esta marca NO es solo trazabilidad — es la LLAVE DE IDEMPOTENCIA.
+    // El cupo YA se descontó del deal (update de arriba). Si la marca no se escribe,
+    // la próxima corrida no ve `cupo_consumo_invoice_id` y DESCUENTA DE NUEVO → doble
+    // consumo → cupo_activo='false' espurio que bloquea facturación legítima.
+    // El hubspotClient ya reintenta los transitorios (withRetry); si llegamos acá es
+    // un fallo duro. NO re-lanzamos (no romper la facturación ya emitida), pero lo
+    // escalamos como accionable para que un humano reconcilie el cupo.
+    logger.error(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, invoiceId, consumo, err },
+      'CRÍTICO: cupo descontado del deal pero NO se pudo marcar el ticket — riesgo de doble consumo'
     );
-    // No lanzar error: trazabilidad no debe romper facturación
+    reportHubSpotError({
+      level: 'error',
+      objectType: 'ticket',
+      objectId: String(ticketId),
+      message: `Cupo YA descontado del deal ${dealId} (valor ${consumo}, invoice ${invoiceId}) pero NO se pudo escribir la marca de idempotencia en el ticket. RIESGO DE DOBLE CONSUMO en la próxima corrida — reconciliar a mano: escribir cupo_consumo_invoice_id=${invoiceId} en este ticket o restar ${consumo} de cupo_consumido del deal.`,
+    });
+    // No re-lanzar: la factura ya se emitió; romper acá no revierte el consumo.
   }
 
   // ========== RESUMEN ==========
