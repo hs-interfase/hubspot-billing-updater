@@ -5,6 +5,7 @@ import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
 /**
  * CÁLCULO PURO DEL CONSUMO DE CUPO (sin HubSpot, testeable).
@@ -52,6 +53,12 @@ export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {}
   const cupoRestanteNuevo = cupoTotal - cupoConsumidoNuevo;
   const cupoDeactivated = cupoRestanteNuevo <= 0;
 
+  // SOBRE-CRÉDITO: una NC que acredita más de lo consumido deja cupo_consumido
+  // negativo. NO se pisa el valor (el dato fiel es la evidencia y reconcilia si se
+  // corrige); solo se señaliza para que el caller lo avise como accionable — casi
+  // siempre es un error de carga de la NC.
+  const cupoSobreCredito = cupoConsumidoNuevo < 0;
+
   return {
     ok: true,
     consumo,
@@ -60,6 +67,7 @@ export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {}
     cupoConsumidoNuevo,
     cupoRestanteNuevo,
     cupoDeactivated,
+    cupoSobreCredito,
   };
 }
 
@@ -190,7 +198,23 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     return { consumed: false, reason: calc.reason };
   }
 
-  const { consumo, cupoConsumidoActual, cupoTotal, cupoConsumidoNuevo, cupoRestanteNuevo } = calc;
+  const { consumo, cupoConsumidoActual, cupoTotal, cupoConsumidoNuevo, cupoRestanteNuevo, cupoSobreCredito } = calc;
+
+  // NC que acredita más de lo consumido: el valor real (negativo) se escribe tal
+  // cual — es la evidencia y reconcilia si se corrige. Solo se avisa al deal para
+  // que el equipo revise (probable error de carga de la NC).
+  if (cupoSobreCredito) {
+    logger.warn(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, consumo, cupoConsumidoActual, cupoConsumidoNuevo },
+      'Nota de crédito excede el cupo consumido: cupo_consumido queda negativo'
+    );
+    reportHubSpotError({
+      level: 'warn',
+      objectType: 'deal',
+      objectId: String(dealId),
+      message: `Nota de crédito acredita más cupo del consumido (crédito ${consumo}, consumido previo ${cupoConsumidoActual} → nuevo ${cupoConsumidoNuevo}). Revisar la NC (ticket ${ticketId}).`,
+    });
+  }
 
   logger.debug(
     { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, cupoTotal, cupoConsumidoActual, cupoConsumidoNuevo, cupoRestanteNuevo, consumo },

@@ -22,6 +22,20 @@ function esUrgente(ticket) {
 }
 
 /**
+ * ¿Es NOTA DE CRÉDITO? Se detecta por el SIGNO del ticket (cantidad o subtotal
+ * negativos, el modelo de NC), con el flag `nc` copiado del LI como respaldo.
+ * Mismo criterio que consumeCupo / el aviso al mirror.
+ */
+function esNotaCredito(ticket) {
+  const tp = ticket?.properties || {};
+  const cant = parseFloat(tp.cantidad_real);
+  const sub = parseFloat(tp.subtotal_real);
+  const porSigno = (Number.isFinite(cant) && cant < 0) || (Number.isFinite(sub) && sub < 0);
+  const porFlag = String(tp.nc || '').trim().toLowerCase() === 'true';
+  return porSigno || porFlag;
+}
+
+/**
  * Determina la empresa emisora según el product_id del ticket.
  * Usa `producto_id` (snapshotteado desde hs_product_id del line item).
  */
@@ -113,6 +127,9 @@ const STYLES = {
   urgentBanner: 'background:#fff3e0;border:1px solid #ff9800;border-radius:6px;padding:10px 12px;margin:10px 0;color:#b35900;font-weight:bold;',
   lineItemDivUrgent: 'background:#fff8f0;border:2px solid #ff9800;border-radius:6px;padding:12px;margin:10px 0;',
   urgentBadge: 'color:#e65100;font-weight:bold;',
+  ncBanner: 'background:#fdecef;border:1px solid #e0356b;border-radius:6px;padding:10px 12px;margin:10px 0;color:#a81e4d;font-weight:bold;',
+  lineItemDivNC: 'background:#fdf2f5;border:2px solid #e0356b;border-radius:6px;padding:12px;margin:10px 0;',
+  ncBadge: 'color:#c81e5b;font-weight:bold;',
   row: 'margin:4px 0;padding:2px 0;',
   label: 'font-weight:bold;color:#555;',
   lineItemDiv: 'background:#f7f9fc;border:1px solid #dde3eb;border-radius:6px;padding:12px;margin:10px 0;',
@@ -199,6 +216,7 @@ function buildLineItemDiv(ticket, portalId = null) {
   const tp = ticket?.properties || {};
   const frecuencia = resolverFrecuencia(ticket);
   const urgente = esUrgente(ticket);
+  const nc = esNotaCredito(ticket);
 
   const ticketId  = ticket?.id || tp.hs_object_id || null;
   const ticketUrl = buildTicketUrl(portalId, ticketId);
@@ -206,9 +224,13 @@ function buildLineItemDiv(ticket, portalId = null) {
     ? `<a href="${ticketUrl}" style="${STYLES.link}">Ver ticket #${ticketId}</a>`
     : null;
 
+  const divStyle = nc ? STYLES.lineItemDivNC : (urgente ? STYLES.lineItemDivUrgent : STYLES.lineItemDiv);
+
   const rows = [
-    `<div style="${urgente ? STYLES.lineItemDivUrgent : STYLES.lineItemDiv}">`,
+    `<div style="${divStyle}">`,
     `<div style="${STYLES.lineItemTitle}">${val(tp.of_producto_nombres) || 'Producto'}${
+      nc ? ` — <span style="${STYLES.ncBadge}">↩️ NOTA DE CRÉDITO</span>` : ''
+    }${
       urgente ? ` — <span style="${STYLES.urgentBadge}">⚡ FACTURACIÓN URGENTE</span>` : ''
     }</div>`,
     buildRow('Descripción de la factura', val(tp.of_descripcion_producto)),
@@ -262,13 +284,21 @@ export function buildMensajeFacturacion(tickets, dealName, dealMeta = {}) {
     ? `<div style="${STYLES.urgentBanner}">⚡ Esta solicitud incluye ${urgentes} ítem(s) de FACTURACIÓN URGENTE solicitada manualmente desde el contrato.</div>`
     : '';
 
+  const ncs = tickets.filter(esNotaCredito).length;
+  const ncBanner = ncs > 0
+    ? `<div style="${STYLES.ncBanner}">↩️ Esta solicitud incluye ${ncs} NOTA(S) DE CRÉDITO — se emiten en negativo y, si la línea consumía cupo, se lo devuelven al negocio.</div>`
+    : '';
+
   const portalId     = dealMeta.portalId || null;
   const header       = buildHeader(tickets[0], dealName, dealMeta);
   const lineItemDivs = tickets.map(t => buildLineItemDiv(t, portalId)).join('\n');
   const ticketIds    = tickets.map(t => t.id || t.properties?.hs_object_id || '?');
   const footer       = buildFooter(ticketIds);
 
-  return header + (banner ? '\n' + banner : '') + '\n' + lineItemDivs + '\n' + footer;
+  return header
+    + (ncBanner ? '\n' + ncBanner : '')
+    + (banner ? '\n' + banner : '')
+    + '\n' + lineItemDivs + '\n' + footer;
 }
 
 // ── Legacy export (mantener compatibilidad temporal) ──

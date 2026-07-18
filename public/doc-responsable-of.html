@@ -180,6 +180,21 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--bd);font-size
   </table>
   <div class="note nok">✅ Corregí lo editable, dejá que el sistema recalcule el total, y recién ahí tocá <b>Facturar Ahora</b>.</div>
 
+  <h3><span class="n">6</span>Nota de crédito <span class="tag ttk">Ticket</span></h3>
+  <p class="par">Una nota de crédito (NC) revierte un cobro: emite una factura en <b>negativo</b> y, si la línea consumía cupo, le <b>devuelve</b> ese cupo al negocio. Es siempre <b>manual</b> — el sistema no genera NC solo.</p>
+  <ol class="steps">
+    <li><b>Cloná la línea de pedido que vas a revertir</b>La misma que se facturó. Clonarla deja registrada la relación con el cupo y con el espejo, y de qué producto salió la NC.</li>
+    <li><b>Ponele precio 0 y facturación manual, y marcá NC = Sí</b>El negativo no va en la línea (no acepta negativos): va en el ticket. Marcá NC antes de que se genere el ticket.</li>
+    <li><b>Guardá — se genera el ticket</b>Aparece en <b>Próximos a facturar</b>: esa es la confirmación de que se creó y se guardó. Si no lo ves ahí, no quedó guardado.</li>
+    <li><b>En el ticket: monto a acreditar en positivo y cantidad en negativo</b>En <b>Monto unitario</b> va el importe en positivo (puede ser menor al original si es parcial). La <b>cantidad</b> va siempre en negativo (ej. <code>-10</code>): sea cupo por monto o por horas, con eso el cupo se ajusta solo y los totales quedan correctos.</li>
+    <li><b>Tocá Facturar Ahora</b>Se emite la factura negativa y, si aplica, se devuelve el cupo.</li>
+  </ol>
+  <div class="note ni">ℹ️ Podés ponerle una <b>fecha pasada</b> al ticket: queda en <b>Próximos a facturar</b> hasta que lo mandes a facturar o le cambies la fecha.</div>
+  <div class="note ni">ℹ️ Si tiene cupo, antes de emitir revisá que el <b>cupo del negocio esté activo</b>. Si se agotó y se desactivó, reactivalo a mano primero — si no, la NC no devuelve nada.</div>
+  <div class="note nok">✅ Si el negocio tiene espejo de Uruguay, en el negocio UY aparece un aviso <b>"NOTA DE CRÉDITO emitida en PY"</b> con el <b>ID del ticket</b> que la originó. La NC de Uruguay se emite a mano, con este mismo procedimiento.</div>
+  <div class="note nw">⚠️ No emitas una NC por <b>más</b> de lo consumido: el cupo consumido queda negativo (a propósito, como señal) y el sistema lo avisa en el <b>Error de facturación</b> del negocio.</div>
+  <div class="note ni">ℹ️ Paso a paso con imágenes en la guía interactiva → <b>Cancelaciones y Pausas → Emitir una Nota de Crédito</b>.</div>
+
   <footer>Interfase Billing Engine · Documento de referencia para Responsables de OF</footer>
 </div>
 

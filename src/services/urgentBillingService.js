@@ -895,7 +895,7 @@ export async function processUrgentLineItem(lineItemId) {
   }
 
   // Propagar al mirror UY — fire-and-forget, no bloquea la respuesta al caller
-  _propagateToMirror(lineItemId, result?.billingPeriodDate).catch(() => {});
+  _propagateToMirror(lineItemId, result?.billingPeriodDate, result?.ticketId).catch(() => {});
 
   return result;
 }
@@ -906,7 +906,7 @@ export async function processUrgentLineItem(lineItemId) {
  * - PY manual → escribe aviso en el deal UY.
  * NUNCA crea Invoice en el mirror — el equipo UY factura manualmente.
  */
-async function _propagateToMirror(pyLineItemId, billingPeriodDate) {
+async function _propagateToMirror(pyLineItemId, billingPeriodDate, pyTicketId = null) {
   const log = logger.child({
     module: 'urgentBillingService',
     fn: '_propagateToMirror',
@@ -968,7 +968,7 @@ const pyLiProps = await hubspotClient.crm.lineItems.basicApi.getById(
 const billingYMD = billingPeriodDate || getTodayYMD();
 
 // Siempre notificar al deal UY que el PY facturó
-await notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD);
+await notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD, { pyTicketId });
 log.info({ mirrorLineItemId, billingYMD }, 'Mirror UY: aviso escrito en deal');
 
 // PY automático → además promover ticket UY al pipeline manual
@@ -1254,7 +1254,7 @@ if (pyLineItemId) {
     );
   } else {
     const billingYMD = getTodayYMD();
-    notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD).catch(err => {
+    notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD, { pyTicketId: ticketId }).catch(err => {
       logger.warn(
         { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, pyLineItemId, err },
         'notifyMirrorDealOnManualEmission falló — no bloquea'

@@ -572,7 +572,7 @@ if (facturarAhora) {
         // PY automático: promover ticket UY + aviso
         // PY manual: solo aviso (el ticket UY ya fue promovido por Phase 2)
         promoteMirrorTicketToManualReady(lineItemId, billingPeriodDate).catch(() => {});
-        notifyMirrorDealOnManualEmission(lineItemId, billingPeriodDate).catch(() => {});
+        notifyMirrorDealOnManualEmission(lineItemId, billingPeriodDate, { pyTicketId: promoted.ticketId }).catch(() => {});
 
       } else {
         logger.info(

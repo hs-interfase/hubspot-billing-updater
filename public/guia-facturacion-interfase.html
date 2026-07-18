@@ -623,7 +623,7 @@ const C = {
     <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Cloná la línea de pedido que vas a revertir</div><div class="sd">La misma línea que se facturó y querés acreditar.</div></div></div>
     <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Ponele precio <strong>0</strong> y facturación <strong>manual</strong></div><div class="sd">La cantidad negativa no va en la línea (no acepta negativos) — va en el ticket.</div></div></div>
     <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Marcá <strong>NC = Sí</strong> en la línea de pedido</div><div class="sd">Con eso alcanza: el sistema lo copia al ticket solo. Marcalo antes de que se genere el ticket.</div></div></div>
-    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Guardá — se genera el ticket</div></div></div>
+    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Guardá — se genera el ticket</div><div class="sd">El ticket aparece en <strong>Próximos a facturar</strong>: esa es la confirmación de que se creó y se guardó. Si no lo ves ahí, el cambio no quedó guardado — revisá y volvé a guardar.</div></div></div>
     <div class="step"><div class="sn">5</div><div class="sb2"><div class="st">En el ticket, poné el <strong>monto</strong> que querés acreditar y la <strong>cantidad</strong> en <strong>negativo</strong></div><div class="sd">En <strong>Monto unitario</strong> va el importe (en positivo) que querés usar en la nota de crédito — puede ser menor al original si la NC es parcial. La cantidad va siempre en negativo (ej. <code>-10</code>): no importa si el cupo es por monto o por horas, con eso el cupo se ajusta solo y los subtotales y totales quedan correctos.</div></div></div>
     <div class="step"><div class="sn">6</div><div class="sb2"><div class="st">Mandá a facturar el ticket</div><div class="sd">Se emite la factura negativa y, si aplica, se devuelve el cupo.</div></div></div>
   </div>
@@ -641,8 +641,9 @@ const C = {
     ${fila('NC','Sí/No','sistema','Llega solo desde la línea de pedido. Es solo registro.')}
     ${fila('Facturar Ahora','Sí/No','usuario','Tocar <strong>Sí</strong> para emitir la nota de crédito.')}
   </div>
-  <div class="note nok">✅ Si el negocio tiene espejo de Uruguay, en el negocio UY aparece un aviso con <strong>"ES NOTA DE CRÉDITO"</strong>. La NC de Uruguay se emite a mano, con este mismo procedimiento.</div>
-  <div class="note nw">⚠️ No emitas una NC por <strong>más</strong> de lo que se consumió: el cupo consumido podría quedar negativo.</div>
+  <div class="note ni">ℹ️ Podés ponerle una <strong>fecha pasada</strong> al ticket: queda en <strong>Próximos a facturar</strong> hasta que lo mandes a facturar o le cambies la fecha.</div>
+  <div class="note nok">✅ Si el negocio tiene espejo de Uruguay, en el negocio UY aparece un aviso que dice <strong>"NOTA DE CRÉDITO emitida en PY"</strong> e incluye el <strong>ID del ticket</strong> que la originó. La NC de Uruguay se emite a mano, con este mismo procedimiento.</div>
+  <div class="note nw">⚠️ No emitas una NC por <strong>más</strong> de lo que se consumió: el cupo consumido queda negativo. El sistema lo <strong>deja así a propósito</strong> (es la señal de que algo no cierra) y <strong>avisa</strong> en el <strong>Error de facturación</strong> del negocio para que lo revises.</div>
   <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Dato:</strong> el sistema reconoce la nota de crédito por la <strong>cantidad negativa</strong> del ticket. La marca NC es solo para dejar registro. 📝</div></div>`,
 
 /* ═══ RESPONSABLES DE ÓRDENES DE FACTURACIÓN ═══ */
