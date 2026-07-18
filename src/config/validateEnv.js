@@ -21,6 +21,12 @@ const IMPORTANT = [
   'DEAL_STAGE_85',
   'DEAL_STAGE_95',
   'BILLING_TZ',
+  // IVA (auditoría 2026-07-18, D3·Q4): si faltan, detectIVA no reconoce ningún tax group
+  // → of_iva='' en TODOS los tickets → facturas sin IVA. Los IDs difieren por portal
+  // (sandbox/prod), así que un swap sin estas vars rompe el IVA en silencio.
+  'IVA_UY_TAX_GROUP_ID',
+  'IVA_PY_TAX_GROUP_ID',
+  'EXENTO_TAX_GROUP_ID',
 ];
 
 export function validateEnv() {
