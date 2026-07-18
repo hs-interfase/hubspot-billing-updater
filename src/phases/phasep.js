@@ -1,7 +1,7 @@
 // src/phases/phaseP.js
 
 import { hubspotClient } from '../hubspotClient.js';
-import { getEffectiveBillingConfig } from '../billingEngine.js';
+import { getEffectiveBillingConfig, snapEndOfMonth } from '../billingEngine.js';
 import { parseLocalDate, formatDateISO, addInterval } from '../utils/dateUtils.js';
 import { parseBool } from '../utils/parsers.js';
 import { buildTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
@@ -366,6 +366,13 @@ export function buildDesiredDates(lineItem, allTickets = [], { overrideToday } =
     return { desiredCount: 1, dates: [startYmd] };
   }
 
+  // fin_de_mes: la regla del último día hábil vive en billingEngine; acá la aplicamos
+  // también al planificar fechas, si no Phase P generaría la factura en el día del ancla
+  // (~2 semanas antes) todos los meses. Iteramos la fecha CRUDA (addInterval preserva el
+  // mes) y snapeamos solo al comparar/emitir — igual que computeNextFromInterval.
+  const endOfMonth = cfg?.isEndOfMonth === true;
+  const emitYmd = (dd) => formatDateISO(snapEndOfMonth(dd, interval, endOfMonth));
+
   const termRaw = p.hs_recurring_billing_number_of_payments ?? p.number_of_payments ?? null;
   const term = safeInt(termRaw);
 
@@ -426,7 +433,7 @@ if (maxCount === 0) return { desiredCount: 0, dates: [] };
     while (safety < 1200) {
       safety++;
       if (!d || !Number.isFinite(d.getTime())) break;
-      const ymd = formatDateISO(d);
+      const ymd = emitYmd(d);
 
       if (ymd > windowEnd) break;
 
@@ -505,7 +512,7 @@ if (!startDate) return { desiredCount: 0, dates: [] };
 // Avanzar por la serie hasta encontrar primera fecha >= floorYmd
 let d = new Date(startDate.getTime());
 let safety = 0;
-while (formatDateISO(d) < floorYmd) {
+while (emitYmd(d) < floorYmd) {
   const next = addInterval(d, interval);
   if (!next || !Number.isFinite(next.getTime())) break;
   if (next.getTime() === d.getTime()) break;
@@ -518,7 +525,7 @@ while (formatDateISO(d) < floorYmd) {
   const dates = [];
   while (dates.length < maxCount) {
     if (!d || !Number.isFinite(d.getTime())) break;
-    const ymd = formatDateISO(d);
+    const ymd = emitYmd(d);
     dates.push(ymd);
     const next = addInterval(d, interval);
     if (!next || !Number.isFinite(next.getTime())) break;
