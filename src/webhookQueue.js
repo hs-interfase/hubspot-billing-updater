@@ -1,6 +1,7 @@
 // src/webhookQueue.js
 import pool, { acquireDealLock, releaseDealLock } from './db.js';
 import logger from '../lib/logger.js';
+import { sendAlert } from '../lib/alertService.js';
 import { processUrgentLineItem, processUrgentTicket } from './services/urgentBillingService.js';
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { runPhasesForDealLocked } from './phases/index.js';
@@ -9,6 +10,9 @@ import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
 import { parseBool } from './utils/parsers.js';
 import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
+import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
+import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
+import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
 
 const MODULE = 'webhookQueue';
 
@@ -33,9 +37,15 @@ export async function initWebhookQueueTable() {
       raw_payload     JSONB,
       created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       started_at      TIMESTAMPTZ,
-      finished_at     TIMESTAMPTZ
+      finished_at     TIMESTAMPTZ,
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      reaped_at       TIMESTAMPTZ
     )
   `);
+
+  // Columnas agregadas después del deploy inicial (tablas ya existentes en Railway)
+  await pool.query(`ALTER TABLE webhook_queue ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE webhook_queue ADD COLUMN IF NOT EXISTS reaped_at TIMESTAMPTZ`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_wq_status_priority
@@ -45,6 +55,11 @@ export async function initWebhookQueueTable() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_wq_deal_status
       ON webhook_queue (deal_id, status)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_wq_status_started
+      ON webhook_queue (status, started_at)
   `);
 
   logger.info({ module: MODULE }, 'Tabla webhook_queue lista.');
@@ -109,6 +124,15 @@ export async function enqueue({
 
 let workerRunning = false;
 
+/**
+ * Id del job que este proceso está ejecutando ahora mismo (null si ninguno).
+ * El reaper lo usa para NO tocar un job que sigue vivo: `processing` viejo solo
+ * es huérfano si nadie lo está corriendo.
+ * Válido con 1 réplica (el escenario actual). Con varias réplicas habría que
+ * mover esto a la fila (worker_id + heartbeat), como hace cronLock.
+ */
+let currentJobId = null;
+
 async function processNext() {
   if (workerRunning) return; // evitar solapamiento si el intervalo es más corto que el procesamiento
   workerRunning = true;
@@ -156,6 +180,7 @@ async function processNext() {
       `UPDATE webhook_queue SET status = 'processing', started_at = NOW() WHERE id = $1`,
       [job.id]
     );
+    currentJobId = job.id;
 
     logger.info(
       { module: MODULE, fn: 'processNext', jobId: job.id, actionType: job.action_type, objectId: job.object_id, dealId: job.deal_id },
@@ -185,6 +210,7 @@ async function processNext() {
           { module: MODULE, fn: 'processNext', jobId: job.id, actionType: job.action_type },
           'Evento procesado → done'
         );
+        await alertIfReapedJobLostItsWork(job, jobResult);
       }
     } catch (err) {
       const errorMsg = err?.message || 'Unknown error';
@@ -203,14 +229,134 @@ async function processNext() {
     // Error a nivel del worker (ej: falla de conexión a DB)
     logger.error({ module: MODULE, fn: 'processNext', err: err?.message }, 'Error en el worker de la cola');
   } finally {
+    currentJobId = null;
     workerRunning = false;
   }
+}
+
+// ─── Reaper de jobs huérfanos ────────────────────────────────────────────────
+
+async function alertIfReapedJobLostItsWork(job, jobResult) {
+  const veredicto = clasificarJobRescatado(job, jobResult);
+  if (!veredicto) return;
+
+  const contexto = {
+    module: MODULE, fn: 'alertIfReapedJobLostItsWork',
+    jobId: job.id, actionType: job.action_type,
+    objectType: job.object_type, objectId: job.object_id,
+    dealId: job.deal_id, attempts: job.attempts,
+  };
+
+  // El camino de ticket se auto-recupera: alcanza con dejar rastro.
+  if (veredicto.severidad === 'warn') {
+    logger.warn(contexto, veredicto.mensaje);
+    return;
+  }
+
+  logger.error(contexto, veredicto.mensaje);
+
+  await sendAlert(veredicto.severidad, veredicto.mensaje, {
+    jobId: job.id,
+    actionType: job.action_type,
+    objectType: job.object_type,
+    objectId: job.object_id,
+    dealId: job.deal_id,
+    detalle: veredicto.detalle,
+  }).catch(err =>
+    logger.error({ ...contexto, err: err?.message }, 'No se pudo enviar la alerta')
+  );
+}
+
+/**
+ * Devuelve a la cola los jobs que quedaron en `processing` sin nadie corriéndolos
+ * (típicamente: redeploy de Railway a mitad de un job). Sin esto quedan huérfanos
+ * para siempre y el `facturar_ahora` se pierde sin factura y sin alerta.
+ *
+ * Se corre al boot (donde por definición nada está en vuelo) y periódicamente,
+ * saltando siempre el job que este proceso tiene en la mano.
+ *
+ * @param {Object} [opts]
+ * @param {number} [opts.staleMinutes]  - antigüedad de `started_at` para considerarlo huérfano
+ * @param {number} [opts.maxAttempts]   - tras N rescates se marca `failed` en vez de reintentar
+ * @returns {Promise<{ requeued: number, failed: number, ids: number[] }>}
+ */
+export async function reapStaleProcessingJobs({
+  staleMinutes = Number(process.env.WEBHOOK_QUEUE_REAP_MINUTES ?? 15),
+  maxAttempts = Number(process.env.WEBHOOK_QUEUE_MAX_ATTEMPTS ?? 3),
+} = {}) {
+  const summary = { requeued: 0, failed: 0, ids: [] };
+
+  const staleRes = await pool.query(
+    `SELECT id, attempts, action_type, object_id, deal_id, started_at
+       FROM webhook_queue
+      WHERE status = 'processing'
+        AND started_at < NOW() - ($1 || ' minutes')::interval
+        AND ($2::int IS NULL OR id <> $2::int)
+      ORDER BY id ASC`,
+    [String(staleMinutes), currentJobId]
+  );
+
+  for (const job of staleRes.rows) {
+    const { status, attempts } = decideReapAction(job, maxAttempts);
+
+    if (status === 'failed') {
+      await pool.query(
+        `UPDATE webhook_queue
+            SET status = 'failed', attempts = $2, reaped_at = NOW(),
+                error = $3, finished_at = NOW()
+          WHERE id = $1`,
+        [job.id, attempts, `Job huérfano: quedó en processing y se rescató ${attempts} veces sin completarse`]
+      );
+      summary.failed += 1;
+    } else {
+      await pool.query(
+        `UPDATE webhook_queue
+            SET status = 'pending', attempts = $2, reaped_at = NOW(),
+                started_at = NULL, created_at = NOW()
+          WHERE id = $1`,
+        [job.id, attempts]
+      );
+      summary.requeued += 1;
+    }
+
+    summary.ids.push(job.id);
+
+    logger.warn(
+      {
+        module: MODULE, fn: 'reapStaleProcessingJobs',
+        jobId: job.id, actionType: job.action_type, objectId: job.object_id,
+        dealId: job.deal_id, startedAt: job.started_at, attempts, nuevoEstado: status,
+      },
+      status === 'failed'
+        ? 'Job huérfano superó el máximo de rescates → failed'
+        : 'Job huérfano devuelto a pending'
+    );
+  }
+
+  if (summary.failed > 0) {
+    await sendAlert(
+      'critical',
+      `${summary.failed} job(s) de la cola de webhooks abandonados tras ${maxAttempts} intentos`,
+      { jobIds: summary.ids, staleMinutes, maxAttempts }
+    ).catch(err =>
+      logger.error({ module: MODULE, fn: 'reapStaleProcessingJobs', err: err?.message }, 'No se pudo enviar la alerta')
+    );
+  }
+
+  if (summary.requeued > 0 || summary.failed > 0) {
+    logger.info(
+      { module: MODULE, fn: 'reapStaleProcessingJobs', ...summary },
+      `Reaper: ${summary.requeued} reencolados, ${summary.failed} abandonados`
+    );
+  }
+
+  return summary;
 }
 
 // ─── Ejecución por action_type ───────────────────────────────────────────────
 
 async function executeJob(job) {
-  const { action_type, object_id, object_type, deal_id, property_name } = job;
+  const { action_type, object_id, object_type, deal_id, property_name, property_value } = job;
 
   switch (action_type) {
     case 'urgent_line_item': {
@@ -409,6 +555,83 @@ async function executeJob(job) {
       }
     }
 
+    case 'product_reassign': {
+      // Split producto 13-jul (D §3): el vendedor cambió el select nombre_producto del LI.
+      // Reasociar hs_product_id al producto elegido y, si cambió, re-correr las phases del
+      // deal para que producto del ticket / área / emisora / factura se recalculen.
+      // Usar el valor del evento (property_value): evita que una corrida de cron que
+      // sincronizó nombre_producto←ID en el ínterin pise el cambio deliberado del vendedor.
+      const swap = await reassignLineItemProduct(object_id, property_value);
+      if (!swap.changed) {
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, reason: swap.reason, nombre: swap.nombre },
+          'product_reassign sin cambio (no se recalcula)'
+        );
+        return { skipped: true, reason: swap.reason };
+      }
+
+      // Resolver dealId si no vino
+      let resolvedDealId = deal_id;
+      if (!resolvedDealId) {
+        resolvedDealId = await getDealIdForLineItem(object_id);
+        if (!resolvedDealId) {
+          throw new Error(`No se encontró deal asociado al line item ${object_id}`);
+        }
+        await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
+      }
+
+      // Verificar facturación activa (mismo criterio que recalc)
+      const deal = await hubspotClient.crm.deals.basicApi.getById(String(resolvedDealId), [
+        'facturacion_activa', 'dealname', 'hubspot_owner_id',
+      ]);
+      const dProps = deal?.properties || {};
+      if (dProps.hubspot_owner_id) {
+        await pool.query(`UPDATE webhook_queue SET owner_id = $2 WHERE id = $1`, [job.id, dProps.hubspot_owner_id]);
+      }
+      if (!parseBool(dProps.facturacion_activa)) {
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId },
+          'product_reassign: deal con facturación inactiva, producto reasignado sin recalcular'
+        );
+        return { reassigned: true, recalculated: false, reason: 'facturacion_inactiva', ...swap };
+      }
+
+      const dealWithLineItems = await getDealWithLineItems(resolvedDealId);
+      const billingResult = await runPhasesForDealLocked(dealWithLineItems, 'webhook_queue');
+      logger.info(
+        {
+          module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId,
+          oldProductId: swap.oldId, newProductId: swap.newId, nombre: swap.nombre,
+          ticketsCreated: billingResult.ticketsCreated || 0,
+        },
+        'product_reassign completado (producto reasignado + phases re-corridas)'
+      );
+      return { reassigned: true, recalculated: true, ...swap, ...billingResult };
+    }
+
+    case 'li_prop_sync': {
+      // Tarea C (13-jul): el vendedor editó una prop del LI; sincronizar SOLO esa prop a
+      // los tickets NO emitidos del LI (quirúrgico, sin re-snapshot). El dealId solo se usa
+      // para leer moneda/país/cupo del deal (contexto del snapshot); si falta, se resuelve.
+      let resolvedDealId = deal_id;
+      if (!resolvedDealId) {
+        resolvedDealId = await getDealIdForLineItem(object_id);
+        if (resolvedDealId) {
+          await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
+        }
+      }
+      const result = await syncLineItemPropToTickets({
+        lineItemId: object_id,
+        propertyName: property_name,
+        dealId: resolvedDealId,
+      });
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, lineItemId: object_id, propertyName: property_name, ...result },
+        'li_prop_sync completado'
+      );
+      return result;
+    }
+
     default:
       throw new Error(`action_type desconocido: ${action_type}`);
   }
@@ -480,12 +703,32 @@ export async function checkWebhookQueue() {
     result.status = 'warn';
   }
 
+  // Eventos 'processing' viejos: el worker murió a mitad y el reaper todavía no
+  // los levantó (o no está corriendo). Antes eran invisibles al health-check.
+  const reapMinutes = Number(process.env.WEBHOOK_QUEUE_REAP_MINUTES ?? 15);
+  const processingRes = await pool.query(
+    `SELECT COUNT(*)::int AS count,
+            MIN(started_at) AS oldest
+       FROM webhook_queue
+      WHERE status = 'processing'
+        AND started_at < NOW() - ($1 || ' minutes')::interval`,
+    [String(reapMinutes)]
+  );
+
+  const processingCount = processingRes.rows[0]?.count || 0;
+  result.processingStale = { count: processingCount };
+  if (processingCount > 0) {
+    result.processingStale.oldest = processingRes.rows[0].oldest;
+    result.status = 'warn';
+  }
+
   return result;
 }
 
 // ─── Start / Stop ────────────────────────────────────────────────────────────
 
 let workerInterval = null;
+let reaperInterval = null;
 
 /**
  * Inicia el worker que procesa la cola cada `intervalMs` milisegundos.
@@ -499,6 +742,16 @@ export function startWorker(intervalMs = 2000) {
 
   workerInterval = setInterval(processNext, intervalMs);
   logger.info({ module: MODULE, intervalMs }, 'Worker de webhook_queue iniciado');
+
+  // Reaper periódico: el boot cubre el redeploy, esto cubre al worker que muere
+  // sin que el proceso caiga. Nunca toca el job en vuelo (`currentJobId`).
+  const reapEveryMin = Number(process.env.WEBHOOK_QUEUE_REAP_INTERVAL_MIN ?? 5);
+  reaperInterval = setInterval(() => {
+    reapStaleProcessingJobs().catch(err =>
+      logger.error({ module: MODULE, fn: 'reaperInterval', err: err?.message }, 'Error en el reaper periódico')
+    );
+  }, reapEveryMin * 60 * 1000);
+  logger.info({ module: MODULE, reapEveryMin }, 'Reaper de webhook_queue iniciado');
 }
 
 /**
@@ -509,5 +762,9 @@ export function stopWorker() {
     clearInterval(workerInterval);
     workerInterval = null;
     logger.info({ module: MODULE }, 'Worker de webhook_queue detenido');
+  }
+  if (reaperInterval) {
+    clearInterval(reaperInterval);
+    reaperInterval = null;
   }
 }

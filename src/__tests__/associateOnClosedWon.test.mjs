@@ -122,6 +122,7 @@ test('happy path: asocia faltantes al deal; ya-asociados no se re-crean', async 
   const stats = await associateAllTicketsOnClosedWon({
     dealId: 'D1',
     dealProps: { facturacion_activa: 'true' },
+    onlyManualPipeline: false, // este test valida la mecánica, no el filtro de pipeline
     client,
     getDealCompaniesFn: async () => ['C10'],
     getDealContactsFn: async () => ['P20'],
@@ -154,6 +155,7 @@ test('idempotencia: segunda corrida no re-asocia (dealLinked=0)', async () => {
   const args = {
     dealId: 'D1',
     dealProps: { facturacion_activa: 'true' },
+    onlyManualPipeline: false, // valida idempotencia, no el filtro de pipeline
     client,
     getDealCompaniesFn: async () => [],
     getDealContactsFn: async () => [],
@@ -190,6 +192,35 @@ test('filtro onlyManual: saltea tickets fuera del pipeline manual', { skip: !TIC
 });
 
 // ─────────────────────────────────────────────────────────────
+// Hook: política resuelta 13-jul — el env ASSOC_CLOSEDWON_ONLY_MANUAL
+// gobierna el default (sin pasar onlyManualPipeline explícito).
+// ─────────────────────────────────────────────────────────────
+test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true saltea el pipeline automático (default)', { skip: !TICKET_PIPELINE }, async () => {
+  const prev = process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
+  process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = 'true';
+  try {
+    const { client, createCalls } = makeFakeClient({
+      tickets: [ticket(1, TICKET_PIPELINE), ticket(2, 'PIPE_AUTO')],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      // onlyManualPipeline NO se pasa → default toma el env
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.considered, 1);          // solo el manual
+    assert.equal(stats.skippedByPipeline, 1);   // el automático
+    assert.equal(stats.dealLinked, 1);
+    assert.ok(createCalls.every(c => c.fromId === '1'));
+  } finally {
+    if (prev === undefined) delete process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
+    else process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = prev;
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // Hook: un error en un ticket no frena al resto
 // ─────────────────────────────────────────────────────────────
 test('resiliencia: falla la asociación de T1 pero T2 igual se asocia', async () => {
@@ -200,6 +231,7 @@ test('resiliencia: falla la asociación de T1 pero T2 igual se asocia', async ()
   const stats = await associateAllTicketsOnClosedWon({
     dealId: 'D1',
     dealProps: { facturacion_activa: 'true' },
+    onlyManualPipeline: false, // valida resiliencia, no el filtro de pipeline
     client,
     getDealCompaniesFn: async () => [],
     getDealContactsFn: async () => [],

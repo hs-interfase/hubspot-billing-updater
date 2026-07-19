@@ -26,7 +26,7 @@ function isMonthBasedInterval(interval) {
 // Ajusta una fecha al último día hábil de SU mes cuando aplica fin_de_mes.
 // El mes de `date` ya es el correcto (addInterval preserva el mes aunque el día
 // "derive" hacia 28/30); acá solo reemplazamos el día por el último hábil del mes.
-function snapEndOfMonth(date, interval, endOfMonth) {
+export function snapEndOfMonth(date, interval, endOfMonth) {
   if (!endOfMonth || !isMonthBasedInterval(interval)) return date;
   return lastBusinessDayOfMonth(date);
 }

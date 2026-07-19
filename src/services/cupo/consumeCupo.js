@@ -4,7 +4,7 @@ import { hubspotClient } from '../../hubspotClient.js';
 import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
-import { reportIfActionable } from '../../utils/errorReporting.js';
+import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
 /**
  * CÁLCULO PURO DEL CONSUMO DE CUPO (sin HubSpot, testeable).
@@ -52,6 +52,12 @@ export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {}
   const cupoRestanteNuevo = cupoTotal - cupoConsumidoNuevo;
   const cupoDeactivated = cupoRestanteNuevo <= 0;
 
+  // SOBRE-CRÉDITO: una NC que acredita más de lo consumido deja cupo_consumido
+  // negativo. NO se pisa el valor (el dato fiel es la evidencia y reconcilia si se
+  // corrige); solo se señaliza para que el caller lo avise como accionable — casi
+  // siempre es un error de carga de la NC.
+  const cupoSobreCredito = cupoConsumidoNuevo < 0;
+
   return {
     ok: true,
     consumo,
@@ -60,6 +66,7 @@ export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {}
     cupoConsumidoNuevo,
     cupoRestanteNuevo,
     cupoDeactivated,
+    cupoSobreCredito,
   };
 }
 
@@ -190,7 +197,23 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     return { consumed: false, reason: calc.reason };
   }
 
-  const { consumo, cupoConsumidoActual, cupoTotal, cupoConsumidoNuevo, cupoRestanteNuevo } = calc;
+  const { consumo, cupoConsumidoActual, cupoTotal, cupoConsumidoNuevo, cupoRestanteNuevo, cupoSobreCredito } = calc;
+
+  // NC que acredita más de lo consumido: el valor real (negativo) se escribe tal
+  // cual — es la evidencia y reconcilia si se corrige. Solo se avisa al deal para
+  // que el equipo revise (probable error de carga de la NC).
+  if (cupoSobreCredito) {
+    logger.warn(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, consumo, cupoConsumidoActual, cupoConsumidoNuevo },
+      'Nota de crédito excede el cupo consumido: cupo_consumido queda negativo'
+    );
+    reportHubSpotError({
+      level: 'warn',
+      objectType: 'deal',
+      objectId: String(dealId),
+      message: `Nota de crédito acredita más cupo del consumido (crédito ${consumo}, consumido previo ${cupoConsumidoActual} → nuevo ${cupoConsumidoNuevo}). Revisar la NC (ticket ${ticketId}).`,
+    });
+  }
 
   logger.debug(
     { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, tipoCupo, cupoTotal, cupoConsumidoActual, cupoConsumidoNuevo, cupoRestanteNuevo, consumo },
@@ -297,12 +320,24 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
       );
     }
   } catch (err) {
-    reportIfActionable({ objectType: 'ticket', objectId: String(ticketId), message: 'Error actualizando ticket con consumo de cupo', err });
-    logger.warn(
-      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, err },
-      'Error actualizando ticket con consumo de cupo (no interrumpe facturación)'
+    // OJO: esta marca NO es solo trazabilidad — es la LLAVE DE IDEMPOTENCIA.
+    // El cupo YA se descontó del deal (update de arriba). Si la marca no se escribe,
+    // la próxima corrida no ve `cupo_consumo_invoice_id` y DESCUENTA DE NUEVO → doble
+    // consumo → cupo_activo='false' espurio que bloquea facturación legítima.
+    // El hubspotClient ya reintenta los transitorios (withRetry); si llegamos acá es
+    // un fallo duro. NO re-lanzamos (no romper la facturación ya emitida), pero lo
+    // escalamos como accionable para que un humano reconcilie el cupo.
+    logger.error(
+      { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', dealId, ticketId, invoiceId, consumo, err },
+      'CRÍTICO: cupo descontado del deal pero NO se pudo marcar el ticket — riesgo de doble consumo'
     );
-    // No lanzar error: trazabilidad no debe romper facturación
+    reportHubSpotError({
+      level: 'error',
+      objectType: 'ticket',
+      objectId: String(ticketId),
+      message: `Cupo YA descontado del deal ${dealId} (valor ${consumo}, invoice ${invoiceId}) pero NO se pudo escribir la marca de idempotencia en el ticket. RIESGO DE DOBLE CONSUMO en la próxima corrida — reconciliar a mano: escribir cupo_consumo_invoice_id=${invoiceId} en este ticket o restar ${consumo} de cupo_consumido del deal.`,
+    });
+    // No re-lanzar: la factura ya se emitió; romper acá no revierte el consumo.
   }
 
   // ========== RESUMEN ==========

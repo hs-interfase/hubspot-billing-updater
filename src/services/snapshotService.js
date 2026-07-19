@@ -4,6 +4,7 @@ import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import {
   IVA_UY_TAX_GROUP_ID,
   IVA_PY_TAX_GROUP_ID,
@@ -105,7 +106,7 @@ function parseYesNoBool(value) {
   return null;
 }
 
-function detectIVA(lineItem) {
+export function detectIVA(lineItem) {
   const raw = String(lineItem?.properties?.hs_tax_rate_group_id ?? '').trim();
 
   let result;
@@ -136,6 +137,30 @@ function detectIVA(lineItem) {
     IVA_PY_TAX_GROUP_ID,
     EXENTO_TAX_GROUP_ID,
   }, '[SNAPSHOT][IVA][A] detectIVA()');
+
+  // AVISO (auditoría 2026-07-18, D3·Q4): si no se pudo determinar el IVA, of_iva queda ''
+  // y la factura saldría con el neto SIN IVA sin ningún error visible. Se MANTIENE el
+  // comportamiento (no bloquea), pero se avisa SIEMPRE para que un humano lo vea antes de
+  // que un automático emita 22%/10% abajo. El caso peligroso es un tax group presente pero
+  // NO reconocido (ID nuevo, o env IVA_*_TAX_GROUP_ID faltante/cambiada por swap de portal).
+  if (result === '') {
+    const taxGroupPresente = raw !== '';
+    logger.warn({
+      module: 'snapshotService', fn: 'detectIVA',
+      lineItemId: lineItem?.id, raw, taxGroupPresente,
+      IVA_UY_TAX_GROUP_ID, IVA_PY_TAX_GROUP_ID, EXENTO_TAX_GROUP_ID,
+    }, taxGroupPresente
+      ? '[SNAPSHOT][IVA][AVISO] tax group NO reconocido → of_iva="" (factura sin IVA)'
+      : '[SNAPSHOT][IVA][AVISO] sin tax group asignado → of_iva=""');
+    reportHubSpotError({
+      level: taxGroupPresente ? 'error' : 'warn',
+      objectType: 'line_item',
+      objectId: String(lineItem?.id ?? ''),
+      message: taxGroupPresente
+        ? `IVA indeterminado: el tax group "${raw}" NO coincide con ninguno configurado (IVA_UY_TAX_GROUP_ID / IVA_PY_TAX_GROUP_ID / IVA_EXENTO_TAX_GROUP_ID). of_iva queda "" → la factura saldría con el NETO SIN IVA. Revisar que la env var del portal apunte a este tax group, o corregir el tax group del line item ANTES de emitir.`
+        : `IVA indeterminado: el line item no tiene tax group asignado (hs_tax_rate_group_id vacío). of_iva queda "" → la factura saldría sin IVA. Asignar el tax group correcto antes de emitir.`,
+    });
+  }
 
   return result;
 }
@@ -299,6 +324,19 @@ const repetitivo = !!rawFreq && ![
     // = costo del PY), así que su facturación NO cuenta para informes (FACT 0 vía calc prop
     // of_facturacion_usd); su MARGEN sí (monto UY − costo real UY). Fuente: es_mirror_de_py.
     of_intercompany: parseBool(deal?.properties?.es_mirror_de_py) ? 'true' : 'false',
+
+    // Contrato / progreso de pagos (para la vista de Victoria): se copian del LI al
+    // ticket. of_cantidad_de_pagos (arriba) = total; of_pagos_restantes = progreso.
+    of_inicio_del_contrato: toHubSpotDateOnly(lp.inicio_del_contrato),
+    of_fin_del_contrato: toHubSpotDateOnly(lp.fin_del_contrato),
+    of_pagos_restantes: parseNumber(lp.pagos_restantes, null),
+
+    // Paramétrica: copia del ajuste aplicado en el LI, para el card de Victoria.
+    // tipo_de_parametrica va como texto (evita depender de opciones del select).
+    of_tipo_de_parametrica: safeString(lp.tipo_de_parametrica),
+    of_monto_unitario_original: parseNumber(lp.monto_unitario_original, null),
+    of_porcentaje_ultimo_ajuste: parseNumber(lp.porcentaje_ultimo_ajuste, null),
+    of_fecha_ultimo_ajuste: toHubSpotDateOnly(lp.fecha_ultimo_ajuste),
   };
 
   logger.info({

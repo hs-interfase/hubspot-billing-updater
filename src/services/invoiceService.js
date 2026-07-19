@@ -13,6 +13,7 @@ import { ensure24FutureTickets } from './tickets/ticketService.js';
 import { buildValidatedUpdateProps } from '../utils/propertyHelpers.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
+import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 
 const HUBSPOT_API_BASE = 'https://api.hubapi.com';
 const accessToken = process.env.HUBSPOT_PRIVATE_TOKEN;
@@ -295,6 +296,25 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
   const invoiceKey = invoiceKeyStrict || safeString(tp.of_ticket_key) || `ticket::${ticketId}`;
 
   logger.info({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceKey, lik, fechaPlan }, '[invoice] invoiceKey calculado');
+
+  // AVISO #11 (auditoría 2026-07-18, D1·Q5): si la key cayó al repuesto `ticket::<id>`
+  // (no había ni key estricta por período ni of_ticket_key), esa key es única por TICKET,
+  // no por período → esquiva el dedup por período y podría facturar el mismo período dos
+  // veces. Los tickets del motor/forecast SIEMPRE traen of_line_item_key; esto solo pasa con
+  // un ticket creado A MANO en la UI sin la etiqueta. NO se bloquea la facturación (decisión
+  // usuaria: no deberían crearse tickets a mano), solo se avisa para que un humano lo revise.
+  if (invoiceKey === `ticket::${ticketId}`) {
+    logger.warn(
+      { module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceKey, dealId, lik, fechaPlan },
+      '[invoice][AVISO] key degradada a ticket::<id> (sin of_line_item_key ni of_ticket_key) — no dedupea por período'
+    );
+    reportHubSpotError({
+      level: 'warn',
+      objectType: 'ticket',
+      objectId: String(ticketId),
+      message: `Ticket sin of_line_item_key ni of_ticket_key: la clave de factura cayó al repuesto por-ticket ("ticket::${ticketId}"), que NO deduplica por período. Riesgo de facturar el mismo período dos veces. Los tickets del motor siempre traen la etiqueta — este parece creado a mano. Revisar y completar of_line_item_key.`,
+    });
+  }
 
   // 2) Verificar idempotencia
   if (tp.of_invoice_id) {

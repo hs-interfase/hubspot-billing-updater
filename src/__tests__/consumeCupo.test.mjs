@@ -103,18 +103,31 @@ test('tipo_de_cupo desconocido es rechazado', () => {
   assert.match(r.reason, /tipo_de_cupo desconocido/);
 });
 
-// ---------- Documenta el GAP conocido: sin clamp a >= 0 ----------
+// ---------- SOBRE-CRÉDITO NC: valor fiel + señal (sin pisar) ----------
 
-test('GAP conocido: una NC mayor a lo consumido deja cupo_consumido NEGATIVO (no se clampa)', () => {
-  // El código NO protege contra sobre-crédito: si se acredita más de lo consumido,
-  // cupo_consumido queda negativo. El tutorial lo advierte como responsabilidad del
-  // usuario. Este test DOCUMENTA el comportamiento actual (cámbialo si se agrega clamp).
+test('NC mayor a lo consumido: cupo_consumido queda negativo (fiel) y marca cupoSobreCredito', () => {
+  // Sobre-crédito (acreditar más de lo consumido): el valor real es negativo y se
+  // conserva TAL CUAL (es la evidencia y reconcilia si se corrige). Solo se señaliza
+  // cupoSobreCredito para que el caller avise (probable error de carga de la NC).
   const r = calcularConsumoCupo({
     tipoCupo: 'Por Monto',
     dealProps: { cupo_total_monto: '1000', cupo_consumido: '100' },
     ticketProps: { subtotal_real: '-300' },   // acredita más de lo consumido
   });
   assert.equal(r.ok, true);
-  assert.equal(r.cupoConsumidoNuevo, -200);  // 100 + (-300) → negativo, sin clamp
-  assert.equal(r.cupoRestanteNuevo, 1200);   // 1000 - (-200) → cupo "inflado"
+  assert.equal(r.cupoConsumidoNuevo, -200);  // 100 + (-300) → fiel, sin pisar
+  assert.equal(r.cupoRestanteNuevo, 1200);   // 1000 - (-200)
+  assert.equal(r.cupoSobreCredito, true);
+});
+
+test('NC dentro de lo consumido: sin sobre-crédito (cupoSobreCredito=false)', () => {
+  const r = calcularConsumoCupo({
+    tipoCupo: 'Por Monto',
+    dealProps: { cupo_total_monto: '1000', cupo_consumido: '500' },
+    ticketProps: { subtotal_real: '-300' },   // acredita menos de lo consumido
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.cupoConsumidoNuevo, 200);   // 500 + (-300)
+  assert.equal(r.cupoRestanteNuevo, 800);
+  assert.equal(r.cupoSobreCredito, false);
 });

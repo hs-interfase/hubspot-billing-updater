@@ -656,27 +656,38 @@ const ticketId = ticketResult.ticketId;
         'Ticket actualizado con invoice ID'
       );
     }
-// 7.e) Consumir cupo (idempotente)
-    if (ticketId && invoiceIdFinal) {
-      try {
-        const { consumeCupoAfterInvoice } = await import('./cupo/consumeCupo.js');
-        await consumeCupoAfterInvoice({
-          dealId,
-          ticketId: String(ticketId),
-          lineItemId: String(lineItemId),
-          invoiceId: String(invoiceIdFinal),
-        });
-        logger.info(
-          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, invoiceId: invoiceIdFinal },
-          'Cupo consumido post-facturación urgente'
-        );
-      } catch (cupoErr) {
-        logger.warn(
-          { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, err: cupoErr },
-          'Error consumiendo cupo post-facturación urgente — no bloquea'
-        );
-      }
-    }
+// 7.e) Consumir cupo (idempotente) — DESHABILITADO (auditoría 2026-07-18, D2·Q2 seq 2).
+    //
+    // Esta llamada es REDUNDANTE: createInvoiceFromTicket (paso 7.c) ya invoca
+    // consumeCupoAfterInvoice internamente (invoiceService.js). Al re-llamar acá, un
+    // crash o fallo de la marca de idempotencia entre ambas → DOBLE CONSUMO de cupo
+    // → cupo_activo='false' espurio que bloquea facturación legítima.
+    //
+    // No se elimina porque todo este path (facturar_ahora de LINE ITEM) está previsto
+    // para retirarse; queda comentado por si algún día se revive — pero si se revive,
+    // NO reactivar sin antes garantizar que createInvoiceFromTicket ya NO consuma cupo,
+    // o el doble consumo vuelve.
+    //
+    // if (ticketId && invoiceIdFinal) {
+    //   try {
+    //     const { consumeCupoAfterInvoice } = await import('./cupo/consumeCupo.js');
+    //     await consumeCupoAfterInvoice({
+    //       dealId,
+    //       ticketId: String(ticketId),
+    //       lineItemId: String(lineItemId),
+    //       invoiceId: String(invoiceIdFinal),
+    //     });
+    //     logger.info(
+    //       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, invoiceId: invoiceIdFinal },
+    //       'Cupo consumido post-facturación urgente'
+    //     );
+    //   } catch (cupoErr) {
+    //     logger.warn(
+    //       { module: 'urgentBillingService', fn: '_executeUrgentBillingForLineItem', dealId, ticketId, err: cupoErr },
+    //       'Error consumiendo cupo post-facturación urgente — no bloquea'
+    //     );
+    //   }
+    // }
 
     // 8) Evidencia
     await updateUrgentBillingEvidence(lineItemId, lineItemProps);
@@ -895,7 +906,7 @@ export async function processUrgentLineItem(lineItemId) {
   }
 
   // Propagar al mirror UY — fire-and-forget, no bloquea la respuesta al caller
-  _propagateToMirror(lineItemId, result?.billingPeriodDate).catch(() => {});
+  _propagateToMirror(lineItemId, result?.billingPeriodDate, result?.ticketId).catch(() => {});
 
   return result;
 }
@@ -906,7 +917,7 @@ export async function processUrgentLineItem(lineItemId) {
  * - PY manual → escribe aviso en el deal UY.
  * NUNCA crea Invoice en el mirror — el equipo UY factura manualmente.
  */
-async function _propagateToMirror(pyLineItemId, billingPeriodDate) {
+async function _propagateToMirror(pyLineItemId, billingPeriodDate, pyTicketId = null) {
   const log = logger.child({
     module: 'urgentBillingService',
     fn: '_propagateToMirror',
@@ -968,7 +979,7 @@ const pyLiProps = await hubspotClient.crm.lineItems.basicApi.getById(
 const billingYMD = billingPeriodDate || getTodayYMD();
 
 // Siempre notificar al deal UY que el PY facturó
-await notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD);
+await notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD, { pyTicketId });
 log.info({ mirrorLineItemId, billingYMD }, 'Mirror UY: aviso escrito en deal');
 
 // PY automático → además promover ticket UY al pipeline manual
@@ -1254,7 +1265,7 @@ if (pyLineItemId) {
     );
   } else {
     const billingYMD = getTodayYMD();
-    notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD).catch(err => {
+    notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD, { pyTicketId: ticketId }).catch(err => {
       logger.warn(
         { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId, pyLineItemId, err },
         'notifyMirrorDealOnManualEmission falló — no bloquea'

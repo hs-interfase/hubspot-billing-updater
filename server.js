@@ -13,7 +13,7 @@ import { initDB } from './api/invoice-editor/Db.js'
 import debugUrgent from './api/debugUrgent.js'
 import healthAuditRouter from './api/healthAudit.js'
 // ── Webhook Queue ──────────────────────────────
-import { initWebhookQueueTable, startWorker } from './src/webhookQueue.js'
+import { initWebhookQueueTable, startWorker, reapStaleProcessingJobs } from './src/webhookQueue.js'
 import { initExchangeRatesTable, initDealLocksTable, initRateBucketTable } from './src/db.js'
 // ── Nodum Upload ─────────────────────────────────
 import nodumUploadRouter from './api/nodum/nodumUpload.js'
@@ -116,6 +116,12 @@ await initRateBucketTable()
 await initParametricaTables()
 
 const PORT = process.env.PORT || 8080
+// Rescate de jobs que quedaron en 'processing' cuando el proceso anterior murió
+// (redeploy de Railway a mitad de un facturar_ahora). Acá nada está en vuelo todavía.
+await reapStaleProcessingJobs({ staleMinutes: 0 }).catch(err =>
+  logger.error({ err: err?.message }, 'Falló el reaper de webhook_queue al boot')
+)
+
 app.listen(PORT, '0.0.0.0', () => {
   logger.info({ port: PORT }, 'Server running')
   startWorker(2000)

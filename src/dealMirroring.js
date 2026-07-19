@@ -123,24 +123,30 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
         continue;
       }
 
-      // Sin tickets promovidos: desasociar + archivar
+      // Sin tickets promovidos: REGLA USUARIA (2026-07-18) — al borrarse el LI original
+      // en PY, el espejo UY NO se borra: se pausa y se AVISA para revisión humana (antes
+      // se desasociaba + archivaba en silencio). Nunca perdemos el espejo automáticamente.
       try {
-        await hubspotClient.crm.associations.v4.basicApi.archive(
-          'line_items',
-          String(li.id),
-          'deals',
-          String(mirrorDealId)
-        );
-        await hubspotClient.crm.lineItems.basicApi.archive(String(li.id));
-        prunedCount++;
+        await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+          properties: {
+            pausa: 'true',
+            of_billing_error: 'LI espejo pausado: el LI original en PY fue borrado/desvinculado. NO se elimina el espejo — revisar y decidir a mano.',
+          },
+        });
+        reportHubSpotError({
+          level: 'warn',
+          objectType: 'deal',
+          objectId: mirrorDealId,
+          message: `LI espejo pausado: "${p.name || li.id}" — su original en Paraguay fue borrado o desvinculado de Uruguay. No tenía facturación aún. El espejo NO se elimina automáticamente: futuros pagos quedan pausados. Revisar y decidir si corresponde eliminarlo o reactivarlo.`,
+        });
         logger.info(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, name: p.name },
-          'Prune: huérfano desasociado y archivado'
+          'Prune: huérfano sin facturación — pausado y avisado (no se elimina, regla usuaria)'
         );
       } catch (err) {
         logger.warn(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, err },
-          'Prune: error al desasociar/archivar huérfano'
+          'Prune: error al pausar/avisar huérfano sin facturación'
         );
       }
       continue;
@@ -172,6 +178,120 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
   }
 
   return { prunedCount };
+}
+
+// ¿El LI espejo (por su line_item_key) tiene tickets en stages promovidos/emitidos?
+// fail-safe: ante error de lectura devuelve true (tratar como facturado → no tocar).
+async function lineItemHasPromotedTickets(lik) {
+  const key = String(lik || '').trim();
+  if (!key) return false;
+  try {
+    const searchResp = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: key }] }],
+      properties: ['hs_pipeline_stage'],
+      limit: 100,
+    });
+    return (searchResp.results || []).some((t) =>
+      PROMOTED_STAGES.has(String(t.properties?.hs_pipeline_stage || ''))
+    );
+  } catch (err) {
+    logger.warn(
+      { module: 'dealMirroring', fn: 'lineItemHasPromotedTickets', lik: key, err },
+      'Dedup sellado: error verificando tickets promovidos — se trata como facturado (no se toca)'
+    );
+    return true;
+  }
+}
+
+/**
+ * DEDUP para mirrors SELLADOS (auditoría 2026-07-18, D1·Q4 / #10b).
+ *
+ * En mirrors sellados el prune completo se omite por diseño (el stock migrado de agosto
+ * es independiente del PY, así que no se puede borrar un "huérfano"). Pero eso también deja
+ * pasar un duplicado PERMANENTE: dos LIs espejo con el MISMO of_line_item_py_origen_id
+ * (creados por la carrera histórica LI↔cron) = doble línea de costo para siempre.
+ *
+ * Este pase deduplica SOLO por of_line_item_py_origen_id exacto, sin tocar huérfanos.
+ * Es CONSERVADOR: conserva el LI que tiene facturación real (tickets promovidos/emitidos);
+ * si el elegido a descartar tiene facturación, NO lo desasocia — avisa para revisión humana.
+ * Idempotente: en un mirror sin duplicados no hace nada.
+ */
+export async function dedupeSealedMirrorLineItems(mirrorDealId) {
+  const ids = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
+  if (ids.length < 2) return { dedupedCount: 0 };
+
+  const batchResp = await hubspotClient.crm.lineItems.batchApi.read({
+    inputs: ids.map((id) => ({ id: String(id) })),
+    properties: ['of_line_item_py_origen_id', 'pais_operativo', 'uy', 'name', 'line_item_key', 'createdate'],
+  });
+
+  const groups = new Map();
+  for (const li of batchResp.results || []) {
+    const p = li.properties || {};
+    const origenId = String(p.of_line_item_py_origen_id || '').trim();
+    if (!origenId) continue;
+    const uyFlag = String(p.uy || '').toLowerCase() === 'true';
+    const isUruguay = String(p.pais_operativo || '').toLowerCase() === 'uruguay';
+    if (!uyFlag || !isUruguay) continue;
+    if (!groups.has(origenId)) groups.set(origenId, []);
+    groups.get(origenId).push(li);
+  }
+
+  let dedupedCount = 0;
+  for (const [origenId, lis] of groups) {
+    if (lis.length < 2) continue;
+
+    // Anotar cada LI con si tiene facturación real y su antigüedad.
+    const anotados = [];
+    for (const li of lis) {
+      const promoted = await lineItemHasPromotedTickets(li.properties?.line_item_key);
+      anotados.push({ li, promoted, createdate: String(li.properties?.createdate || '') });
+    }
+
+    // Keeper: si EXACTAMENTE uno tiene facturación → ese; si no, el más viejo (createdate asc).
+    const conFactura = anotados.filter((x) => x.promoted);
+    const keeper = conFactura.length === 1
+      ? conFactura[0]
+      : anotados.slice().sort((a, b) => a.createdate.localeCompare(b.createdate))[0];
+
+    for (const x of anotados) {
+      if (String(x.li.id) === String(keeper.li.id)) continue;
+
+      if (x.promoted) {
+        // El duplicado a descartar tiene facturación → NO desasociar automáticamente.
+        reportHubSpotError({
+          level: 'warn',
+          objectType: 'deal',
+          objectId: String(mirrorDealId),
+          message: `LI espejo DUPLICADO con facturación en deal sellado (origen PY ${origenId}, "${x.li.properties?.name || x.li.id}"). Hay 2+ líneas espejo del mismo LI PY y más de una tiene tickets promovidos/emitidos. NO se desasoció automáticamente — revisar a mano cuál conservar.`,
+        });
+        logger.warn(
+          { module: 'dealMirroring', fn: 'dedupeSealedMirrorLineItems', mirrorDealId, lineItemId: x.li.id, origenId },
+          'Dedup sellado: duplicado con facturación — no se toca, se avisa para revisión humana'
+        );
+        continue;
+      }
+
+      // Duplicado sin facturación → desasociar (no se archiva el LI, solo se saca del deal).
+      try {
+        await hubspotClient.crm.associations.v4.basicApi.archive(
+          'line_items', String(x.li.id), 'deals', String(mirrorDealId)
+        );
+        dedupedCount++;
+        logger.info(
+          { module: 'dealMirroring', fn: 'dedupeSealedMirrorLineItems', mirrorDealId, lineItemId: x.li.id, origenId, keeper: keeper.li.id, name: x.li.properties?.name },
+          'Dedup sellado: duplicado sin facturación desasociado'
+        );
+      } catch (err) {
+        logger.warn(
+          { module: 'dealMirroring', fn: 'dedupeSealedMirrorLineItems', mirrorDealId, lineItemId: x.li.id, origenId, err },
+          'Dedup sellado: error al desasociar duplicado'
+        );
+      }
+    }
+  }
+
+  return { dedupedCount };
 }
 
 async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
@@ -221,41 +341,22 @@ async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
     }
   }
 
-  logger.info(
+  // REGLA USUARIA (2026-07-18): el deal espejo NO se archiva automáticamente aunque quede
+  // sin line items válidos. Antes se archivaba y se limpiaba el vínculo deal_uy_mirror_id
+  // en PY (borrado silencioso del mirror). Ahora solo se AVISA y se mantiene el vínculo,
+  // para que un humano decida si corresponde archivarlo.
+  logger.warn(
     { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, sourceDealId },
-    'Espejo sin line items válidos, archivando deal espejo'
+    'Espejo sin line items válidos — NO se archiva (regla usuaria); se avisa para revisión'
   );
+  reportHubSpotError({
+    level: 'warn',
+    objectType: 'deal',
+    objectId: String(mirrorDealId),
+    message: `Deal espejo UY quedó sin productos válidos (su original PY ${sourceDealId} ya no tiene líneas espejadas). NO se archivó automáticamente — revisar a mano si corresponde archivarlo o si falta algo.`,
+  });
 
-  try {
-    await hubspotClient.crm.deals.basicApi.archive(String(mirrorDealId));
-    logger.info(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId },
-      'Deal espejo archivado'
-    );
-  } catch (err) {
-    logger.warn(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, err },
-      'No se pudo archivar deal espejo'
-    );
-    return { archived: false, remainingValidCount: 0, error: 'archive_failed' };
-  }
-
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-      properties: { deal_uy_mirror_id: '' },
-    });
-    logger.info(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', dealId: sourceDealId },
-      'Deal PY actualizado: deal_uy_mirror_id limpiado'
-    );
-  } catch (err) {
-    logger.warn(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', dealId: sourceDealId, err },
-      'No se pudo limpiar deal_uy_mirror_id en PY'
-    );
-  }
-
-  return { archived: true, remainingValidCount: 0 };
+  return { archived: false, remainingValidCount: 0, flaggedEmpty: true };
 }
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
@@ -1004,6 +1105,25 @@ const allowedProps = new Set([
 
   // Mirror sellado: ya se crearon las líneas nuevas; prune/archive/asociaciones no corren.
   if (sealedMirror) {
+    // #10b (auditoría 2026-07-18): el prune completo se omite (no se borran "huérfanos"
+    // porque el stock sellado es independiente del PY), pero SÍ deduplicamos LIs espejo
+    // con el mismo of_line_item_py_origen_id (doble línea de costo permanente). Conservador
+    // e idempotente: no toca duplicados con facturación real, los avisa.
+    let dedupedCount = 0;
+    try {
+      ({ dedupedCount } = await dedupeSealedMirrorLineItems(targetDealId));
+      if (dedupedCount) {
+        logger.info(
+          { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, dedupedCount },
+          'Dedup de mirror sellado completado'
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', mirrorDealId: targetDealId, err },
+        'Dedup de mirror sellado falló'
+      );
+    }
     return {
       mirrored: true,
       sourceDealId: String(sourceDealId),
@@ -1012,6 +1132,7 @@ const allowedProps = new Set([
       createdLineItems,
       sealedMirrorLineItemsSkipped: true,
       sealedNewLineItems: sealedNuevasLIs.length,
+      sealedDedupedLineItems: dedupedCount,
     };
   }
 

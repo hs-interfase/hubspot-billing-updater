@@ -23,10 +23,18 @@
 //       VALOR = Σ costo_total_usd de los LIs (el costo en USD). NO se usa el price
 //       (el mirror no lleva precio de venta) ni se fuerza a 0. Ver valorMirrorUsd()
 //       para el porqué — no confundir con la facturación intercompany (esa sí es 0).
+//       🔴 2026-07-15 — ESTO ESTÁ CUESTIONADO, NO LO TOMES COMO VERDAD. La premisa
+//       "el mirror no lleva precio de venta" es FALSA para los mirrors migrados:
+//       Paso B' les escribe el price REAL del twin UY. Resultado: hoy el VALOR del
+//       mirror muestra su COSTO y no su INGRESO. Leer el ⚠️ de valorMirrorUsd()
+//       abajo antes de tocar nada. Decisión pendiente de la usuaria.
 //
-// Moneda: se escriben DOS propiedades del deal (Michelle 2026-07-10):
+// Moneda: se escriben propiedades del deal (Michelle 2026-07-10):
 //   - `valor_total`                  → VALOR en USD  (principal, para reporting)
 //   - `valor_total_moneda_original`  → VALOR en la moneda del negocio
+//   - `margen_total_usd`             → MARGEN bruto en USD = valor_total − costo total
+//     proyectado al mismo horizonte (2026-07-18). Mirror intercompany = 0. Ver
+//     costoProyectadoUsd(). Override de nombre por env PROP_DEAL_MARGEN.
 // La conversión usa el `dolar` del DEAL (1 USD → moneda del negocio), que setea
 // `ensureDealDolar` en creación + cierre-ganado (y refresh anual futuro, cron 1-ene).
 //
@@ -50,6 +58,9 @@ const MOD = 'recalcValorTotal';
 const PROP_DEAL_TOTAL_USD = process.env.PROP_DEAL_TOTAL || 'valor_total';
 const PROP_DEAL_TOTAL_LOCAL =
   process.env.PROP_DEAL_TOTAL_LOCAL || 'valor_total_moneda_original';
+
+// Margen bruto del negocio en USD (mismo horizonte que el VALOR).
+const PROP_DEAL_MARGEN_USD = process.env.PROP_DEAL_MARGEN || 'margen_total_usd';
 
 // Propiedad del TICKET que apunta al deal (usada solo por el diagnóstico legacy).
 const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
@@ -170,6 +181,7 @@ const DEAL_PROPS = [
   'es_mirror_de_py',
   PROP_DEAL_TOTAL_USD,
   PROP_DEAL_TOTAL_LOCAL,
+  PROP_DEAL_MARGEN_USD,
 ];
 
 /**
@@ -181,6 +193,38 @@ const DEAL_PROPS = [
  *   - Pero el VALOR del negocio NO es 0: el mirror vale su COSTO. El mirror no lleva
  *     precio de venta (su `price` suele ser 0), así que su valor sale de
  *     `costo_total_usd` (fuente de verdad del costo, YA en USD; cogs es derivada).
+ *
+ * 🔴 ⚠️ 2026-07-15 — LEER ANTES DE TOCAR. Lo de arriba tiene DOS supuestos rotos y hoy
+ * esta función devuelve el número equivocado. DECISIÓN PENDIENTE de la usuaria; se deja
+ * como está a propósito hasta que decida (NO "arreglar" sin confirmar).
+ *
+ *   1) "el mirror no lleva precio de venta (su price suele ser 0)" → FALSO para los
+ *      mirrors MIGRADOS: Paso B' (`migracion_pasoBprima_mirror.mjs`, twinPropsParaMirror)
+ *      les escribe el price REAL del twin UY.
+ *   2) "el mirror vale su COSTO" → la frase "costo intercompany" es AMBIGUA y ahí se
+ *      coló el error: se pensó como *lo que PY le paga a UY* (= el ingreso del mirror,
+ *      que vive en `price`), pero se implementó como *el costo propio de UY* (que es lo
+ *      que trae `costo_total_usd` después de B'). Son cosas DISTINTAS.
+ *
+ * ⚠️ OJO — NO confundir este tema con el "Excel de MB de Pablo". Son DOS cosas:
+ *   - Los ~21 mirrors con VALOR 0  → el costo del twin es 0 en el ORIGEN (Fact Est con
+ *     Mbrt=Monto, el bug del Excel). Con la regla de HOY eso da 0, y el Excel SÍ lo
+ *     arregla. Es un problema de DATO.
+ *   - Esto de acá                  → el VALOR lee el campo equivocado. NINGÚN Excel lo
+ *     arregla. Es un problema de REGLA. Eidas lo prueba: TIENE costo real (25.437) y
+ *     aun así muestra 25.437 en vez de los 33.000 que factura.
+ *
+ * Evidencia (pruebas 51101688, 15-jul) — Eidas separa las dos hipótesis:
+ *   `Eidas … - UY`        amount=33.000  valor_total=25.437  (LI: price=33.000, costo_total_usd=25.437)
+ *   `EESS y FLOTA - UY`   amount= 3.500  valor_total=     0  (LI: price= 3.500, costo_total_usd=0)
+ * El mirror Eidas está PERFECTO: ingreso 33.000 (= costo del PY, regla N-D8) + costo
+ * propio 25.437 + margen 7.563. El único error es QUÉ CAMPO LEE EL VALOR.
+ *
+ * Nota: por la regla general (VALOR = Σ price×qty) el mirror ya caería solo en 33.000
+ * → este caso especial podría sobrar. Y OJO: no está verificado si los mirrors que crea
+ * el MOTOR (dealMirroring.js setea props.price, no se vio que escriba costo_total_usd en
+ * el LI del mirror) sufren lo mismo → posible impacto en PROD.
+ * Detalle: definitivos/TAREAS_PENDIENTES.md (🔴 VALOR) + BITACORA_trabajo.md (15-jul).
  *
  * @returns {number} Σ costo_total_usd de los LIs (USD).
  */
@@ -194,6 +238,34 @@ export function valorMirrorUsd(lis, log) {
   }
   if (sinCosto > 0) {
     log?.warn({ sinCosto, total: lis.length }, 'Mirror con LIs sin costo_total_usd cargado');
+  }
+  return round2(usd);
+}
+
+/**
+ * Costo total del deal en USD, proyectado al MISMO horizonte que el VALOR:
+ *   - normal  → Σ costo_total_usd × (nº de pagos | multiplicador anual)  (igual criterio
+ *               de horizonte que valorLineItemLocal: Caso 1 × plazo, Caso 2 × anual)
+ *   - mirror  → Σ costo_total_usd SIN proyectar (valorMirrorUsd tampoco proyecta) → así el
+ *               margen del mirror da 0 (pass-through intercompany), sin depender de la
+ *               decisión pendiente del VALOR del espejo.
+ * `costo_total_usd` ausente = costo no cargado = 0 (criterio: margen = ingreso; ver
+ * CHECKLIST_of_costo_usd_calc). Devuelve USD.
+ */
+function costoProyectadoUsd(lis, esMirror, log) {
+  let usd = 0;
+  for (const li of lis) {
+    const p = li?.properties || {};
+    const c = num(p.costo_total_usd, NaN);
+    if (!Number.isFinite(c)) continue;
+    if (esMirror) {
+      usd += c;
+    } else {
+      const mult = isAutoRenew(li)
+        ? multiplicadorAnual(p.recurringbillingfrequency || p.hs_recurring_billing_frequency, log)
+        : num(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments, 1);
+      usd += c * mult;
+    }
   }
   return round2(usd);
 }
@@ -263,6 +335,12 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     totalUsd = convertirAUsd(totalLocal, dolar);
   }
 
+  // 4b) Margen bruto del negocio en USD = VALOR USD − costo total proyectado (mismo
+  //     horizonte que el VALOR). Null si el VALOR en USD no es calculable (sin dólar y
+  //     moneda ≠ USD) → no se escribe.
+  const costoUsd = costoProyectadoUsd(lis, esMirror, log);
+  const margenUsd = totalUsd !== null ? round2(totalUsd - costoUsd) : null;
+
   // 5) Escribir solo lo que cambió (y solo valores calculables, nunca null).
   let changed = false;
   if (applyUpdate) {
@@ -273,12 +351,15 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     if (totalUsd !== null && num(dp[PROP_DEAL_TOTAL_USD], NaN) !== totalUsd) {
       properties[PROP_DEAL_TOTAL_USD] = String(totalUsd);
     }
+    if (margenUsd !== null && num(dp[PROP_DEAL_MARGEN_USD], NaN) !== margenUsd) {
+      properties[PROP_DEAL_MARGEN_USD] = String(margenUsd);
+    }
 
     if (Object.keys(properties).length > 0) {
       await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties });
       changed = true;
       log.info(
-        { esMirror, totalUsd, totalLocal, dolar, lineItems: lis.length, wrote: Object.keys(properties) },
+        { esMirror, totalUsd, totalLocal, margenUsd, dolar, lineItems: lis.length, wrote: Object.keys(properties) },
         'VALOR actualizado'
       );
     } else {
@@ -286,5 +367,5 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     }
   }
 
-  return { total: totalUsd, totalUsd, totalLocal, esMirror, lineItemCount: lis.length, changed };
+  return { total: totalUsd, totalUsd, totalLocal, margenUsd, esMirror, lineItemCount: lis.length, changed };
 }

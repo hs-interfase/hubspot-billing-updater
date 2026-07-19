@@ -259,6 +259,22 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
 
 
 /**
+ * Decide si una emisión PY es NOTA DE CRÉDITO a partir de señales del ticket y del LI.
+ * Prioriza el SIGNO del ticket (mismo criterio que consumeCupo / Paso D: cantidad o
+ * monto negativos) y usa el flag `nc` del LI PY solo como respaldo. Pura y testeable.
+ *
+ * @param {{cantidadReal?:number|string, subtotalReal?:number|string, ncFlag?:*}} [signals]
+ * @returns {boolean}
+ */
+export function isNotaCreditoFromSignals({ cantidadReal, subtotalReal, ncFlag } = {}) {
+  const cant = Number(cantidadReal);
+  const sub = Number(subtotalReal);
+  const porSigno = (Number.isFinite(cant) && cant < 0) || (Number.isFinite(sub) && sub < 0);
+  const porFlag = String(ncFlag ?? '').toLowerCase() === 'true';
+  return porSigno || porFlag;
+}
+
+/**
  * Cuando un LI PY manual emite factura, escribe un aviso en el deal UY espejo
  * para que el equipo sepa que debe facturar manualmente.
  * No promueve ticket — Phase 2 ya lo hizo dentro de la ventana de 30 días.
@@ -268,8 +284,11 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
  *
  * @param {string|number} pyLineItemId  ID del line item PY que facturó
  * @param {string} billingYMD           Fecha de facturación YYYY-MM-DD
+ * @param {{pyTicketId?: string|number}} [opts]  Ticket PY que originó la emisión
+ *                                               (se cita en el aviso y sirve para
+ *                                               detectar NC por signo).
  */
-export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD) {
+export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD, { pyTicketId = null } = {}) {
   const log = logger.child({
     module: 'mirrorUtils',
     fn: 'notifyMirrorDealOnManualEmission',
@@ -306,17 +325,37 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD)
 
  const productName = String(mirrorLi?.properties?.name || '').trim() || 'Producto desconocido';
 
-  // ¿Es nota de crédito? El flag `nc` (manual) vive en el LI PY. Solo etiqueta el aviso.
-  let esNotaCredito = false;
+  // ¿Es NOTA DE CRÉDITO? Detección robusta: el SIGNO del ticket PY que originó la
+  // emisión manda (mismo criterio que consumeCupo / Paso D); el flag `nc` del LI PY
+  // queda como respaldo cuando no tenemos el ticket. Antes dependía solo de la marca.
+  let cantidadReal, subtotalReal;
+  if (pyTicketId) {
+    try {
+      const pyTk = await hubspotClient.crm.tickets.basicApi.getById(
+        String(pyTicketId),
+        ['cantidad_real', 'subtotal_real']
+      );
+      cantidadReal = pyTk?.properties?.cantidad_real;
+      subtotalReal = pyTk?.properties?.subtotal_real;
+    } catch (err) {
+      log.debug({ err, pyTicketId }, 'No se pudo leer el ticket PY para detectar NC por signo');
+    }
+  }
+  let ncFlag;
   try {
     const pyLi = await hubspotClient.crm.lineItems.basicApi.getById(String(pyLineItemId), ['nc']);
-    esNotaCredito = String(pyLi?.properties?.nc || '').toLowerCase() === 'true';
+    ncFlag = pyLi?.properties?.nc;
   } catch (err) {
-    log.debug({ err, pyLineItemId }, 'No se pudo leer flag nc del LI PY; asumo factura normal');
+    log.debug({ err, pyLineItemId }, 'No se pudo leer flag nc del LI PY');
   }
-  const prefijoNC = esNotaCredito ? '⚠️ ES NOTA DE CRÉDITO. ' : '';
+  const esNotaCredito = isNotaCreditoFromSignals({ cantidadReal, subtotalReal, ncFlag });
 
-  const aviso = `${prefijoNC}Factura PY original ha sido enviada a facturar. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
+  // El ID del ticket PY que originó la emisión evita buscarlo a mano por invoice ID.
+  const refTicket = pyTicketId ? ` | Ticket PY origen: ${pyTicketId}` : '';
+
+  const aviso = esNotaCredito
+    ? `⚠️ NOTA DE CRÉDITO emitida en PY. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId}${refTicket} | Período: ${billingYMD}. Registrar la nota de crédito correspondiente en el espejo UY.`
+    : `Factura PY original ha sido enviada a facturar. Deal PY: ${pyDealId} | Producto: ${productName} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId}${refTicket} | Período: ${billingYMD}. Ticket UY ya promovido por Phase 2 — revisar y confirmar.`;
 
   reportHubSpotError({
     level: 'warn',
@@ -325,7 +364,7 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD)
     message: aviso,
   });
 
-  log.info({ mirrorDealId, aviso }, 'Aviso de factura PY manual escrito en deal UY');
+  log.info({ mirrorDealId, esNotaCredito, aviso }, 'Aviso de emisión PY manual escrito en deal UY');
 }
 
 /**
