@@ -1,54 +1,72 @@
 // src/services/deal/recalcValorTotal.js
 //
-// Calcula el campo VALOR del negocio (deal) a partir de sus LINE ITEMS, según la
-// definición de Paola (correo 2026-07-02) — decisión Michelle 2026-07-10: se toma
-// del LINE ITEM (no del ticket); cualquier ajuste se hace editando el LI, y los
-// cambios de criterio van por control de cambios.
+// Calcula el VALOR y el MARGEN del negocio (deal) a partir de sus TICKETS.
 //
-//   Caso 1 — contrato/proyecto con fin definido:
-//       VALOR_li = precio_unitario × cantidad × (nº total de pagos del término)
-//       (= Σ de todos los flujos del line item)
+// ─────────────────────────────────────────────────────────────────────────────
+//  REGLA VIGENTE — definición de la usuaria, 2026-07-19. LEER ANTES DE TOCAR.
+// ─────────────────────────────────────────────────────────────────────────────
 //
-//   Caso 2 — auto-renovación (sin fecha de fin):
-//       VALOR_li = precio_unitario × cantidad × multiplicador_anual
-//       multiplicador_anual = periodicidad normalizada a base anual
-//       (mensual ×12, trimestral ×4, semestral ×2, anual ×1, …)
+//   VALOR_local  = Σ subtotal_real de los tickets del negocio   (moneda del negocio)
+//   VALOR_USD    = VALOR_local / dolar del NEGOCIO
+//   COSTO_USD    = Σ of_costo_usd de ESOS MISMOS tickets
+//   MARGEN_USD   = VALOR_USD − COSTO_USD
 //
-//   VALOR_total_local = Σ VALOR_li  (en la moneda del negocio)
+// EXCEPCIÓN AUTO-RENEW (usuaria 2026-07-19): un contrato de auto-renovación no tiene fin,
+//   así que sumar todos sus tickets no significa nada. Para esos se toma **1 año**, y el año
+//   es el CALENDARIO EN CURSO (1-ene → 31-dic). Elegido así para que empalme con el cron
+//   del 1-ene: cada año el valor se recalcula solo y refleja el run-rate vigente, ya con la
+//   paramétrica del año aplicada.
+//     - ticket de plan fijo   → entra siempre
+//     - ticket de auto-renew  → entra solo si su fecha cae en el año calendario en curso
+//   Un mismo negocio puede mezclar ambos: la clasificación es POR TICKET.
+//   Marcador de auto-renew en el ticket: `of_cantidad_de_pagos` vacío (auto-renew = tiene
+//   frecuencia y NO tiene nº de pagos; ver isAutoRenew en services/billing/mode.js).
 //
-// Un mismo negocio puede mezclar LIs Caso 1 y Caso 2 → se clasifica POR LINE ITEM
-// con el helper canónico `isAutoRenew` (src/services/billing/mode.js).
+// POR QUÉ TICKETS Y NO LINE ITEMS (esto ya se implementó mal una vez, no repetirlo):
+//   **El ticket tiene el valor REAL; el line item no necesariamente.** El LI es la
+//   intención comercial; el ticket es lo que efectivamente se factura (y lo que el
+//   responsable corrige antes de emitir). Por eso la fuente de verdad es el ticket.
 //
-//   Caso MIRROR (intercompany, es_mirror_de_py=true):
-//       VALOR = Σ costo_total_usd de los LIs (el costo en USD). NO se usa el price
-//       (el mirror no lleva precio de venta) ni se fuerza a 0. Ver valorMirrorUsd()
-//       para el porqué — no confundir con la facturación intercompany (esa sí es 0).
-//       🔴 2026-07-15 — ESTO ESTÁ CUESTIONADO, NO LO TOMES COMO VERDAD. La premisa
-//       "el mirror no lleva precio de venta" es FALSA para los mirrors migrados:
-//       Paso B' les escribe el price REAL del twin UY. Resultado: hoy el VALOR del
-//       mirror muestra su COSTO y no su INGRESO. Leer el ⚠️ de valorMirrorUsd()
-//       abajo antes de tocar nada. Decisión pendiente de la usuaria.
+//   ⚠️ El criterio de Paola ("se toma de line items", correo 2026-07-02) NO significaba
+//   line items en el sentido técnico — Paola no es técnica. Lo que pedía es el valor del
+//   negocio; la fuente correcta para eso son los tickets. NO volver a interpretarlo literal.
 //
-// Moneda: se escriben propiedades del deal (Michelle 2026-07-10):
-//   - `valor_total`                  → VALOR en USD  (principal, para reporting)
+// ⚠️ LOS NEGOCIOS EN FORECAST **SÍ** TIENEN TICKETS. Están vinculados por la propiedad
+//   `of_deal_id`, aunque NO estén asociados en el CRM (se asocian recién al cerrar
+//   ganado, ver associateOnClosedWon). Por eso la búsqueda es POR PROPIEDAD (Search API)
+//   y NO por asociaciones: leer por key NO asocia nada y el forecast queda intacto.
+//   No "arreglar" esto pasándolo a asociaciones — rompería el forecast entero.
+//
+// SIMETRÍA VALOR ↔ COSTO (invariante): el costo se suma sobre EXACTAMENTE el mismo
+//   conjunto de tickets que el valor. Un ticket que no entra en el VALOR tampoco entra
+//   en el COSTO. Si algún día se filtra por algo, se filtra UNA sola vez (getDealTickets)
+//   y ambos lados heredan el filtro. NO duplicar el criterio de filtrado.
+//
+// MIRROR (es_mirror_de_py=true): **sin caso especial** (decisión usuaria 2026-07-19).
+//   Se calcula igual que cualquier negocio, desde sus propios tickets. Como el price del
+//   espejo ES el costo del original (regla N-D8), el número sale bien solo. El viejo
+//   `valorMirrorUsd()` (Σ costo_total_usd de los LIs) queda ELIMINADO — mostraba el costo
+//   propio de UY en vez del ingreso intercompany.
+//
+// Tickets CANCELADOS quedan fuera del cálculo (ambos lados).
+//
+// Props que se escriben en el deal:
+//   - `valor_total`                  → VALOR en USD (principal, para reporting)
 //   - `valor_total_moneda_original`  → VALOR en la moneda del negocio
-//   - `margen_total_usd`             → MARGEN bruto en USD = valor_total − costo total
-//     proyectado al mismo horizonte (2026-07-18). Mirror intercompany = 0. Ver
-//     costoProyectadoUsd(). Override de nombre por env PROP_DEAL_MARGEN.
-// La conversión usa el `dolar` del DEAL (1 USD → moneda del negocio), que setea
-// `ensureDealDolar` en creación + cierre-ganado (y refresh anual futuro, cron 1-ene).
+//   - `margen_total_usd`             → MARGEN bruto en USD
+//   (los tres con override de nombre por env)
 //
 // Es un campo DINÁMICO: se recalcula al final de runPhasesForDeal, por lo que queda
 // cubierto por los tres disparadores (runBilling, cronWeekendFull, webhook).
 //
-// PENDIENTE / control de cambios (ver PREGUNTAS_VALOR_reunion_lunes_2026-07-13.md):
-//   - TC "mixto" del Caso 1 de Paola (facturado al TC del día + proyección al TC de
-//     creación). Hoy se usa un único `dolar` del deal para todo el total. Aislado en
-//     convertirAUsd() para cambiarlo sin tocar el resto.
+// PENDIENTE / control de cambios:
+//   - TC "mixto" del Caso 1 de Paola (facturado al TC del día de cada factura + proyección
+//     al TC de creación). Hoy se usa un único `dolar` del deal para todo el total, aislado
+//     en convertirAUsd() para cambiarlo sin tocar el resto. Cada ticket ya trae su propio
+//     `dolar` sellado si algún día se quiere TC por ticket.
 
-import { hubspotClient, getDealWithLineItems } from '../../hubspotClient.js';
+import { hubspotClient } from '../../hubspotClient.js';
 import { ensureDealDolar } from '../costoUsdService.js';
-import { isAutoRenew } from '../billing/mode.js';
 import { TICKET_STAGES, BILLING_AUTOMATED_CANCELLED } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
 
@@ -62,30 +80,14 @@ const PROP_DEAL_TOTAL_LOCAL =
 // Margen bruto del negocio en USD (mismo horizonte que el VALOR).
 const PROP_DEAL_MARGEN_USD = process.env.PROP_DEAL_MARGEN || 'margen_total_usd';
 
-// Propiedad del TICKET que apunta al deal (usada solo por el diagnóstico legacy).
+// Propiedad del TICKET que apunta al deal. Es el vínculo que usan los forecast
+// (desasociados en el CRM) — la clave de todo el cálculo.
 const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
 
-// Stages de ticket cancelados (solo para el diagnóstico legacy getDealTicketIds).
+// Stages de ticket cancelados: quedan FUERA del VALOR y del COSTO (getDealTickets).
 const CANCELLED = new Set(
   [TICKET_STAGES.CANCELLED, BILLING_AUTOMATED_CANCELLED].filter(Boolean)
 );
-
-// Multiplicador anual por periodicidad (pagos por año). Cubre los internal values
-// nativos de `recurringbillingfrequency` y los labels ES más comunes. Coherente con
-// getIntervalFromFrequency de billingEngine.js (12 / meses; semanal/quincenal por días).
-const ANNUAL_MULTIPLIER = {
-  weekly: 52, semanal: 52,
-  biweekly: 26, quincenal: 26,
-  monthly: 12, mensual: 12,
-  bimonthly: 6, bi_monthly: 6, every_two_months: 6, bimestral: 6,
-  quarterly: 4, trimestral: 4,
-  per_six_months: 2, semiannually: 2, semi_annually: 2, semestral: 2,
-  annually: 1, annual: 1, anual: 1, yearly: 1,
-  per_two_years: 0.5,
-  per_three_years: 1 / 3,
-  per_four_years: 0.25,
-  per_five_years: 0.2,
-};
 
 /** Número finito o `dflt` (evita que '0' se convierta en el default). */
 function num(v, dflt = 0) {
@@ -94,40 +96,6 @@ function num(v, dflt = 0) {
 }
 
 const round2 = (n) => Math.round(n * 100) / 100;
-
-/** Multiplicador anual de un LI auto-renew; default monthly=12 (+warn) si no matchea. */
-function multiplicadorAnual(freqRaw, log) {
-  const f = String(freqRaw ?? '').trim().toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(ANNUAL_MULTIPLIER, f)) {
-    return ANNUAL_MULTIPLIER[f];
-  }
-  log?.warn(
-    { freq: freqRaw },
-    'Periodicidad no reconocida en LI auto-renew; se asume mensual (×12)'
-  );
-  return 12;
-}
-
-/**
- * VALOR de un line item en la moneda del negocio, según Caso 1 / Caso 2.
- * @returns {number}
- */
-export function valorLineItemLocal(li, log) {
-  const p = li?.properties || {};
-  const price = num(p.price, 0);
-  const qty = num(p.quantity, 1);
-  const base = price * qty; // flujo por período (precio unitario × cantidad)
-
-  if (isAutoRenew(li)) {
-    // Caso 2 — auto-renew: run-rate anual.
-    const freq = p.recurringbillingfrequency || p.hs_recurring_billing_frequency;
-    return base * multiplicadorAnual(freq, log);
-  }
-
-  // Caso 1 — fin definido / one-off: Σ de todos los flujos = base × nº de pagos.
-  const term = num(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments, 1);
-  return base * term;
-}
 
 /**
  * Convierte el total en moneda local a USD usando el `dolar` del deal
@@ -140,10 +108,102 @@ function convertirAUsd(totalLocal, dolar) {
   return round2(totalLocal / dolar);
 }
 
+// Props del TICKET que necesita el cálculo.
+const TICKET_PROPS = [
+  'hs_object_id',
+  'hs_pipeline_stage',
+  'subtotal_real',        // neto en moneda del negocio (fuente del VALOR)
+  'of_costo_usd',         // costo en USD del ticket (fuente del COSTO)
+  'of_cantidad_de_pagos', // vacío ⇒ auto-renew (ver isAutoRenew)
+  'fecha_resolucion_esperada',
+];
+
+/**
+ * ¿El ticket viene de un line item AUTO-RENEW?
+ * Auto-renew = tiene frecuencia y NO tiene nº de pagos (services/billing/mode.js).
+ * En el snapshot del ticket eso se ve como `of_cantidad_de_pagos` vacío/null.
+ */
+function esTicketAutoRenew(tp) {
+  const pagos = tp?.of_cantidad_de_pagos;
+  return pagos == null || String(pagos).trim() === '';
+}
+
+/**
+ * ¿La fecha del ticket cae en el año calendario en curso?
+ * Sin fecha ⇒ NO se puede ubicar en el año → se excluye del auto-renew (y se avisa),
+ * para no inflar el run-rate con tickets sin fecha.
+ */
+function enAnioEnCurso(tp, anio) {
+  const f = tp?.fecha_resolucion_esperada;
+  if (!f) return false;
+  return String(f).slice(0, 4) === String(anio);
+}
+
+/**
+ * Trae los TICKETS de un deal con las props del cálculo.
+ *
+ * ⚠️ Busca por la PROPIEDAD `of_deal_id` (Search API), NO por asociaciones: los tickets
+ * de forecast existen pero están DESASOCIADOS a propósito (se asocian al ganar). Leer por
+ * propiedad no asocia nada. NO cambiar a asociaciones — dejaría fuera todo el forecast.
+ *
+ * Excluye los tickets CANCELADOS. Este es el ÚNICO lugar donde se filtra: VALOR y COSTO
+ * se calculan después sobre el mismo array, así que la simetría queda garantizada.
+ */
+export async function getDealTickets(dealId) {
+  const out = [];
+  let after;
+  do {
+    const res = await hubspotClient.crm.tickets.searchApi.doSearch({
+      filterGroups: [{ filters: [{ propertyName: PROP_TICKET_DEAL_ID, operator: 'EQ', value: String(dealId) }] }],
+      properties: TICKET_PROPS,
+      limit: 100,
+      after,
+    });
+    for (const t of res.results || []) {
+      if (CANCELLED.has(String(t.properties?.hs_pipeline_stage))) continue;
+      out.push(t);
+    }
+    after = res.paging?.next?.after;
+  } while (after);
+  return out;
+}
+
+/**
+ * Selecciona los tickets que entran en el cálculo:
+ *   - plan fijo  → todos
+ *   - auto-renew → solo los del año calendario en curso (1 año de run-rate)
+ * Devuelve el mismo array que después consumen VALOR y COSTO (simetría).
+ */
+export function ticketsDelCalculo(tickets, anio, log) {
+  const elegidos = [];
+  let autoRenewFuera = 0;
+  let sinFecha = 0;
+  for (const t of tickets) {
+    const tp = t?.properties || {};
+    if (!esTicketAutoRenew(tp)) {
+      elegidos.push(t);
+      continue;
+    }
+    if (enAnioEnCurso(tp, anio)) {
+      elegidos.push(t);
+    } else {
+      autoRenewFuera++;
+      if (!tp.fecha_resolucion_esperada) sinFecha++;
+    }
+  }
+  if (sinFecha > 0) {
+    log?.warn(
+      { sinFecha, anio },
+      'Tickets auto-renew SIN fecha de resolución esperada: quedan fuera del VALOR (no se pueden ubicar en el año)'
+    );
+  }
+  return { elegidos, autoRenewFuera };
+}
+
 /**
  * Trae TODOS los IDs de tickets de un deal (of_deal_id ∪ asociaciones, dedup).
  * LEGACY: la usa scripts/diagnostics/diagValorTotal.mjs (auditoría ticket-por-ticket).
- * El cálculo de VALOR ya NO usa tickets; se conserva solo para el diagnóstico.
+ * El cálculo productivo usa getDealTickets(); esto se conserva solo para el diagnóstico.
  */
 export async function getDealTicketIds(dealId) {
   const ids = new Set();
@@ -185,87 +245,42 @@ const DEAL_PROPS = [
 ];
 
 /**
- * VALOR en USD de un deal MIRROR (intercompany, es_mirror_de_py=true).
- *
- * ⚠️ NO CONFUNDIR (este error ya se cometió una vez, 2026-07-10):
- *   - La FACTURACIÓN intercompany del mirror sí es 0 para informes (of_facturacion_usd),
- *     para no duplicar el ingreso — la venta al cliente vive en el deal PY.
- *   - Pero el VALOR del negocio NO es 0: el mirror vale su COSTO. El mirror no lleva
- *     precio de venta (su `price` suele ser 0), así que su valor sale de
- *     `costo_total_usd` (fuente de verdad del costo, YA en USD; cogs es derivada).
- *
- * 🔴 ⚠️ 2026-07-15 — LEER ANTES DE TOCAR. Lo de arriba tiene DOS supuestos rotos y hoy
- * esta función devuelve el número equivocado. DECISIÓN PENDIENTE de la usuaria; se deja
- * como está a propósito hasta que decida (NO "arreglar" sin confirmar).
- *
- *   1) "el mirror no lleva precio de venta (su price suele ser 0)" → FALSO para los
- *      mirrors MIGRADOS: Paso B' (`migracion_pasoBprima_mirror.mjs`, twinPropsParaMirror)
- *      les escribe el price REAL del twin UY.
- *   2) "el mirror vale su COSTO" → la frase "costo intercompany" es AMBIGUA y ahí se
- *      coló el error: se pensó como *lo que PY le paga a UY* (= el ingreso del mirror,
- *      que vive en `price`), pero se implementó como *el costo propio de UY* (que es lo
- *      que trae `costo_total_usd` después de B'). Son cosas DISTINTAS.
- *
- * ⚠️ OJO — NO confundir este tema con el "Excel de MB de Pablo". Son DOS cosas:
- *   - Los ~21 mirrors con VALOR 0  → el costo del twin es 0 en el ORIGEN (Fact Est con
- *     Mbrt=Monto, el bug del Excel). Con la regla de HOY eso da 0, y el Excel SÍ lo
- *     arregla. Es un problema de DATO.
- *   - Esto de acá                  → el VALOR lee el campo equivocado. NINGÚN Excel lo
- *     arregla. Es un problema de REGLA. Eidas lo prueba: TIENE costo real (25.437) y
- *     aun así muestra 25.437 en vez de los 33.000 que factura.
- *
- * Evidencia (pruebas 51101688, 15-jul) — Eidas separa las dos hipótesis:
- *   `Eidas … - UY`        amount=33.000  valor_total=25.437  (LI: price=33.000, costo_total_usd=25.437)
- *   `EESS y FLOTA - UY`   amount= 3.500  valor_total=     0  (LI: price= 3.500, costo_total_usd=0)
- * El mirror Eidas está PERFECTO: ingreso 33.000 (= costo del PY, regla N-D8) + costo
- * propio 25.437 + margen 7.563. El único error es QUÉ CAMPO LEE EL VALOR.
- *
- * Nota: por la regla general (VALOR = Σ price×qty) el mirror ya caería solo en 33.000
- * → este caso especial podría sobrar. Y OJO: no está verificado si los mirrors que crea
- * el MOTOR (dealMirroring.js setea props.price, no se vio que escriba costo_total_usd en
- * el LI del mirror) sufren lo mismo → posible impacto en PROD.
- * Detalle: definitivos/TAREAS_PENDIENTES.md (🔴 VALOR) + BITACORA_trabajo.md (15-jul).
- *
- * @returns {number} Σ costo_total_usd de los LIs (USD).
+ * Suma el VALOR en la moneda del negocio sobre los tickets ya seleccionados.
+ * Fuente: `subtotal_real` (NETO, sin IVA — ver _shared/montoTicket.mjs de la migración).
+ * @returns {number}
  */
-export function valorMirrorUsd(lis, log) {
+export function valorLocalDesdeTickets(tickets, log) {
+  let total = 0;
+  let sinMonto = 0;
+  for (const t of tickets) {
+    const v = num(t?.properties?.subtotal_real, NaN);
+    if (Number.isFinite(v)) total += v;
+    else sinMonto++;
+  }
+  if (sinMonto > 0) {
+    log?.warn({ sinMonto, total: tickets.length }, 'Tickets sin subtotal_real: no suman al VALOR');
+  }
+  return round2(total);
+}
+
+/**
+ * Suma el COSTO en USD sobre EXACTAMENTE los mismos tickets que el VALOR.
+ * Fuente: `of_costo_usd` (copia directa de costo_total_usd del LI; el costo del LI es POR
+ * PAGO — confirmado con el cliente 2026-07-17 — así que sumar por ticket es correcto).
+ * Ticket sin costo cargado = 0 (criterio: el margen queda igual al ingreso; el dato falta,
+ * no se inventa). Se avisa para poder detectarlo.
+ * @returns {number} USD
+ */
+export function costoUsdDesdeTickets(tickets, log) {
   let usd = 0;
   let sinCosto = 0;
-  for (const li of lis) {
-    const c = num(li?.properties?.costo_total_usd, NaN);
+  for (const t of tickets) {
+    const c = num(t?.properties?.of_costo_usd, NaN);
     if (Number.isFinite(c)) usd += c;
     else sinCosto++;
   }
   if (sinCosto > 0) {
-    log?.warn({ sinCosto, total: lis.length }, 'Mirror con LIs sin costo_total_usd cargado');
-  }
-  return round2(usd);
-}
-
-/**
- * Costo total del deal en USD, proyectado al MISMO horizonte que el VALOR:
- *   - normal  → Σ costo_total_usd × (nº de pagos | multiplicador anual)  (igual criterio
- *               de horizonte que valorLineItemLocal: Caso 1 × plazo, Caso 2 × anual)
- *   - mirror  → Σ costo_total_usd SIN proyectar (valorMirrorUsd tampoco proyecta) → así el
- *               margen del mirror da 0 (pass-through intercompany), sin depender de la
- *               decisión pendiente del VALOR del espejo.
- * `costo_total_usd` ausente = costo no cargado = 0 (criterio: margen = ingreso; ver
- * CHECKLIST_of_costo_usd_calc). Devuelve USD.
- */
-function costoProyectadoUsd(lis, esMirror, log) {
-  let usd = 0;
-  for (const li of lis) {
-    const p = li?.properties || {};
-    const c = num(p.costo_total_usd, NaN);
-    if (!Number.isFinite(c)) continue;
-    if (esMirror) {
-      usd += c;
-    } else {
-      const mult = isAutoRenew(li)
-        ? multiplicadorAnual(p.recurringbillingfrequency || p.hs_recurring_billing_frequency, log)
-        : num(p.hs_recurring_billing_number_of_payments ?? p.number_of_payments, 1);
-      usd += c * mult;
-    }
+    log?.warn({ sinCosto, total: tickets.length }, 'Tickets sin of_costo_usd: cuentan como costo 0 (margen inflado)');
   }
   return round2(usd);
 }
@@ -275,26 +290,25 @@ function costoProyectadoUsd(lis, esMirror, log) {
  *
  * @param {object}   params
  * @param {string}   params.dealId
- * @param {Array}    [params.lineItems]  - LIs ya cargados (hot path); si no, se traen.
  * @param {boolean}  [params.applyUpdate=true] - si false, solo calcula (no escribe).
  * @returns {Promise<{ total: number|null, totalUsd: number|null, totalLocal: number,
  *                     lineItemCount: number, changed: boolean }>}
  *          `total` = valor principal escrito en valor_total (USD).
  */
-export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate = true }) {
+export async function recalcValorTotal({ dealId, applyUpdate = true }) {
   const log = logger.child({ module: MOD, dealId });
 
-  // 1) Line items (fuente del cálculo). Se usan los del caller (hot path) solo si
-  // vienen con props completas; si están ausentes o sin `price`, se traen frescos
-  // para no sub-reportar por props faltantes.
-  let lis = Array.isArray(lineItems) ? lineItems : null;
-  const sparse = lis && lis.length > 0 && lis[0]?.properties?.price === undefined;
-  if (!lis || sparse) {
-    const dwli = await getDealWithLineItems(dealId);
-    lis = dwli.lineItems || [];
-  }
+  // 1) TICKETS del negocio (fuente del cálculo). Por PROPIEDAD of_deal_id, no por
+  //    asociaciones: el forecast existe pero está desasociado a propósito.
+  //    getDealTickets ya excluye los CANCELADOS.
+  const todos = await getDealTickets(dealId);
 
-  // 2) Props del deal (para el dólar, clasificar mirror y comparar antes de escribir).
+  // 1b) Selección: plan fijo → todos; auto-renew → solo el año calendario en curso.
+  //     Un solo filtro, del que VALOR y COSTO heredan (simetría garantizada).
+  const anio = new Date().getUTCFullYear();
+  const { elegidos, autoRenewFuera } = ticketsDelCalculo(todos, anio, log);
+
+  // 2) Props del deal (dólar, mirror y comparación antes de escribir).
   let dp = {};
   try {
     const cur = await hubspotClient.crm.deals.basicApi.getById(String(dealId), DEAL_PROPS);
@@ -316,29 +330,15 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
     }
   }
 
-  // 4) VALOR según el tipo de deal:
-  //    - MIRROR (intercompany): su valor es el COSTO en USD (costo_total_usd). Ver
-  //      valorMirrorUsd() para el porqué (no es el price, NO es 0). El local = USD×dolar.
-  //    - Resto: desde el price del LI (fórmula Paola). El USD = local/dolar.
+  // 4) VALOR — igual para TODOS los negocios, mirror incluido (sin caso especial).
+  //    Lo intercompany se resuelve en los REPORTES, no acá.
   const esMirror = String(dp.es_mirror_de_py || '').trim().toLowerCase() === 'true';
-  let totalUsd;
-  let totalLocal;
-  if (esMirror) {
-    totalUsd = valorMirrorUsd(lis, log);
-    if (dolar > 0) totalLocal = round2(totalUsd * dolar);
-    else if (String(dp.deal_currency_code || '').toUpperCase() === 'USD') totalLocal = totalUsd;
-    else totalLocal = null; // sin dólar y moneda ≠ USD: no se puede expresar en local
-  } else {
-    totalLocal = 0;
-    for (const li of lis) totalLocal += valorLineItemLocal(li, log);
-    totalLocal = round2(totalLocal);
-    totalUsd = convertirAUsd(totalLocal, dolar);
-  }
+  const totalLocal = valorLocalDesdeTickets(elegidos, log);
+  const totalUsd = convertirAUsd(totalLocal, dolar);
 
-  // 4b) Margen bruto del negocio en USD = VALOR USD − costo total proyectado (mismo
-  //     horizonte que el VALOR). Null si el VALOR en USD no es calculable (sin dólar y
-  //     moneda ≠ USD) → no se escribe.
-  const costoUsd = costoProyectadoUsd(lis, esMirror, log);
+  // 4b) MARGEN = VALOR USD − COSTO USD de LOS MISMOS tickets. Null si el VALOR en USD
+  //     no es calculable (sin dólar) → no se escribe.
+  const costoUsd = costoUsdDesdeTickets(elegidos, log);
   const margenUsd = totalUsd !== null ? round2(totalUsd - costoUsd) : null;
 
   // 5) Escribir solo lo que cambió (y solo valores calculables, nunca null).
@@ -359,13 +359,19 @@ export async function recalcValorTotal({ dealId, lineItems = null, applyUpdate =
       await hubspotClient.crm.deals.basicApi.update(String(dealId), { properties });
       changed = true;
       log.info(
-        { esMirror, totalUsd, totalLocal, margenUsd, dolar, lineItems: lis.length, wrote: Object.keys(properties) },
+        { esMirror, totalUsd, totalLocal, costoUsd, margenUsd, dolar,
+          tickets: elegidos.length, ticketsTotal: todos.length, autoRenewFuera, anio,
+          wrote: Object.keys(properties) },
         'VALOR actualizado'
       );
     } else {
-      log.debug({ esMirror, totalUsd, totalLocal, lineItems: lis.length }, 'VALOR sin cambios');
+      log.debug(
+        { esMirror, totalUsd, totalLocal, margenUsd, tickets: elegidos.length },
+        'VALOR sin cambios'
+      );
     }
   }
 
-  return { total: totalUsd, totalUsd, totalLocal, margenUsd, esMirror, lineItemCount: lis.length, changed };
+  return { total: totalUsd, totalUsd, totalLocal, costoUsd, margenUsd, esMirror,
+           ticketCount: elegidos.length, ticketCountTotal: todos.length, autoRenewFuera, changed };
 }
