@@ -383,6 +383,15 @@ export async function getDealWithLineItems(dealId) {
     // --- cupo (solo flag) ---
     "parte_del_cupo",
 
+    // --- contrato / paramétrica / progreso de pagos (snapshot al ticket, vista Victoria) ---
+    "inicio_del_contrato",
+    "fin_del_contrato",
+    "pagos_restantes",
+    "monto_unitario_original",
+    "tipo_de_parametrica",
+    "fecha_ultimo_ajuste",
+    "porcentaje_ultimo_ajuste",
+
     // --- control / mensajes ---
     'hs_lastmodifieddate',
     "mensaje_para_responsable",

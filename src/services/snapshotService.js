@@ -324,6 +324,19 @@ const repetitivo = !!rawFreq && ![
     // = costo del PY), así que su facturación NO cuenta para informes (FACT 0 vía calc prop
     // of_facturacion_usd); su MARGEN sí (monto UY − costo real UY). Fuente: es_mirror_de_py.
     of_intercompany: parseBool(deal?.properties?.es_mirror_de_py) ? 'true' : 'false',
+
+    // Contrato / progreso de pagos (para la vista de Victoria): se copian del LI al
+    // ticket. of_cantidad_de_pagos (arriba) = total; of_pagos_restantes = progreso.
+    of_inicio_del_contrato: toHubSpotDateOnly(lp.inicio_del_contrato),
+    of_fin_del_contrato: toHubSpotDateOnly(lp.fin_del_contrato),
+    of_pagos_restantes: parseNumber(lp.pagos_restantes, null),
+
+    // Paramétrica: copia del ajuste aplicado en el LI, para el card de Victoria.
+    // tipo_de_parametrica va como texto (evita depender de opciones del select).
+    of_tipo_de_parametrica: safeString(lp.tipo_de_parametrica),
+    of_monto_unitario_original: parseNumber(lp.monto_unitario_original, null),
+    of_porcentaje_ultimo_ajuste: parseNumber(lp.porcentaje_ultimo_ajuste, null),
+    of_fecha_ultimo_ajuste: toHubSpotDateOnly(lp.fecha_ultimo_ajuste),
   };
 
   logger.info({
