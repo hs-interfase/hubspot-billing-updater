@@ -557,7 +557,10 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     // valor_total_moneda_original (local). Dinámico: se recalcula en cada corrida.
     // No bloquea el ciclo si falla.
     try {
-      const { total } = await recalcValorTotal({ dealId, lineItems: currentLineItems });
+      // Desde 2026-07-19 el VALOR/MARGEN se calculan desde los TICKETS (no desde los
+      // LIs), por eso ya no se le pasan line items. Va al FINAL de runPhasesForDeal a
+      // propósito: los tickets de esta corrida ya están creados/actualizados.
+      const { total } = await recalcValorTotal({ dealId });
       results.valorTotal = total;
     } catch (err) {
       logger.error(
