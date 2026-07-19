@@ -216,7 +216,7 @@ async function lineItemHasPromotedTickets(lik) {
  * si el elegido a descartar tiene facturación, NO lo desasocia — avisa para revisión humana.
  * Idempotente: en un mirror sin duplicados no hace nada.
  */
-async function dedupeSealedMirrorLineItems(mirrorDealId) {
+export async function dedupeSealedMirrorLineItems(mirrorDealId) {
   const ids = await getAssocIdsV4('deals', String(mirrorDealId), 'line_items', 500);
   if (ids.length < 2) return { dedupedCount: 0 };
 
