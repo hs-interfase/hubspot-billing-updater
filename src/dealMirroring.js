@@ -123,24 +123,30 @@ async function pruneMirrorUyLineItems(mirrorDealId, uyLineItemsFromPy = []) {
         continue;
       }
 
-      // Sin tickets promovidos: desasociar + archivar
+      // Sin tickets promovidos: REGLA USUARIA (2026-07-18) — al borrarse el LI original
+      // en PY, el espejo UY NO se borra: se pausa y se AVISA para revisión humana (antes
+      // se desasociaba + archivaba en silencio). Nunca perdemos el espejo automáticamente.
       try {
-        await hubspotClient.crm.associations.v4.basicApi.archive(
-          'line_items',
-          String(li.id),
-          'deals',
-          String(mirrorDealId)
-        );
-        await hubspotClient.crm.lineItems.basicApi.archive(String(li.id));
-        prunedCount++;
+        await hubspotClient.crm.lineItems.basicApi.update(String(li.id), {
+          properties: {
+            pausa: 'true',
+            of_billing_error: 'LI espejo pausado: el LI original en PY fue borrado/desvinculado. NO se elimina el espejo — revisar y decidir a mano.',
+          },
+        });
+        reportHubSpotError({
+          level: 'warn',
+          objectType: 'deal',
+          objectId: mirrorDealId,
+          message: `LI espejo pausado: "${p.name || li.id}" — su original en Paraguay fue borrado o desvinculado de Uruguay. No tenía facturación aún. El espejo NO se elimina automáticamente: futuros pagos quedan pausados. Revisar y decidir si corresponde eliminarlo o reactivarlo.`,
+        });
         logger.info(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, name: p.name },
-          'Prune: huérfano desasociado y archivado'
+          'Prune: huérfano sin facturación — pausado y avisado (no se elimina, regla usuaria)'
         );
       } catch (err) {
         logger.warn(
           { module: 'dealMirroring', fn: 'pruneMirrorUyLineItems', mirrorDealId, lineItemId: li.id, origenId, err },
-          'Prune: error al desasociar/archivar huérfano'
+          'Prune: error al pausar/avisar huérfano sin facturación'
         );
       }
       continue;
@@ -335,41 +341,22 @@ async function maybeArchiveMirrorDealIfEmpty(sourceDealId, mirrorDealId) {
     }
   }
 
-  logger.info(
+  // REGLA USUARIA (2026-07-18): el deal espejo NO se archiva automáticamente aunque quede
+  // sin line items válidos. Antes se archivaba y se limpiaba el vínculo deal_uy_mirror_id
+  // en PY (borrado silencioso del mirror). Ahora solo se AVISA y se mantiene el vínculo,
+  // para que un humano decida si corresponde archivarlo.
+  logger.warn(
     { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, sourceDealId },
-    'Espejo sin line items válidos, archivando deal espejo'
+    'Espejo sin line items válidos — NO se archiva (regla usuaria); se avisa para revisión'
   );
+  reportHubSpotError({
+    level: 'warn',
+    objectType: 'deal',
+    objectId: String(mirrorDealId),
+    message: `Deal espejo UY quedó sin productos válidos (su original PY ${sourceDealId} ya no tiene líneas espejadas). NO se archivó automáticamente — revisar a mano si corresponde archivarlo o si falta algo.`,
+  });
 
-  try {
-    await hubspotClient.crm.deals.basicApi.archive(String(mirrorDealId));
-    logger.info(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId },
-      'Deal espejo archivado'
-    );
-  } catch (err) {
-    logger.warn(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', mirrorDealId, err },
-      'No se pudo archivar deal espejo'
-    );
-    return { archived: false, remainingValidCount: 0, error: 'archive_failed' };
-  }
-
-  try {
-    await hubspotClient.crm.deals.basicApi.update(String(sourceDealId), {
-      properties: { deal_uy_mirror_id: '' },
-    });
-    logger.info(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', dealId: sourceDealId },
-      'Deal PY actualizado: deal_uy_mirror_id limpiado'
-    );
-  } catch (err) {
-    logger.warn(
-      { module: 'dealMirroring', fn: 'maybeArchiveMirrorDealIfEmpty', dealId: sourceDealId, err },
-      'No se pudo limpiar deal_uy_mirror_id en PY'
-    );
-  }
-
-  return { archived: true, remainingValidCount: 0 };
+  return { archived: false, remainingValidCount: 0, flaggedEmpty: true };
 }
 
 // Propiedad del line item (checkbox) que marca la línea como operada en UY.
