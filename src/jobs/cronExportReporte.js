@@ -65,19 +65,12 @@ const INVOICED_STAGES = new Set([
   process.env.BILLING_AUTOMATED_PAID,
 ].filter(Boolean));
 
-// "Próximos a Facturar" (solo pipeline manual): Phase 2 promueve acá cuando faltan
-// ≤30 días. Para el Estado Backlog equivale a "Notificado".
-const PROXIMOS_STAGES = new Set([
-  process.env.BILLING_TICKET_STAGE_ID,
-].filter(Boolean));
-
-// Estado del backlog (solo tickets SIN número de factura):
-//   forecast (a +30 días)                → Pendiente de notificar
-//   Próximos a Facturar (≤30 días)       → Notificado
-//   Listo para Facturar / Emitido sin nº → Solicitado a facturar
+// Estado del backlog de un negocio ganado sin facturar:
+//   Listo para Facturar (ambos pipelines)              → Notificado
+//   85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar
+// Las etapas siguientes (Emitido/Enviado/Atrasado/Cobrado) NO son backlog: son Facturado.
 function estadoBacklog(stageId) {
-  if (LISTO_STAGES.has(stageId) || INVOICED_STAGES.has(stageId)) return 'Solicitado a facturar';
-  if (PROXIMOS_STAGES.has(stageId)) return 'Notificado';
+  if (LISTO_STAGES.has(stageId)) return 'Notificado';
   return 'Pendiente de notificar';
 }
 
@@ -103,6 +96,29 @@ function esRepetitivo(freq) {
   const f = safe(freq).toLowerCase();
   return f && !['unico', 'único', 'one_time', ''].includes(f) ? 'SI' : 'NO';
 }
+
+// Fecha a dd/mm/yyyy para las columnas visibles (mesAnio sigue usando ymd internamente).
+const dmy = (v) => {
+  const d = ymd(v);
+  if (!d || d.length < 10) return '';
+  const [y, m, day] = d.split('-');
+  return `${day}/${m}/${y}`;
+};
+
+// Probabilidad 0..1 → "NN%".
+const pct = (v) => { const n = safeNum(v); return n == null ? '' : `${Math.round(n * 100)}%`; };
+
+// Frecuencia de facturación → etiqueta en español (los LIs guardan códigos en inglés).
+const FREQ_ES = {
+  weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual', quarterly: 'Trimestral',
+  per_six_months: 'Semestral', annually: 'Anual', per_two_years: 'Bienal',
+  per_three_years: 'Trienal', per_four_years: 'Cada 4 años', per_five_years: 'Cada 5 años',
+};
+const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Único');
+
+// Momento de facturación → etiqueta legible.
+const MOMENTO_ES = { adelantado: 'Adelantado', fin_de_mes: 'Fin de mes', vencido: 'Vencido' };
+const momentoLabel = (raw) => MOMENTO_ES[safe(raw)] || safe(raw);
 
 // ── TC helpers ──────────────────────────────────────────────────────────────
 
@@ -190,12 +206,13 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
-  'condiciones_de_pago',
+  'condiciones_de_pago', 'dolar',
 ];
 
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
-  'costo_total_usd', 'dolar',
+  'costo_total_usd', 'dolar', 'monto_usd', 'margen_usd',
+  'hs_line_item_currency_code', 'mig_moneda', 'mensaje_para_responsable',
   'discount', 'hs_discount_percentage', 'hs_margin',
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
@@ -211,10 +228,12 @@ const LI_PROPS = [
 const TICKET_PROPS = [
   'of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_estado',
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
-  'of_producto_nombres', 'of_descripcion_producto',
+  'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'content', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
+  'of_facturacion_usd',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
+  'of_frecuencia_de_facturacion',
   'nombre_empresa', 'empresa_id', 'empresa_que_factura', 'cliente_partner',
 ];
 
@@ -410,8 +429,8 @@ function buildDealBase(deal, companies, ownerName) {
     'Ejecutivo Asignado': ownerName,
     'País Operativo': safe(dp.pais_operativo),
     'Ciclo de Negocio': '',
-    'Probabilidad': safeNum(dp.hs_deal_stage_probability),
-    'Fecha de Cierre': ymd(dp.closedate),
+    'Probabilidad': pct(dp.hs_deal_stage_probability),
+    'Fecha de Cierre': dmy(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
     'Condiciones de Pago': safe(dp.condiciones_de_pago),
     'Intercompany': safe(dp.es_mirror_de_py) === 'true' ? 'SI' : 'NO',
@@ -443,42 +462,53 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     ? Math.round((safeNum(lp.hs_margin) / monto) * 10000) / 100
     : null;
 
-  // TC: último cierre para line items (no facturados)
-  const moneda = dealBase['Moneda'];
-  const tc = getTCForCurrency(moneda, latestRates);
-  // USD directo cuando existe la fuente; si no, re-conversión con TC como antes.
-  const costoUSD = costoUsdFuente != null ? costoUsdFuente : convertToUSD(costo, moneda, tc);
-  const montoUSD = convertToUSD(monto, moneda, tc);
-  const margenBrutoUSD = (montoUSD != null && costoUSD != null) ? Math.round((montoUSD - costoUSD) * 100) / 100 : null;
+  // Moneda REAL del line item (hs_line_item_currency_code / mig_moneda); NO la "home currency"
+  // del negocio (que en HubSpot es USD para todos y ocultaba PYG/UYU).
+  const moneda = safe(lp.hs_line_item_currency_code) || safe(lp.mig_moneda) || dealBase['Moneda'];
+  const esUSD = safe(moneda).toUpperCase() === 'USD';
+  // Dólar ASIGNADO al negocio, congelado en creación/cierre/1-ene (NO el cambio del día).
+  // Preferencia: dólar del LI; fallback dólar del negocio. En USD no hay conversión → 1.
+  const dealDolar = safeNum(deal.properties?.dolar);
+  const tc = esUSD ? 1 : (dolarLi != null ? dolarLi : dealDolar);
+  // Columnas USD = props CALCULADAS de HubSpot (monto_usd/margen_usd usan el dólar asignado).
+  // Fallback USD→valor en moneda (la fórmula monto_usd divide por `dolar`, que en USD puede faltar).
+  const montoUSD = safeNum(lp.monto_usd) != null ? safeNum(lp.monto_usd) : (esUSD ? monto : null);
+  const costoUSD = costoUsdFuente != null ? costoUsdFuente : (esUSD ? costo : null);
+  const margenBrutoUSD = safeNum(lp.margen_usd) != null
+    ? safeNum(lp.margen_usd)
+    : (montoUSD != null && costoUSD != null ? Math.round((montoUSD - costoUSD) * 100) / 100 : null);
 
   return {
     ...dealBase,
+    'Moneda': moneda,
     'Rubro': safe(lp.servicio),
     // Área de Negocio = prop `area` del LI (la puebla la regla por país, p.ej. Paraguay);
     // fallback legacy: nombre del producto / nombre del LI.
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
-    'Descripción': safe(lp.description),
+    'Descripción Producto': safe(lp.description),
+    'Descripción Ticket': '',
+    'Observaciones': safe(lp.mensaje_para_responsable),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
-    'Fecha Fact Estimada': fechaFact,
+    'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
     'Monto': monto,
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': margenPct,
-    'TC Dólar a Pesos': tc,
+    'Dólar': tc,
     'Monto USD': montoUSD,
     'Costo USD': costoUSD,
     'Margen Bruto USD': margenBrutoUSD,
-    'Momento de Facturación': safe(lp.momento_de_facturacion),
+    'Momento de Facturación': momentoLabel(lp.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
     'N Factura': '',
     'Fuente': 'Line Item',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
-    'Fecha Inicio Contrato': fechaInicio,
-    'Frecuencia': freq,
-    'Fecha Fin Contrato': fechaVenc,
+    'Fecha Inicio Contrato': dmy(fechaInicio),
+    'Frecuencia': frecuenciaLI(freq),
+    'Fecha Fin Contrato': dmy(fechaVenc),
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -491,7 +521,8 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
 
   const fechaFact = ymd(tp.fecha_resolucion_esperada);
   const { mes, anio } = mesAnio(fechaFact);
-  const freq = safe(lp?.recurringbillingfrequency || lp?.hs_recurring_billing_frequency || '');
+  // Frecuencia del TICKET (of_frecuencia_de_facturacion, ya en español); fallback al código del LI.
+  const freq = safe(tp.of_frecuencia_de_facturacion) || frecuenciaLI(lp?.recurringbillingfrequency);
   const esAuto = safe(lp?.facturacion_automatica || '').toLowerCase() === 'true';
   const fechaInicio = ymd(lp?.hs_recurring_billing_start_date || lp?.fecha_inicio_de_facturacion || '');
   const fechaVenc = ymd(lp?.fecha_vencimiento_contrato || '');
@@ -501,28 +532,23 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const costo = safeNum(tp.of_costo);
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
 
-  // TC: si tiene numero_de_factura → usar tp.dolar (TC de Nodum).
-  //     si no → usar último cierre de exchange_rates.
   // Moneda: la del TICKET (of_moneda, sellada al crear la OF); fallback moneda del deal.
   const moneda = safe(tp.of_moneda) || dealBase['Moneda'];
+  const esUSD = safe(moneda).toUpperCase() === 'USD';
   const tieneFactura = safe(tp.numero_de_factura) !== '';
-  const tcNodum = safeNum(tp.dolar);
-  const monedaUpper = safe(moneda).toUpperCase();
-  const tc = monedaUpper === 'USD'
-  ? 1
-  : (tieneFactura && tcNodum > 0)
-    ? tcNodum
-    : getTCForCurrency(moneda, latestRates);
+  // TC = dólar SELLADO en el ticket al momento de facturación (prop `dolar`). NO cambio del día.
+  // En USD no hay conversión → 1 (el ticket puede traer un `dolar` residual que no aplica).
+  const tc = esUSD ? 1 : safeNum(tp.dolar);
 
-  // Definición 2026-07-07: of_costo_usd (snapshot del costo_total_usd del LI) es la
-  // fuente directa del costo en USD; la re-conversión con TC queda como fallback legacy.
-  const costoUSD = safeNum(tp.of_costo_usd) != null
-    ? safeNum(tp.of_costo_usd)
-    : convertToUSD(costo, moneda, tc);
-  const montoUSD = convertToUSD(monto, moneda, tc);
-  const margenBrutoUSD = (montoUSD != null && costoUSD != null)
-    ? Math.round((montoUSD - costoUSD) * 100) / 100
-    : null;
+  // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket):
+  //   of_facturacion_usd = subtotal en USD (respeta intercompany=0) · of_margen_usd = margen USD.
+  const costoUSD = safeNum(tp.of_costo_usd) != null ? safeNum(tp.of_costo_usd) : (esUSD ? costo : null);
+  const montoUSD = safeNum(tp.of_facturacion_usd) != null
+    ? safeNum(tp.of_facturacion_usd)
+    : (esUSD ? monto : null);
+  const margenBrutoUSD = safeNum(tp.of_margen_usd) != null
+    ? safeNum(tp.of_margen_usd)
+    : (montoUSD != null && costoUSD != null ? Math.round((montoUSD - costoUSD) * 100) / 100 : null);
 
   return {
     ...dealBase,
@@ -538,28 +564,30 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // Área de Negocio = prop `area` del ticket (snapshot del LI, regla por país);
     // fallback legacy: producto / of_producto_nombres / nombre del LI.
     'Área de Negocio': safe(tp.area || lp?.area || '') || productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
-    'Descripción': safe(tp.of_descripcion_producto || lp?.description || ''),
+    'Descripción Producto': safe(tp.of_descripcion_producto || lp?.description || ''),
+    'Descripción Ticket': safe(tp.descripcion || tp.content || ''),
+    'Observaciones': safe(tp.observaciones || lp?.mensaje_para_responsable || ''),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
-    'Fecha Fact Estimada': fechaFact,
+    'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
     'Monto': monto,
     'Costo': costo,
     'Margen Bruto': margenBruto,
     'Margen %': safeNum(tp.of_margen),
-    'TC Dólar a Pesos': tc,
+    'Dólar': tc,
     'Monto USD': montoUSD,
     'Costo USD': costoUSD,
     'Margen Bruto USD': margenBrutoUSD,
-    'Momento de Facturación': safe(tp.momento_de_facturacion || lp?.momento_de_facturacion || ''),
+    'Momento de Facturación': momentoLabel(tp.momento_de_facturacion || lp?.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
     'N Factura': safe(tp.numero_de_factura),
     'Fuente': 'Ticket',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
-    'Fecha Inicio Contrato': fechaInicio,
+    'Fecha Inicio Contrato': dmy(fechaInicio),
     'Frecuencia': freq,
-    'Fecha Fin Contrato': fechaVenc,
+    'Fecha Fin Contrato': dmy(fechaVenc),
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -593,7 +621,9 @@ const COLUMNS = [
   { header: 'Moneda', key: 'Moneda', width: 10 },
   { header: 'Rubro', key: 'Rubro', width: 25 },
   { header: 'Área de Negocio', key: 'Área de Negocio', width: 30 },
-  { header: 'Descripción', key: 'Descripción', width: 40 },
+  { header: 'Descripción Producto', key: 'Descripción Producto', width: 40 },
+  { header: 'Descripción Ticket', key: 'Descripción Ticket', width: 40 },
+  { header: 'Observaciones', key: 'Observaciones', width: 30 },
   { header: 'Fecha Fact Estimada', key: 'Fecha Fact Estimada', width: 18 },
   { header: 'Mes', key: 'Mes', width: 8 },
   { header: 'Año', key: 'Año', width: 8 },
@@ -601,7 +631,7 @@ const COLUMNS = [
   { header: 'Costo', key: 'Costo', width: 15 },
   { header: 'Margen Bruto', key: 'Margen Bruto', width: 15 },
   { header: 'Margen %', key: 'Margen %', width: 12 },
-  { header: 'TC Dólar a Pesos', key: 'TC Dólar a Pesos', width: 15 },
+  { header: 'Dólar', key: 'Dólar', width: 12 },
   { header: 'Monto USD', key: 'Monto USD', width: 15 },
   { header: 'Costo USD', key: 'Costo USD', width: 15 },
   { header: 'Margen Bruto USD', key: 'Margen Bruto USD', width: 15 },
@@ -783,21 +813,20 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
         const tp = ticket.properties || {};
         const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap, latestRates);
         const tieneFactura = safe(tp.numero_de_factura) !== '';
+        const stage = safe(tp.hs_pipeline_stage);
         aplicarIntercompany(row);
 
-        if (tieneFactura) {
-          // Facturado = tiene número de factura de Nodum
+        // Facturado = con nº de factura de Nodum o en etapas Emitido/Enviado/Atrasado/Cobrado.
+        if (tieneFactura || INVOICED_STAGES.has(stage)) {
           facturadoRows.push(row);
+        } else if (LISTO_STAGES.has(stage)) {
+          // Listo para Facturar (ambos pipelines) → Notificado.
+          row['Estado Backlog'] = 'Notificado';
+          listoRows.push(row);
         } else {
-          // Backlog = ticket de negocio ganado sin nº de factura.
-          row['Estado Backlog'] = estadoBacklog(safe(tp.hs_pipeline_stage));
-          if (LISTO_STAGES.has(safe(tp.hs_pipeline_stage)) || INVOICED_STAGES.has(safe(tp.hs_pipeline_stage))) {
-            // Solicitado a facturar = stages de "ready" + stages avanzados sin N° factura
-            listoRows.push(row);
-          } else {
-            // Pendiente/Notificado = todo lo demás
-            forecastRows.push(row);
-          }
+          // 85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar.
+          row['Estado Backlog'] = 'Pendiente de notificar';
+          forecastRows.push(row);
         }
       }
     }

@@ -13,7 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideReapAction, esFacturacionUrgentePerdida } from '../utils/webhookQueueRules.js';
+import { decideReapAction, clasificarJobRescatado } from '../utils/webhookQueueRules.js';
 
 const MAX = 3;
 
@@ -40,46 +40,46 @@ test('maxAttempts=1 abandona en el primer rescate', () => {
   assert.deepEqual(decideReapAction({ attempts: 0 }, 1), { status: 'failed', attempts: 1 });
 });
 
-// ─── esFacturacionUrgentePerdida ─────────────────────────────────────────────
+// ─── clasificarJobRescatado ──────────────────────────────────────────────────
 //
-// El caso que importa: el job rescatado se re-ejecuta, pero facturar_ahora ya
-// fue reseteado a false por la corrida que murió → el re-run solo skipea.
-// Sin este aviso el job termina en 'done' y la pérdida queda invisible.
+// El job rescatado se re-ejecuta y encuentra facturar_ahora ya en false.
+// Qué significa depende del camino, porque cada uno resetea el flag en un
+// momento distinto (ver el JSDoc de la función).
 
 const SKIP_FLAG = { skipped: true, reason: 'facturar_ahora_false' };
 
-test('job rescatado + urgente + flag ya consumido → avisa', () => {
+test('LI rescatado con el flag ya consumido → critical: pudo perderse la factura', () => {
   const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
-  assert.equal(esFacturacionUrgentePerdida(job, SKIP_FLAG), true);
+  assert.equal(clasificarJobRescatado(job, SKIP_FLAG)?.severidad, 'critical');
 });
 
-test('lo mismo para urgent_ticket', () => {
+test('ticket rescatado con el flag ya consumido → warn: el finally corrió, ya facturó', () => {
   const job = { action_type: 'urgent_ticket', reaped_at: new Date(), attempts: 1 };
-  assert.equal(esFacturacionUrgentePerdida(job, SKIP_FLAG), true);
+  assert.equal(clasificarJobRescatado(job, SKIP_FLAG)?.severidad, 'warn');
 });
 
-test('job nunca rescatado que skipea es normal (el usuario destildó el flag) → NO avisa', () => {
+test('job nunca rescatado que skipea es normal (el usuario destildó el flag) → null', () => {
   const job = { action_type: 'urgent_line_item', reaped_at: null, attempts: 0 };
-  assert.equal(esFacturacionUrgentePerdida(job, SKIP_FLAG), false);
+  assert.equal(clasificarJobRescatado(job, SKIP_FLAG), null);
 });
 
-test('job rescatado que SÍ facturó → NO avisa', () => {
+test('job rescatado que SÍ facturó → null', () => {
   const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
-  assert.equal(esFacturacionUrgentePerdida(job, { invoiceId: '999' }), false);
+  assert.equal(clasificarJobRescatado(job, { invoiceId: '999' }), null);
 });
 
-test('job rescatado que skipea por otro motivo → NO avisa (no hubo pérdida)', () => {
+test('job rescatado que skipea por otro motivo → null (no hubo pérdida)', () => {
   const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
   const otroSkip = { skipped: true, reason: 'facturacion_inactiva' };
-  assert.equal(esFacturacionUrgentePerdida(job, otroSkip), false);
+  assert.equal(clasificarJobRescatado(job, otroSkip), null);
 });
 
-test('action_type no urgente (recalc) → NO avisa, no hay plata en juego', () => {
+test('action_type no urgente (recalc) → null, no hay plata en juego', () => {
   const job = { action_type: 'recalc', reaped_at: new Date(), attempts: 1 };
-  assert.equal(esFacturacionUrgentePerdida(job, SKIP_FLAG), false);
+  assert.equal(clasificarJobRescatado(job, SKIP_FLAG), null);
 });
 
 test('jobResult undefined (job sin retorno) no rompe', () => {
   const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
-  assert.equal(esFacturacionUrgentePerdida(job, undefined), false);
+  assert.equal(clasificarJobRescatado(job, undefined), null);
 });

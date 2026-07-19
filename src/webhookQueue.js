@@ -12,7 +12,7 @@ import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
 import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
 import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
-import { decideReapAction, esFacturacionUrgentePerdida } from './utils/webhookQueueRules.js';
+import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
 
 const MODULE = 'webhookQueue';
 
@@ -237,33 +237,33 @@ async function processNext() {
 // ─── Reaper de jobs huérfanos ────────────────────────────────────────────────
 
 async function alertIfReapedJobLostItsWork(job, jobResult) {
-  if (!esFacturacionUrgentePerdida(job, jobResult)) return;
+  const veredicto = clasificarJobRescatado(job, jobResult);
+  if (!veredicto) return;
 
-  logger.error(
-    {
-      module: MODULE, fn: 'alertIfReapedJobLostItsWork',
-      jobId: job.id, actionType: job.action_type,
-      objectId: job.object_id, dealId: job.deal_id, attempts: job.attempts,
-    },
-    'Job rescatado pero "facturar ahora" ya estaba consumido — posible facturación perdida'
-  );
+  const contexto = {
+    module: MODULE, fn: 'alertIfReapedJobLostItsWork',
+    jobId: job.id, actionType: job.action_type,
+    objectType: job.object_type, objectId: job.object_id,
+    dealId: job.deal_id, attempts: job.attempts,
+  };
 
-  await sendAlert(
-    'critical',
-    'Facturar ahora posiblemente perdido (job huérfano rescatado)',
-    {
-      jobId: job.id,
-      actionType: job.action_type,
-      objectType: job.object_type,
-      objectId: job.object_id,
-      dealId: job.deal_id,
-      detalle:
-        'El worker murió a mitad de una facturación urgente. Al reintentarla, "facturar ahora" ' +
-        'ya estaba en false (se resetea al inicio), así que el motor no pudo repetirla. ' +
-        'Verificar a mano si la factura se emitió; si no, volver a marcar "facturar ahora".',
-    }
-  ).catch(err =>
-    logger.error({ module: MODULE, fn: 'alertIfReapedJobLostItsWork', err: err?.message }, 'No se pudo enviar la alerta')
+  // El camino de ticket se auto-recupera: alcanza con dejar rastro.
+  if (veredicto.severidad === 'warn') {
+    logger.warn(contexto, veredicto.mensaje);
+    return;
+  }
+
+  logger.error(contexto, veredicto.mensaje);
+
+  await sendAlert(veredicto.severidad, veredicto.mensaje, {
+    jobId: job.id,
+    actionType: job.action_type,
+    objectType: job.object_type,
+    objectId: job.object_id,
+    dealId: job.deal_id,
+    detalle: veredicto.detalle,
+  }).catch(err =>
+    logger.error({ ...contexto, err: err?.message }, 'No se pudo enviar la alerta')
   );
 }
 
