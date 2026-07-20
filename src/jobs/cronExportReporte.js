@@ -9,7 +9,8 @@
 //   FORECAST  = deals en pipeline (prob < 85%), unificados, con columna
 //               "Tipo de Forecast" (Forecast / Forecast en Strech / Forecast Firme).
 //   BACKLOG   = tickets de negocios ganados SIN facturar, con columna
-//               "Estado Backlog" (Pendiente de notificar / Notificado / Solicitado a facturar).
+//               "Estado Backlog" (Pendiente de notificar / Notificado). El tercer estado
+//               "Solicitado a facturar" se retiró: esas etapas ahora clasifican como FACTURADO.
 //   FACTURADO = tickets con número de factura de Nodum.
 // Intercompany (negocio mirror PY→UY, es_mirror_de_py=true): la facturación NO se
 // considera (Monto/Monto USD = 0) para no duplicar contra la facturación al cliente
@@ -151,7 +152,7 @@ const LI_PROPS = [
   'hs_recurring_billing_number_of_payments', 'number_of_payments',
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
-  'uy', 'pais_operativo', 'hubspot_owner_id',
+  'uy', 'pais_operativo', 'hubspot_owner_id', 'empresa_que_factura',
   'momento_de_facturacion', 'area',
 ];
 
@@ -160,7 +161,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
-  'of_facturacion_usd', 'of_margen_usd',
+  'of_facturacion_usd', 'of_margen_usd', 'entidad_facturadora',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
   'of_frecuencia_de_facturacion',
@@ -416,6 +417,9 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     // fallback legacy: nombre del producto / nombre del LI.
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción Producto': safe(lp.description),
+    // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
+    // Distinta de 'Empresa Factura', que es la empresa CLIENTE a la que se le factura.
+    'Empresa Emisora': safe(lp.empresa_que_factura),
     'Descripción Ticket': '',
     'Observaciones': safe(lp.mensaje_para_responsable),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
@@ -487,6 +491,8 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // empresa_que_factura / cliente_partner.
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
+    // Emisora sellada en el ticket; fallback al select del line item de origen.
+    'Empresa Emisora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
     'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
@@ -533,6 +539,7 @@ function isValidTicket(ticket) {
 const COLUMNS = [
   { header: 'Cliente Beneficiario', key: 'Cliente Beneficiario', width: 30 },
   { header: 'ID Cliente Beneficiario', key: 'ID Cliente Beneficiario', width: 15 },
+  { header: 'Empresa Emisora', key: 'Empresa Emisora', width: 18 },
   { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
   { header: 'ID Empresa Factura', key: 'ID Empresa Factura', width: 15 },
   { header: 'Partner', key: 'Partner', width: 25 },
