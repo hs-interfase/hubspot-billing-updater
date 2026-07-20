@@ -114,18 +114,34 @@ const TICKET_PROPS = [
   'hs_pipeline_stage',
   'subtotal_real',        // neto en moneda del negocio (fuente del VALOR)
   'of_costo_usd',         // costo en USD del ticket (fuente del COSTO)
-  'of_cantidad_de_pagos', // vacío ⇒ auto-renew (ver isAutoRenew)
+  'of_cantidad_de_pagos',          // >0 ⇒ plan fijo
+  'of_frecuencia_de_facturacion',  // 'Único' ⇒ one-off (NO auto-renew). Ver esTicketAutoRenew.
   'fecha_resolucion_esperada',
 ];
 
 /**
  * ¿El ticket viene de un line item AUTO-RENEW?
- * Auto-renew = tiene frecuencia y NO tiene nº de pagos (services/billing/mode.js).
- * En el snapshot del ticket eso se ve como `of_cantidad_de_pagos` vacío/null.
+ *
+ * Replica `isAutoRenew` (services/billing/mode.js) a nivel TICKET:
+ *     auto-renew = TIENE frecuencia  Y  NO tiene nº de pagos
+ *
+ * ⚠️ LAS DOS CONDICIONES SON NECESARIAS. Mirar solo el nº de pagos está MAL: un line
+ * item de UNA SOLA VEZ (manual/one-off) tampoco tiene nº de pagos, y quedaría
+ * clasificado como auto-renew → si su fecha cae fuera del año en curso se lo excluiría
+ * del VALOR sin motivo. (Detectado con el caso de prueba de la usuaria, 2026-07-19:
+ * 3 line items manuales al 2-ene-2028 desaparecían del total.)
+ *
+ * En el snapshot del ticket:
+ *   - `of_frecuencia_de_facturacion` = 'Único' ⇒ NO tiene frecuencia ⇒ NO es auto-renew.
+ *   - `of_cantidad_de_pagos` con valor > 0     ⇒ plan fijo         ⇒ NO es auto-renew.
  */
 function esTicketAutoRenew(tp) {
-  const pagos = tp?.of_cantidad_de_pagos;
-  return pagos == null || String(pagos).trim() === '';
+  const frec = String(tp?.of_frecuencia_de_facturacion ?? '').trim().toLowerCase();
+  const esUnico = frec === '' || frec === 'unico' || frec === 'único';
+  if (esUnico) return false; // sin frecuencia ⇒ plan fijo (one-off)
+
+  const pagos = Number.parseFloat(tp?.of_cantidad_de_pagos);
+  return !(Number.isFinite(pagos) && pagos > 0);
 }
 
 /**

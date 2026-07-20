@@ -21,24 +21,38 @@ import {
 
 const ANIO = 2026;
 
-/** Ticket de PLAN FIJO: tiene nº de pagos. */
+/** Ticket de PLAN FIJO: frecuencia + nº de pagos. */
 const fijo = (subtotal, costoUsd, fecha = '2026-03-15', pagos = 3) => ({
   id: String(Math.random()).slice(2, 8),
   properties: {
     subtotal_real: String(subtotal),
     of_costo_usd: costoUsd == null ? null : String(costoUsd),
     of_cantidad_de_pagos: String(pagos),
+    of_frecuencia_de_facturacion: 'Frecuente',
     fecha_resolucion_esperada: fecha,
   },
 });
 
-/** Ticket de AUTO-RENEW: SIN nº de pagos (marcador). */
+/** Ticket ONE-OFF (manual, pago único): SIN frecuencia y SIN nº de pagos. */
+const unico = (subtotal, costoUsd, fecha) => ({
+  id: String(Math.random()).slice(2, 8),
+  properties: {
+    subtotal_real: String(subtotal),
+    of_costo_usd: costoUsd == null ? null : String(costoUsd),
+    of_cantidad_de_pagos: '',
+    of_frecuencia_de_facturacion: 'Único',
+    fecha_resolucion_esperada: fecha,
+  },
+});
+
+/** Ticket de AUTO-RENEW: CON frecuencia y SIN nº de pagos. */
 const autoRenew = (subtotal, costoUsd, fecha) => ({
   id: String(Math.random()).slice(2, 8),
   properties: {
     subtotal_real: String(subtotal),
     of_costo_usd: costoUsd == null ? null : String(costoUsd),
     of_cantidad_de_pagos: '',
+    of_frecuencia_de_facturacion: 'Frecuente',
     fecha_resolucion_esperada: fecha,
   },
 });
@@ -171,4 +185,46 @@ test('negocio sin tickets: valor y costo en 0, no explota', () => {
   assert.equal(elegidos.length, 0);
   assert.equal(valorLocalDesdeTickets(elegidos), 0);
   assert.equal(costoUsdDesdeTickets(elegidos), 0);
+});
+
+// ─────────── one-off vs auto-renew (regresión del caso de prueba 19-jul) ───────────
+
+test('ONE-OFF sin frecuencia NI nº de pagos: NO es auto-renew, entra aunque sea de otro año', () => {
+  // Regresión: mirar solo `of_cantidad_de_pagos` clasificaba estos como auto-renew y,
+  // al estar fuera del año en curso, los borraba del VALOR.
+  const tickets = [unico(40000, 250, '2028-01-02')];
+  const { elegidos } = ticketsDelCalculo(tickets, ANIO);
+  assert.equal(elegidos.length, 1, 'un pago único a futuro NO se recorta por año');
+  assert.equal(valorLocalDesdeTickets(elegidos), 40000);
+});
+
+test('CASO DE PRUEBA COMPLETO (usuaria 19-jul): dólar 40, esperado 9.600 USD / margen 8.850', () => {
+  const tickets = [
+    // 3 manuales one-off al 2-ene-2028: 40.000 c/u, costo 250 USD c/u
+    unico(40000, 250, '2028-01-02'),
+    unico(40000, 250, '2028-01-02'),
+    unico(40000, 250, '2028-01-02'),
+    // auto-renew mensual 20.000 desde 2023, sin costo → solo cuentan los 12 de 2026
+    ...Array.from({ length: 12 }, (_, i) =>
+      autoRenew(20000, null, `2026-${String(i + 1).padStart(2, '0')}-01`)),
+    ...Array.from({ length: 12 }, (_, i) =>
+      autoRenew(20000, null, `2025-${String(i + 1).padStart(2, '0')}-01`)), // fuera
+    // plan fijo 12 pagos de 2.000 durante 2023-2024 → entran todos
+    ...Array.from({ length: 12 }, (_, i) =>
+      fijo(2000, null, `2024-${String(i + 1).padStart(2, '0')}-01`, 12)),
+  ];
+
+  const { elegidos } = ticketsDelCalculo(tickets, ANIO);
+  assert.equal(elegidos.length, 3 + 12 + 12, 'los 12 auto-renew de 2025 quedan fuera');
+
+  const dolar = 40;
+  const valorLocal = valorLocalDesdeTickets(elegidos);
+  const valorUsd = Math.round((valorLocal / dolar) * 100) / 100;
+  const costoUsd = costoUsdDesdeTickets(elegidos);
+  const margen = Math.round((valorUsd - costoUsd) * 100) / 100;
+
+  assert.equal(valorLocal, 384000);  // 120.000 + 240.000 + 24.000
+  assert.equal(valorUsd, 9600);      // 3.000 + 6.000 + 600
+  assert.equal(costoUsd, 750);       // 250 × 3
+  assert.equal(margen, 8850);
 });
