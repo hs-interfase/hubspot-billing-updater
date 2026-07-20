@@ -9,7 +9,8 @@
 //   FORECAST  = deals en pipeline (prob < 85%), unificados, con columna
 //               "Tipo de Forecast" (Forecast / Forecast en Strech / Forecast Firme).
 //   BACKLOG   = tickets de negocios ganados SIN facturar, con columna
-//               "Estado Backlog" (Pendiente de notificar / Notificado / Solicitado a facturar).
+//               "Estado Backlog" (Pendiente de notificar / Notificado). El tercer estado
+//               "Solicitado a facturar" se retiró: esas etapas ahora clasifican como FACTURADO.
 //   FACTURADO = tickets con número de factura de Nodum.
 // Intercompany (negocio mirror PY→UY, es_mirror_de_py=true): la facturación NO se
 // considera (Monto/Monto USD = 0) para no duplicar contra la facturación al cliente
@@ -30,9 +31,7 @@ import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 import { initExportSnapshotsTable, saveExportSnapshot } from '../db-export.js';
 import { setCronState } from '../db.js';
-import pool from '../db.js';
 import { sendAlert, pingHeartbeat } from '../../lib/alertService.js';
-import { EXCHANGE_RATE_STALE_DAYS } from '../config/constants.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -65,14 +64,8 @@ const INVOICED_STAGES = new Set([
   process.env.BILLING_AUTOMATED_PAID,
 ].filter(Boolean));
 
-// Estado del backlog de un negocio ganado sin facturar:
-//   Listo para Facturar (ambos pipelines)              → Notificado
-//   85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar
-// Las etapas siguientes (Emitido/Enviado/Atrasado/Cobrado) NO son backlog: son Facturado.
-function estadoBacklog(stageId) {
-  if (LISTO_STAGES.has(stageId)) return 'Notificado';
-  return 'Pendiente de notificar';
-}
+// NOTA: estadoBacklog() se eliminó — quedó sin llamadores cuando la clasificación
+// Backlog/Facturado pasó a resolverse inline (tieneFactura || INVOICED_STAGES → Facturado).
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -122,73 +115,11 @@ const momentoLabel = (raw) => MOMENTO_ES[safe(raw)] || safe(raw);
 
 // ── TC helpers ──────────────────────────────────────────────────────────────
 
-/**
- * Obtiene el último TC disponible en exchange_rates (para filas no facturadas).
- * Devuelve { uyu_usd, pyg_usd, eur_usd, date } o null.
- */
-async function getLatestExchangeRate() {
-  try {
-    const { rows } = await pool.query(
-      `SELECT date, uyu_usd, eur_usd, pyg_usd
-       FROM exchange_rates
-       ORDER BY date DESC
-       LIMIT 1`
-    );
-    if (!rows.length) return null;
-    const r = rows[0];
-    return {
-      uyu_usd: parseFloat(r.uyu_usd) || null,
-      eur_usd: parseFloat(r.eur_usd) || null,
-      pyg_usd: parseFloat(r.pyg_usd) || null,
-      date: r.date,
-    };
-  } catch (err) {
-    logger.warn({ err: err.message }, '[export] No se pudo obtener TC de exchange_rates');
-    return null;
-  }
-}
-
-/**
- * Convierte un monto a USD dado la moneda y el TC.
- * TC = unidades de moneda local por 1 USD (ej: 42.5 UYU = 1 USD).
- * Si moneda es USD, devuelve el monto tal cual.
- */
-function convertToUSD(monto, moneda, tc) {
-  if (monto == null || monto === '') return null;
-  const m = parseFloat(monto);
-  if (isNaN(m)) return null;
-
-  const cur = safe(moneda).toUpperCase();
-  if (cur === 'USD') return m;
-  if (!tc || tc <= 0) return null;
-
-  return Math.round((m / tc) * 100) / 100;
-}
-
-/**
- * Dado la moneda del deal y el objeto de rates, devuelve el TC
- * normalizado como "unidades de moneda local por 1 USD".
- *
- * DB almacena:
- *   uyu_usd = UYU por 1 USD (ej: 42.5)  → ya está bien
- *   pyg_usd = PYG por 1 USD (ej: 7500)  → ya está bien
- *   eur_usd = USD por 1 EUR (ej: 0.92)  → HAY QUE INVERTIR
- *
- * Invertimos EUR para que convertToUSD siempre haga monto / tc.
- */
-function getTCForCurrency(moneda, rates) {
-  if (!rates) return null;
-  const cur = safe(moneda).toUpperCase();
-  if (cur === 'USD') return 1;
-  if (cur === 'UYU') return rates.uyu_usd;
-  if (cur === 'PYG') return rates.pyg_usd;
-  if (cur === 'EUR') {
-    // eur_usd en DB = ~0.92 (USD que vale 1 EUR)
-    // Necesitamos EUR por 1 USD = 1 / 0.92 ≈ 1.087
-    return rates.eur_usd > 0 ? Math.round((1 / rates.eur_usd) * 1000) / 1000 : null;
-  }
-  return null;
-}
+// NOTA: acá vivían getLatestExchangeRate(), convertToUSD() y getTCForCurrency(),
+// que convertían a USD con el "TC del día" de la tabla exchange_rates. Se eliminaron
+// al pasar el reporte al dólar SELLADO por negocio/ticket (prop `dolar`): ya no había
+// ningún llamador y solo generaban alertas de frescura sobre un TC que el reporte no usa.
+// El cron cronExchangeRates, que puebla esa tabla, sigue funcionando sin cambios.
 
 // ── Rate limiting ───────────────────────────────────────────────────────────
 let lastCall = 0;
@@ -221,7 +152,7 @@ const LI_PROPS = [
   'hs_recurring_billing_number_of_payments', 'number_of_payments',
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
-  'uy', 'pais_operativo', 'hubspot_owner_id',
+  'uy', 'pais_operativo', 'hubspot_owner_id', 'empresa_que_factura',
   'momento_de_facturacion', 'area',
 ];
 
@@ -230,7 +161,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
-  'of_facturacion_usd',
+  'of_facturacion_usd', 'of_margen_usd', 'entidad_facturadora',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
   'of_frecuencia_de_facturacion',
@@ -486,6 +417,9 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     // fallback legacy: nombre del producto / nombre del LI.
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción Producto': safe(lp.description),
+    // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
+    // Distinta de 'Empresa Factura', que es la empresa CLIENTE a la que se le factura.
+    'Empresa Emisora': safe(lp.empresa_que_factura),
     'Descripción Ticket': '',
     'Observaciones': safe(lp.mensaje_para_responsable),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
@@ -557,6 +491,8 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // empresa_que_factura / cliente_partner.
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
+    // Emisora sellada en el ticket; fallback al select del line item de origen.
+    'Empresa Emisora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
     'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
@@ -603,6 +539,7 @@ function isValidTicket(ticket) {
 const COLUMNS = [
   { header: 'Cliente Beneficiario', key: 'Cliente Beneficiario', width: 30 },
   { header: 'ID Cliente Beneficiario', key: 'ID Cliente Beneficiario', width: 15 },
+  { header: 'Empresa Emisora', key: 'Empresa Emisora', width: 18 },
   { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
   { header: 'ID Empresa Factura', key: 'ID Empresa Factura', width: 15 },
   { header: 'Partner', key: 'Partner', width: 25 },
@@ -708,30 +645,12 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const start = Date.now();
   logger.info({ pipelineFilter }, '[export] Iniciando generación de reporte');
 
-  // 0) Obtener último TC disponible para filas no facturadas
-  const latestRates = await getLatestExchangeRate();
-  if (latestRates) {
-    logger.info({ date: latestRates.date, uyu_usd: latestRates.uyu_usd, pyg_usd: latestRates.pyg_usd }, '[export] TC último cierre cargado');
-
-    // CHECK-4: frescura del TC. Si el último cierre es más viejo que el umbral,
-    // el reporte usaría cotizaciones obsoletas → avisar (no bloquea el reporte).
-    const ageDays = Math.floor((Date.now() - new Date(latestRates.date).getTime()) / 86_400_000);
-    if (ageDays > EXCHANGE_RATE_STALE_DAYS) {
-      logger.warn({ date: latestRates.date, ageDays, staleAfterDays: EXCHANGE_RATE_STALE_DAYS }, '[export] TC obsoleto — el reporte usará cotizaciones viejas');
-      sendAlert('warning', `Tipo de cambio obsoleto (${ageDays} días) al generar el reporte`, {
-        ultimaFecha: String(latestRates.date),
-        diasDeAntiguedad: ageDays,
-        umbralDias: EXCHANGE_RATE_STALE_DAYS,
-        uyu_usd: latestRates.uyu_usd,
-        pyg_usd: latestRates.pyg_usd,
-      }).catch(() => {});
-    }
-  } else {
-    logger.warn('[export] No se encontró TC en exchange_rates — columnas USD quedarán vacías');
-    sendAlert('warning', 'No hay tipos de cambio en exchange_rates al generar el reporte', {
-      detalle: 'Las columnas USD del reporte quedarán vacías. Revisar el cron de tasas (cronExchangeRates).',
-    }).catch(() => {});
-  }
+  // 0) El reporte NO usa el "TC del día" de exchange_rates: cada fila convierte a USD
+  //    con el dólar SELLADO del negocio/ticket (prop `dolar`, fallback fx_* en las props
+  //    de cálculo). Por eso ya no se consulta exchange_rates ni se alerta por frescura:
+  //    ese TC no alimenta ninguna columna. El cron que puebla la tabla (cronExchangeRates)
+  //    queda intacto, sigue sirviendo a otros consumidores.
+  const latestRates = null;
 
   // 1) Fetch all deals
   const allDeals = await fetchAllDeals(pipelineFilter);

@@ -86,10 +86,13 @@ function makeFakeClient({ tickets = [], failCreateFor = () => false } = {}) {
   return { client, createCalls, seedAssoc };
 }
 
-const ticket = (id, pipeline = 'PIPE_AUTO') => ({
+// fecha por defecto en el PASADO: un ticket sin fecha se trata como pasado (conservador).
+const ticket = (id, pipeline = 'PIPE_AUTO', fecha = '2020-01-01') => ({
   id: String(id),
-  properties: { of_deal_id: 'D1', hs_pipeline: pipeline },
+  properties: { of_deal_id: 'D1', hs_pipeline: pipeline, fecha_resolucion_esperada: fecha },
 });
+/** Ticket a futuro (lejos, para no depender de la fecha de hoy). */
+const ticketFuturo = (id, pipeline = 'PIPE_AUTO') => ticket(id, pipeline, '2099-12-31');
 
 // ─────────────────────────────────────────────────────────────
 // Hook: gate por facturacion_activa
@@ -175,7 +178,11 @@ test('idempotencia: segunda corrida no re-asocia (dealLinked=0)', async () => {
 // ─────────────────────────────────────────────────────────────
 test('filtro onlyManual: saltea tickets fuera del pipeline manual', { skip: !TICKET_PIPELINE }, async () => {
   const { client, createCalls } = makeFakeClient({
-    tickets: [ticket(1, TICKET_PIPELINE), ticket(2, 'PIPE_AUTO')],
+    tickets: [
+      ticket(1, TICKET_PIPELINE),        // manual (pasado)
+      ticket(2, 'PIPE_AUTO'),            // automático PASADO  → sí se asocia (regla 19-jul)
+      ticketFuturo(3, 'PIPE_AUTO'),      // automático FUTURO  → NO se asocia
+    ],
   });
   const stats = await associateAllTicketsOnClosedWon({
     dealId: 'D1',
@@ -185,22 +192,27 @@ test('filtro onlyManual: saltea tickets fuera del pipeline manual', { skip: !TIC
     getDealCompaniesFn: async () => [],
     getDealContactsFn: async () => [],
   });
-  assert.equal(stats.considered, 1);          // solo el manual
-  assert.equal(stats.skippedByPipeline, 1);   // el automático
-  assert.equal(stats.dealLinked, 1);
-  assert.ok(createCalls.every(c => c.fromId === '1'));
+  assert.equal(stats.considered, 2);          // manual + automático pasado
+  assert.equal(stats.autoPastLinked, 1);      // el automático del pasado
+  assert.equal(stats.skippedByPipeline, 1);   // solo el automático FUTURO
+  assert.equal(stats.dealLinked, 2);
+  assert.ok(createCalls.every(c => c.fromId !== '3'), 'el futuro automático NO se toca');
 });
 
 // ─────────────────────────────────────────────────────────────
 // Hook: política resuelta 13-jul — el env ASSOC_CLOSEDWON_ONLY_MANUAL
 // gobierna el default (sin pasar onlyManualPipeline explícito).
 // ─────────────────────────────────────────────────────────────
-test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true saltea el pipeline automático (default)', { skip: !TICKET_PIPELINE }, async () => {
+test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true deja sin asociar SOLO el automático futuro (default)', { skip: !TICKET_PIPELINE }, async () => {
   const prev = process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
   process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = 'true';
   try {
     const { client, createCalls } = makeFakeClient({
-      tickets: [ticket(1, TICKET_PIPELINE), ticket(2, 'PIPE_AUTO')],
+      tickets: [
+        ticket(1, TICKET_PIPELINE),
+        ticket(2, 'PIPE_AUTO'),        // automático PASADO → se asocia
+        ticketFuturo(3, 'PIPE_AUTO'),  // automático FUTURO → no
+      ],
     });
     const stats = await associateAllTicketsOnClosedWon({
       dealId: 'D1',
@@ -210,10 +222,10 @@ test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true saltea el pipeline automá
       getDealCompaniesFn: async () => [],
       getDealContactsFn: async () => [],
     });
-    assert.equal(stats.considered, 1);          // solo el manual
-    assert.equal(stats.skippedByPipeline, 1);   // el automático
-    assert.equal(stats.dealLinked, 1);
-    assert.ok(createCalls.every(c => c.fromId === '1'));
+    assert.equal(stats.considered, 2);          // manual + automático pasado
+    assert.equal(stats.skippedByPipeline, 1);   // solo el automático futuro
+    assert.equal(stats.dealLinked, 2);
+    assert.ok(createCalls.every(c => c.fromId !== '3'));
   } finally {
     if (prev === undefined) delete process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
     else process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = prev;

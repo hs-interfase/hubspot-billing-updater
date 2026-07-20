@@ -6,7 +6,6 @@
 import 'dotenv/config';
 import { Client } from '@hubspot/api-client';
 import ExcelJS from 'exceljs';
-import pg from 'pg';
 
 // ── Config ──
 const TOKEN = process.env.HUBSPOT_PRIVATE_TOKEN;
@@ -39,14 +38,8 @@ const INVOICED_STAGES = new Set([
   process.env.BILLING_AUTOMATED_PAID,
 ].filter(Boolean));
 
-// Estado del backlog de un negocio ganado sin facturar (mismo criterio que el cron):
-//   Listo para facturar (ambos pipelines)              → Notificado
-//   85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar
-// Las etapas siguientes (Emitido/Enviado/Atrasado/Cobrado) NO son backlog: son Facturado.
-function estadoBacklog(stageId) {
-  if (LISTO_STAGES.has(stageId)) return 'Notificado';
-  return 'Pendiente de notificar';
-}
+// NOTA: estadoBacklog() se elimino — quedo sin llamadores cuando la clasificacion
+// Backlog/Facturado paso a resolverse inline (tieneFactura || INVOICED_STAGES -> Facturado).
 
 // ── Helpers ──
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -96,84 +89,10 @@ const momentoLabel = (raw) => MOMENTO_ES[safe(raw)] || safe(raw);
 
 // ── TC helpers ──────────────────────────────────────────────────────────────
 
-/**
- * Obtiene el último TC disponible en exchange_rates.
- * Devuelve { uyu_usd, pyg_usd, eur_usd, date } o null.
- */
-async function getLatestExchangeRate() {
-  const connStrings = [
-    process.env.DATABASE_URL,
-    process.env.DATABASE_PUBLIC_URL,
-  ].filter(Boolean);
-
-  if (!connStrings.length) {
-    console.warn('  ⚠ DATABASE_URL y DATABASE_PUBLIC_URL no configuradas — columnas USD quedarán vacías');
-    return null;
-  }
-
-  for (const connStr of connStrings) {
-    const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
-    try {
-      const { rows } = await pool.query(
-        `SELECT date, uyu_usd, eur_usd, pyg_usd FROM exchange_rates ORDER BY date DESC LIMIT 1`
-      );
-      await pool.end();
-      if (!rows.length) return null;
-      const r = rows[0];
-      return {
-        uyu_usd: parseFloat(r.uyu_usd) || null,
-        eur_usd: parseFloat(r.eur_usd) || null,
-        pyg_usd: parseFloat(r.pyg_usd) || null,
-        date: r.date,
-      };
-    } catch (err) {
-      console.warn(`  ⚠ Error con ${connStr.split('@')[1]?.split('/')[0] ?? 'host'}: ${err.message}`);
-      await pool.end().catch(() => {});
-    }
-  }
-
-  console.warn('  ⚠ Sin TC disponible — columnas USD quedarán vacías');
-  return null;
-}
-
-/**
- * Convierte un monto a USD dado la moneda y el TC.
- * TC = unidades de moneda local por 1 USD (ej: 42.5 UYU = 1 USD).
- */
-function convertToUSD(monto, moneda, tc) {
-  if (monto == null || monto === '') return null;
-  const m = parseFloat(monto);
-  if (isNaN(m)) return null;
-
-  const cur = safe(moneda).toUpperCase();
-  if (cur === 'USD') return m;
-  if (!tc || tc <= 0) return null;
-
-  return Math.round((m / tc) * 100) / 100;
-}
-
-/**
- * Dado la moneda del deal y el objeto de rates, devuelve el TC
- * normalizado como "unidades de moneda local por 1 USD".
- *
- * DB almacena:
- *   uyu_usd = UYU por 1 USD (ej: 42.5)  → ya está bien
- *   pyg_usd = PYG por 1 USD (ej: 7500)  → ya está bien
- *   eur_usd = USD por 1 EUR (ej: 0.92)  → HAY QUE INVERTIR
- *
- * Invertimos EUR para que convertToUSD siempre haga monto / tc.
- */
-function getTCForCurrency(moneda, rates) {
-  if (!rates) return null;
-  const cur = safe(moneda).toUpperCase();
-  if (cur === 'USD') return 1;
-  if (cur === 'UYU') return rates.uyu_usd;
-  if (cur === 'PYG') return rates.pyg_usd;
-  if (cur === 'EUR') {
-    return rates.eur_usd > 0 ? Math.round((1 / rates.eur_usd) * 1000) / 1000 : null;
-  }
-  return null;
-}
+// NOTA: aca vivian getLatestExchangeRate(), convertToUSD() y getTCForCurrency(),
+// que convertian a USD con el "TC del dia" de exchange_rates. Se eliminaron al pasar
+// el reporte al dolar SELLADO por negocio/ticket (prop `dolar`). El cron cronExchangeRates,
+// que puebla esa tabla, sigue funcionando sin cambios.
 
 // ── Rate-limited API helpers ──
 let lastCall = 0;
@@ -206,7 +125,7 @@ const LI_PROPS = [
   'hs_recurring_billing_number_of_payments', 'number_of_payments',
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
-  'uy', 'pais_operativo', 'hubspot_owner_id',
+  'uy', 'pais_operativo', 'hubspot_owner_id', 'empresa_que_factura',
   'momento_de_facturacion', 'area',
 ];
 
@@ -215,7 +134,7 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
   'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
-  'of_facturacion_usd',
+  'of_facturacion_usd', 'of_margen_usd', 'entidad_facturadora',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
   'of_pais_operativo', 'of_moneda', 'momento_de_facturacion', 'area',
   'of_frecuencia_de_facturacion',
@@ -482,6 +401,9 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     // Área de Negocio = prop `area` del LI (regla por país); fallback producto/nombre.
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción Producto': safe(lp.description),
+    // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
+    // Distinta de 'Empresa Factura', que es la empresa CLIENTE a la que se le factura.
+    'Empresa Emisora': safe(lp.empresa_que_factura),
     'Descripción Ticket': '',
     'Observaciones': safe(lp.mensaje_para_responsable),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
@@ -553,6 +475,8 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // empresa_que_factura / cliente_partner.
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
+    // Emisora sellada en el ticket; fallback al select del line item de origen.
+    'Empresa Emisora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
     'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
@@ -712,7 +636,8 @@ async function main() {
   const COLUMNS = [
     { header: 'Cliente Beneficiario', key: 'Cliente Beneficiario', width: 30 },
     { header: 'ID Cliente Beneficiario', key: 'ID Cliente Beneficiario', width: 15 },
-    { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
+    { header: 'Empresa Emisora', key: 'Empresa Emisora', width: 18 },
+  { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
     { header: 'ID Empresa Factura', key: 'ID Empresa Factura', width: 15 },
     { header: 'Partner', key: 'Partner', width: 25 },
     { header: 'ID Partner', key: 'ID Partner', width: 15 },
