@@ -228,7 +228,7 @@ const LI_PROPS = [
 const TICKET_PROPS = [
   'of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_estado',
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
-  'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'content', 'observaciones',
+  'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'of_facturacion_usd',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
@@ -565,7 +565,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // fallback legacy: producto / of_producto_nombres / nombre del LI.
     'Área de Negocio': safe(tp.area || lp?.area || '') || productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
     'Descripción Producto': safe(tp.of_descripcion_producto || lp?.description || ''),
-    'Descripción Ticket': safe(tp.descripcion || tp.content || ''),
+    'Descripción Ticket': safe(tp.descripcion || ''),
     'Observaciones': safe(tp.observaciones || lp?.mensaje_para_responsable || ''),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
