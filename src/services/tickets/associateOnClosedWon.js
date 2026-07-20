@@ -16,10 +16,31 @@
 // Patrón probado en scripts/fix/fixTicketAssociations.mjs, acá vía el hubspotClient
 // del motor (rate-limit + retry del proxy).
 //
-// DECISIÓN reunión 13-jul (resuelve "todos vs solo manuales"): SOLO el pipeline
-// MANUAL se asocia al ganar (ASSOC_CLOSEDWON_ONLY_MANUAL=true). Los tickets del
-// pipeline AUTOMÁTICO NO se asocian; se muestran ordenados por fecha en la vista
-// del negocio (facturados / listo-notificado / próximo-sin-notificar).
+// DECISIÓN reunión 13-jul + AJUSTE usuaria 2026-07-19 (regla vigente):
+//   - pipeline MANUAL            → SIEMPRE se asocia (pasado y futuro).
+//   - pipeline AUTOMÁTICO PASADO → SE ASOCIA (ya ocurrió: es historia del negocio).
+//   - pipeline AUTOMÁTICO FUTURO → NO se asocia (cronograma por venir; se muestra
+//                                  ordenado por fecha en la vista del negocio).
+// El corte pasado/futuro es por `fecha_resolucion_esperada` contra HOY.
+// El flag ASSOC_CLOSEDWON_ONLY_MANUAL sigue gobernando el trato especial del
+// automático; con el flag en false se asocia todo, como antes.
+//
+// ⚠️ LIMITACIÓN CONOCIDA — ASOCIACIONES RESIDUALES (verificado 2026-07-19, decisión
+// usuaria: se ACEPTA, no se corrige por ahora).
+//   Este módulo SOLO AGREGA asociaciones; el motor NO DESASOCIA tickets en ningún lado
+//   (las únicas llamadas a associations.archive están en dealMirroring.js, y son de
+//   line items del espejo). Consecuencia:
+//     1. Phase 3 promueve un forecast automático a READY y LO ASOCIA (phase3.js,
+//        promoteAutoForecastTicketToReady).
+//     2. Una corrida posterior de Phase P lo devuelve a forecast ("Re-snapshot aplicado
+//        a ticket forecast").
+//     3. El stage vuelve atrás, pero LA ASOCIACIÓN QUEDA COLGADA.
+//   → Un ticket automático FUTURO puede aparecer asociado al negocio aunque esta regla
+//     diga que no debería. Es un residuo histórico, no un bug activo: se comprobó que
+//     tras borrar la asociación a mano y correr el motor completo, NO se vuelve a crear.
+//   → NO afecta el cálculo de VALOR/MARGEN (recalcValorTotal busca por of_deal_id, no
+//     por asociaciones). Es puramente de VISTA.
+//   Si algún día molesta: agregar acá el paso simétrico (desasociar el automático futuro).
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { getDealCompanies, getDealContacts, normalizeCompaniesInfo } from './ticketService.js';
@@ -33,6 +54,26 @@ import { parseBool } from '../../utils/parsers.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'associateOnClosedWon';
+
+/** Fecha de hoy en YYYY-MM-DD (UTC), para comparar contra fecha_resolucion_esperada. */
+function hoyYMD() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * ¿El ticket es a FUTURO? (su facturación todavía no ocurrió)
+ *
+ * Regla usuaria 2026-07-19: los tickets automáticos del PASADO sí se asocian al negocio
+ * (son historia real); los del FUTURO quedan sueltos hasta que les toque.
+ *
+ * Sin fecha ⇒ se considera PASADO (conservador: se asocia). Un ticket sin fecha no
+ * debería quedar invisible desde el negocio.
+ */
+function esTicketFuturo(t, hoy) {
+  const f = String(t?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+  if (!f) return false;
+  return f > hoy;
+}
 
 /**
  * Busca por Search todos los tickets con of_deal_id === dealId.
@@ -50,7 +91,7 @@ async function fetchTicketsForDealBySearch(client, dealId) {
           { propertyName: 'hs_object_id', operator: 'GT', value: lastId },
         ],
       }],
-      properties: ['of_deal_id', 'of_ticket_key', 'hs_pipeline', 'hs_pipeline_stage'],
+      properties: ['of_deal_id', 'of_ticket_key', 'hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada'],
       sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
       limit: 100,
     };
@@ -100,7 +141,7 @@ async function ensureAssoc(client, ticketId, toType, toId, existing) {
  *                                              (default: env ASSOC_CLOSEDWON_ONLY_MANUAL)
  * @returns {Promise<{applies:boolean, ticketsFound:number, considered:number,
  *   dealLinked:number, companyLinked:number, contactLinked:number,
- *   alreadyLinked:number, skippedByPipeline:number, errors:number}>}
+ *   alreadyLinked:number, skippedByPipeline:number, autoPastLinked:number, errors:number}>}
  */
 export async function associateAllTicketsOnClosedWon({
   dealId,
@@ -120,7 +161,8 @@ export async function associateAllTicketsOnClosedWon({
     companyLinked: 0,
     contactLinked: 0,
     alreadyLinked: 0,
-    skippedByPipeline: 0,
+    skippedByPipeline: 0,   // automáticos FUTUROS: quedan sin asociar a propósito
+    autoPastLinked: 0,      // automáticos PASADOS que sí se asocian (regla 19-jul)
     errors: 0,
   };
 
@@ -168,14 +210,20 @@ export async function associateAllTicketsOnClosedWon({
     return specs;
   };
 
+  const hoy = hoyYMD();
+
   for (const t of tickets) {
     const ticketId = String(t.id);
     const pipeline = String(t.properties?.hs_pipeline || '');
 
-    // Filtro opcional: asociar solo los tickets del pipeline manual.
+    // Pipeline AUTOMÁTICO: se asocia si su facturación ya ocurrió (pasado).
+    // Solo se deja sin asociar el cronograma FUTURO. El manual pasa siempre.
     if (onlyManual && TICKET_PIPELINE && pipeline !== TICKET_PIPELINE) {
-      stats.skippedByPipeline++;
-      continue;
+      if (esTicketFuturo(t, hoy)) {
+        stats.skippedByPipeline++;
+        continue;
+      }
+      stats.autoPastLinked++;
     }
     stats.considered++;
 
