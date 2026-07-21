@@ -8,11 +8,12 @@ import assert from 'node:assert/strict';
 import { EMPRESA_EMISORA_MAP, EMPRESA_EMISORA_MAP_BY_ENV } from '../services/billing/empresaEmisora.js';
 import { NOMBRE_PRODUCTO_TO_ID_BY_ENV } from '../services/billing/nombreProductoSelect.js';
 
-test('ambos entornos tienen los mismos 11 productos con la misma empresa', () => {
+// 13 = 11 originales + Liferay (usuaria 20-jul) + NNDD Ops (usuaria 21-jul).
+test('ambos entornos tienen los mismos 13 productos con la misma empresa', () => {
   const prod = EMPRESA_EMISORA_MAP_BY_ENV.prod;
   const sandbox = EMPRESA_EMISORA_MAP_BY_ENV.sandbox;
-  assert.equal(Object.keys(prod).length, 11);
-  assert.equal(Object.keys(sandbox).length, 11);
+  assert.equal(Object.keys(prod).length, 13);
+  assert.equal(Object.keys(sandbox).length, 13);
   // multiconjunto de empresas idéntico entre entornos
   const bag = (m) => Object.values(m).sort();
   assert.deepEqual(bag(prod), bag(sandbox));

@@ -15,6 +15,9 @@ export const EMPRESA_EMISORA_MAP_BY_ENV = {
   prod: {
     '33688819739': 'ISA',       // iGDoc
     '33695807329': 'ISA',       // Portal
+    '45054899755': 'ISA',       // Liferay — va junto con Portal (decisión usuaria 20-jul):
+                                //   quien factura Portal factura Liferay
+    '45054899756': 'ISA',       // NNDD Ops — decisión usuaria 21-jul: lo factura ISA UY
     '33695559578': 'ISA',       // Flota
     '33688695870': 'ISA',       // iJServ
     '33688695865': 'Interfase', // PayRoll
@@ -28,6 +31,8 @@ export const EMPRESA_EMISORA_MAP_BY_ENV = {
   sandbox: {
     '42010367402': 'ISA',       // iGDoc
     '42010181660': 'ISA',       // Portal
+    '45055023516': 'ISA',       // Liferay — junto con Portal (decisión usuaria 20-jul)
+    '45054899742': 'ISA',       // NNDD Ops — decisión usuaria 21-jul: lo factura ISA UY
     '41943895219': 'ISA',       // Flota
     '41943895217': 'ISA',       // iJServ
     '42010367404': 'Interfase', // PayRoll
