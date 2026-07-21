@@ -2,7 +2,16 @@
 
 > Extraído 2026-07-14 del portal de PRODUCCIÓN (developer account interfaseisa.com, portal 50148277, app id **24185440**) vía la API interna `/api/webhooks/v1/24185440/subscriptions` (con header CSRF de la sesión).
 > **URL de destino:** `https://webhooks-production-6c1b.up.railway.app/api/escuchar-cambios` · máx concurrencia 10 · máx reintentos 10.
-> **Total: 123 suscripciones, todas `*.propertyChange`, todas activas.** Sirve de checklist para replicar en la app de PRUEBAS (portal 51101688).
+> **Total al 14-jul: 123 suscripciones, todas `*.propertyChange`, todas activas.**
+>
+> ⚠️ **ACTUALIZADO 20-jul:** se detectó que 5 props que Tarea C dice escuchar NO tenían suscripción
+> (`costo_total_usd`, `dolar`, `hs_cost_of_goods_sold`, `fecha_inicio_de_facturacion`, `of_codigo_rubro`),
+> más `descripcion` en ticket (creada ese día). **La usuaria las suscribió el 20-jul.** Sin ellas, el sync
+> line item → ticket de costo/margen nunca se disparaba. Detalle en
+> `definitivos/CRUCE_maria_vs_webhooks_2026-07-20.md`.
+>
+> 🔁 **NO suscribir** props que escribe el propio motor (`subtotal_real`, `of_costo`, `of_margen`,
+> `of_pagos_restantes`): riesgo de bucle motor→webhook→motor. Sirve de checklist para replicar en la app de PRUEBAS (portal 51101688).
 
 ## line_item / "Elemento de pedido" — 45 (`line_item.propertyChange`)
 actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, discount, empresa_que_factura, es_definitivo, exonera_irae, facturacion_automatica, facturar_ahora, fecha_de_baja, fecha_vencimiento_contrato, fin_del_contrato, hs_billing_start_delay_type, hs_discount_percentage, hs_recurring_billing_period, hs_recurring_billing_start_date, hs_tax_rate_group_id, hubspot_owner_id, inicio_del_contrato, line_item_key, mensaje_para_responsable, momento_de_facturacion, monto_unitario_actual, motivo_de_pausa, name, nc, nombre_producto, nota, opera_trading, pais_operativo, parte_del_cupo, pausa, price, quantity, recurringbillingfrequency, responsable_asignado, reventa, servicio, subrubro, terceros, tipo_de_parametrica, unidad_de_negocio, uy
