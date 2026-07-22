@@ -206,6 +206,30 @@ export default async function handler(req, res) {
       return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'li_prop_sync' });
     }
 
+    // ====== RUTA 5: FRECUENCIA / Nº DE PAGOS DEL LI → RECALCULAR VALOR ======
+    // Regla del VALOR auto-renew (21-jul): price × qty × multiplicador anual de la
+    // frecuencia. Cambiar la frecuencia o el nº de pagos cambia la clasificación
+    // (auto-renew ↔ plan fijo) y el multiplicador → recalcular SOLO el VALOR del deal
+    // (no re-corre phases; el ciclo de facturación sigue leyendo estas props por cron).
+    // ⚠️ Requiere suscripción de webhook line_item.propertyChange para estas props.
+    if (
+      objectType === 'line_item' &&
+      ['recurringbillingfrequency', 'hs_recurring_billing_frequency',
+       'hs_recurring_billing_number_of_payments'].includes(propertyName)
+    ) {
+      const dealId = await getDealIdForLineItem(objectId);
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId,
+        actionType: 'valor_recalc',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'valor_recalc' });
+    }
+
     // ====== PROPIEDAD NO RECONOCIDA ======
     return res.status(200).json({ message: 'Property not supported, skipped', propertyName });
 

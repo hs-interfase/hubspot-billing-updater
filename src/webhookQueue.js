@@ -12,6 +12,7 @@ import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
 import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
 import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
+import { recalcValorTotal } from './services/deal/recalcValorTotal.js';
 import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
 
 const MODULE = 'webhookQueue';
@@ -77,7 +78,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel'
+ * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -625,9 +626,45 @@ async function executeJob(job) {
         propertyName: property_name,
         dealId: resolvedDealId,
       });
+
+      // price/quantity/costo cambian el VALOR proyectado del auto-renew (regla 21-jul:
+      // "campo dinámico, se actualiza al editar el LI") → recalcular. No bloquea el sync.
+      if (resolvedDealId && ['price', 'quantity', 'costo_total_usd'].includes(property_name)) {
+        try {
+          await recalcValorTotal({ dealId: resolvedDealId });
+        } catch (err) {
+          logger.warn(
+            { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId, err: err?.message },
+            'recalcValorTotal post li_prop_sync falló (no bloquea)'
+          );
+        }
+      }
+
       logger.info(
         { module: MODULE, fn: 'executeJob', jobId: job.id, lineItemId: object_id, propertyName: property_name, ...result },
         'li_prop_sync completado'
+      );
+      return result;
+    }
+
+    case 'valor_recalc': {
+      // Frecuencia / nº de pagos del LI cambian la clasificación auto-renew y el
+      // multiplicador anual del VALOR (regla 21-jul). Recalcula SOLO el VALOR del deal,
+      // sin re-correr las phases (no crea tickets ni toca facturación).
+      let resolvedDealId = deal_id;
+      if (!resolvedDealId) {
+        resolvedDealId = await getDealIdForLineItem(object_id);
+        if (!resolvedDealId) {
+          throw new Error(`No se encontró deal asociado al line item ${object_id}`);
+        }
+        await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
+      }
+      const result = await recalcValorTotal({ dealId: resolvedDealId });
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId,
+          lineItemId: object_id, propertyName: property_name,
+          totalUsd: result.totalUsd, changed: result.changed },
+        'valor_recalc completado'
       );
       return result;
     }
