@@ -51,7 +51,7 @@ const TICKET_PROPS = [
   'monto_unitario_real', 'cantidad_real', 'subtotal_real',
   'descuento_en_porcentaje', 'descuento_por_unidad_real', 'total_real_a_facturar',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura', 'facturacion_urgente',
-  'unidad_de_negocio', 'observaciones_ventas',
+  'unidad_de_negocio', 'observaciones',
   'fecha_resolucion_esperada', 'subject',
   'opera_trading', 'momento_de_facturacion',
   'ticket_emitio_aviso_a_admin',

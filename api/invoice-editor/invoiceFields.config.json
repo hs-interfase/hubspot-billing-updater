@@ -56,16 +56,8 @@
     "helpText": ""
   },
   {
-    "internalName": "descripcion_producto",
-    "label": "Descripción del Producto",
-    "type": "textarea",
-    "required": false,
-    "readOnly": false,
-    "helpText": ""
-  },
-  {
     "internalName": "mensaje_del_vendedor",
-    "label": "Mensaje del Vendedor",
+    "label": "Observaciones",
     "type": "textarea",
     "required": false,
     "readOnly": true,

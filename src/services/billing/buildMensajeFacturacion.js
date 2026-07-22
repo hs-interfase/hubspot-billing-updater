@@ -245,7 +245,7 @@ function buildLineItemDiv(ticket, portalId = null) {
     buildRow('TRADING',                   fmtBoolSiNo(tp.opera_trading)),
     buildRow('Frecuencia de Facturación', frecuencia),
     buildRow('Momento de facturación',    val(tp.momento_de_facturacion)),
-    buildRow('Observaciones',             val(tp.observaciones_ventas)),
+    buildRow('Observaciones',             val(tp.observaciones)),
     buildRow('Ticket',                    ticketLink),
     `</div>`,
   ];
@@ -495,7 +495,7 @@ function buildLineItemDiv(ticket) {
     buildRow('Subtotal', fmtNum(tp.subtotal_real)),
     buildRow('Total a facturar', fmtNum(tp.total_real_a_facturar)),
     buildRow('Frecuencia de Facturación', frecuencia),
-    buildRow('Observaciones', val(tp.observaciones_ventas)),
+    buildRow('Observaciones', val(tp.observaciones)),
 
     !esUnico
       ? buildRow(
