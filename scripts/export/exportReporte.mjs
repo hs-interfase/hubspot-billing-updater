@@ -358,6 +358,8 @@ function buildDealBase(deal, companies, ownerName) {
     'Moneda': safe(dp.deal_currency_code),
     'Condiciones de Pago': safe(dp.condiciones_de_pago),
     'Intercompany': safe(dp.es_mirror_de_py) === 'true' ? 'SI' : 'NO',
+    // Dólar congelado del negocio (no es columna: la usan las filas como fallback del TC).
+    '__dolarNegocio': safeNum(dp.dolar),
   };
 }
 
@@ -390,10 +392,11 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   // del negocio (que en HubSpot es USD para todos y ocultaba PYG/UYU).
   const moneda = safe(lp.hs_line_item_currency_code) || safe(lp.mig_moneda) || dealBase['Moneda'];
   const esUSD = safe(moneda).toUpperCase() === 'USD';
-  // Dólar ASIGNADO al negocio, congelado en creación/cierre/1-ene (NO el cambio del día).
-  // Preferencia: dólar del LI; fallback dólar del negocio. En USD no hay conversión → 1.
+  // Columna "Dólar" = TC de dólares a pesos (pedido Paola 21-jul), NO el TC aplicado a la
+  // conversión de la fila. Se muestra SIEMPRE, aunque la fila sea USD: dólar del LI,
+  // fallback dólar congelado del negocio. Sin dólar → vacío (no se inventa ni se pone 1).
   const dealDolar = safeNum(deal.properties?.dolar);
-  const tc = esUSD ? 1 : (dolarLi != null ? dolarLi : dealDolar);
+  const tc = dolarLi != null ? dolarLi : dealDolar;
   // Columnas USD = props CALCULADAS de HubSpot (monto_usd/margen_usd usan el dólar asignado).
   // Fallback USD→valor en moneda (la fórmula monto_usd divide por `dolar`, que en USD puede faltar).
   const montoUSD = safeNum(lp.monto_usd) != null ? safeNum(lp.monto_usd) : (esUSD ? monto : null);
@@ -464,9 +467,12 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const moneda = safe(tp.of_moneda) || dealBase['Moneda'];
   const esUSD = safe(moneda).toUpperCase() === 'USD';
   const tieneFactura = safe(tp.numero_de_factura) !== '';
-  // TC = dólar SELLADO en el ticket al momento de facturación (prop `dolar`). NO cambio del día.
-  // En USD no hay conversión → 1 (el ticket puede traer un `dolar` residual que no aplica).
-  const tc = esUSD ? 1 : safeNum(tp.dolar);
+  // Columna "Dólar" = TC de dólares a pesos (pedido Paola 21-jul), NO el TC aplicado.
+  // Se muestra SIEMPRE: dólar sellado del ticket (TC del día en que se facturó/creó la OF),
+  // fallback dólar del LI de origen y después dólar congelado del negocio. Vacío si no hay.
+  const tc = safeNum(tp.dolar) != null
+    ? safeNum(tp.dolar)
+    : (safeNum(lp?.dolar) != null ? safeNum(lp?.dolar) : dealBase['__dolarNegocio']);
 
   // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket):
   //   of_facturacion_usd = subtotal en USD (respeta intercompany=0) · of_margen_usd = margen USD.
