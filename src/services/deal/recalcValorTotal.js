@@ -11,25 +11,33 @@
 //   COSTO_USD    = Σ of_costo_usd de ESOS MISMOS tickets
 //   MARGEN_USD   = VALOR_USD − COSTO_USD
 //
-// EXCEPCIÓN AUTO-RENEW (usuaria 2026-07-19): un contrato de auto-renovación no tiene fin,
-//   así que sumar todos sus tickets no significa nada. Para esos se toma **1 año**, y el año
-//   es el CALENDARIO EN CURSO (1-ene → 31-dic). Elegido así para que empalme con el cron
-//   del 1-ene: cada año el valor se recalcula solo y refleja el run-rate vigente, ya con la
-//   paramétrica del año aplicada.
-//     - ticket de plan fijo   → entra siempre
-//     - ticket de auto-renew  → entra solo si su fecha cae en el año calendario en curso
-//   Un mismo negocio puede mezclar ambos: la clasificación es POR TICKET.
-//   Marcador de auto-renew en el ticket: `of_cantidad_de_pagos` vacío (auto-renew = tiene
-//   frecuencia y NO tiene nº de pagos; ver isAutoRenew en services/billing/mode.js).
+// EXCEPCIÓN AUTO-RENEW (usuaria 2026-07-21, transcript reunión + correo Paola 2026-07-02):
+//   un contrato de auto-renovación no tiene fin, así que sumar tickets no significa nada.
+//   Su valor es el RUN-RATE ANUAL calculado desde el LINE ITEM:
 //
-// POR QUÉ TICKETS Y NO LINE ITEMS (esto ya se implementó mal una vez, no repetirlo):
+//     VALOR_ar = Σ price × quantity × multiplicador anual   (por cada LI auto-renew)
+//     COSTO_ar = Σ costo_total_usd × multiplicador anual    (el costo del LI es POR PAGO)
+//
+//   Multiplicador anual = pagos que entran en UN año: mensual ×12 · trimestral ×4 ·
+//   semestral ×2 · anual ×1 · bimestral ×6 · plurianual 12÷meses (cada 2 años = 0,5) ·
+//   semanal/quincenal por días (365÷n). Ver multAnual(). Es la fórmula literal del correo
+//   de Paola del 2-jul ("Σ de los precios unitario × cantidad × multiplicador, normalizado
+//   a base anual"), confirmada por la usuaria el 21/22-jul. "Último precio" = el price
+//   VIGENTE del LI (la paramétrica edita el price, así que siempre está al día).
+//
+//   Los TICKETS de un LI auto-renew quedan FUERA del cálculo (los reemplaza el run-rate;
+//   sumarlos además sería doble conteo). Plan fijo y pago único siguen POR TICKETS.
+//   Un mismo negocio puede mezclar ambos: la clasificación es POR LI / POR TICKET.
+//   Marcador de auto-renew: tiene frecuencia y NO tiene nº de pagos (isAutoRenew en
+//   services/billing/mode.js; a nivel ticket, esTicketAutoRenew acá).
+//
+// POR QUÉ EL PLAN FIJO VA POR TICKETS Y NO POR LINE ITEMS:
 //   **El ticket tiene el valor REAL; el line item no necesariamente.** El LI es la
 //   intención comercial; el ticket es lo que efectivamente se factura (y lo que el
-//   responsable corrige antes de emitir). Por eso la fuente de verdad es el ticket.
-//
-//   ⚠️ El criterio de Paola ("se toma de line items", correo 2026-07-02) NO significaba
-//   line items en el sentido técnico — Paola no es técnica. Lo que pedía es el valor del
-//   negocio; la fuente correcta para eso son los tickets. NO volver a interpretarlo literal.
+//   responsable corrige antes de emitir). Para el AUTO-RENEW la regla es la inversa a
+//   propósito: es una PROYECCIÓN, y la fuente de la proyección es el precio vigente del
+//   LI (decisión usuaria 2026-07-21 — reemplaza la regla del 19-jul que tomaba los
+//   tickets del año calendario en curso).
 //
 // ⚠️ LOS NEGOCIOS EN FORECAST **SÍ** TIENEN TICKETS. Están vinculados por la propiedad
 //   `of_deal_id`, aunque NO estén asociados en el CRM (se asocian recién al cerrar
@@ -57,7 +65,10 @@
 //   (los tres con override de nombre por env)
 //
 // Es un campo DINÁMICO: se recalcula al final de runPhasesForDeal, por lo que queda
-// cubierto por los tres disparadores (runBilling, cronWeekendFull, webhook).
+// cubierto por los tres disparadores (runBilling, cronWeekendFull, webhook). Además, el
+// caso 'li_prop_sync' y la ruta 'valor_recalc' de la cola de webhooks lo recalculan al
+// editar price/quantity/costo/frecuencia/nº de pagos del LI (regla "campo dinámico" de
+// Paola: ante cualquier modificación debe actualizarse solo).
 //
 // PENDIENTE / control de cambios:
 //   - TC "mixto" del Caso 1 de Paola (facturado al TC del día de cada factura + proyección
@@ -67,6 +78,8 @@
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { ensureDealDolar } from '../costoUsdService.js';
+import { isAutoRenew } from '../billing/mode.js';
+import { getIntervalFromFrequency } from '../../billingEngine.js';
 import { TICKET_STAGES, BILLING_AUTOMATED_CANCELLED } from '../../config/constants.js';
 import logger from '../../../lib/logger.js';
 
@@ -145,14 +158,89 @@ function esTicketAutoRenew(tp) {
 }
 
 /**
- * ¿La fecha del ticket cae en el año calendario en curso?
- * Sin fecha ⇒ NO se puede ubicar en el año → se excluye del auto-renew (y se avisa),
- * para no inflar el run-rate con tickets sin fecha.
+ * Multiplicador anual de una frecuencia de LI: cuántos pagos entran en UN año.
+ * Deriva de getIntervalFromFrequency (misma tabla que usa la facturación, así los dos
+ * caminos nunca divergen): meses > 0 → 12÷meses; si es por días → 365÷días.
+ * @returns {number|null} null si la frecuencia no se puede mapear.
  */
-function enAnioEnCurso(tp, anio) {
-  const f = tp?.fecha_resolucion_esperada;
-  if (!f) return false;
-  return String(f).slice(0, 4) === String(anio);
+export function multAnual(freqRaw) {
+  const interval = getIntervalFromFrequency(freqRaw);
+  if (!interval) return null;
+  if (interval.months > 0) return 12 / interval.months;
+  if (interval.days > 0) return 365 / interval.days;
+  return null;
+}
+
+// Props del LINE ITEM que necesita el caso auto-renew.
+const LI_PROPS = [
+  'price',
+  'quantity',
+  'costo_total_usd',
+  'recurringbillingfrequency',
+  'hs_recurring_billing_frequency',
+  'hs_recurring_billing_number_of_payments',
+  'number_of_payments',
+];
+
+/**
+ * VALOR y COSTO anualizados de los line items AUTO-RENEW del negocio.
+ *   VALOR_local = Σ price × quantity × multAnual   (price está en la moneda del negocio)
+ *   COSTO_USD   = Σ costo_total_usd × multAnual    (el costo del LI es POR PAGO, 17-jul)
+ * quantity vacía cuenta como 1 (regla de María: cantidad 0/vacía con monto → 1 unidad).
+ * LI auto-renew cuya frecuencia no se puede mapear → no aporta y se avisa (no se inventa).
+ */
+export function valorAutoRenewDesdeLineItems(lineItems, log) {
+  let totalLocal = 0;
+  let costoUsd = 0;
+  let sinMult = 0;
+  let cuenta = 0;
+  for (const li of lineItems || []) {
+    if (!isAutoRenew(li)) continue;
+    const p = li?.properties || {};
+    const m = multAnual(p.recurringbillingfrequency || p.hs_recurring_billing_frequency);
+    if (m === null) {
+      sinMult++;
+      continue;
+    }
+    const qty = num(p.quantity, NaN);
+    totalLocal += num(p.price, 0) * (Number.isFinite(qty) && qty > 0 ? qty : 1) * m;
+    costoUsd += num(p.costo_total_usd, 0) * m;
+    cuenta++;
+  }
+  if (sinMult > 0) {
+    log?.warn(
+      { sinMult },
+      'LIs auto-renew con frecuencia no mapeable: NO aportan al VALOR (revisar la frecuencia del LI)'
+    );
+  }
+  return { totalLocal: round2(totalLocal), costoUsd: round2(costoUsd), cuenta, sinMult };
+}
+
+/**
+ * Trae los line items del deal con las props del caso auto-renew.
+ * Solo se usa cuando el caller no los pasa (runPhasesForDeal ya los tiene cargados).
+ */
+export async function getDealLineItems(dealId) {
+  const ids = [];
+  let after;
+  do {
+    const resp = await hubspotClient.crm.associations.v4.basicApi.getPage(
+      'deals', String(dealId), 'line_items', 500, after
+    );
+    for (const r of resp.results || []) ids.push(String(r.toObjectId));
+    after = resp.paging?.next?.after;
+  } while (after);
+  if (!ids.length) return [];
+
+  const out = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const batch = await hubspotClient.crm.lineItems.batchApi.read({
+      inputs: ids.slice(i, i + 100).map((id) => ({ id })),
+      properties: LI_PROPS,
+    });
+    out.push(...(batch.results || []));
+  }
+  return out;
 }
 
 /**
@@ -186,34 +274,23 @@ export async function getDealTickets(dealId) {
 
 /**
  * Selecciona los tickets que entran en el cálculo:
- *   - plan fijo  → todos
- *   - auto-renew → solo los del año calendario en curso (1 año de run-rate)
+ *   - plan fijo / pago único → todos
+ *   - auto-renew → NINGUNO: su valor lo aporta el LINE ITEM (run-rate anual,
+ *     valorAutoRenewDesdeLineItems). Sumar sus tickets además sería doble conteo.
  * Devuelve el mismo array que después consumen VALOR y COSTO (simetría).
  */
-export function ticketsDelCalculo(tickets, anio, log) {
+export function ticketsDelCalculo(tickets, log) {
   const elegidos = [];
-  let autoRenewFuera = 0;
-  let sinFecha = 0;
+  let autoRenewExcluidos = 0;
   for (const t of tickets) {
     const tp = t?.properties || {};
-    if (!esTicketAutoRenew(tp)) {
-      elegidos.push(t);
+    if (esTicketAutoRenew(tp)) {
+      autoRenewExcluidos++;
       continue;
     }
-    if (enAnioEnCurso(tp, anio)) {
-      elegidos.push(t);
-    } else {
-      autoRenewFuera++;
-      if (!tp.fecha_resolucion_esperada) sinFecha++;
-    }
+    elegidos.push(t);
   }
-  if (sinFecha > 0) {
-    log?.warn(
-      { sinFecha, anio },
-      'Tickets auto-renew SIN fecha de resolución esperada: quedan fuera del VALOR (no se pueden ubicar en el año)'
-    );
-  }
-  return { elegidos, autoRenewFuera };
+  return { elegidos, autoRenewExcluidos };
 }
 
 /**
@@ -302,27 +379,32 @@ export function costoUsdDesdeTickets(tickets, log) {
 }
 
 /**
- * Recalcula el VALOR del deal desde sus line items y escribe las dos props.
+ * Recalcula el VALOR del deal y escribe las props.
  *
  * @param {object}   params
  * @param {string}   params.dealId
  * @param {boolean}  [params.applyUpdate=true] - si false, solo calcula (no escribe).
+ * @param {Array}    [params.lineItems] - LIs del deal ya cargados (runPhasesForDeal los
+ *                   tiene); si faltan, se traen con getDealLineItems.
  * @returns {Promise<{ total: number|null, totalUsd: number|null, totalLocal: number,
- *                     lineItemCount: number, changed: boolean }>}
+ *                     ticketCount: number, changed: boolean }>}
  *          `total` = valor principal escrito en valor_total (USD).
  */
-export async function recalcValorTotal({ dealId, applyUpdate = true }) {
+export async function recalcValorTotal({ dealId, applyUpdate = true, lineItems = null }) {
   const log = logger.child({ module: MOD, dealId });
 
-  // 1) TICKETS del negocio (fuente del cálculo). Por PROPIEDAD of_deal_id, no por
-  //    asociaciones: el forecast existe pero está desasociado a propósito.
+  // 1) TICKETS del negocio (fuente del plan fijo / pago único). Por PROPIEDAD of_deal_id,
+  //    no por asociaciones: el forecast existe pero está desasociado a propósito.
   //    getDealTickets ya excluye los CANCELADOS.
   const todos = await getDealTickets(dealId);
 
-  // 1b) Selección: plan fijo → todos; auto-renew → solo el año calendario en curso.
-  //     Un solo filtro, del que VALOR y COSTO heredan (simetría garantizada).
-  const anio = new Date().getUTCFullYear();
-  const { elegidos, autoRenewFuera } = ticketsDelCalculo(todos, anio, log);
+  // 1b) Selección: plan fijo / pago único → tickets; auto-renew → fuera (los reemplaza
+  //     el run-rate anual del LI). Un solo filtro, del que VALOR y COSTO heredan.
+  const { elegidos, autoRenewExcluidos } = ticketsDelCalculo(todos, log);
+
+  // 1c) Run-rate anual de los LIs auto-renew (VALOR local + COSTO USD, simétricos).
+  const lis = Array.isArray(lineItems) ? lineItems : await getDealLineItems(dealId);
+  const autoRenew = valorAutoRenewDesdeLineItems(lis, log);
 
   // 2) Props del deal (dólar, mirror y comparación antes de escribir).
   let dp = {};
@@ -348,13 +430,14 @@ export async function recalcValorTotal({ dealId, applyUpdate = true }) {
 
   // 4) VALOR — igual para TODOS los negocios, mirror incluido (sin caso especial).
   //    Lo intercompany se resuelve en los REPORTES, no acá.
+  //    Tickets (plan fijo / pago único) + run-rate anual de los LIs auto-renew.
   const esMirror = String(dp.es_mirror_de_py || '').trim().toLowerCase() === 'true';
-  const totalLocal = valorLocalDesdeTickets(elegidos, log);
+  const totalLocal = round2(valorLocalDesdeTickets(elegidos, log) + autoRenew.totalLocal);
   const totalUsd = convertirAUsd(totalLocal, dolar);
 
-  // 4b) MARGEN = VALOR USD − COSTO USD de LOS MISMOS tickets. Null si el VALOR en USD
-  //     no es calculable (sin dólar) → no se escribe.
-  const costoUsd = costoUsdDesdeTickets(elegidos, log);
+  // 4b) MARGEN = VALOR USD − COSTO USD del MISMO conjunto (tickets elegidos + LIs
+  //     auto-renew anualizados). Null si el VALOR en USD no es calculable (sin dólar).
+  const costoUsd = round2(costoUsdDesdeTickets(elegidos, log) + autoRenew.costoUsd);
   const margenUsd = totalUsd !== null ? round2(totalUsd - costoUsd) : null;
 
   // 5) Escribir solo lo que cambió (y solo valores calculables, nunca null).
@@ -376,7 +459,8 @@ export async function recalcValorTotal({ dealId, applyUpdate = true }) {
       changed = true;
       log.info(
         { esMirror, totalUsd, totalLocal, costoUsd, margenUsd, dolar,
-          tickets: elegidos.length, ticketsTotal: todos.length, autoRenewFuera, anio,
+          tickets: elegidos.length, ticketsTotal: todos.length, autoRenewExcluidos,
+          liAutoRenew: autoRenew.cuenta, valorAutoRenewLocal: autoRenew.totalLocal,
           wrote: Object.keys(properties) },
         'VALOR actualizado'
       );
@@ -389,5 +473,6 @@ export async function recalcValorTotal({ dealId, applyUpdate = true }) {
   }
 
   return { total: totalUsd, totalUsd, totalLocal, costoUsd, margenUsd, esMirror,
-           ticketCount: elegidos.length, ticketCountTotal: todos.length, autoRenewFuera, changed };
+           ticketCount: elegidos.length, ticketCountTotal: todos.length,
+           autoRenewExcluidos, liAutoRenew: autoRenew.cuenta, changed };
 }

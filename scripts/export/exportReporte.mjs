@@ -61,7 +61,7 @@ function esRenovacionAutomatica(fechaVenc) {
 
 function esRepetitivo(freq) {
   const f = safe(freq).toLowerCase();
-  return f && !['unico', 'único', 'one_time', ''].includes(f) ? 'SI' : 'NO';
+  return f && !['unico', 'único', 'pago único', 'pago unico', 'one_time', ''].includes(f) ? 'SI' : 'NO';
 }
 
 // Fecha a dd/mm/yyyy para las columnas visibles (mesAnio sigue usando ymd internamente).
@@ -76,12 +76,18 @@ const dmy = (v) => {
 const pct = (v) => { const n = safeNum(v); return n == null ? '' : `${Math.round(n * 100)}%`; };
 
 // Frecuencia de facturación → etiqueta en español (los LIs guardan códigos en inglés).
+// Pedido Paola 21-jul: mostrar los mismos labels del editor de LI (mensual/pago único...),
+// nunca el código en inglés.
 const FREQ_ES = {
   weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual', quarterly: 'Trimestral',
   per_six_months: 'Semestral', annually: 'Anual', per_two_years: 'Bienal',
   per_three_years: 'Trienal', per_four_years: 'Cada 4 años', per_five_years: 'Cada 5 años',
+  one_time: 'Pago único',
 };
-const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Único');
+const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Pago único');
+// El ticket sella 'Único' (vocabulario del snapshot); en el reporte se muestra igual
+// que el label del LI para que la columna sea homogénea en los 3 CSV.
+const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v));
 
 // Momento de facturación → etiqueta legible.
 const MOMENTO_ES = { adelantado: 'Adelantado', fin_de_mes: 'Fin de mes', vencido: 'Vencido' };
@@ -116,7 +122,7 @@ const DEAL_PROPS = [
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
   'costo_total_usd', 'dolar', 'monto_usd', 'margen_usd',
-  'hs_line_item_currency_code', 'mig_moneda', 'mensaje_para_responsable',
+  'hs_line_item_currency_code', 'mig_moneda',
   'discount', 'hs_discount_percentage', 'hs_margin',
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
@@ -132,7 +138,7 @@ const LI_PROPS = [
 const TICKET_PROPS = [
   'of_ticket_key', 'of_line_item_key', 'of_deal_id', 'of_estado',
   'fecha_resolucion_esperada', 'hs_pipeline_stage', 'hs_pipeline',
-  'of_producto_nombres', 'of_descripcion_producto', 'descripcion', 'observaciones',
+  'of_producto_nombres', 'of_descripcion_producto', 'content', 'observaciones',
   'of_rubro', 'of_subrubro', 'reventa', 'of_costo', 'of_costo_usd', 'of_margen',
   'of_facturacion_usd', 'of_margen_usd', 'entidad_facturadora',
   'subtotal_real', 'total_real_a_facturar', 'numero_de_factura', 'dolar',
@@ -336,8 +342,10 @@ function buildDealBase(deal, companies, ownerName) {
   return {
     'Cliente Beneficiario': companies.beneficiario.nombre,
     'ID Cliente Beneficiario': companies.beneficiario.id,
-    'Empresa Factura': companies.factura.nombre,
-    'ID Empresa Factura': companies.factura.id,
+    // "Cliente Factura" = la empresa que RECIBE y paga la factura (renombre 22-jul;
+    // antes "Empresa Factura"). No confundir con 'Entidad Facturadora' (quien emite).
+    'Cliente Factura': companies.factura.nombre,
+    'ID Cliente Factura': companies.factura.id,
     'Partner': companies.partner.nombre,
     'ID Partner': companies.partner.id,
     'Negocio': safe(dp.dealname),
@@ -402,10 +410,12 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción Producto': safe(lp.description),
     // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
-    // Distinta de 'Empresa Factura', que es la empresa CLIENTE a la que se le factura.
-    'Empresa Emisora': safe(lp.empresa_que_factura),
+    // Distinta de 'Cliente Factura', que es la empresa CLIENTE a la que se le factura.
+    // (Renombre 22-jul: antes "Empresa Emisora"; Paola la pide como ENTIDAD FACTURADORA.)
+    'Entidad Facturadora': safe(lp.empresa_que_factura),
     'Descripción Ticket': '',
-    'Observaciones': safe(lp.mensaje_para_responsable),
+    // 21-jul: mensaje_para_responsable se archivó; Observaciones es del ticket (LI vacío).
+    'Observaciones': '',
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
@@ -422,7 +432,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
     'N Factura': '',
-    'Fuente': 'Line Item',
+    'ORIGEN': 'Line Item',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
     'Frecuencia': frecuenciaLI(freq),
@@ -476,16 +486,18 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
     // Emisora sellada en el ticket; fallback al select del line item de origen.
-    'Empresa Emisora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
-    'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
+    'Entidad Facturadora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
+    // ⚠️ doble vocabulario: `empresa_que_factura` en el TICKET es la empresa CLIENTE.
+    'Cliente Factura': dealBase['Cliente Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
     // Área de Negocio = prop `area` del ticket (snapshot del LI, regla por país); fallback legacy.
     'Área de Negocio': safe(tp.area || lp?.area || '') || productNameMap.get(safe(lp?.hs_product_id)) || safe(tp.of_producto_nombres || lp?.name || ''),
     'Descripción Producto': safe(tp.of_descripcion_producto || lp?.description || ''),
-    'Descripción Ticket': safe(tp.descripcion || ''),
-    'Observaciones': safe(tp.observaciones || lp?.mensaje_para_responsable || ''),
+    // 21-jul: la prop `descripcion` del ticket se archivó; el texto operativo vive en `content`.
+    'Descripción Ticket': safe(tp.content || ''),
+    'Observaciones': safe(tp.observaciones || ''),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
@@ -502,10 +514,10 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
     'N Factura': safe(tp.numero_de_factura),
-    'Fuente': 'Ticket',
+    'ORIGEN': 'Ticket',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
-    'Frecuencia': freq,
+    'Frecuencia': frecuenciaDisplay(freq),
     'Fecha Fin Contrato': dmy(fechaVenc),
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
@@ -588,12 +600,13 @@ async function main() {
     }));
 
     if (prob < PROB_CORTE) {
-      // Tipo de Forecast por bucket de probabilidad del deal (spec Paola jul-2026).
+      // Sub-fuente (columna Estado) por bucket de probabilidad del deal (spec Paola jul-2026).
       const tipoForecast = prob < 0.50 ? 'Forecast' : prob < 0.75 ? 'Forecast en Strech' : 'Forecast Firme';
       for (const li of lineItems) {
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
         const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
-        row['Tipo de Forecast'] = tipoForecast;
+        row['FUENTE'] = 'Forecast';
+        row['Estado'] = tipoForecast; // sub-fuente: Forecast / Forecast en Strech / Forecast Firme
         pipelineRows.push(aplicarIntercompany(row));
       }
     } else {
@@ -609,14 +622,18 @@ async function main() {
 
         // Facturado = con nº de factura o en etapas Emitido/Enviado/Atrasado/Cobrado.
         if (tieneFactura || INVOICED_STAGES.has(stage)) {
+          row['FUENTE'] = 'Facturación';
+          row['Estado'] = 'Facturado'; // definición usuaria 19-jul
           facturadoRows.push(row);
         } else if (LISTO_STAGES.has(stage)) {
           // Listo para facturar (ambos pipelines) → Notificado.
-          row['Estado Backlog'] = 'Notificado';
+          row['FUENTE'] = 'Backlog';
+          row['Estado'] = 'Notificado';
           listoRows.push(row);
         } else {
           // 85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar.
-          row['Estado Backlog'] = 'Pendiente de notificar';
+          row['FUENTE'] = 'Backlog';
+          row['Estado'] = 'Pendiente de notificar';
           forecastRows.push(row);
         }
       }
@@ -636,9 +653,9 @@ async function main() {
   const COLUMNS = [
     { header: 'Cliente Beneficiario', key: 'Cliente Beneficiario', width: 30 },
     { header: 'ID Cliente Beneficiario', key: 'ID Cliente Beneficiario', width: 15 },
-    { header: 'Empresa Emisora', key: 'Empresa Emisora', width: 18 },
-  { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
-    { header: 'ID Empresa Factura', key: 'ID Empresa Factura', width: 15 },
+    { header: 'Entidad Facturadora', key: 'Entidad Facturadora', width: 18 },
+    { header: 'Cliente Factura', key: 'Cliente Factura', width: 30 },
+    { header: 'ID Cliente Factura', key: 'ID Cliente Factura', width: 15 },
     { header: 'Partner', key: 'Partner', width: 25 },
     { header: 'ID Partner', key: 'ID Partner', width: 15 },
     { header: 'Negocio', key: 'Negocio', width: 35 },
@@ -647,8 +664,9 @@ async function main() {
     { header: 'País Operativo', key: 'País Operativo', width: 15 },
     { header: 'Incluye UY', key: 'Incluye UY', width: 12 },
     { header: 'Ciclo de Negocio', key: 'Ciclo de Negocio', width: 22 },
-    { header: 'Tipo de Forecast', key: 'Tipo de Forecast', width: 18 },
-    { header: 'Estado Backlog', key: 'Estado Backlog', width: 20 },
+    // Renombres Paola 21-jul: FUENTE (Forecast/Backlog/Facturación) · Estado (sub-fuente)
+    { header: 'FUENTE', key: 'FUENTE', width: 14 },
+    { header: 'Estado', key: 'Estado', width: 22 },
     { header: 'Intercompany', key: 'Intercompany', width: 13 },
     { header: 'Probabilidad', key: 'Probabilidad', width: 13 },
     { header: 'Fecha de Cierre', key: 'Fecha de Cierre', width: 15 },
@@ -673,7 +691,7 @@ async function main() {
     { header: 'Reventa', key: 'Reventa', width: 10 },
     { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
     { header: 'N Factura', key: 'N Factura', width: 15 },
-    { header: 'Fuente', key: 'Fuente', width: 12 },
+    { header: 'ORIGEN', key: 'ORIGEN', width: 12 },
     { header: 'Momento de Facturación', key: 'Momento de Facturación', width: 20 },
     { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
     { header: 'Facturación Automática', key: 'Facturación Automática', width: 20 },

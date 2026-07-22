@@ -4,14 +4,17 @@
 // Genera el xlsx, lo guarda en PostgreSQL (sobreescribiendo cada día),
 // y opcionalmente lo envía por POST a una URL externa (EXPORT_TARGET_URL).
 //
-// Estructura (spec Paola / commercial controller, jul-2026): 3 grandes conceptos,
-// cada uno una pestaña del xlsx y un CSV descargable propio:
-//   FORECAST  = deals en pipeline (prob < 85%), unificados, con columna
-//               "Tipo de Forecast" (Forecast / Forecast en Strech / Forecast Firme).
-//   BACKLOG   = tickets de negocios ganados SIN facturar, con columna
-//               "Estado Backlog" (Pendiente de notificar / Notificado). El tercer estado
-//               "Solicitado a facturar" se retiró: esas etapas ahora clasifican como FACTURADO.
-//   FACTURADO = tickets con número de factura de Nodum.
+// Estructura (spec Paola / commercial controller, jul-2026; renombres correo 21-jul):
+// 3 grandes conceptos, cada uno una pestaña del xlsx y un CSV descargable propio.
+// Columnas comunes a los 3:
+//   FUENTE = Forecast | Backlog | Facturación  (a cuál concepto pertenece la fila)
+//   Estado = la "sub-fuente": Forecast/Forecast en Strech/Forecast Firme ·
+//            Pendiente de notificar/Notificado · Facturado
+//   ORIGEN = Line Item | Ticket  (de qué objeto sale la fila)
+//   FORECAST    = deals en pipeline (prob < 85%), unificados.
+//   BACKLOG     = tickets de negocios ganados SIN facturar. El tercer estado
+//                 "Solicitado a facturar" se retiró: esas etapas clasifican FACTURADO.
+//   FACTURACIÓN = tickets con número de factura de Nodum (hoja "Facturado").
 // Intercompany (negocio mirror PY→UY, es_mirror_de_py=true): la facturación NO se
 // considera (Monto/Monto USD = 0) para no duplicar contra la facturación al cliente
 // del deal PY; el margen SÍ conserva su valor. Columna "Intercompany" = SI/NO.
@@ -87,7 +90,7 @@ function esRenovacionAutomatica(fechaVenc) {
 
 function esRepetitivo(freq) {
   const f = safe(freq).toLowerCase();
-  return f && !['unico', 'único', 'one_time', ''].includes(f) ? 'SI' : 'NO';
+  return f && !['unico', 'único', 'pago único', 'pago unico', 'one_time', ''].includes(f) ? 'SI' : 'NO';
 }
 
 // Fecha a dd/mm/yyyy para las columnas visibles (mesAnio sigue usando ymd internamente).
@@ -102,12 +105,18 @@ const dmy = (v) => {
 const pct = (v) => { const n = safeNum(v); return n == null ? '' : `${Math.round(n * 100)}%`; };
 
 // Frecuencia de facturación → etiqueta en español (los LIs guardan códigos en inglés).
+// Pedido Paola 21-jul: mostrar los mismos labels del editor de LI (mensual/pago único...),
+// nunca el código en inglés.
 const FREQ_ES = {
   weekly: 'Semanal', biweekly: 'Quincenal', monthly: 'Mensual', quarterly: 'Trimestral',
   per_six_months: 'Semestral', annually: 'Anual', per_two_years: 'Bienal',
   per_three_years: 'Trienal', per_four_years: 'Cada 4 años', per_five_years: 'Cada 5 años',
+  one_time: 'Pago único',
 };
-const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Único');
+const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Pago único');
+// El ticket sella 'Único' (vocabulario del snapshot); en el reporte se muestra igual
+// que el label del LI para que la columna sea homogénea en los 3 CSV.
+const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v));
 
 // Momento de facturación → etiqueta legible.
 const MOMENTO_ES = { adelantado: 'Adelantado', fin_de_mes: 'Fin de mes', vencido: 'Vencido' };
@@ -143,7 +152,7 @@ const DEAL_PROPS = [
 const LI_PROPS = [
   'name', 'description', 'price', 'hs_cost_of_goods_sold', 'quantity', 'amount',
   'costo_total_usd', 'dolar', 'monto_usd', 'margen_usd',
-  'hs_line_item_currency_code', 'mig_moneda', 'mensaje_para_responsable',
+  'hs_line_item_currency_code', 'mig_moneda',
   'discount', 'hs_discount_percentage', 'hs_margin',
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
@@ -351,8 +360,10 @@ function buildDealBase(deal, companies, ownerName) {
   return {
     'Cliente Beneficiario': companies.beneficiario.nombre,
     'ID Cliente Beneficiario': companies.beneficiario.id,
-    'Empresa Factura': companies.factura.nombre,
-    'ID Empresa Factura': companies.factura.id,
+    // "Cliente Factura" = la empresa que RECIBE y paga la factura (renombre 22-jul;
+    // antes "Empresa Factura"). No confundir con 'Entidad Facturadora' (quien emite).
+    'Cliente Factura': companies.factura.nombre,
+    'ID Cliente Factura': companies.factura.id,
     'Partner': companies.partner.nombre,
     'ID Partner': companies.partner.id,
     'Negocio': safe(dp.dealname),
@@ -418,8 +429,9 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Área de Negocio': safe(lp.area) || productName || safe(lp.name),
     'Descripción Producto': safe(lp.description),
     // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
-    // Distinta de 'Empresa Factura', que es la empresa CLIENTE a la que se le factura.
-    'Empresa Emisora': safe(lp.empresa_que_factura),
+    // Distinta de 'Cliente Factura', que es la empresa CLIENTE a la que se le factura.
+    // (Renombre 22-jul: antes "Empresa Emisora"; Paola la pide como ENTIDAD FACTURADORA.)
+    'Entidad Facturadora': safe(lp.empresa_que_factura),
     'Descripción Ticket': '',
     'Observaciones': '',
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
@@ -438,7 +450,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
     'N Factura': '',
-    'Fuente': 'Line Item',
+    'ORIGEN': 'Line Item',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
     'Frecuencia': frecuenciaLI(freq),
@@ -492,8 +504,9 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
     // Emisora sellada en el ticket; fallback al select del line item de origen.
-    'Empresa Emisora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
-    'Empresa Factura': dealBase['Empresa Factura'] || safe(tp.empresa_que_factura),
+    'Entidad Facturadora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
+    // ⚠️ doble vocabulario: `empresa_que_factura` en el TICKET es la empresa CLIENTE.
+    'Cliente Factura': dealBase['Cliente Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
     'Moneda': moneda,
     'Rubro': safe(tp.of_rubro || lp?.servicio || ''),
@@ -519,10 +532,10 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
     'N Factura': safe(tp.numero_de_factura),
-    'Fuente': 'Ticket',
+    'ORIGEN': 'Ticket',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
-    'Frecuencia': freq,
+    'Frecuencia': frecuenciaDisplay(freq),
     'Fecha Fin Contrato': dmy(fechaVenc),
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
@@ -539,9 +552,9 @@ function isValidTicket(ticket) {
 const COLUMNS = [
   { header: 'Cliente Beneficiario', key: 'Cliente Beneficiario', width: 30 },
   { header: 'ID Cliente Beneficiario', key: 'ID Cliente Beneficiario', width: 15 },
-  { header: 'Empresa Emisora', key: 'Empresa Emisora', width: 18 },
-  { header: 'Empresa Factura', key: 'Empresa Factura', width: 30 },
-  { header: 'ID Empresa Factura', key: 'ID Empresa Factura', width: 15 },
+  { header: 'Entidad Facturadora', key: 'Entidad Facturadora', width: 18 },
+  { header: 'Cliente Factura', key: 'Cliente Factura', width: 30 },
+  { header: 'ID Cliente Factura', key: 'ID Cliente Factura', width: 15 },
   { header: 'Partner', key: 'Partner', width: 25 },
   { header: 'ID Partner', key: 'ID Partner', width: 15 },
   { header: 'Negocio', key: 'Negocio', width: 35 },
@@ -550,8 +563,11 @@ const COLUMNS = [
   { header: 'País Operativo', key: 'País Operativo', width: 15 },
   { header: 'Incluye UY', key: 'Incluye UY', width: 12 },
   { header: 'Ciclo de Negocio', key: 'Ciclo de Negocio', width: 22 },
-  { header: 'Tipo de Forecast', key: 'Tipo de Forecast', width: 18 },
-  { header: 'Estado Backlog', key: 'Estado Backlog', width: 20 },
+  // Renombres Paola 21-jul: FUENTE = a cuál de los 3 conceptos pertenece la fila
+  // (Forecast/Backlog/Facturación); Estado = la "sub-fuente" (tipo de forecast /
+  // estado de backlog / estado de facturación); ORIGEN = de qué objeto sale la fila.
+  { header: 'FUENTE', key: 'FUENTE', width: 14 },
+  { header: 'Estado', key: 'Estado', width: 22 },
   { header: 'Intercompany', key: 'Intercompany', width: 13 },
   { header: 'Probabilidad', key: 'Probabilidad', width: 13 },
   { header: 'Fecha de Cierre', key: 'Fecha de Cierre', width: 15 },
@@ -576,7 +592,7 @@ const COLUMNS = [
   { header: 'Reventa', key: 'Reventa', width: 10 },
   { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
   { header: 'N Factura', key: 'N Factura', width: 15 },
-  { header: 'Fuente', key: 'Fuente', width: 12 },
+  { header: 'ORIGEN', key: 'ORIGEN', width: 12 },
   { header: 'Momento de Facturación', key: 'Momento de Facturación', width: 20 },
   { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
   { header: 'Facturación Automática', key: 'Facturación Automática', width: 20 },
@@ -720,7 +736,8 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
       for (const li of lineItems) {
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
         const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
-        row['Tipo de Forecast'] = tipoForecast;
+        row['FUENTE'] = 'Forecast';
+        row['Estado'] = tipoForecast; // sub-fuente: Forecast / Forecast en Strech / Forecast Firme
         target.push(aplicarIntercompany(row));
       }
     } else {
@@ -737,14 +754,18 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
 
         // Facturado = con nº de factura de Nodum o en etapas Emitido/Enviado/Atrasado/Cobrado.
         if (tieneFactura || INVOICED_STAGES.has(stage)) {
+          row['FUENTE'] = 'Facturación';
+          row['Estado'] = 'Facturado'; // definición usuaria 19-jul: emitido/enviado/atrasado/cobrado o con nº ⇒ Facturado
           facturadoRows.push(row);
         } else if (LISTO_STAGES.has(stage)) {
           // Listo para Facturar (ambos pipelines) → Notificado.
-          row['Estado Backlog'] = 'Notificado';
+          row['FUENTE'] = 'Backlog';
+          row['Estado'] = 'Notificado';
           listoRows.push(row);
         } else {
           // 85% / 95% / Próximos a facturar (y forecast previo) → Pendiente de notificar.
-          row['Estado Backlog'] = 'Pendiente de notificar';
+          row['FUENTE'] = 'Backlog';
+          row['Estado'] = 'Pendiente de notificar';
           forecastRows.push(row);
         }
       }

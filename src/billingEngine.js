@@ -57,7 +57,7 @@ function computeNextFromInterval({ startRaw, interval, todayYmd, addInterval, fo
  * Devuelve un intervalo { months, days } a partir de una frecuencia textual.
  * Soporta tanto los valores nativos (en inglés) como tus labels en español.
  */
-function getIntervalFromFrequency(freqRaw) {
+export function getIntervalFromFrequency(freqRaw) {
   const f = (freqRaw ?? '').toString().trim().toLowerCase();
 
   // Mapeo por internal value de recurringbillingfrequency

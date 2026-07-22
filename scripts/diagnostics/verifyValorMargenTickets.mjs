@@ -1,7 +1,8 @@
 // scripts/diagnostics/verifyValorMargenTickets.mjs
 //
-// Verificación END-TO-END del cálculo nuevo de VALOR / COSTO / MARGEN desde TICKETS
-// (regla usuaria 2026-07-19) contra HubSpot REAL.
+// Verificación END-TO-END del cálculo de VALOR / COSTO / MARGEN (regla usuaria
+// 2026-07-21: plan fijo/pago único desde TICKETS + auto-renew como run-rate anual
+// desde el LINE ITEM) contra HubSpot REAL.
 //
 // 100% READ-ONLY: llama a recalcValorTotal con applyUpdate=false. No escribe NADA.
 //
@@ -18,14 +19,15 @@ import { hubspotClient } from '../../src/hubspotClient.js';
 import {
   recalcValorTotal,
   getDealTickets,
+  getDealLineItems,
   ticketsDelCalculo,
   valorLocalDesdeTickets,
   costoUsdDesdeTickets,
+  valorAutoRenewDesdeLineItems,
 } from '../../src/services/deal/recalcValorTotal.js';
 
 const argv = process.argv.slice(2);
 const AUTO = argv.includes('--auto');
-const ANIO = new Date().getUTCFullYear();
 
 const n = (v) => (v == null || v === '' ? null : Number.parseFloat(v));
 const fmt = (v) =>
@@ -56,7 +58,7 @@ async function verificar(dealId) {
   console.log('='.repeat(78));
 
   const todos = await getDealTickets(dealId);
-  const { elegidos } = ticketsDelCalculo(todos, ANIO);
+  const { elegidos } = ticketsDelCalculo(todos);
   const setElegidos = new Set(elegidos.map((t) => String(t.id)));
 
   if (todos.length === 0) {
@@ -69,11 +71,7 @@ async function verificar(dealId) {
       const pagos = tp.of_cantidad_de_pagos;
       const auto = pagos == null || String(pagos).trim() === '';
       const dentro = setElegidos.has(String(t.id));
-      const motivo = dentro
-        ? 'sí'
-        : auto
-          ? (tp.fecha_resolucion_esperada ? `no · auto-renew fuera de ${ANIO}` : 'no · auto-renew SIN fecha')
-          : 'no';
+      const motivo = dentro ? 'sí' : 'no · auto-renew (va por el run-rate del LI)';
       console.log(
         `  ${String(t.id).padEnd(14)}${(auto ? 'auto-renew' : `fijo(${pagos})`).padEnd(12)}` +
         `${String(tp.fecha_resolucion_esperada || '—').padEnd(12)}` +
@@ -82,20 +80,28 @@ async function verificar(dealId) {
     }
   }
 
-  const valorLocal = valorLocalDesdeTickets(elegidos);
-  const costoUsd = costoUsdDesdeTickets(elegidos);
+  // Run-rate anual de los LIs auto-renew (regla 21-jul)
+  const lis = await getDealLineItems(dealId);
+  const ar = valorAutoRenewDesdeLineItems(lis);
+  if (ar.cuenta > 0 || ar.sinMult > 0) {
+    console.log(`\n  LIs auto-renew: ${ar.cuenta} → run-rate anual ${fmt(ar.totalLocal)} (moneda orig.) · costo USD ${fmt(ar.costoUsd)}`);
+    if (ar.sinMult > 0) console.log(`  ⚠️  ${ar.sinMult} LI(s) auto-renew con frecuencia NO mapeable: no aportan`);
+  }
+
+  const valorLocal = Math.round((valorLocalDesdeTickets(elegidos) + ar.totalLocal) * 100) / 100;
+  const costoUsd = Math.round((costoUsdDesdeTickets(elegidos) + ar.costoUsd) * 100) / 100;
   const dolar = n(dp.dolar);
   const valorUsd = dolar > 0 ? Math.round((valorLocal / dolar) * 100) / 100 : null;
   const margen = valorUsd == null ? null : Math.round((valorUsd - costoUsd) * 100) / 100;
 
-  console.log('\n  ── CALCULADO (regla nueva, desde tickets) ──');
-  console.log(`  tickets: ${elegidos.length} de ${todos.length}`);
+  console.log('\n  ── CALCULADO (regla 21-jul: tickets + run-rate auto-renew) ──');
+  console.log(`  tickets: ${elegidos.length} de ${todos.length} · LIs auto-renew: ${ar.cuenta}`);
   console.log(`  VALOR moneda original : ${fmt(valorLocal)}`);
   console.log(`  VALOR USD             : ${fmt(valorUsd)}`);
   console.log(`  COSTO USD             : ${fmt(costoUsd)}`);
   console.log(`  MARGEN USD            : ${fmt(margen)}`);
 
-  console.log('\n  ── HOY EN HUBSPOT (regla vieja, desde line items) ──');
+  console.log('\n  ── HOY EN HUBSPOT (regla anterior) ──');
   console.log(`  valor_total           : ${fmt(n(dp.valor_total))}`);
   console.log(`  valor_total_mon_orig  : ${fmt(n(dp.valor_total_moneda_original))}`);
   console.log(`  margen_total_usd      : ${fmt(n(dp.margen_total_usd))}`);
@@ -123,7 +129,7 @@ if (ids.length === 0) {
   process.exit(1);
 }
 
-console.log(`Portal: ${process.env.HUBSPOT_ENV || '(sin HUBSPOT_ENV)'}  ·  año en curso: ${ANIO}  ·  READ-ONLY`);
+console.log(`Portal: ${process.env.HUBSPOT_ENV || '(sin HUBSPOT_ENV)'}  ·  READ-ONLY`);
 const res = [];
 for (const id of ids) {
   try {

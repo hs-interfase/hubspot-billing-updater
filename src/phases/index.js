@@ -551,16 +551,16 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       );
     }
 
-    // ========== DEAL TOTAL: VALOR del negocio desde line items ==========
-    // Caso 1 (fin definido) = Σ flujos (price×qty×term); Caso 2 (auto-renew) =
-    // run-rate anual (price×qty×mult. anual). Escribe valor_total (USD) +
-    // valor_total_moneda_original (local). Dinámico: se recalcula en cada corrida.
-    // No bloquea el ciclo si falla.
+    // ========== DEAL TOTAL: VALOR del negocio ==========
+    // Caso 1 (fin definido / pago único) = Σ subtotal_real de sus TICKETS; Caso 2
+    // (auto-renew) = run-rate anual desde el LI (price×qty×mult. anual, regla 21-jul).
+    // Escribe valor_total (USD) + valor_total_moneda_original (local) + margen_total_usd.
+    // Dinámico: se recalcula en cada corrida. No bloquea el ciclo si falla.
     try {
-      // Desde 2026-07-19 el VALOR/MARGEN se calculan desde los TICKETS (no desde los
-      // LIs), por eso ya no se le pasan line items. Va al FINAL de runPhasesForDeal a
-      // propósito: los tickets de esta corrida ya están creados/actualizados.
-      const { total } = await recalcValorTotal({ dealId });
+      // Va al FINAL de runPhasesForDeal a propósito: los tickets de esta corrida ya
+      // están creados/actualizados. Se le pasan los LIs ya cargados para el caso
+      // auto-renew (evita re-leerlos de la API).
+      const { total } = await recalcValorTotal({ dealId, lineItems: currentLineItems });
       results.valorTotal = total;
     } catch (err) {
       logger.error(
