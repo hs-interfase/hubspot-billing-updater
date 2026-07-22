@@ -53,7 +53,8 @@ export const LI_PROP_TO_TICKET_KEYS = {
   subrubro: ['of_subrubro'],
   area: ['area'],
   of_codigo_rubro: ['of_codigo_rubro'],
-  mensaje_para_responsable: ['observaciones'],
+  // mensaje_para_responsable → observaciones: RETIRADO (21-jul). "Observaciones" es
+  // ahora un campo propio del ticket (nace vacío), NO un espejo del LI.
   nota: ['nota'],
   pais_operativo: ['of_pais_operativo'],
   empresa_que_factura: ['entidad_facturadora'],
@@ -88,7 +89,7 @@ const LI_PROPS_TO_FETCH = [
   'costo_total_usd', 'dolar',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency', 'irregular',
   'name', 'description', 'servicio', 'subrubro', 'area', 'of_codigo_rubro',
-  'momento_de_facturacion', 'mensaje_para_responsable', 'nota', 'pais_operativo',
+  'momento_de_facturacion', 'nota', 'pais_operativo',
   'parte_del_cupo', 'reventa', 'opera_trading', 'nc', 'empresa_que_factura',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion', 'facturacion_automatica',
   'hs_recurring_billing_number_of_payments',

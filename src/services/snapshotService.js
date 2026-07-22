@@ -290,7 +290,9 @@ const repetitivo = !!rawFreq && ![
     area: safeString(lp.area), // select del line item → select homónimo del ticket (mismas opciones)
     of_codigo_rubro: safeString(lp.of_codigo_rubro),
     momento_de_facturacion: safeString(lp.momento_de_facturacion),
-    observaciones: safeString(lp.mensaje_para_responsable),
+    // `observaciones` del ticket YA NO se espeja desde el LI (decisión 21-jul): el LI
+    // tiene un único texto libre (`description`). "Observaciones" pasa a ser un campo
+    // propio del ticket, que nace vacío y solo escribe el responsable a mano.
     nota: safeString(lp.nota),
     of_pais_operativo: safeString(deal?.properties?.pais_operativo || lp.pais_operativo),
     monto_unitario_real: precioUnitario,

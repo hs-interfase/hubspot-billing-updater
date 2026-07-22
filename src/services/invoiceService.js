@@ -37,7 +37,7 @@ export const REQUIRED_TICKET_PROPS = [
   'of_cupo_consumido', 'of_cupo_consumido_fecha', 'of_cupo_consumo_valor', 'of_cupo_consumo_invoice_id',
   'of_moneda', 'of_pais_operativo', 'of_frecuencia_de_facturacion', 'of_propietario_secundario',
   'hubspot_owner_id', 'of_cliente', 'unidad_de_negocio',
-  'descripcion', 'content', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
+  'content', 'observaciones', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
   'facturar_ahora', 'repetitivo', 'nombre_empresa', 'hs_pipeline_stage',
   'of_codigo_rubro', 'momento_de_facturacion', 'opera_trading',
   'mig_id_crm_origen', 'mig_id_cliente_nodum',
@@ -405,7 +405,7 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     ticket_id: String(ticketId),
     line_item_key: lik,
     nombre_producto: tp.of_producto_nombres,
-    descripcion: tp.of_descripcion_producto || tp.descripcion,
+    descripcion: tp.of_descripcion_producto,
     servicio: tp.of_rubro,
     // FREEZE RULE: montos RAW del ticket, NO cálculo de backend
     cantidad,
@@ -426,8 +426,9 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     pais_operativo: tp.of_pais_operativo,
     unidad_de_negocio: tp.unidad_de_negocio,
     fecha_de_facturacion: tp.of_fecha_de_facturacion,
-    hs_comments: tp.content,                               
-    motivo_de_pausa: tp.of_motivo_pausa,                    
+    hs_comments: tp.content,                    // Descripción del Ticket → factura
+    mensaje_del_vendedor: tp.observaciones,     // Observaciones del ticket → factura
+    motivo_de_pausa: tp.of_motivo_pausa,
     id_factura_nodum: tp.numero_de_factura,                 
     etapa_de_la_factura: 'Pendiente',
     modo_de_generacion_de_factura: modoGeneracion,

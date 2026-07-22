@@ -357,7 +357,7 @@ export async function createAutoBillingTicket(deal, lineItem, billingDate) {
           of_line_item_ids: lineItemId,
           of_line_item_key: lineItemKey,
           of_ticket_key: expectedKey,
-          observaciones: lineItem?.properties?.mensaje_para_responsable || '',
+          // observaciones: campo propio del ticket (nace vacío), ya no viene del LI (21-jul)
           unidad_de_negocio: lineItem?.properties?.unidad_de_negocio || '',
           ...snapshots,
         };
@@ -553,7 +553,7 @@ export async function buildTicketFullProps({
     of_rubro: servicio,
     subject,
     fecha_resolucion_esperada: String(expectedYMD),
-    observaciones: safeString(lp.mensaje_para_responsable),
+    // observaciones: campo propio del ticket (nace vacío), ya no viene del LI (21-jul)
     hs_product_id: safeString(lp.hs_product_id) || undefined,
     ...snapshots,
   };
