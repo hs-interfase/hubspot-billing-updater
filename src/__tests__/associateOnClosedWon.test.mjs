@@ -87,12 +87,13 @@ function makeFakeClient({ tickets = [], failCreateFor = () => false } = {}) {
 }
 
 // fecha por defecto en el PASADO: un ticket sin fecha se trata como pasado (conservador).
-const ticket = (id, pipeline = 'PIPE_AUTO', fecha = '2020-01-01') => ({
+const ticket = (id, pipeline = 'PIPE_AUTO', fecha = '2020-01-01', extra = {}) => ({
   id: String(id),
-  properties: { of_deal_id: 'D1', hs_pipeline: pipeline, fecha_resolucion_esperada: fecha },
+  properties: { of_deal_id: 'D1', hs_pipeline: pipeline, fecha_resolucion_esperada: fecha, ...extra },
 });
 /** Ticket a futuro (lejos, para no depender de la fecha de hoy). */
-const ticketFuturo = (id, pipeline = 'PIPE_AUTO') => ticket(id, pipeline, '2099-12-31');
+const ticketFuturo = (id, pipeline = 'PIPE_AUTO', fecha = '2099-12-31', extra = {}) =>
+  ticket(id, pipeline, fecha, extra);
 
 // ─────────────────────────────────────────────────────────────
 // Hook: gate por facturacion_activa
@@ -176,12 +177,13 @@ test('idempotencia: segunda corrida no re-asocia (dealLinked=0)', async () => {
 // ─────────────────────────────────────────────────────────────
 // Hook: filtro por pipeline manual (requiere BILLING_TICKET_PIPELINE_ID seteado)
 // ─────────────────────────────────────────────────────────────
-test('filtro onlyManual: saltea tickets fuera del pipeline manual', { skip: !TICKET_PIPELINE }, async () => {
+test('filtro onlyManual: manual + auto pasado + PRÓXIMO auto; el resto del futuro se saltea', { skip: !TICKET_PIPELINE }, async () => {
   const { client, createCalls } = makeFakeClient({
     tickets: [
-      ticket(1, TICKET_PIPELINE),        // manual (pasado)
-      ticket(2, 'PIPE_AUTO'),            // automático PASADO  → sí se asocia (regla 19-jul)
-      ticketFuturo(3, 'PIPE_AUTO'),      // automático FUTURO  → NO se asocia
+      ticket(1, TICKET_PIPELINE),                    // manual (pasado)
+      ticket(2, 'PIPE_AUTO'),                        // automático PASADO  → sí (regla 19-jul)
+      ticketFuturo(3, 'PIPE_AUTO', '2098-01-01'),    // automático FUTURO más cercano → PRÓXIMO (regla 22-jul)
+      ticketFuturo(4, 'PIPE_AUTO', '2099-12-31'),    // automático FUTURO lejano → NO se asocia
     ],
   });
   const stats = await associateAllTicketsOnClosedWon({
@@ -192,40 +194,96 @@ test('filtro onlyManual: saltea tickets fuera del pipeline manual', { skip: !TIC
     getDealCompaniesFn: async () => [],
     getDealContactsFn: async () => [],
   });
-  assert.equal(stats.considered, 2);          // manual + automático pasado
+  assert.equal(stats.considered, 3);          // manual + auto pasado + próximo
   assert.equal(stats.autoPastLinked, 1);      // el automático del pasado
-  assert.equal(stats.skippedByPipeline, 1);   // solo el automático FUTURO
+  assert.equal(stats.autoNextLinked, 1);      // el próximo a facturar
+  assert.equal(stats.skippedByPipeline, 1);   // solo el futuro lejano
+  assert.equal(stats.dealLinked, 3);
+  assert.ok(createCalls.every(c => c.fromId !== '4'), 'el futuro lejano NO se toca');
+});
+
+// ─────────────────────────────────────────────────────────────
+// Regla 22-jul: el "próximo" es POR LINE ITEM (un próximo por of_line_item_key)
+// ─────────────────────────────────────────────────────────────
+test('próximo por line item: con dos LIK se asocia el más cercano de CADA uno', { skip: !TICKET_PIPELINE }, async () => {
+  const { client, createCalls } = makeFakeClient({
+    tickets: [
+      ticketFuturo(1, 'PIPE_AUTO', '2098-01-01', { of_line_item_key: 'LIK_A' }), // próximo de A
+      ticketFuturo(2, 'PIPE_AUTO', '2098-02-01', { of_line_item_key: 'LIK_A' }), // no
+      ticketFuturo(3, 'PIPE_AUTO', '2098-03-01', { of_line_item_key: 'LIK_B' }), // próximo de B
+      ticketFuturo(4, 'PIPE_AUTO', '2098-04-01', { of_line_item_key: 'LIK_B' }), // no
+    ],
+  });
+  const stats = await associateAllTicketsOnClosedWon({
+    dealId: 'D1',
+    dealProps: { facturacion_activa: 'true' },
+    onlyManualPipeline: true,
+    client,
+    getDealCompaniesFn: async () => [],
+    getDealContactsFn: async () => [],
+  });
+  assert.equal(stats.autoNextLinked, 2);      // uno por line item
+  assert.equal(stats.skippedByPipeline, 2);
   assert.equal(stats.dealLinked, 2);
-  assert.ok(createCalls.every(c => c.fromId !== '3'), 'el futuro automático NO se toca');
+  const asociados = new Set(createCalls.filter(c => c.toType === 'deals').map(c => c.fromId));
+  assert.deepEqual([...asociados].sort(), ['1', '3']);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Kill-switch: ASSOC_NEXT_AUTO_FORECAST=false vuelve a la regla del 19-jul
+// ─────────────────────────────────────────────────────────────
+test('kill-switch: associateNextAuto=false NO asocia ningún automático futuro', { skip: !TICKET_PIPELINE }, async () => {
+  const { client, createCalls } = makeFakeClient({
+    tickets: [
+      ticket(1, TICKET_PIPELINE),
+      ticketFuturo(2, 'PIPE_AUTO', '2098-01-01'),
+    ],
+  });
+  const stats = await associateAllTicketsOnClosedWon({
+    dealId: 'D1',
+    dealProps: { facturacion_activa: 'true' },
+    onlyManualPipeline: true,
+    associateNextAuto: false,
+    client,
+    getDealCompaniesFn: async () => [],
+    getDealContactsFn: async () => [],
+  });
+  assert.equal(stats.autoNextLinked, 0);
+  assert.equal(stats.skippedByPipeline, 1);
+  assert.equal(stats.dealLinked, 1);
+  assert.ok(createCalls.every(c => c.fromId !== '2'));
 });
 
 // ─────────────────────────────────────────────────────────────
 // Hook: política resuelta 13-jul — el env ASSOC_CLOSEDWON_ONLY_MANUAL
 // gobierna el default (sin pasar onlyManualPipeline explícito).
 // ─────────────────────────────────────────────────────────────
-test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true deja sin asociar SOLO el automático futuro (default)', { skip: !TICKET_PIPELINE }, async () => {
+test('política env: ASSOC_CLOSEDWON_ONLY_MANUAL=true asocia manual + auto pasado + próximo auto (default)', { skip: !TICKET_PIPELINE }, async () => {
   const prev = process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
   process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = 'true';
   try {
     const { client, createCalls } = makeFakeClient({
       tickets: [
         ticket(1, TICKET_PIPELINE),
-        ticket(2, 'PIPE_AUTO'),        // automático PASADO → se asocia
-        ticketFuturo(3, 'PIPE_AUTO'),  // automático FUTURO → no
+        ticket(2, 'PIPE_AUTO'),                       // automático PASADO → se asocia
+        ticketFuturo(3, 'PIPE_AUTO', '2098-01-01'),   // automático FUTURO cercano → PRÓXIMO
+        ticketFuturo(4, 'PIPE_AUTO', '2099-12-31'),   // automático FUTURO lejano → no
       ],
     });
     const stats = await associateAllTicketsOnClosedWon({
       dealId: 'D1',
       dealProps: { facturacion_activa: 'true' },
       // onlyManualPipeline NO se pasa → default toma el env
+      // associateNextAuto NO se pasa → default prendido (ASSOC_NEXT_AUTO_FORECAST ausente)
       client,
       getDealCompaniesFn: async () => [],
       getDealContactsFn: async () => [],
     });
-    assert.equal(stats.considered, 2);          // manual + automático pasado
-    assert.equal(stats.skippedByPipeline, 1);   // solo el automático futuro
-    assert.equal(stats.dealLinked, 2);
-    assert.ok(createCalls.every(c => c.fromId !== '3'));
+    assert.equal(stats.considered, 3);          // manual + auto pasado + próximo
+    assert.equal(stats.autoNextLinked, 1);
+    assert.equal(stats.skippedByPipeline, 1);   // solo el futuro lejano
+    assert.equal(stats.dealLinked, 3);
+    assert.ok(createCalls.every(c => c.fromId !== '4'));
   } finally {
     if (prev === undefined) delete process.env.ASSOC_CLOSEDWON_ONLY_MANUAL;
     else process.env.ASSOC_CLOSEDWON_ONLY_MANUAL = prev;
