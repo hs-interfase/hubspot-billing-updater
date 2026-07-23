@@ -19,7 +19,13 @@ import { alertDerivacionCompleta } from '../notifications/dealAlerts.js';
 
 const MOD = 'recalcDerivedFacturas';
 
-export async function recalcDerivedFacturas({ hubspotClient, lineItemId, dealId }) {
+export async function recalcDerivedFacturas({
+  hubspotClient,
+  lineItemId,
+  dealId,
+  esEmisionHistorica = false,
+  alertDerivacionCompletaFn = alertDerivacionCompleta,
+}) {
   const id = String(lineItemId);
 
   const { properties } = await hubspotClient.crm.lineItems.basicApi.getById(
@@ -31,6 +37,7 @@ export async function recalcDerivedFacturas({ hubspotClient, lineItemId, dealId 
       'hs_recurring_billing_number_of_payments',
       'facturas_por_derivar',
       'line_item_key',
+      'mig_migracion_historica',
     ],
     undefined,
     undefined,
@@ -174,10 +181,21 @@ export async function recalcDerivedFacturas({ hubspotClient, lineItemId, dealId 
     );
 
     // ── Alerta: facturas_por_derivar llegó a 0 ──
+    // Guard migración: en emisiones históricas (ticket mig_emision_historica,
+    // vía esEmisionHistorica) o LIs migrados (mig_migracion_historica) el
+    // contador igual se recalcula pero NO se avisa al vendedor/responsable.
     if (porDerivar === 0) {
-      alertDerivacionCompleta({ dealId, lineItemId: id, lineItemName: null, lik })
-        .catch(err => logger.warn({ module: MOD, lineItemId: id, err: err?.message },
-          'alertDerivacionCompleta falló (no bloquea)'));
+      const esLiMigrado = String(properties?.mig_migracion_historica ?? '').trim() === 'true';
+      if (esEmisionHistorica || esLiMigrado) {
+        logger.info(
+          { module: MOD, fn: 'recalcDerivedFacturas', lineItemId: id, lik, esEmisionHistorica, esLiMigrado },
+          'Derivación completa en migración histórica: aviso omitido'
+        );
+      } else {
+        alertDerivacionCompletaFn({ dealId, lineItemId: id, lineItemName: null, lik })
+          .catch(err => logger.warn({ module: MOD, lineItemId: id, err: err?.message },
+            'alertDerivacionCompleta falló (no bloquea)'));
+      }
     }
 
     // NOTA: fire-and-forget. Se evalúa porDerivar (ya calculado), no el valor de la prop.

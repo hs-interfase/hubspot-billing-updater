@@ -40,7 +40,7 @@ export const REQUIRED_TICKET_PROPS = [
   'content', 'observaciones', 'createdate', 'of_motivo_pausa', 'numero_de_factura', 'of_invoice_status',
   'facturar_ahora', 'repetitivo', 'nombre_empresa', 'hs_pipeline_stage',
   'of_codigo_rubro', 'momento_de_facturacion', 'opera_trading',
-  'mig_id_crm_origen', 'mig_id_cliente_nodum',
+  'mig_id_crm_origen', 'mig_id_cliente_nodum', 'mig_emision_historica',
 ];
 
 // Extrae la fecha YYYY-MM-DD del ticketKey (último segmento si matchea formato)
@@ -559,7 +559,12 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
           },
         });
 
-        const rr = await recalcDerivedFacturas({ hubspotClient, lineItemId: String(lineItemId), dealId: String(tp.of_deal_id) });
+        const rr = await recalcDerivedFacturas({
+          hubspotClient,
+          lineItemId: String(lineItemId),
+          dealId: String(tp.of_deal_id),
+          esEmisionHistorica: String(tp.mig_emision_historica ?? '').trim() === 'true',
+        });
 
         const liAfter = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
           'facturas_restantes','hs_recurring_billing_number_of_payments',
