@@ -89,6 +89,29 @@ const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Pago único')
 // que el label del LI para que la columna sea homogénea en los 3 CSV.
 const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v));
 
+// ── Intercompany (definición Paola 22-jul) ──────────────────────────────────
+// "Dentro de Uruguay se facturan entre sí": el CLIENTE que recibe la factura es ISA
+// Uruguay o Interfase Uruguay y la EMITE otra empresa del grupo. Detección por NOMBRE
+// del Cliente Factura contra el registro de empresas (⚠️ si esas empresas todavía no
+// existen en el CRM, ninguna fila marca SI — es dato, no bug). Ajustable sin código
+// con EXPORT_INTERCO_CLIENTES (nombres separados por ;).
+const normEmp = (s) => safe(s).toUpperCase().normalize('NFD')
+  .replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+
+const INTERCO_CLIENTES_UY = (process.env.EXPORT_INTERCO_CLIENTES || 'ISA URUGUAY;INTERFASE URUGUAY')
+  .split(';').map((s) => normEmp(s)).filter(Boolean);
+
+function esFilaIntercompany(row) {
+  const cli = normEmp(row['Cliente Factura']);
+  if (!cli) return false;
+  const token = INTERCO_CLIENTES_UY.find((t) => cli.includes(t));
+  if (!token) return false;
+  // "la entidad facturadora es LA OTRA": si la emisora es la misma empresa que recibe,
+  // no es intercompany. Emisora vacía → cuenta igual (el cliente ya es del grupo).
+  const propia = token.startsWith('ISA') ? 'ISA UY' : 'INTERFASE UY';
+  return normEmp(row['Entidad Facturadora']) !== propia;
+}
+
 // Momento de facturación → etiqueta legible.
 const MOMENTO_ES = { adelantado: 'Adelantado', fin_de_mes: 'Fin de mes', vencido: 'Vencido' };
 const momentoLabel = (raw) => MOMENTO_ES[safe(raw)] || safe(raw);
@@ -357,7 +380,8 @@ function buildDealBase(deal, companies, ownerName) {
     'Fecha de Cierre': dmy(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
     'Condiciones de Pago': safe(dp.condiciones_de_pago),
-    'Intercompany': safe(dp.es_mirror_de_py) === 'true' ? 'SI' : 'NO',
+    // Se decide POR FILA en marcarIntercompany (definición 22-jul); acá solo el default.
+    'Intercompany': 'NO',
     // Dólar congelado del negocio (no es columna: la usan las filas como fallback del TC).
     '__dolarNegocio': safeNum(dp.dolar),
   };
@@ -474,13 +498,17 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     ? safeNum(tp.dolar)
     : (safeNum(lp?.dolar) != null ? safeNum(lp?.dolar) : dealBase['__dolarNegocio']);
 
-  // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket):
-  //   of_facturacion_usd = subtotal en USD (respeta intercompany=0) · of_margen_usd = margen USD.
+  // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket).
   const costoUSD = safeNum(tp.of_costo_usd) != null ? safeNum(tp.of_costo_usd) : (esUSD ? costo : null);
-  const montoUSD = safeNum(tp.of_facturacion_usd) != null
+  // of_facturacion_usd = 0 con subtotal > 0 ⇒ viene ANULADO por la regla intercompany
+  // VIEJA del motor (of_intercompany=true en los espejos). Bajo la definición 22-jul el
+  // espejo SÍ factura → recalcular desde el subtotal y el dólar sellado (si la fila es
+  // intercompany de verdad, el FACT 0 lo pone marcarIntercompany después).
+  const usdAnulado = safeNum(tp.of_facturacion_usd) === 0 && monto != null && monto > 0;
+  const montoUSD = (!usdAnulado && safeNum(tp.of_facturacion_usd) != null)
     ? safeNum(tp.of_facturacion_usd)
-    : (esUSD ? monto : null);
-  const margenBrutoUSD = safeNum(tp.of_margen_usd) != null
+    : (esUSD ? monto : (tc > 0 && monto != null ? Math.round((monto / tc) * 100) / 100 : null));
+  const margenBrutoUSD = (!usdAnulado && safeNum(tp.of_margen_usd) != null)
     ? safeNum(tp.of_margen_usd)
     : (montoUSD != null && costoUSD != null ? Math.round((montoUSD - costoUSD) * 100) / 100 : null);
 
@@ -580,10 +608,14 @@ async function main() {
     const dealBase = buildDealBase(deal, companies, ownerName);
     dealBase['Ciclo de Negocio'] = stageLabel;
 
-    // Intercompany (mirror PY→UY): FACT 0 para no duplicar; el margen conserva su valor.
-    const esIntercompany = dealBase['Intercompany'] === 'SI';
-    const aplicarIntercompany = (row) => {
-      if (esIntercompany) { row['Monto'] = 0; row['Monto USD'] = 0; }
+    // Intercompany POR FILA (definición 22-jul): cliente = ISA/Interfase Uruguay y
+    // emisora otra empresa del grupo → FACT 0 (el MB conserva su valor).
+    const marcarIntercompany = (row) => {
+      if (esFilaIntercompany(row)) {
+        row['Intercompany'] = 'SI';
+        row['Monto'] = 0;
+        row['Monto USD'] = 0;
+      }
       return row;
     };
 
@@ -613,7 +645,7 @@ async function main() {
         const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
         row['FUENTE'] = 'Forecast';
         row['Estado'] = tipoForecast; // sub-fuente: Forecast / Forecast en Strech / Forecast Firme
-        pipelineRows.push(aplicarIntercompany(row));
+        pipelineRows.push(marcarIntercompany(row));
       }
     } else {
       const tickets = await fetchTicketsForDeal(dealId);
@@ -624,7 +656,7 @@ async function main() {
         const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap, latestRates);
         const tieneFactura = safe(tp.numero_de_factura) !== '';
         const stage = safe(tp.hs_pipeline_stage);
-        aplicarIntercompany(row);
+        marcarIntercompany(row);
 
         // Facturado = con nº de factura o en etapas Emitido/Enviado/Atrasado/Cobrado.
         if (tieneFactura || INVOICED_STAGES.has(stage)) {
