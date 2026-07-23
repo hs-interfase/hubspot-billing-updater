@@ -27,6 +27,7 @@ import { reportIfActionable } from '../utils/errorReporting.js';
 import { createLineItemWriteBuffer } from '../services/lineItems/lineItemWriteBuffer.js';
 import { syncDealCatalogTags } from '../services/deal/syncDealCatalogTags.js';
 import { syncLineItemAreaByCountry } from '../services/deal/syncLineItemAreaByCountry.js';
+import { syncLineItemEntidadFacturadora } from '../services/deal/syncLineItemEntidadFacturadora.js';
 import { syncNombreProductoFromProductId } from '../services/billing/nombreProductoSelect.js';
 import { costoUsdEnabled, syncCostoUsdLineItems } from '../services/costoUsdService.js';
 
@@ -650,6 +651,17 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
     await syncNombreProductoFromProductId(lineItems);
   } catch (err) {
     logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncNombreProductoFromProductId');
+  }
+
+  // 5.47) Entidad facturadora (emisora) en el LI: país PY → ISA PY · UY → producto/área.
+  //        SOLO rellena `empresa_que_factura` vacía (no pisa carga manual); el snapshot y
+  //        el sync quirúrgico la propagan al ticket como entidad_facturadora. DESPUÉS del
+  //        sync de área (5.4) para que el desempate iSCert vea el área ya corregida.
+  //        Detrás del flag ENTIDAD_FACTURADORA_ENABLED (default OFF).
+  try {
+    await syncLineItemEntidadFacturadora(deal, lineItems);
+  } catch (err) {
+    logger.error({ module: 'phase1', fn: 'runPhase1', dealId, err }, '[phase1] Error en syncLineItemEntidadFacturadora');
   }
 
   // 5.5) Sincronizar tags de catálogo (producto/rubro/unidad_de_negocio/area) desde los line items
