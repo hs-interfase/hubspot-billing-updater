@@ -16,14 +16,24 @@
 // Patrón probado en scripts/fix/fixTicketAssociations.mjs, acá vía el hubspotClient
 // del motor (rate-limit + retry del proxy).
 //
-// DECISIÓN reunión 13-jul + AJUSTE usuaria 2026-07-19 (regla vigente):
+// DECISIÓN reunión 13-jul + AJUSTE usuaria 2026-07-19 + AJUSTE usuaria 2026-07-22
+// (regla vigente):
 //   - pipeline MANUAL            → SIEMPRE se asocia (pasado y futuro).
 //   - pipeline AUTOMÁTICO PASADO → SE ASOCIA (ya ocurrió: es historia del negocio).
-//   - pipeline AUTOMÁTICO FUTURO → NO se asocia (cronograma por venir; se muestra
-//                                  ordenado por fecha en la vista del negocio).
+//   - pipeline AUTOMÁTICO FUTURO → se asocia SOLO el PRÓXIMO A FACTURAR (el de
+//                                  fecha más cercana, por line item). El resto del
+//                                  cronograma queda suelto hasta que le toque.
 // El corte pasado/futuro es por `fecha_resolucion_esperada` contra HOY.
 // El flag ASSOC_CLOSEDWON_ONLY_MANUAL sigue gobernando el trato especial del
 // automático; con el flag en false se asocia todo, como antes.
+//
+// CÓMO SE AUTO-MANTIENE el "próximo" (22-jul): este hook corre al FINAL de cada
+// corrida completa de phases (webhook recalc y cron diario). El día de facturación,
+// Phase 3 promueve el forecast a READY (y lo asocia por su propio camino); cuando
+// este hook corre en esa misma corrida, ese ticket ya no es futuro y el que sigue
+// pasa a ser "el próximo" → se asocia. No hace falta tocar Phase 3.
+// Kill-switch: ASSOC_NEXT_AUTO_FORECAST=false vuelve a la regla del 19-jul
+// (ningún automático futuro se asocia).
 //
 // ⚠️ LIMITACIÓN CONOCIDA — ASOCIACIONES RESIDUALES (verificado 2026-07-19, decisión
 // usuaria: se ACEPTA, no se corrige por ahora).
@@ -91,7 +101,7 @@ async function fetchTicketsForDealBySearch(client, dealId) {
           { propertyName: 'hs_object_id', operator: 'GT', value: lastId },
         ],
       }],
-      properties: ['of_deal_id', 'of_ticket_key', 'hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada'],
+      properties: ['of_deal_id', 'of_ticket_key', 'of_line_item_key', 'hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada'],
       sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
       limit: 100,
     };
@@ -139,14 +149,19 @@ async function ensureAssoc(client, ticketId, toType, toId, existing) {
  * @param {Object}  params.dealProps            props del deal (necesita facturacion_activa)
  * @param {boolean} [params.onlyManualPipeline] override del filtro por pipeline manual
  *                                              (default: env ASSOC_CLOSEDWON_ONLY_MANUAL)
+ * @param {boolean} [params.associateNextAuto]  override de "asociar el próximo automático
+ *                                              por facturar" (default: env
+ *                                              ASSOC_NEXT_AUTO_FORECAST, prendido si falta)
  * @returns {Promise<{applies:boolean, ticketsFound:number, considered:number,
  *   dealLinked:number, companyLinked:number, contactLinked:number,
- *   alreadyLinked:number, skippedByPipeline:number, autoPastLinked:number, errors:number}>}
+ *   alreadyLinked:number, skippedByPipeline:number, autoPastLinked:number,
+ *   autoNextLinked:number, errors:number}>}
  */
 export async function associateAllTicketsOnClosedWon({
   dealId,
   dealProps,
   onlyManualPipeline = null,
+  associateNextAuto = null,
   // Inyectables solo para tests (defaults = producción).
   client = hubspotClient,
   getDealCompaniesFn = getDealCompanies,
@@ -163,6 +178,7 @@ export async function associateAllTicketsOnClosedWon({
     alreadyLinked: 0,
     skippedByPipeline: 0,   // automáticos FUTUROS: quedan sin asociar a propósito
     autoPastLinked: 0,      // automáticos PASADOS que sí se asocian (regla 19-jul)
+    autoNextLinked: 0,      // el PRÓXIMO automático por facturar (regla 22-jul)
     errors: 0,
   };
 
@@ -212,18 +228,53 @@ export async function associateAllTicketsOnClosedWon({
 
   const hoy = hoyYMD();
 
+  // Regla 22-jul: del cronograma automático FUTURO se asocia el PRÓXIMO a facturar
+  // de cada line item (fecha_resolucion_esperada más chica; empate → id más bajo,
+  // determinístico). Los tickets sin key de line item caen a un grupo único: mejor
+  // asociar uno de más que dejar el próximo invisible.
+  const nextAuto = associateNextAuto !== null
+    ? associateNextAuto
+    : (process.env.ASSOC_NEXT_AUTO_FORECAST === undefined
+        ? true
+        : parseBool(process.env.ASSOC_NEXT_AUTO_FORECAST));
+
+  const nextAutoIds = new Set();
+  if (onlyManual && nextAuto && TICKET_PIPELINE) {
+    const proximoPorLi = new Map();
+    for (const t of tickets) {
+      const pipeline = String(t.properties?.hs_pipeline || '');
+      if (pipeline === TICKET_PIPELINE) continue;      // manual: se asocia siempre
+      if (!esTicketFuturo(t, hoy)) continue;           // pasado: ya se asocia
+      const grupo =
+        String(t.properties?.of_line_item_key || '').trim() ||
+        String(t.properties?.of_ticket_key || '').replace(/::\d{4}-\d{2}-\d{2}$/, '').trim() ||
+        '(sin_key)';
+      const fecha = String(t.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+      const prev = proximoPorLi.get(grupo);
+      if (!prev || fecha < prev.fecha || (fecha === prev.fecha && Number(t.id) < Number(prev.id))) {
+        proximoPorLi.set(grupo, { id: String(t.id), fecha });
+      }
+    }
+    for (const v of proximoPorLi.values()) nextAutoIds.add(v.id);
+  }
+
   for (const t of tickets) {
     const ticketId = String(t.id);
     const pipeline = String(t.properties?.hs_pipeline || '');
 
-    // Pipeline AUTOMÁTICO: se asocia si su facturación ya ocurrió (pasado).
-    // Solo se deja sin asociar el cronograma FUTURO. El manual pasa siempre.
+    // Pipeline AUTOMÁTICO: se asocia si su facturación ya ocurrió (pasado) o si es
+    // el próximo a facturar de su line item. El resto del cronograma futuro queda
+    // sin asociar. El manual pasa siempre.
     if (onlyManual && TICKET_PIPELINE && pipeline !== TICKET_PIPELINE) {
       if (esTicketFuturo(t, hoy)) {
-        stats.skippedByPipeline++;
-        continue;
+        if (!nextAutoIds.has(ticketId)) {
+          stats.skippedByPipeline++;
+          continue;
+        }
+        stats.autoNextLinked++;
+      } else {
+        stats.autoPastLinked++;
       }
-      stats.autoPastLinked++;
     }
     stats.considered++;
 
