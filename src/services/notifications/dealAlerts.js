@@ -21,6 +21,22 @@ import logger from '../../../lib/logger.js';
 
 const MOD = 'dealAlerts';
 
+// ── Llave global de estas alertas (usuaria 23-jul) ───────────────────────────
+// DEAL_ALERTS_ENABLED=false apaga la EMISIÓN de las tres alertas (props billing_error
+// + correos), sin tocar Phase R ni los contadores: los recálculos siguen corriendo.
+// Pensada para migraciones/corridas históricas donde Phase R debe quedar prendida
+// pero los avisos serían una avalancha. Vacía o ausente = PRENDIDA (no apagar por
+// accidente, mismo criterio que ASSOC_NEXT_AUTO_FORECAST). Se evalúa en cada llamada
+// (cambiarla en Railway no requiere redeploy del worker, solo del proceso).
+function alertasApagadas(fn, ctx) {
+  const raw = (process.env.DEAL_ALERTS_ENABLED ?? '').trim().toLowerCase();
+  if (raw === 'false' || raw === '0' || raw === 'no') {
+    logger.info({ module: MOD, fn, ...ctx }, 'DEAL_ALERTS_ENABLED=false — alerta OMITIDA (contadores intactos)');
+    return true;
+  }
+  return false;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function ts() {
@@ -141,6 +157,7 @@ async function writeTicketBillingError(ticketId, message) {
  */
 export async function alertPagosCompletos({ dealId, lineItemId, lineItemName }) {
   const fn = 'alertPagosCompletos';
+  if (alertasApagadas(fn, { dealId, lineItemId })) return { skipped: true, reason: 'DEAL_ALERTS_ENABLED=false' };
   try {
     const { dealName } = await getDealMeta(dealId);
     const liName = lineItemName || await getLineItemName(lineItemId);
@@ -164,6 +181,7 @@ export async function alertPagosCompletos({ dealId, lineItemId, lineItemName }) 
  */
 export async function alertDerivacionCompleta({ dealId, lineItemId, lineItemName, lik }) {
   const fn = 'alertDerivacionCompleta';
+  if (alertasApagadas(fn, { dealId, lineItemId, lik })) return { skipped: true, reason: 'DEAL_ALERTS_ENABLED=false' };
   try {
     const [{ dealName, ownerId: dealOwnerId }, liName, lastTicket] = await Promise.all([
       getDealMeta(dealId),
@@ -225,6 +243,7 @@ export async function alertDerivacionCompleta({ dealId, lineItemId, lineItemName
  */
 export async function alertFechasCompletas({ dealId, lineItemId, lineItemName, lik }) {
   const fn = 'alertFechasCompletas';
+  if (alertasApagadas(fn, { dealId, lineItemId, lik })) return { skipped: true, reason: 'DEAL_ALERTS_ENABLED=false' };
   try {
     const [{ dealName }, liName, lastTicket] = await Promise.all([
       getDealMeta(dealId),
