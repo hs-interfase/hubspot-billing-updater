@@ -36,6 +36,7 @@ import axios from 'axios';
 import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 import { initExportSnapshotsTable, saveExportSnapshot } from '../db-export.js';
+import { getDolar } from '../services/fxService.js';
 import { setCronState } from '../db.js';
 import { sendAlert, pingHeartbeat } from '../../lib/alertService.js';
 
@@ -121,6 +122,15 @@ const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Pago único')
 // que el label del LI para que la columna sea homogénea en los 3 CSV.
 const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v));
 
+// La columna "Dólar" es INFORMATIVA (dólares a pesos): si el TC sellado es 1 (fila en
+// USD, getDolar('USD')=1) o falta, se muestra el TC del DÍA — UYU, o PYG si el país
+// operativo es Paraguay. Si tampoco hay TC del día, queda el sellado (peor es nada).
+function tcInformativo(tcSellado, pais, rates) {
+  if (tcSellado != null && tcSellado !== 1) return tcSellado;
+  const dia = safe(pais).toLowerCase() === 'paraguay' ? rates?.PYG : rates?.UYU;
+  return dia != null ? dia : tcSellado;
+}
+
 // ── Intercompany (definición Paola 22-jul) ──────────────────────────────────
 // "Dentro de Uruguay se facturan entre sí": el CLIENTE que recibe la factura es ISA
 // Uruguay o Interfase Uruguay y la EMITE otra empresa del grupo. Detección por NOMBRE
@@ -172,7 +182,7 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
-  'condiciones_de_pago', 'dolar',
+  'condiciones_de_pago', 'dolar', 'tipo_de_venta',
 ];
 
 const LI_PROPS = [
@@ -183,7 +193,7 @@ const LI_PROPS = [
   'facturacion_activa', 'facturacion_automatica',
   'recurringbillingfrequency', 'hs_recurring_billing_frequency',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion',
-  'fecha_vencimiento_contrato', 'billing_anchor_date',
+  'fecha_vencimiento_contrato', 'billing_anchor_date', 'facturas_restantes',
   'hs_recurring_billing_number_of_payments', 'number_of_payments',
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
@@ -397,6 +407,7 @@ function buildDealBase(deal, companies, ownerName) {
     'Ejecutivo Asignado': ownerName,
     'País Operativo': safe(dp.pais_operativo),
     'Ciclo de Negocio': '',
+    'Tipo de Venta': safe(dp.tipo_de_venta), // ítem 139: prop creada el 20-jul en ambos portales
     'Probabilidad': pct(dp.hs_deal_stage_probability),
     'Fecha de Cierre': dmy(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
@@ -438,10 +449,12 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   const moneda = safe(lp.hs_line_item_currency_code) || safe(lp.mig_moneda) || dealBase['Moneda'];
   const esUSD = safe(moneda).toUpperCase() === 'USD';
   // Columna "Dólar" = TC de dólares a pesos (pedido Paola 21-jul), NO el TC aplicado a la
-  // conversión de la fila. Se muestra SIEMPRE, aunque la fila sea USD: dólar del LI,
-  // fallback dólar congelado del negocio. Sin dólar → vacío (no se inventa ni se pone 1).
+  // conversión de la fila. Dólar del LI, fallback dólar congelado del negocio. En filas
+  // USD el sellado vale 1 (getDolar('USD')=1) y NO es un TC a pesos → se muestra el TC
+  // del día (UYU; PYG si el país operativo es Paraguay). Sin dato → queda el sellado.
   const dealDolar = safeNum(deal.properties?.dolar);
-  const tc = dolarLi != null ? dolarLi : dealDolar;
+  const tcSellado = dolarLi != null ? dolarLi : dealDolar;
+  const tc = tcInformativo(tcSellado, dealBase['País Operativo'], latestRates);
   // Columnas USD = props CALCULADAS de HubSpot (monto_usd/margen_usd usan el dólar asignado).
   // Fallback USD→valor en moneda (la fórmula monto_usd divide por `dolar`, que en USD puede faltar).
   const montoUSD = safeNum(lp.monto_usd) != null ? safeNum(lp.monto_usd) : (esUSD ? monto : null);
@@ -480,6 +493,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(lp.subrubro),
     'N Factura': '',
+    'Facturas Restantes': safe(lp.facturas_restantes), // ítem 133
     'ORIGEN': 'Line Item',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
@@ -513,11 +527,12 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const esUSD = safe(moneda).toUpperCase() === 'USD';
   const tieneFactura = safe(tp.numero_de_factura) !== '';
   // Columna "Dólar" = TC de dólares a pesos (pedido Paola 21-jul), NO el TC aplicado.
-  // Se muestra SIEMPRE: dólar sellado del ticket (TC del día en que se facturó/creó la OF),
-  // fallback dólar del LI de origen y después dólar congelado del negocio. Vacío si no hay.
-  const tc = safeNum(tp.dolar) != null
+  // Dólar sellado del ticket (TC del día en que se facturó/creó la OF), fallback dólar
+  // del LI y después el del negocio. En filas USD el sellado vale 1 → TC del día.
+  const tcSellado = safeNum(tp.dolar) != null
     ? safeNum(tp.dolar)
     : (safeNum(lp?.dolar) != null ? safeNum(lp?.dolar) : dealBase['__dolarNegocio']);
+  const tc = tcInformativo(tcSellado, safe(tp.of_pais_operativo) || dealBase['País Operativo'], latestRates);
 
   // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket).
   const costoUSD = safeNum(tp.of_costo_usd) != null ? safeNum(tp.of_costo_usd) : (esUSD ? costo : null);
@@ -569,6 +584,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
     'Sub Rubro': safe(tp.of_subrubro || lp?.subrubro || ''),
     'N Factura': safe(tp.numero_de_factura),
+    'Facturas Restantes': safe(lp?.facturas_restantes), // ítem 133 (del LI de origen)
     'ORIGEN': 'Ticket',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
     'Fecha Inicio Contrato': dmy(fechaInicio),
@@ -600,6 +616,7 @@ const COLUMNS = [
   { header: 'País Operativo', key: 'País Operativo', width: 15 },
   { header: 'Incluye UY', key: 'Incluye UY', width: 12 },
   { header: 'Ciclo de Negocio', key: 'Ciclo de Negocio', width: 22 },
+  { header: 'Tipo de Venta', key: 'Tipo de Venta', width: 16 },
   // Renombres Paola 21-jul: FUENTE = a cuál de los 3 conceptos pertenece la fila
   // (Forecast/Backlog/Facturación); Estado = la "sub-fuente" (tipo de forecast /
   // estado de backlog / estado de facturación); ORIGEN = de qué objeto sale la fila.
@@ -629,6 +646,7 @@ const COLUMNS = [
   { header: 'Reventa', key: 'Reventa', width: 10 },
   { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
   { header: 'N Factura', key: 'N Factura', width: 15 },
+  { header: 'Facturas Restantes', key: 'Facturas Restantes', width: 16 },
   { header: 'ORIGEN', key: 'ORIGEN', width: 12 },
   { header: 'Momento de Facturación', key: 'Momento de Facturación', width: 20 },
   { header: 'Condiciones de Pago', key: 'Condiciones de Pago', width: 25 },
@@ -698,12 +716,15 @@ export async function generateExportReporte({ pipelineFilter = null } = {}) {
   const start = Date.now();
   logger.info({ pipelineFilter }, '[export] Iniciando generación de reporte');
 
-  // 0) El reporte NO usa el "TC del día" de exchange_rates: cada fila convierte a USD
-  //    con el dólar SELLADO del negocio/ticket (prop `dolar`, fallback fx_* en las props
-  //    de cálculo). Por eso ya no se consulta exchange_rates ni se alerta por frescura:
-  //    ese TC no alimenta ninguna columna. El cron que puebla la tabla (cronExchangeRates)
-  //    queda intacto, sigue sirviendo a otros consumidores.
-  const latestRates = null;
+  // 0) Las conversiones a USD usan el dólar SELLADO del negocio/ticket (prop `dolar`).
+  //    El TC del día se busca SOLO para la columna informativa "Dólar" de las filas USD
+  //    (dolar sellado = 1, que no es un TC "de dólares a pesos"): pedido Paola 21-jul,
+  //    validado por la usuaria el 22-jul — la columna debe mostrar el valor del dólar
+  //    aunque la fila esté en dólares. Vía fxService (BCU / BCP), sin tocar la DB.
+  const latestRates = { UYU: null, PYG: null };
+  try { latestRates.UYU = await getDolar('UYU'); } catch { /* columna queda con el sellado */ }
+  try { latestRates.PYG = await getDolar('PYG'); } catch { /* idem */ }
+  logger.info({ tcDia: latestRates }, '[export] TC del día para filas USD (columna Dólar)');
 
   // 1) Fetch all deals
   const allDeals = await fetchAllDeals(pipelineFilter);
