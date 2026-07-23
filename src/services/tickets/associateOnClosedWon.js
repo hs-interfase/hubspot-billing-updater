@@ -232,11 +232,12 @@ export async function associateAllTicketsOnClosedWon({
   // de cada line item (fecha_resolucion_esperada más chica; empate → id más bajo,
   // determinístico). Los tickets sin key de line item caen a un grupo único: mejor
   // asociar uno de más que dejar el próximo invisible.
+  // Env ausente O VACÍO ⇒ prendido (una var creada sin valor en Railway no lo apaga
+  // por accidente); apagar es explícito: ASSOC_NEXT_AUTO_FORECAST=false.
+  const rawNextAuto = String(process.env.ASSOC_NEXT_AUTO_FORECAST ?? '').trim();
   const nextAuto = associateNextAuto !== null
     ? associateNextAuto
-    : (process.env.ASSOC_NEXT_AUTO_FORECAST === undefined
-        ? true
-        : parseBool(process.env.ASSOC_NEXT_AUTO_FORECAST));
+    : (rawNextAuto === '' ? true : parseBool(rawNextAuto));
 
   const nextAutoIds = new Set();
   if (onlyManual && nextAuto && TICKET_PIPELINE) {
