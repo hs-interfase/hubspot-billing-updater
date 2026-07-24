@@ -7,6 +7,8 @@ import 'dotenv/config';
 import { Client } from '@hubspot/api-client';
 import ExcelJS from 'exceljs';
 import { getDolar } from '../../src/services/fxService.js';
+import { resolverEntidadFacturadora } from '../../src/services/billing/resolverEntidadFacturadora.js';
+import { lastBusinessDayOfMonth, formatDateISO } from '../../src/utils/dateUtils.js';
 
 // ── Config ──
 const TOKEN = process.env.HUBSPOT_PRIVATE_TOKEN;
@@ -90,9 +92,14 @@ const frecuenciaLI = (raw) => FREQ_ES[safe(raw)] || (safe(raw) || 'Pago único')
 // que el label del LI para que la columna sea homogénea en los 3 CSV.
 const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v));
 
-// La columna "Dólar" es INFORMATIVA (dólares a pesos): si el TC sellado es 1 (fila en
-// USD, getDolar('USD')=1) o falta, se muestra el TC del DÍA — UYU, o PYG si el país
-// operativo es Paraguay. Si tampoco hay TC del día, queda el sellado (peor es nada).
+// La columna "Valor del Dólar" es INFORMATIVA (dólares a pesos): si el TC sellado es 1
+// (fila en USD, getDolar('USD')=1) o falta, se muestra el TC del DÍA — UYU, o PYG si el
+// país operativo es Paraguay. Si tampoco hay TC del día, queda el sellado (peor es nada).
+// ⚠️ DEFINICIÓN 23-jul (explicar al cliente): el TC del día es un PLACEHOLDER. El valor
+// definitivo lo va a mandar el equipo POR NEGOCIO (prop `dolar` del deal, que ya tiene
+// prioridad como TC sellado); los tickets YA FACTURADOS traen su propio TC real de Nodum
+// (prop `dolar` del ticket, pisada al facturar). Cuando el dólar del negocio esté cargado,
+// este fallback al TC del día deja de aparecer solo.
 function tcInformativo(tcSellado, pais, rates) {
   if (tcSellado != null && tcSellado !== 1) return tcSellado;
   const dia = safe(pais).toLowerCase() === 'paraguay' ? rates?.PYG : rates?.UYU;
@@ -126,6 +133,23 @@ function esFilaIntercompany(row) {
 const MOMENTO_ES = { adelantado: 'Adelantado', fin_de_mes: 'Fin de mes', vencido: 'Vencido' };
 const momentoLabel = (raw) => MOMENTO_ES[safe(raw)] || safe(raw);
 
+// Fecha estimada para filas armadas desde el LINE ITEM (fallback de Forecast sin ticket).
+// La fecha buena la calcula el MOTOR en el ticket (anchor-based, fecha_resolucion_esperada);
+// acá solo se proyecta la base (ancla → inicio) según momento_de_facturacion:
+//   adelantado → día 1 del mes · fin_de_mes → último día HÁBIL (regla fin-de-mes 2026-06,
+//   misma función del motor) · vencido/otro → la base tal cual.
+function fechaEstimadaLI(lp) {
+  const base = ymd(lp.billing_anchor_date || lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion);
+  if (!base) return '';
+  const momento = safe(lp.momento_de_facturacion).toLowerCase();
+  if (momento === 'adelantado') return `${base.slice(0, 7)}-01`;
+  if (momento === 'fin_de_mes') {
+    const [y, m] = base.split('-').map(Number);
+    return formatDateISO(lastBusinessDayOfMonth(new Date(y, m - 1, 15)));
+  }
+  return base;
+}
+
 // ── TC helpers ──────────────────────────────────────────────────────────────
 
 // NOTA: aca vivian getLatestExchangeRate(), convertToUSD() y getTCForCurrency(),
@@ -149,7 +173,9 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
-  'condiciones_de_pago', 'dolar', 'tipo_de_venta',
+  'dolar', 'tipo_de_venta',
+  // condiciones_de_pago NO va acá: en el DEAL nunca existió (se pedía y HubSpot la
+  // ignoraba en silencio → columna siempre vacía). Vive en el LINE ITEM (creada 23-jul).
 ];
 
 const LI_PROPS = [
@@ -165,7 +191,7 @@ const LI_PROPS = [
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo', 'hubspot_owner_id', 'empresa_que_factura',
-  'momento_de_facturacion', 'area',
+  'momento_de_facturacion', 'area', 'condiciones_de_pago',
 ];
 
 const TICKET_PROPS = [
@@ -390,7 +416,7 @@ function buildDealBase(deal, companies, ownerName) {
     'Probabilidad': pct(dp.hs_deal_stage_probability),
     'Fecha de Cierre': dmy(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
-    'Condiciones de Pago': safe(dp.condiciones_de_pago),
+    // 'Condiciones de Pago' se llena en las filas (viene del LINE ITEM desde el 23-jul).
     // Se decide POR FILA en marcarIntercompany (definición 22-jul); acá solo el default.
     'Intercompany': 'NO',
     // Dólar congelado del negocio (no es columna: la usan las filas como fallback del TC).
@@ -405,7 +431,10 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   const fechaVenc = ymd(lp.fecha_vencimiento_contrato);
   const esAuto = safe(lp.facturacion_automatica).toLowerCase() === 'true';
   const incluyeUY = safe(lp.uy).toLowerCase() === 'true';
-  const fechaFact = fechaInicio;
+  // Fecha estimada proyectada por momento_de_facturacion (antes mostraba el inicio de
+  // contrato tal cual — bug commercial controller 23-jul). Solo aplica al FALLBACK sin
+  // ticket: las filas desde ticket traen fecha_resolucion_esperada del motor.
+  const fechaFact = fechaEstimadaLI(lp);
   const { mes, anio } = mesAnio(fechaFact);
 
   const monto = safeNum(lp.amount);
@@ -419,9 +448,8 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
       ? safeNum(lp.hs_cost_of_goods_sold) * (safeNum(lp.quantity) || 1)
       : (costoUsdFuente != null ? costoUsdFuente : null); // sin dolar: al menos en deals USD es el valor correcto
   const margenBruto = (monto != null && costo != null) ? monto - costo : null;
-  const margenPct = monto > 0
-    ? Math.round((safeNum(lp.hs_margin) / monto) * 10000) / 100
-    : null;
+  // Margen %: ELIMINADA (23-jul) — mostraba valores absurdos (of_margen absoluto en las
+  // filas de ticket) y el cliente pidió sacarla, no recalcularla.
 
   // Moneda REAL del line item (hs_line_item_currency_code / mig_moneda); NO la "home currency"
   // del negocio (que en HubSpot es USD para todos y ocultaba PYG/UYU).
@@ -451,22 +479,27 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Descripción Producto': safe(lp.description),
     // Entidad del grupo que EMITE la factura (Interfase UY / ISA UY / ISA PY / Interfase PY).
     // Distinta de 'Cliente Factura', que es la empresa CLIENTE a la que se le factura.
-    // (Renombre 22-jul: antes "Empresa Emisora"; Paola la pide como ENTIDAD FACTURADORA.)
-    'Entidad Facturadora': safe(lp.empresa_que_factura),
+    // Prop del LI; si está vacía (históricos sin backfill) se resuelve AL VUELO con la
+    // regla país+producto/área — mismo resolver que escribe el motor (23-jul).
+    'Entidad Facturadora': safe(lp.empresa_que_factura) || resolverEntidadFacturadora({
+      paisOperativo: deal.properties?.pais_operativo,
+      productId: lp.hs_product_id,
+      area: lp.area,
+    }).valor,
     'Descripción Ticket': '',
     // 21-jul: mensaje_para_responsable se archivó; Observaciones es del ticket (LI vacío).
     'Observaciones': '',
+    'Condiciones de Pago': safe(lp.condiciones_de_pago),
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
-    'Monto': monto,
-    'Costo': costo,
-    'Margen Bruto': margenBruto,
-    'Margen %': margenPct,
-    'Dólar': tc,
-    'Monto USD': montoUSD,
-    'Costo USD': costoUSD,
-    'Margen Bruto USD': margenBrutoUSD,
+    'Monto en Moneda Original': monto,
+    'Costo en Moneda Original': costo,
+    'Margen Bruto en Moneda Original': margenBruto,
+    'Valor del Dólar': tc,
+    'Monto en Dólares': montoUSD,
+    'Costo en Dólares': costoUSD,
+    'Margen Bruto en Dólares': margenBrutoUSD,
     'Momento de Facturación': momentoLabel(lp.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(lp.reventa).toLowerCase() === 'true' ? 'SI' : 'NO',
@@ -475,9 +508,10 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Facturas Restantes': safe(lp.facturas_restantes), // ítem 133
     'ORIGEN': 'Line Item',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
-    'Fecha Inicio Contrato': dmy(fechaInicio),
+    // Fechas de contrato SOLO para facturación automática (pedido 23-jul).
+    'Fecha Inicio Contrato': esAuto ? dmy(fechaInicio) : '',
     'Frecuencia': frecuenciaLI(freq),
-    'Fecha Fin Contrato': dmy(fechaVenc),
+    'Fecha Fin Contrato': esAuto ? dmy(fechaVenc) : '',
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -534,8 +568,15 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // empresa_que_factura / cliente_partner.
     'Cliente Beneficiario': dealBase['Cliente Beneficiario'] || safe(tp.nombre_empresa),
     'ID Cliente Beneficiario': dealBase['ID Cliente Beneficiario'] || safe(tp.empresa_id),
-    // Emisora sellada en el ticket; fallback al select del line item de origen.
-    'Entidad Facturadora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura),
+    // Emisora sellada en el ticket; fallback al select del line item de origen, y si
+    // ambos están vacíos (históricos sin backfill) se resuelve AL VUELO con la regla
+    // país+producto/área — mismo resolver que escribe el motor (23-jul).
+    'Entidad Facturadora': safe(tp.entidad_facturadora) || safe(lp?.empresa_que_factura)
+      || resolverEntidadFacturadora({
+        paisOperativo: safe(tp.of_pais_operativo) || dealBase['País Operativo'],
+        productId: lp?.hs_product_id,
+        area: safe(tp.area) || lp?.area,
+      }).valor,
     // ⚠️ doble vocabulario: `empresa_que_factura` en el TICKET es la empresa CLIENTE.
     'Cliente Factura': dealBase['Cliente Factura'] || safe(tp.empresa_que_factura),
     'Partner': dealBase['Partner'] || safe(tp.cliente_partner),
@@ -547,17 +588,19 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     // 21-jul: la prop `descripcion` del ticket se archivó; el texto operativo vive en `content`.
     'Descripción Ticket': safe(tp.content || ''),
     'Observaciones': safe(tp.observaciones || ''),
+    'Condiciones de Pago': safe(lp?.condiciones_de_pago), // del LI de origen (prop creada 23-jul)
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
-    'Monto': monto,
-    'Costo': costo,
-    'Margen Bruto': margenBruto,
-    'Margen %': safeNum(tp.of_margen),
-    'Dólar': tc,
-    'Monto USD': montoUSD,
-    'Costo USD': costoUSD,
-    'Margen Bruto USD': margenBrutoUSD,
+    'Monto en Moneda Original': monto,
+    'Costo en Moneda Original': costo,
+    'Margen Bruto en Moneda Original': margenBruto,
+    // Margen %: ELIMINADA (23-jul) — acá iba of_margen crudo (margen ABSOLUTO en moneda
+    // original, ej. 12.610) disfrazado de porcentaje. Se saca, no se recalcula.
+    'Valor del Dólar': tc,
+    'Monto en Dólares': montoUSD,
+    'Costo en Dólares': costoUSD,
+    'Margen Bruto en Dólares': margenBrutoUSD,
     'Momento de Facturación': momentoLabel(tp.momento_de_facturacion || lp?.momento_de_facturacion),
     'Repetitivo': esRepetitivo(freq),
     'Reventa': safe(tp.reventa || lp?.reventa || '').toLowerCase() === 'true' ? 'SI' : 'NO',
@@ -566,9 +609,10 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Facturas Restantes': safe(lp?.facturas_restantes), // ítem 133 (del LI de origen)
     'ORIGEN': 'Ticket',
     'Facturación Automática': esAuto ? 'SI' : 'NO',
-    'Fecha Inicio Contrato': dmy(fechaInicio),
+    // Fechas de contrato SOLO para facturación automática (pedido 23-jul).
+    'Fecha Inicio Contrato': esAuto ? dmy(fechaInicio) : '',
     'Frecuencia': frecuenciaDisplay(freq),
-    'Fecha Fin Contrato': dmy(fechaVenc),
+    'Fecha Fin Contrato': esAuto ? dmy(fechaVenc) : '',
     'Renovación Automática': esRenovacionAutomatica(fechaVenc),
   };
 }
@@ -633,8 +677,8 @@ async function main() {
     const marcarIntercompany = (row) => {
       if (esFilaIntercompany(row)) {
         row['Intercompany'] = 'SI';
-        row['Monto'] = 0;
-        row['Monto USD'] = 0;
+        row['Monto en Moneda Original'] = 0;
+        row['Monto en Dólares'] = 0;
       }
       return row;
     };
@@ -660,11 +704,28 @@ async function main() {
     if (prob < PROB_CORTE) {
       // Sub-fuente (columna Estado) por bucket de probabilidad del deal (spec Paola jul-2026).
       const tipoForecast = prob < 0.50 ? 'Forecast' : prob < 0.75 ? 'Forecast en Strech' : 'Forecast Firme';
+      // Forecast DESDE TICKETS (definición 23-jul, igual que Backlog): el motor ya crea
+      // tickets de forecast para deals en pipeline, y su fecha_resolucion_esperada
+      // respeta momento_de_facturacion (la fila desde LI mostraba el inicio de contrato).
+      // Fallback: LIs sin ticket emitido → fila desde el LI (ORIGEN = 'Line Item') con
+      // fecha proyectada por fechaEstimadaLI.
+      const ticketsForecast = (await fetchTicketsForDeal(dealId)).filter(isValidTicket);
+      const liKeysConTicket = new Set();
+      for (const ticket of ticketsForecast) {
+        const row = buildTicketRow(ticket, dealBase, liKeyMap, productNameMap, latestRates);
+        const lik = safe(ticket.properties?.of_line_item_key);
+        if (lik) liKeysConTicket.add(lik);
+        row['FUENTE'] = 'Forecast';
+        row['Estado'] = tipoForecast; // sub-fuente: Forecast / Forecast en Strech / Forecast Firme
+        pipelineRows.push(marcarIntercompany(row));
+      }
       for (const li of lineItems) {
+        const lik = safe(li.properties?.line_item_key || li.properties?.of_line_item_key);
+        if (lik && liKeysConTicket.has(lik)) continue; // ya cubierto por su(s) ticket(s)
         const productName = productNameMap.get(safe(li.properties?.hs_product_id)) || '';
         const row = buildLineItemRow(li, dealBase, deal, productName, latestRates);
         row['FUENTE'] = 'Forecast';
-        row['Estado'] = tipoForecast; // sub-fuente: Forecast / Forecast en Strech / Forecast Firme
+        row['Estado'] = tipoForecast;
         pipelineRows.push(marcarIntercompany(row));
       }
     } else {
@@ -738,14 +799,15 @@ async function main() {
     { header: 'Fecha Fact Estimada', key: 'Fecha Fact Estimada', width: 18 },
     { header: 'Mes', key: 'Mes', width: 8 },
     { header: 'Año', key: 'Año', width: 8 },
-    { header: 'Monto', key: 'Monto', width: 15 },
-    { header: 'Costo', key: 'Costo', width: 15 },
-    { header: 'Margen Bruto', key: 'Margen Bruto', width: 15 },
-    { header: 'Margen %', key: 'Margen %', width: 12 },
-    { header: 'Dólar', key: 'Dólar', width: 12 },
-    { header: 'Monto USD', key: 'Monto USD', width: 15 },
-    { header: 'Costo USD', key: 'Costo USD', width: 15 },
-    { header: 'Margen Bruto USD', key: 'Margen Bruto USD', width: 15 },
+    // Renombres 23-jul (commercial controller): moneda explícita en cada columna de plata,
+    // "Valor del Dólar" (antes "Dólar") y Margen % ELIMINADA (traía of_margen absoluto).
+    { header: 'Monto en Moneda Original', key: 'Monto en Moneda Original', width: 18 },
+    { header: 'Costo en Moneda Original', key: 'Costo en Moneda Original', width: 18 },
+    { header: 'Margen Bruto en Moneda Original', key: 'Margen Bruto en Moneda Original', width: 20 },
+    { header: 'Valor del Dólar', key: 'Valor del Dólar', width: 12 },
+    { header: 'Monto en Dólares', key: 'Monto en Dólares', width: 15 },
+    { header: 'Costo en Dólares', key: 'Costo en Dólares', width: 15 },
+    { header: 'Margen Bruto en Dólares', key: 'Margen Bruto en Dólares', width: 18 },
     { header: 'Repetitivo', key: 'Repetitivo', width: 12 },
     { header: 'Reventa', key: 'Reventa', width: 10 },
     { header: 'Sub Rubro', key: 'Sub Rubro', width: 20 },
