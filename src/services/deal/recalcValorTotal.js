@@ -93,6 +93,14 @@ const PROP_DEAL_TOTAL_LOCAL =
 // Margen bruto del negocio en USD (mismo horizonte que el VALOR).
 const PROP_DEAL_MARGEN_USD = process.env.PROP_DEAL_MARGEN || 'margen_total_usd';
 
+// Flag (default OFF): si está en 'true', el motor escribe también el `amount`
+// nativo del deal = total en la moneda del negocio, para que el encabezado
+// ("Valor") muestre el total anualizado y no el de un período. Reversible: se
+// apaga el env y el amount deja de tocarse. Requiere que la "Cantidad
+// predeterminada del Negocio" esté en Registro manual (si no, HubSpot lo pisa).
+const WRITE_DEAL_AMOUNT_FROM_VALOR =
+  String(process.env.WRITE_DEAL_AMOUNT_FROM_VALOR || '').toLowerCase() === 'true';
+
 // Propiedad del TICKET que apunta al deal. Es el vínculo que usan los forecast
 // (desasociados en el CRM) — la clave de todo el cálculo.
 const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
@@ -332,6 +340,7 @@ const DEAL_PROPS = [
   'dealstage',
   'dolar_cierre_asignado',
   'es_mirror_de_py',
+  'amount', // leer el amount actual para comparar (solo se escribe si WRITE_DEAL_AMOUNT_FROM_VALOR)
   PROP_DEAL_TOTAL_USD,
   PROP_DEAL_TOTAL_LOCAL,
   PROP_DEAL_MARGEN_USD,
@@ -446,6 +455,16 @@ export async function recalcValorTotal({ dealId, applyUpdate = true, lineItems =
     const properties = {};
     if (totalLocal !== null && num(dp[PROP_DEAL_TOTAL_LOCAL], NaN) !== totalLocal) {
       properties[PROP_DEAL_TOTAL_LOCAL] = String(totalLocal);
+    }
+    // amount nativo = mismo total en la moneda del negocio, para que el encabezado
+    // del deal ("Valor") muestre el total anualizado y no el de un período. Gateado
+    // por flag y guardado por comparación → no reescribe ni entra en loop de webhooks.
+    if (
+      WRITE_DEAL_AMOUNT_FROM_VALOR &&
+      totalLocal !== null &&
+      num(dp.amount, NaN) !== totalLocal
+    ) {
+      properties.amount = String(totalLocal);
     }
     if (totalUsd !== null && num(dp[PROP_DEAL_TOTAL_USD], NaN) !== totalUsd) {
       properties[PROP_DEAL_TOTAL_USD] = String(totalUsd);
