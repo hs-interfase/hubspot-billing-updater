@@ -271,6 +271,28 @@ export default async function handler(req, res) {
       return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId: info?.dealId ?? null, action: 'valor_recalc' });
     }
 
+    // ====== RUTA 6: CASILLA CANCELAR TICKET ======
+    // Handler MÍNIMO (26-jul): el usuario marca `cancelar_ticket` en el ticket.
+    // Solo cubre el caso simple (ticket manual sin factura viva → etapa CANCELADO);
+    // NO toca factura, NO toca cupo, NO toca el espejo — eso llega con el flujo
+    // completo de cancelar/revertir (en diseño). El worker resetea la casilla siempre.
+    if (objectType === 'ticket' && propertyName === 'cancelar_ticket') {
+      if (!parseBool(propertyValue)) {
+        return res.status(200).json({ message: 'cancelar_ticket not true, skipped', receivedValue: propertyValue });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: null,
+        actionType: 'ticket_cancel_request',
+        priority: 1,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'ticket_cancel_request' });
+    }
+
     // ====== PROPIEDAD NO RECONOCIDA ======
     return res.status(200).json({ message: 'Property not supported, skipped', propertyName });
 

@@ -7,6 +7,7 @@ import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { runPhasesForDealLocked } from './phases/index.js';
 import { propagateDealCancellation } from './propagacion/deals/cancelDeal.js';
 import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
+import { processCancelTicketRequest } from './services/tickets/cancelTicketRequest.js';
 import { parseBool } from './utils/parsers.js';
 import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
@@ -78,7 +79,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -654,6 +655,19 @@ async function executeJob(job) {
           lineItemId: object_id, propertyName: property_name,
           totalUsd: result.totalUsd, changed: result.changed },
         'valor_recalc completado'
+      );
+      return result;
+    }
+
+    case 'ticket_cancel_request': {
+      // Casilla cancelar_ticket (handler mínimo 26-jul): solo escribe props del
+      // TICKET (etapa/motivo/aviso/reset de casilla) — no toca deal, factura ni
+      // cupo, así que NO aplica el lock de deal (mismo criterio que urgent_ticket,
+      // que toma su propio lock solo porque emite factura; acá no se emite nada).
+      const result = await processCancelTicketRequest(object_id);
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, ...result },
+        'ticket_cancel_request completado'
       );
       return result;
     }

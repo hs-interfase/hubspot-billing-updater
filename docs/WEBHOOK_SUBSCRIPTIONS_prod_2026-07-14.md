@@ -24,6 +24,13 @@ actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, disco
 > que el motor re-snapshotea en phasep, se descartan). Las props que escribe el motor en
 > emisión (`subtotal_real`, `of_costo`, `of_margen`) siguen SIN suscribirse.
 
+> 🗑️ **Ruteo cancelar_ticket (26-jul):** `cancelar_ticket` ya no cae en el fallback
+> "Property not supported" — ahora rutea a `ticket_cancel_request` (RUTA 6 de
+> `api/escuchar-cambios.js` → `processCancelTicketRequest`). Handler MÍNIMO: solo mueve a
+> CANCELADO tickets sin factura viva (los automáticos y los con factura solo reciben aviso
+> en `of_billing_error`); no toca factura/cupo/espejo. El flujo completo de
+> cancelar/revertir está en diseño.
+
 ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, comentarios_pm, content, descuento_en_porcentaje, descuento_por_unidad_real, dolar, empresa_id, empresa_que_factura, entidad_facturadora, exonera_irae, facturacion_automatica, facturar_ahora, fecha_inicio_de_facturacion, fecha_real_de_facturacion, fecha_resolucion_esperada, fin_del_contrato, hay_ajuste, hs_resolution, inicio_del_contrato, momento_de_facturacion, monto_unitario_real, motivo_cancelacion_del_ticket, motivo_del_ajuste, nc, negocio_compartido, nombre_empresa, nota, observaciones, observaciones_ventas, of_aplica_para_cupo, of_cantidad_de_pagos, of_costo_usd, of_frecuencia_de_facturacion, of_line_item_ids, of_moneda, of_monto_total, of_motivo_pausa, of_pais_operativo, of_producto, of_producto_nombres, of_propietario_secundario, of_rubro, of_subrubro, opera_trading, producto_id, renovacion_automatica, repetitivo, reventa, revisado_por, servicio, source_type, subject, tipo_de_parametrica, unidad_de_negocio
 
 ## deal / "Negocio" — 17 (`deal.propertyChange`)
