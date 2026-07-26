@@ -82,20 +82,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ message: 'Property value not true, skipped' });
       }
 
-      if (objectType === 'line_item') {
-        const dealId = await getDealIdForLineItem(objectId);
-        const queueId = await enqueue({
-          source: 'escuchar-cambios',
-          objectType, objectId, propertyName, propertyValue,
-          dealId,
-          actionType: 'urgent_line_item',
-          priority: 1,
-          eventId,
-          rawPayload: payload,
-        });
-        return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_line_item' });
-
-      } else if (objectType === 'ticket') {
+      if (objectType === 'ticket') {
         // Tickets no tienen dealId directo para deduplicar, se encolan sin él
         const queueId = await enqueue({
           source: 'escuchar-cambios',
@@ -107,10 +94,12 @@ export default async function handler(req, res) {
           rawPayload: payload,
         });
         return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_ticket' });
-
-      } else {
-        return res.status(400).json({ error: `Unsupported object type: ${objectType}` });
       }
+
+      // Flujo "facturar ahora" de line item ELIMINADO (2026-07, control de cambios N°5).
+      // Responder 200 (no 4xx): HubSpot puede seguir mandando eventos de LI hasta que
+      // se quite la suscripción, y un 4xx provoca reintentos/deshabilitación del webhook.
+      return res.status(200).json({ message: 'facturar_ahora solo soportado en tickets, skipped', objectType });
     }
 
     // ====== RUTA 2: RECALCULACIÓN ======

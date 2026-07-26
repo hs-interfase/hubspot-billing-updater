@@ -48,28 +48,23 @@ test('maxAttempts=1 abandona en el primer rescate', () => {
 
 const SKIP_FLAG = { skipped: true, reason: 'facturar_ahora_false' };
 
-test('LI rescatado con el flag ya consumido → critical: pudo perderse la factura', () => {
-  const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
-  assert.equal(clasificarJobRescatado(job, SKIP_FLAG)?.severidad, 'critical');
-});
-
 test('ticket rescatado con el flag ya consumido → warn: el finally corrió, ya facturó', () => {
   const job = { action_type: 'urgent_ticket', reaped_at: new Date(), attempts: 1 };
   assert.equal(clasificarJobRescatado(job, SKIP_FLAG)?.severidad, 'warn');
 });
 
 test('job nunca rescatado que skipea es normal (el usuario destildó el flag) → null', () => {
-  const job = { action_type: 'urgent_line_item', reaped_at: null, attempts: 0 };
+  const job = { action_type: 'urgent_ticket', reaped_at: null, attempts: 0 };
   assert.equal(clasificarJobRescatado(job, SKIP_FLAG), null);
 });
 
 test('job rescatado que SÍ facturó → null', () => {
-  const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
+  const job = { action_type: 'urgent_ticket', reaped_at: new Date(), attempts: 1 };
   assert.equal(clasificarJobRescatado(job, { invoiceId: '999' }), null);
 });
 
 test('job rescatado que skipea por otro motivo → null (no hubo pérdida)', () => {
-  const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
+  const job = { action_type: 'urgent_ticket', reaped_at: new Date(), attempts: 1 };
   const otroSkip = { skipped: true, reason: 'facturacion_inactiva' };
   assert.equal(clasificarJobRescatado(job, otroSkip), null);
 });
@@ -80,6 +75,6 @@ test('action_type no urgente (recalc) → null, no hay plata en juego', () => {
 });
 
 test('jobResult undefined (job sin retorno) no rompe', () => {
-  const job = { action_type: 'urgent_line_item', reaped_at: new Date(), attempts: 1 };
+  const job = { action_type: 'urgent_ticket', reaped_at: new Date(), attempts: 1 };
   assert.equal(clasificarJobRescatado(job, undefined), null);
 });

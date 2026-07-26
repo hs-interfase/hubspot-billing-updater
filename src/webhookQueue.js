@@ -2,7 +2,7 @@
 import pool, { acquireDealLock, releaseDealLock } from './db.js';
 import logger from '../lib/logger.js';
 import { sendAlert } from '../lib/alertService.js';
-import { processUrgentLineItem, processUrgentTicket } from './services/urgentBillingService.js';
+import { processUrgentTicket } from './services/urgentBillingService.js';
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { runPhasesForDealLocked } from './phases/index.js';
 import { propagateDealCancellation } from './propagacion/deals/cancelDeal.js';
@@ -78,7 +78,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -360,22 +360,6 @@ async function executeJob(job) {
   const { action_type, object_id, object_type, deal_id, property_name, property_value } = job;
 
   switch (action_type) {
-    case 'urgent_line_item': {
-      const result = await processUrgentLineItem(object_id);
-      if (result.skipped) {
-        logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, reason: result.reason },
-          'Facturación urgente de LI skipped'
-        );
-      } else {
-        logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, invoiceId: result.invoiceId },
-          'Facturación urgente de LI completada'
-        );
-      }
-      return result;
-    }
-
     case 'urgent_ticket': {
       const result = await processUrgentTicket(object_id);
       if (result.skipped) {

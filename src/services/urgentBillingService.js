@@ -96,6 +96,11 @@ async function updateUrgentBillingEvidence(lineItemId, currentProps = {}) {
 }
 
 /**
+ * DEPRECADO 2026-07-26 (control de cambios N°5): el disparador de facturar_ahora
+ * en LINE ITEM fue desconectado (router + cola). Este código queda muerto a
+ * propósito; eliminación en segunda etapa de limpieza. El flujo de TICKET
+ * (processUrgentTicket) sigue vigente.
+ *
  * Núcleo de la facturación urgente de un Line Item.
  * NO contiene guard de facturar_ahora — eso es responsabilidad del caller.
  * Llamado para el line item PY desde processUrgentLineItem.
@@ -759,6 +764,11 @@ const ticketId = ticketResult.ticketId;
 }
 
 /**
+ * DEPRECADO 2026-07-26 (control de cambios N°5): el disparador de facturar_ahora
+ * en LINE ITEM fue desconectado (router + cola). Este código queda muerto a
+ * propósito; eliminación en segunda etapa de limpieza. El flujo de TICKET
+ * (processUrgentTicket) sigue vigente.
+ *
  * Entry point público para facturación urgente de un Line Item.
  * Contiene el guard de intención del usuario (facturar_ahora = true).
  * Después de facturar el PY, propaga al mirror UY de forma asíncrona (fire-and-forget).

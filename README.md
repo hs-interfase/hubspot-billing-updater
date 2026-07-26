@@ -10,7 +10,7 @@ Facturación Manual (facturacion_automatica=false)
 Genera tickets de Orden de Facturación para revisión humana con 30 días de anticipación.
 
 Facturación Automática (facturacion_automatica=true)
-Emite facturas directamente cuando llega la fecha o mediante disparo manual (facturar_ahora=true).
+Emite facturas directamente cuando llega la fecha. (La facturación urgente por disparo manual — facturar_ahora=true — se hace únicamente desde el TICKET.)
 
 ✨ Características
 
@@ -68,7 +68,7 @@ Phase 2
 Crea tickets manuales para line items que facturan dentro de 30 días.
 
 Phase 3
-Emite facturas automáticas (fecha = hoy o facturar_ahora=true).
+Emite facturas automáticas (fecha = hoy).
 
 👤 Responsable del Ticket (DEFINICIÓN OFICIAL)
 
@@ -137,11 +137,11 @@ responsable_asignado
 
 facturacion_automatica
 
-facturar_ahora
-
 Ticket
 
 of_ticket_key
+
+facturar_ahora (disparo de facturación urgente)
 
 Propiedades de cálculo (subtotal_real, total_real_a_facturar, etc.)
 
@@ -151,11 +151,11 @@ of_invoice_key
 
 of_invoice_status
 
-🔔 Webhook – Facturación Inmediata
+🔔 Webhook – Facturación Urgente (Facturar ahora)
 
 Evento: Property Change
 
-Objeto: Line Item
+Objeto: Ticket
 
 Propiedad: facturar_ahora
 
@@ -165,7 +165,7 @@ https://tu-dominio/api/escuchar-cambios
 
 (la ruta filtra por propertyName=facturar_ahora; no existe /api/facturar-ahora)
 
-Nota: el disparo "facturar ahora" desde line item está EN PAUSA por decisión de la empresa (2026-07). El endpoint sigue activo en el motor; solo no se usa desde la UI.
+Nota: el disparo "facturar ahora" desde line item fue ELIMINADO en 2026-07 (control de cambios N°5). El router responde 200 "skipped" a eventos de line item; la suscripción del webhook de line item y la propiedad en las vistas del CRM ya fueron retiradas. La facturación urgente se dispara únicamente desde el TICKET.
 
 🧪 Testing e Idempotencia
 
@@ -191,7 +191,7 @@ El consumo de cupo ocurre solo al emitir factura
 
 la regla de facturacion en phase 3 es asi.
 
-facturar_ahora / phase3
+facturar_ahora (ticket) / phase3
        ↓
   [GUARD] countActivePlanInvoices >= totalPayments → skip   ← lo que agregamos
        ↓
@@ -258,7 +258,7 @@ Facturación Manual (facturacion_automatica=false)
 Genera tickets de Orden de Facturación para revisión humana con 30 días de anticipación.
 
 Facturación Automática (facturacion_automatica=true)
-Emite facturas directamente cuando llega la fecha o mediante disparo manual (facturar_ahora=true).
+Emite facturas directamente cuando llega la fecha. (La facturación urgente por disparo manual — facturar_ahora=true — se hace únicamente desde el TICKET.)
 
 ✨ Características
 
@@ -316,7 +316,7 @@ Phase 2
 Crea tickets manuales para line items que facturan dentro de 30 días.
 
 Phase 3
-Emite facturas automáticas (fecha = hoy o facturar_ahora=true).
+Emite facturas automáticas (fecha = hoy).
 
 👤 Responsable del Ticket (DEFINICIÓN OFICIAL)
 
@@ -385,11 +385,11 @@ responsable_asignado
 
 facturacion_automatica
 
-facturar_ahora
-
 Ticket
 
 of_ticket_key
+
+facturar_ahora (disparo de facturación urgente)
 
 Propiedades de cálculo (subtotal_real, total_real_a_facturar, etc.)
 
@@ -399,11 +399,11 @@ of_invoice_key
 
 of_invoice_status
 
-🔔 Webhook – Facturación Inmediata
+🔔 Webhook – Facturación Urgente (Facturar ahora)
 
 Evento: Property Change
 
-Objeto: Line Item
+Objeto: Ticket
 
 Propiedad: facturar_ahora
 
@@ -413,7 +413,7 @@ https://tu-dominio/api/escuchar-cambios
 
 (la ruta filtra por propertyName=facturar_ahora; no existe /api/facturar-ahora)
 
-Nota: el disparo "facturar ahora" desde line item está EN PAUSA por decisión de la empresa (2026-07). El endpoint sigue activo en el motor; solo no se usa desde la UI.
+Nota: el disparo "facturar ahora" desde line item fue ELIMINADO en 2026-07 (control de cambios N°5). El router responde 200 "skipped" a eventos de line item; la suscripción del webhook de line item y la propiedad en las vistas del CRM ya fueron retiradas. La facturación urgente se dispara únicamente desde el TICKET.
 
 🧪 Testing e Idempotencia
 

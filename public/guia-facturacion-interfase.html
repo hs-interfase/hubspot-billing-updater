@@ -344,7 +344,7 @@ const C = {
     ${fila('Precio unitario','Número','usuario','El precio por unidad.')}
     ${fila('Cantidad','Número','usuario','Cuántas unidades. Si es cupo por horas, acá van las horas.')}
   </div>
-  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Ojo:</strong> el botón "Facturar ahora" no funciona en líneas automáticas. El sistema lo ignora y anota un error. Las automáticas solo responden al calendario. 📅</div></div>
+  <div class="bco"><div class="bco-em">🤖</div><div class="bco-tx"><strong>Ojo:</strong> las líneas automáticas solo responden al calendario. El disparo "Facturar ahora" desde la línea de pedido fue <strong>eliminado en 2026-07</strong>: la facturación urgente se hace siempre desde el ticket. 📅</div></div>
   <div class="sl">¿Cómo funciona por dentro?</div>
   <div class="steps">
     <div class="step"><div class="sn">P</div><div class="sb2"><div class="st">Se crea un ticket de promesa</div><div class="sd">No aparece todavía en el negocio. Solo existe como registro de que esa factura viene.</div></div></div>
@@ -369,7 +369,7 @@ const C = {
   <div class="steps">
     <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">30 días antes del cobro, aparece un ticket</div><div class="sd">El responsable lo recibe y puede revisar los montos y detalles.</div></div></div>
     <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El responsable revisa y edita si hace falta</div><div class="sd">Puede cambiar el monto, la cantidad o el descuento directo en el ticket.</div></div></div>
-    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">El responsable toca <strong>Facturar Ahora</strong></div><div class="sd">Eso es lo que dispara la factura. Sin ese paso, no se emite nada.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">El responsable toca <strong>Facturar Ahora</strong> en el ticket</div><div class="sd">Eso es lo que dispara la factura. Sin ese paso, no se emite nada.</div></div></div>
   </div>
   <div class="note nw">⚠️ La factura <strong>no sale sola</strong>. Alguien tiene que tocar <strong>Facturar Ahora</strong> en el ticket para que se emita.</div>
   <div class="sl">Qué se puede editar en el ticket <span class="tag ttk">Ticket</span></div>
@@ -391,7 +391,7 @@ const C = {
     ${fila('Fecha de Inicio','Fecha','usuario','La fecha del cobro. Solo hay una.')}
     ${fila('Cantidad de pagos','Número','usuario','Poner <code>1</code>. Así el sistema sabe que es un único cobro y no genera más.')}
     ${fila('Frecuencia','Opción','usuario','Dejar vacío. Sin frecuencia, no hay recurrencia.')}
-    ${fila('Facturación Automática','Sí/No','usuario','<strong>Sí</strong> = el sistema lo emite solo cuando llega la fecha. <strong>No</strong> = alguien tiene que tocar Facturar Ahora.')}
+    ${fila('Facturación Automática','Sí/No','usuario','<strong>Sí</strong> = el sistema lo emite solo cuando llega la fecha. <strong>No</strong> = alguien tiene que tocar Facturar Ahora en el ticket.')}
     ${fila('Precio unitario','Número','usuario','El monto del cobro.')}
     ${fila('Cantidad','Número','usuario','Generalmente <code>1</code>.')}
   </div>
@@ -450,17 +450,18 @@ const C = {
 
 'urgente-forecast': `
   <div class="note nw">⚠️ Esta opción es solo para <strong>líneas manuales</strong>. El ticket todavía está en modo promesa, no fue promovido todavía.</div>
-  <div class="sl">Opción A — Disparar la factura ahora mismo <span class="tag tlp">Línea de pedido</span></div>
+  <div class="note ni">ℹ️ El disparo "Facturar Ahora" desde la <strong>línea de pedido</strong> fue <strong>eliminado en 2026-07</strong> (control de cambios N°5). La facturación urgente se dispara siempre desde el <strong>ticket</strong>.</div>
+  <div class="sl">Opción A — Disparar la factura desde el ticket <span class="tag ttk">Ticket</span></div>
   <div class="pb">${CAB}
-    ${fila('Facturar Ahora','Sí/No','usuario','Poner en <strong>Sí</strong>. El sistema genera el ticket y emite la factura de forma inmediata. Después vuelve solo a <strong>No</strong>.')}
+    ${fila('Facturar Ahora','Sí/No','usuario','Buscar el ticket en el pipeline manual y poner en <strong>Sí</strong>. El sistema emite la factura de forma inmediata. Después vuelve solo a <strong>No</strong>.')}
   </div>
   <div class="sl">Opción B — Mover la fecha para que el cron lo tome esta noche <span class="tag tlp">Línea de pedido</span></div>
   <div class="pb">${CAB}
     ${fila('Fecha Ancla','Fecha','sistema','Cambiarla a la fecha deseada. El sistema recalcula todo esa noche y emite si la fecha ya llegó.')}
   </div>
   <div class="steps">
-    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Activar <strong>Facturar Ahora</strong> en la línea de pedido</div></div></div>
-    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema actúa de inmediato</div><div class="sd">Crea el ticket si no existía y emite la factura.</div></div></div>
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Activar <strong>Facturar Ahora</strong> en el ticket</div><div class="sd">Está en el pipeline de facturación manual.</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">El sistema actúa de inmediato</div><div class="sd">Emite la factura y deja el ticket como emitido.</div></div></div>
     <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Facturar Ahora vuelve a No solo</div><div class="sd">No hay que tocarlo de nuevo.</div></div></div>
   </div>`,
 
@@ -480,7 +481,7 @@ const C = {
   </div>`,
 
 'urgente-auto': `
-  <div class="note ne">🔴 <strong>No usar Facturar Ahora</strong> en líneas automáticas. El sistema lo ignora, lo vuelve a <strong>No</strong> y anota un error. Las líneas automáticas solo responden a fechas.</div>
+  <div class="note ne">🔴 Las líneas automáticas <strong>no tienen disparo urgente</strong>: responden solo a fechas. (El disparo "Facturar Ahora" desde la línea de pedido fue eliminado en 2026-07.)</div>
   <div class="sl">La solución: cambiar la Fecha Ancla <span class="tag tlp">Línea de pedido</span></div>
   <div class="pb">${CAB}
     ${fila('Fecha Ancla','Fecha','sistema','Cambiarla a la fecha deseada. El sistema recalcula la próxima fecha de cobro. Si ya llegó o pasó, emite la factura esa noche.')}
@@ -777,9 +778,9 @@ const SECS = {
     {k:'mirror',     ic:'🪞',bg:'rgba(244,114,182,.13)', tt:'Mirror Paraguay → Uruguay',sb:'Un negocio de Paraguay que se duplica en Uruguay'},
   ]},
   urgentes:{icon:'🚀',title:'Facturación Urgente',hc:'so',sub:[
-    {k:'urgente-forecast',ic:'📋',bg:'rgba(251,146,60,.13)',tt:'El ticket todavía no fue promovido',sb:'Está en modo promesa — usá Facturar Ahora o cambiá la fecha'},
+    {k:'urgente-forecast',ic:'📋',bg:'rgba(251,146,60,.13)',tt:'El ticket todavía no fue promovido',sb:'Está en modo promesa — usá Facturar Ahora en el ticket o cambiá la fecha'},
     {k:'urgente-ready',   ic:'🔔',bg:'rgba(251,146,60,.13)',tt:'El ticket ya está listo',           sb:'El responsable lo toca y listo'},
-    {k:'urgente-auto',    ic:'⚡',bg:'rgba(251,146,60,.13)',tt:'Línea automática',                 sb:'No usar Facturar Ahora — hay que cambiar la Fecha Ancla'},
+    {k:'urgente-auto',    ic:'⚡',bg:'rgba(251,146,60,.13)',tt:'Línea automática',                 sb:'Sin disparo urgente — hay que cambiar la Fecha Ancla'},
   ]},
   ediciones:{icon:'✏️',title:'Ediciones',hc:'sp',sub:[
     {k:'editar-fecha',   ic:'📅',bg:'rgba(167,139,250,.13)',tt:'Cambiar las fechas de cobro',sb:'Cómo mover el ciclo desde la Fecha Ancla'},
