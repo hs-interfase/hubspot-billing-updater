@@ -9,6 +9,7 @@ import logger from '../../lib/logger.js'
 import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 import { tryAdvanceDealToEnEjecucion } from './advanceDealToEnEjecucion.js'
+import { esTransicionEtapaPermitida, ETAPA_CANCELADA } from './stageTransitions.js'
 
 const MOD = 'invoice-editor/invoices'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -185,7 +186,7 @@ router.patch('/:id', async (req, res) => {
 
   // Si se cancela y no viene fecha_de_cancelacion → inyectar fecha del día
   if (
-    filteredProperties.etapa_de_la_factura === 'Cancelada' &&
+    filteredProperties.etapa_de_la_factura === ETAPA_CANCELADA &&
     !filteredProperties.fecha_de_cancelacion
   ) {
     try {
@@ -203,6 +204,52 @@ router.patch('/:id', async (req, res) => {
       const hoy = new Date()
       hoy.setUTCHours(0, 0, 0, 0)
       filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
+    }
+  }
+
+  // Guard de transición de etapa (hallazgo #4): Cancelada es terminal e
+  // irreversible. Solo hace falta verificar cuando el body pide una etapa
+  // distinta de Cancelada (X → Cancelada siempre está permitido hoy).
+  const etapaSolicitada = filteredProperties.etapa_de_la_factura
+  if (etapaSolicitada != null && etapaSolicitada !== ETAPA_CANCELADA) {
+    let etapaActual
+    try {
+      const { data: invEtapa } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
+        params: { properties: 'etapa_de_la_factura' },
+      })
+      etapaActual = invEtapa.properties?.etapa_de_la_factura ?? null
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
+      }
+      // Fail-closed: si no podemos verificar la etapa actual, no aplicamos un
+      // cambio de etapa (podría estar reviviendo una Cancelada).
+      logger.error({ module: MOD, fn, invoiceId: id, err: err.response?.data || err.message },
+        'No se pudo leer la etapa actual para validar la transición')
+      return res.status(500).json({
+        error: 'No se pudo verificar la etapa actual de la factura. Reintentá en unos segundos.',
+      })
+    }
+
+    if (etapaSolicitada !== etapaActual && !esTransicionEtapaPermitida(etapaActual, etapaSolicitada)) {
+      logger.warn({ module: MOD, fn, invoiceId: id, etapaActual, etapaSolicitada },
+        'Transición de etapa bloqueada (Cancelada es terminal)')
+      writeAuditLog({
+        timestamp: new Date().toISOString(),
+        invoiceId: id,
+        user: req.headers['x-app-user'] || 'admin',
+        changes: {
+          etapa_de_la_factura: {
+            from: etapaActual,
+            to: etapaSolicitada,
+            rejected: true,
+            reason: 'transicion_no_permitida_cancelada_terminal',
+          },
+        },
+      })
+      return res.status(409).json({
+        error: 'La factura está Cancelada: es irreversible. Para facturar el período de nuevo usá la refacturación del ticket.',
+      })
     }
   }
 
@@ -325,11 +372,13 @@ router.post('/:id/cancelar', async (req, res) => {
     const ticketId     = invoice.properties?.ticket_id
     const fechaExiste  = invoice.properties?.fecha_de_cancelacion
 
-    if (etapaActual === 'Cancelada') {
+    // Coherente con stageTransitions: Cancelada es terminal; cancelar dos veces
+    // no tiene sentido (y X → Cancelada siempre está permitido por la matriz).
+    if (etapaActual === ETAPA_CANCELADA) {
       return res.status(400).json({ error: 'La factura ya está cancelada.' })
     }
 
-    const propsToUpdate = { etapa_de_la_factura: 'Cancelada' }
+    const propsToUpdate = { etapa_de_la_factura: ETAPA_CANCELADA }
     if (!fechaExiste) {
       const hoy = new Date()
       hoy.setUTCHours(0, 0, 0, 0)

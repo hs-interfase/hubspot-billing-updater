@@ -307,7 +307,21 @@ async function sweepAutoBacklog({ dealId, lineItemId, lineItemKey, today, migrat
   const autoRenew = !Number.isFinite(totalPayments) || totalPayments === 0;
 
   let activeCount = await countActivePlanInvoices(lineItemKey);
-  if (activeCount === null || !Number.isFinite(activeCount)) activeCount = 0;
+  if (activeCount === null || !Number.isFinite(activeCount)) {
+    if (!autoRenew) {
+      // Fail-closed: sin conteo confiable no podemos garantizar el tope del plan
+      // finito → no emitimos el backlog de este LI en esta pasada (la próxima
+      // corrida lo retoma). Un error transitorio de HubSpot no debe habilitar
+      // sobre-facturación del plan.
+      logger.warn({
+        module: 'phase3', fn: 'sweepAutoBacklog', dealId, lineItemId, lineItemKey,
+        totalPayments, backlogTickets: backlog.map(t => t.id),
+      }, 'No se pudo contar facturas activas del plan finito — skip backlog de este LI en esta pasada (fail closed)');
+      return { emitted, ensured, errors };
+    }
+    // Plan auto-renovable: el conteo no limita la emisión (no hay tope), seguimos.
+    activeCount = 0;
+  }
 
   // 4) Emitir por período (más viejo → más nuevo)
   for (const t of backlog) {
