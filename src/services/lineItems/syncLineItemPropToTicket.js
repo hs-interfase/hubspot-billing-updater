@@ -26,6 +26,8 @@ import { PROXIMOS_A_FACTURAR_STAGE, TICKET_PIPELINE } from '../../config/constan
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 import { findMirrorLineItem } from '../mirrorUtils.js';
+import { avisarResponsableTicketPorSyncLI } from '../notifications/liSyncTicketAlert.js';
+import { emailAvisoMirror } from '../notifications/mirrorAlert.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'syncLineItemPropToTicket';
@@ -132,8 +134,15 @@ export function pickAffectedTicketProps(snapshot, propertyName) {
  * (qué prop cambió) para que revisen el espejo. Anti-loop vía findMirrorLineItem (si el
  * LI ya es de un deal mirror, no avisa).
  *
+ * Aviso al responsable del ticket: por cada ticket "Próximos a Facturar" que este
+ * sync efectivamente modificó, se escribe of_billing_error del ticket vía
+ * avisarResponsableTicketPorSyncLI (SIN correo — el workflow de HubSpot crea la
+ * tarea al owner), gateado por LI_SYNC_OWNER_ALERT_ENABLED.
+ * Fire-and-forget: nunca frena el sync.
+ *
  * @returns {Promise<{applies:boolean, reason?:string, ticketsScanned:number,
- *   ticketsUpdated:number, skipped:number, keys:string[], errors:number, mirrorNotified:boolean}>}
+ *   ticketsUpdated:number, skipped:number, keys:string[], errors:number, mirrorNotified:boolean,
+ *   ownersNotified:number}>}
  */
 export async function syncLineItemPropToTickets({
   lineItemId,
@@ -145,8 +154,10 @@ export async function syncLineItemPropToTickets({
   updateTicketFn = updateTicket,
   findMirrorFn = findMirrorLineItem,
   reportErrorFn = reportHubSpotError,
+  notifyOwnerFn = avisarResponsableTicketPorSyncLI,
+  emailMirrorFn = emailAvisoMirror,
 }) {
-  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false };
+  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false, ownersNotified: 0 };
 
   if (!isTransferableLiProp(propertyName)) {
     return { ...stats, reason: TRANSFER_EXCLUDED_LI_PROPS.has(propertyName) ? 'excluded' : 'not_mapped' };
@@ -187,7 +198,7 @@ export async function syncLineItemPropToTickets({
   try {
     const resp = await client.crm.tickets.searchApi.doSearch({
       filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) }] }],
-      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', ...affectedKeys],
+      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'hubspot_owner_id', 'subject', ...affectedKeys],
       limit: 100,
     });
     tickets = resp?.results || [];
@@ -195,6 +206,8 @@ export async function syncLineItemPropToTickets({
     logger.error({ module: MODULE, lineItemId, lineItemKey, err }, 'Error buscando tickets del line item');
     return { ...stats, reason: 'ticket_search_error', errors: 1 };
   }
+
+  const updatedTickets = []; // {ticketId, ownerId, subject, patch} de cada update exitoso
 
   for (const t of tickets) {
     stats.ticketsScanned++;
@@ -215,6 +228,12 @@ export async function syncLineItemPropToTickets({
     try {
       await updateTicketFn(String(t.id), patch);
       stats.ticketsUpdated++;
+      updatedTickets.push({
+        ticketId: String(t.id),
+        ownerId: t?.properties?.hubspot_owner_id || null,
+        subject: t?.properties?.subject || null,
+        patch,
+      });
       logger.info(
         { module: MODULE, lineItemId, ticketId: t.id, propertyName, patchKeys: Object.keys(patch) },
         'Sync quirúrgico LI→ticket aplicado'
@@ -241,10 +260,39 @@ export async function syncLineItemPropToTickets({
           `Tickets del original actualizados: ${stats.ticketsUpdated}.`;
         reportErrorFn({ level: 'warn', objectType: 'deal', objectId: mirror.mirrorDealId, message: aviso });
         stats.mirrorNotified = true;
+        // Todos los avisos a mirror van también por correo (usuaria 25-jul).
+        // emailAvisoMirror nunca lanza (llave DEAL_ALERTS_ENABLED adentro).
+        await emailMirrorFn({
+          mirrorDealId: mirror.mirrorDealId,
+          title: 'Cambio del vendedor en original PY — revisar espejo UY',
+          message: aviso,
+          meta: { deal_py: mirror.pyDealId, li_py: String(lineItemId), li_uy: mirror.mirrorLineItemId, propiedad: propertyName },
+        });
         logger.info({ module: MODULE, lineItemId, propertyName, mirrorDealId: mirror.mirrorDealId }, 'Aviso de cambio del original escrito en deal UY mirror');
       }
     } catch (err) {
       logger.warn({ module: MODULE, lineItemId, err }, 'Aviso al mirror falló (no bloquea el sync)');
+    }
+  }
+
+  // Aviso al responsable de cada ticket modificado: el vendedor tocó el LI y el
+  // cambio aterrizó en un ticket "Próximos a Facturar" → el owner debe verificar
+  // antes de facturar. Gateado por LI_SYNC_OWNER_ALERT_ENABLED (dentro de
+  // notifyOwnerFn). Fire-and-forget: nunca frena el sync.
+  for (const ut of updatedTickets) {
+    try {
+      const r = await notifyOwnerFn({
+        ticketId: ut.ticketId,
+        ticketOwnerId: ut.ownerId,
+        lineItemId,
+        lineItemName: lp.name || null,
+        propertyName,
+        patch: ut.patch,
+        dealId,
+      });
+      if (r?.notified) stats.ownersNotified++;
+    } catch (err) {
+      logger.warn({ module: MODULE, lineItemId, ticketId: ut.ticketId, err }, 'Aviso al responsable del ticket falló (no bloquea el sync)');
     }
   }
 

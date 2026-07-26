@@ -39,14 +39,14 @@ function alertasApagadas(fn, ctx) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function ts() {
+export function ts() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
 /**
  * Resuelve el email de un HubSpot owner. Devuelve null si no se puede.
  */
-async function resolveOwnerEmail(ownerId) {
+export async function resolveOwnerEmail(ownerId) {
   if (!ownerId) return null;
   try {
     const owner = await hubspotClient.crm.owners.defaultApi.getById(Number(ownerId));
@@ -133,7 +133,7 @@ async function writeDealBillingError(dealId, message) {
 /**
  * Escribe un mensaje en of_billing_error del ticket (con timestamp).
  */
-async function writeTicketBillingError(ticketId, message) {
+export async function writeTicketBillingError(ticketId, message) {
   try {
     await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
       properties: {

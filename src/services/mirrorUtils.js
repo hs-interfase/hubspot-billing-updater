@@ -6,6 +6,7 @@
 import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
+import { emailAvisoMirror } from './notifications/mirrorAlert.js';
 import { getAllAssociatedIds } from '../utils/hubspotAssociations.js';
 import { withRetry } from '../utils/withRetry.js';
 import {
@@ -254,6 +255,14 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
     message: aviso,
   });
 
+  // Todos los avisos a mirror van también por correo (usuaria 25-jul).
+  await emailAvisoMirror({
+    mirrorDealId,
+    title: 'Factura PY emitida — revisar y facturar manualmente en UY',
+    message: aviso,
+    meta: { deal_py: pyDealId, li_py: String(pyLineItemId), li_uy: mirrorLineItemId, producto: productName },
+  });
+
   log.info({ mirrorDealId, aviso }, 'Aviso de factura PY escrito en deal UY');
 }
 
@@ -364,6 +373,16 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD,
     message: aviso,
   });
 
+  // Todos los avisos a mirror van también por correo (usuaria 25-jul).
+  await emailAvisoMirror({
+    mirrorDealId,
+    title: esNotaCredito
+      ? 'Nota de crédito emitida en PY — registrar en espejo UY'
+      : 'Emisión PY manual — revisar espejo UY',
+    message: aviso,
+    meta: { deal_py: pyDealId, li_py: String(pyLineItemId), li_uy: mirrorLineItemId, producto: productName, periodo: billingYMD },
+  });
+
   log.info({ mirrorDealId, esNotaCredito, aviso }, 'Aviso de emisión PY manual escrito en deal UY');
 }
 
@@ -447,6 +466,16 @@ export async function notifyMirrorDealOnPauseChange(pyLineItemId, { paused, deta
     objectType: 'deal',
     objectId: mirrorDealId,
     message: aviso,
+  });
+
+  // Todos los avisos a mirror van también por correo (usuaria 25-jul).
+  await emailAvisoMirror({
+    mirrorDealId,
+    title: paused
+      ? 'Pausa de línea PY — pausar la facturación manual en UY'
+      : 'Reactivación de línea PY — reactivar la facturación manual en UY',
+    message: aviso,
+    meta: { deal_py: String(d.pyDealId || pyDealId), li_py: String(pyLineItemId), li_uy: mirrorLineItemId },
   });
 
   log.info({ mirrorDealId, paused, aviso }, 'Aviso de cambio de pausa PY escrito en deal UY');
