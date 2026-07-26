@@ -143,6 +143,8 @@ Antes "asociado = promovido/cerca de facturar"; ahora un ganado asocia TODO su c
 | 2026-07-08 | Usuaria: "ahora no subiré las assoc" → código de asociaciones etiquetadas + snapshot `of_producto` quedó SIN commitear en el working tree (pasó por el stash `assoc-wip-mirrors-A-F`, popeado el mismo día; junto con fixes mirrors A-F). Backfills area/of_producto ya corridos en ambos portales quedan firmes. |
 | 2026-07-08 | Propietario de tickets confirmado por usuaria: **vendedor del deal** como fallback cuando el LI no tiene `responsable_asignado` — implementado en `assignTicketOwners` (sigue gateado a closedwon+; suite 89/89). |
 | 2026-07-26 | Fase 1 ejecutada en modo conservador: desconectado el disparador del LI (router+cola); handlers quedan deprecados sin borrar; limpieza de código → segunda etapa. Usuaria ya quitó la suscripción del webhook y la prop de las vistas del CRM (26-jul). |
+| 2026-07-26 | Stack de propiedades (revisión usuaria): `of_codigo_rubro` FUERA de la escucha LI→ticket (la prop se conserva en HubSpot, oculta de las vistas; el snapshot inicial la sigue copiando). Resto de la lista de 24 props vigente. |
+| 2026-07-26 | Avisos a mirror: destinatario default dedicado = usuaria María Bitencurt, vía env `MIRROR_ALERT_TO_EMAIL` (fallback `ALERT_TO_EMAIL`). Falta setear la env con su correo en .env/.env.real/Railway. |
 | (pendiente) | Stack de propiedades T3 (correo usuaria 6-jul). |
 | (pendiente) | Campos editables post-emisión (Paola) — define si T2 crece. |
 | (pendiente) | T4: todos vs solo manuales al cierre. |

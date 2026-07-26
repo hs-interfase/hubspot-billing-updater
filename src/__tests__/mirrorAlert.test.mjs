@@ -17,6 +17,7 @@ const { emailAvisoMirror, mirrorEmailApagado } =
   await import('../services/notifications/mirrorAlert.js');
 
 const ORIGINAL_FLAG = process.env.DEAL_ALERTS_ENABLED;
+delete process.env.MIRROR_ALERT_TO_EMAIL; // los tests de default no deben ver un destino dedicado del entorno
 
 test('DEAL_ALERTS_ENABLED=false/0/no → email omitido, sin llamadas', async () => {
   for (const v of ['false', '0', 'no']) {
@@ -61,6 +62,46 @@ test('camino feliz: manda email warning con deal espejo + mensaje', async () => 
   assert.equal(calls[0].meta.deal_py, 'DPY');
   assert.equal(calls[0].meta.li_py, 'LI1');
   assert.equal(calls[0].meta.mensaje, 'el aviso completo');
+});
+
+test('MIRROR_ALERT_TO_EMAIL seteada → usa sendAlertTo con ese destinatario (no el default)', async () => {
+  delete process.env.DEAL_ALERTS_ENABLED;
+  process.env.MIRROR_ALERT_TO_EMAIL = 'maria@ejemplo.com';
+  const toCalls = [];
+  const defaultCalls = [];
+  const r = await emailAvisoMirror(
+    { mirrorDealId: 'DUY', title: 'T', message: 'aviso', meta: { deal_py: 'DPY' } },
+    {
+      sendAlertFn: async (...a) => { defaultCalls.push(a); },
+      sendAlertToFn: async (args) => { toCalls.push(args); },
+    }
+  );
+  assert.deepEqual(r, { emailed: true });
+  assert.equal(defaultCalls.length, 0);
+  assert.equal(toCalls.length, 1);
+  assert.deepEqual(toCalls[0].to, ['maria@ejemplo.com']);
+  assert.equal(toCalls[0].level, 'warning');
+  assert.equal(toCalls[0].meta.deal_espejo_uy, 'DUY');
+  assert.equal(toCalls[0].meta.mensaje, 'aviso');
+  delete process.env.MIRROR_ALERT_TO_EMAIL;
+});
+
+test('MIRROR_ALERT_TO_EMAIL vacía/ausente → sigue por el destino operativo default', async () => {
+  delete process.env.DEAL_ALERTS_ENABLED;
+  process.env.MIRROR_ALERT_TO_EMAIL = '   ';
+  const toCalls = [];
+  const defaultCalls = [];
+  const r = await emailAvisoMirror(
+    { mirrorDealId: 'DUY', message: 'aviso' },
+    {
+      sendAlertFn: async (...a) => { defaultCalls.push(a); },
+      sendAlertToFn: async (args) => { toCalls.push(args); },
+    }
+  );
+  assert.deepEqual(r, { emailed: true });
+  assert.equal(defaultCalls.length, 1);
+  assert.equal(toCalls.length, 0);
+  delete process.env.MIRROR_ALERT_TO_EMAIL;
 });
 
 test('sendAlertFn que lanza: NO lanza, devuelve reason=error', async () => {

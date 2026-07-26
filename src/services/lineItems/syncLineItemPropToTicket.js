@@ -54,7 +54,9 @@ export const LI_PROP_TO_TICKET_KEYS = {
   servicio: ['of_rubro'],
   subrubro: ['of_subrubro'],
   area: ['area'],
-  of_codigo_rubro: ['of_codigo_rubro'],
+  // of_codigo_rubro: RETIRADO de la escucha (decisión usuaria 26-jul). La prop
+  // se conserva en HubSpot pero oculta de las vistas; el snapshot inicial del
+  // forecast la sigue copiando — solo NO se sobreescribe por ediciones del LI.
   // mensaje_para_responsable → observaciones: RETIRADO (21-jul). "Observaciones" es
   // ahora un campo propio del ticket (nace vacío), NO un espejo del LI.
   nota: ['nota'],

@@ -241,12 +241,12 @@ SELECT id, action_type, object_id, property_name, status, error, finished_at
 1. [ ] Editar `price` del LI del deal ORIGINAL PY (`LI_PY_ID`) con ticket en "Próximos a Facturar".
 2. [ ] Verificar que el sync actualizó el/los ticket(s) del original (job `li_prop_sync` en `done`).
 3. [ ] Verificar en el deal espejo UY (`DEAL_UY_ID`): `billing_error` con el aviso "Cambio en el negocio ORIGINAL … revisar el espejo UY" (indica prop cambiada, LI PY→UY y cantidad de tickets actualizados).
-4. [ ] Verificar la bandeja del **operativo por defecto del sistema de alertas**: llegó el correo del aviso al mirror.
+4. [ ] Verificar la bandeja del **destinatario de mirrors** (`MIRROR_ALERT_TO_EMAIL` = María Bitencurt; si la env no está seteada, cae al operativo default `ALERT_TO_EMAIL`): llegó el correo del aviso al mirror.
 
 **Resultado esperado**
 - El sync es quirúrgico: SOLO las props influidas por `price` cambian; nota/observaciones/lo demás del responsable queda intacto. Solo toca tickets del pipeline manual en "Próximos a Facturar" (forecast/automático/emitido se saltean).
 - **El aviso al responsable NO manda correo** (definición 26-jul): (a) patch + `of_billing_error` + tarea del workflow al owner. (b) patch + prop escrita, sin `failed`. (c) patch sin aviso.
-- (d) El aviso a MIRROR sí llega por correo al operativo por defecto de alertas, además del `billing_error` en el deal UY. El anti-loop se respeta: editar un LI de un deal que YA es espejo NO genera aviso.
+- (d) El aviso a MIRROR sí llega por correo al destinatario de mirrors (`MIRROR_ALERT_TO_EMAIL`, con fallback al operativo default), además del `billing_error` en el deal UY. El anti-loop se respeta: editar un LI de un deal que YA es espejo NO genera aviso.
 - Ojo colateral esperado: como `price` también recalcula el VALOR del deal (post `li_prop_sync`), `valor_total` puede moverse — es correcto.
 
 **Evidencia a registrar**

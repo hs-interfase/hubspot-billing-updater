@@ -8,9 +8,11 @@
 // site sigue escribiendo su billing_error como siempre (comportamiento
 // histórico intacto) y llama emailAvisoMirror() al lado.
 //
-// Destinatario: el destino operativo por defecto de lib/alertService.js →
-// sendAlert() manda a ALERT_TO_EMAIL (env; fallback promichfsd@gmail.com).
-// No hay destinatario por-deal: los espejos UY los trabaja el equipo operativo.
+// Destinatario (decisión usuaria 26-jul): TODOS los avisos a mirror van a un
+// destinatario default dedicado — la usuaria operativa María Bitencurt — vía
+// env MIRROR_ALERT_TO_EMAIL. Si la env no está seteada, fallback al destino
+// operativo general de lib/alertService.js (ALERT_TO_EMAIL). No hay
+// destinatario por-deal: los espejos UY los trabaja el equipo operativo.
 //
 // Llave: DEAL_ALERTS_ENABLED (la misma de dealAlerts.js, mismo parser):
 //   · ausente o vacía      → PRENDIDA
@@ -20,7 +22,7 @@
 //
 // Fire-and-forget: emailAvisoMirror NUNCA lanza.
 
-import { sendAlert } from '../../../lib/alertService.js';
+import { sendAlert, sendAlertTo } from '../../../lib/alertService.js';
 import logger from '../../../lib/logger.js';
 
 const MOD = 'mirrorAlert';
@@ -48,22 +50,30 @@ export function mirrorEmailApagado(fn, ctx = {}) {
  * @param {string} params.message - el aviso (idéntico al billing_error)
  * @param {Object} [params.meta]  - datos extra para la tabla del email
  * @param {Object} [deps]
- * @param {Function} [deps.sendAlertFn] - default sendAlert (→ ALERT_TO_EMAIL)
+ * @param {Function} [deps.sendAlertFn]   - default sendAlert (→ ALERT_TO_EMAIL)
+ * @param {Function} [deps.sendAlertToFn] - default sendAlertTo (usada cuando
+ *                                          MIRROR_ALERT_TO_EMAIL está seteada)
  * @returns {Promise<{emailed:boolean, reason?:string}>} NUNCA lanza.
  */
 export async function emailAvisoMirror({ mirrorDealId, title = 'Aviso al deal espejo UY', message, meta = {} }, deps = {}) {
   const fn = 'emailAvisoMirror';
-  const { sendAlertFn = sendAlert } = deps;
+  const { sendAlertFn = sendAlert, sendAlertToFn = sendAlertTo } = deps;
   try {
     if (mirrorEmailApagado(fn, { mirrorDealId })) {
       return { emailed: false, reason: 'DEAL_ALERTS_ENABLED=false' };
     }
-    await sendAlertFn('warning', title, {
+    const metaEmail = {
       deal_espejo_uy: String(mirrorDealId),
       ...meta,
       mensaje: message,
-    });
-    logger.info({ module: MOD, fn, mirrorDealId, title }, 'Email de aviso a mirror enviado al destino operativo');
+    };
+    const destinoDedicado = (process.env.MIRROR_ALERT_TO_EMAIL ?? '').trim();
+    if (destinoDedicado) {
+      await sendAlertToFn({ to: [destinoDedicado], level: 'warning', title, meta: metaEmail });
+    } else {
+      await sendAlertFn('warning', title, metaEmail);
+    }
+    logger.info({ module: MOD, fn, mirrorDealId, title, destinoDedicado: destinoDedicado || '(operativo default)' }, 'Email de aviso a mirror enviado');
     return { emailed: true };
   } catch (err) {
     logger.warn({ module: MOD, fn, mirrorDealId, err: err?.message }, 'Email de aviso a mirror falló (no bloquea nada)');
