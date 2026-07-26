@@ -6,8 +6,12 @@ import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
 import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
+import { esEventoTicketValor, esTicketEditableParaValor } from '../src/utils/webhookRouteRules.js';
 
 const MODULE = 'escuchar-cambios';
+
+// Prop del ticket que apunta a su deal (misma que usan processUrgentTicket y recalcValorTotal)
+const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
 
 // ─── Helper: resolver dealId desde line item (para deduplicación en la cola) ─
 
@@ -32,6 +36,28 @@ async function getDealIdForLineItem(lineItemId) {
   }
 }
 
+// ─── Helper: info de ruteo de un ticket (deal + pipeline/stage para el guard) ─
+
+async function getTicketRoutingInfo(ticketId) {
+  try {
+    const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+      PROP_TICKET_DEAL_ID, 'hs_pipeline', 'hs_pipeline_stage',
+    ]);
+    const props = ticket?.properties || {};
+    return {
+      dealId: (props[PROP_TICKET_DEAL_ID] || '').trim() || null,
+      pipeline: props.hs_pipeline,
+      stage: props.hs_pipeline_stage,
+    };
+  } catch (err) {
+    logger.warn(
+      { module: MODULE, fn: 'getTicketRoutingInfo', ticketId, err: err?.message },
+      'No se pudo leer el ticket pre-enqueue, se resolverá en el worker'
+    );
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -46,7 +72,7 @@ export default async function handler(req, res) {
     const propertyValue = payload?.propertyValue;
     const eventId = payload?.eventId;
 
-    logger.info({ module: MODULE, fn: 'handler', objectId, objectType, propertyName, propertyValue, eventId }, 'Evento webhook recibido');
+    logger.info({ module: MODULE, fn: 'handler', objectId, objectType, propertyName, propertyValue, eventId, changeSource: payload?.changeSource }, 'Evento webhook recibido');
 
     if (!objectId) {
       logger.error({ module: MODULE, fn: 'handler' }, 'Missing objectId');
@@ -217,6 +243,32 @@ export default async function handler(req, res) {
         rawPayload: payload,
       });
       return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'valor_recalc' });
+    }
+
+    // ====== RUTA 5b: MONTOS DEL TICKET EDITABLE → RECALCULAR VALOR ======
+    // Para plan fijo / pago único el VALOR del deal = Σ subtotal_real de sus TICKETS
+    // (recalcValorTotal). Si el responsable corrige montos de un ticket editable
+    // (monto_unitario_real / cantidad_real / of_costo_usd / dolar), recalcular el VALOR.
+    // Guard anti-tormenta: el motor escribe estas mismas props en tickets FORECAST
+    // (re-snapshot masivo de phasep) → solo se encola si el ticket está en el pipeline
+    // manual y su etapa NO es forecast (ver src/utils/webhookRouteRules.js).
+    if (esEventoTicketValor(objectType, propertyName)) {
+      const info = await getTicketRoutingInfo(objectId);
+
+      if (info && !esTicketEditableParaValor(info)) {
+        return res.status(200).json({ message: 'Ticket no editable (forecast/automático), skipped', propertyName });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: info?.dealId ?? null,
+        actionType: 'valor_recalc',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId: info?.dealId ?? null, action: 'valor_recalc' });
     }
 
     // ====== PROPIEDAD NO RECONOCIDA ======

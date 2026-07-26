@@ -17,6 +17,13 @@
 actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, discount, empresa_que_factura, es_definitivo, exonera_irae, facturacion_automatica, facturar_ahora, fecha_de_baja, fecha_vencimiento_contrato, fin_del_contrato, hs_billing_start_delay_type, hs_discount_percentage, hs_recurring_billing_period, hs_recurring_billing_start_date, hs_tax_rate_group_id, hubspot_owner_id, inicio_del_contrato, line_item_key, mensaje_para_responsable, momento_de_facturacion, monto_unitario_actual, motivo_de_pausa, name, nc, nombre_producto, nota, opera_trading, pais_operativo, parte_del_cupo, pausa, price, quantity, recurringbillingfrequency, responsable_asignado, reventa, servicio, subrubro, terceros, tipo_de_parametrica, unidad_de_negocio, uy
 
 ## ticket / "Ticket" — 58 (`ticket.propertyChange`)
+
+> 🧮 **Ruteo valor_recalc (semana tickets, fase 1):** `monto_unitario_real`, `cantidad_real`,
+> `of_costo_usd` y `dolar` ahora rutean a `valor_recalc` (RUTA 5b de `api/escuchar-cambios.js`)
+> — solo tickets EDITABLES del pipeline manual; anti-bucle por stage (los tickets forecast,
+> que el motor re-snapshotea en phasep, se descartan). Las props que escribe el motor en
+> emisión (`subtotal_real`, `of_costo`, `of_margen`) siguen SIN suscribirse.
+
 ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, comentarios_pm, content, descuento_en_porcentaje, descuento_por_unidad_real, dolar, empresa_id, empresa_que_factura, entidad_facturadora, exonera_irae, facturacion_automatica, facturar_ahora, fecha_inicio_de_facturacion, fecha_real_de_facturacion, fecha_resolucion_esperada, fin_del_contrato, hay_ajuste, hs_resolution, inicio_del_contrato, momento_de_facturacion, monto_unitario_real, motivo_cancelacion_del_ticket, motivo_del_ajuste, nc, negocio_compartido, nombre_empresa, nota, observaciones, observaciones_ventas, of_aplica_para_cupo, of_cantidad_de_pagos, of_costo_usd, of_frecuencia_de_facturacion, of_line_item_ids, of_moneda, of_monto_total, of_motivo_pausa, of_pais_operativo, of_producto, of_producto_nombres, of_propietario_secundario, of_rubro, of_subrubro, opera_trading, producto_id, renovacion_automatica, repetitivo, reventa, revisado_por, servicio, source_type, subject, tipo_de_parametrica, unidad_de_negocio
 
 ## deal / "Negocio" — 17 (`deal.propertyChange`)

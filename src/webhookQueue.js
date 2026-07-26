@@ -632,14 +632,19 @@ async function executeJob(job) {
     }
 
     case 'valor_recalc': {
-      // Frecuencia / nº de pagos del LI cambian la clasificación auto-renew y el
-      // multiplicador anual del VALOR (regla 21-jul). Recalcula SOLO el VALOR del deal,
-      // sin re-correr las phases (no crea tickets ni toca facturación).
+      // Dos orígenes (mismo efecto): frecuencia / nº de pagos del LI cambian la
+      // clasificación auto-renew y el multiplicador anual del VALOR (regla 21-jul);
+      // y ediciones de montos de TICKETS editables (monto_unitario_real / cantidad_real /
+      // of_costo_usd / dolar — RUTA 5b) cambian el Σ subtotal_real del plan fijo.
+      // Recalcula SOLO el VALOR del deal, sin re-correr las phases (no crea tickets
+      // ni toca facturación).
       let resolvedDealId = deal_id;
       if (!resolvedDealId) {
-        resolvedDealId = await getDealIdForLineItem(object_id);
+        resolvedDealId = object_type === 'ticket'
+          ? await getDealIdForTicket(object_id)
+          : await getDealIdForLineItem(object_id);
         if (!resolvedDealId) {
-          throw new Error(`No se encontró deal asociado al line item ${object_id}`);
+          throw new Error(`No se encontró deal asociado al ${object_type} ${object_id}`);
         }
         await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
       }
@@ -671,6 +676,17 @@ async function getDealIdForLineItem(lineItemId) {
     .map(r => String(r.toObjectId))
     .filter(Boolean);
   return dealIds.length ? dealIds[0] : null;
+}
+
+// ─── Helper: resolver dealId desde ticket (prop of_deal_id, como recalcValorTotal) ─
+
+const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
+
+async function getDealIdForTicket(ticketId) {
+  const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+    PROP_TICKET_DEAL_ID,
+  ]);
+  return (ticket?.properties?.[PROP_TICKET_DEAL_ID] || '').trim() || null;
 }
 
 // ─── Health check (para healthAudit.js) ──────────────────────────────────────
