@@ -38,6 +38,11 @@ const SLEEP_MS = (() => {
   const i = argv.indexOf('--sleep');
   return i >= 0 ? Number(argv[i + 1]) || 120 : 120;
 })();
+// --deal <id>: procesar SOLO ese deal (para probar el fix en uno antes del backfill masivo).
+const ONLY_DEAL = (() => {
+  const i = argv.indexOf('--deal');
+  return i >= 0 ? String(argv[i + 1] || '').trim() : null;
+})();
 const FLAG_ON =
   String(process.env.WRITE_DEAL_AMOUNT_FROM_VALOR || '').toLowerCase() === 'true';
 
@@ -48,8 +53,15 @@ const fmt = (v) =>
     ? '—'
     : v.toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Enumera TODOS los deals con valor local calculado, paginando el Search API. */
+/** Enumera deals con valor local calculado. Si ONLY_DEAL está seteado, solo ese. */
 async function* iterDeals() {
+  if (ONLY_DEAL) {
+    const d = await hubspotClient.crm.deals.basicApi.getById(ONLY_DEAL, [
+      'dealname', 'amount', 'valor_total_moneda_original', 'deal_currency_code',
+    ]);
+    yield d;
+    return;
+  }
   let after;
   do {
     const res = await hubspotClient.crm.deals.searchApi.doSearch({
