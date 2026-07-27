@@ -153,6 +153,28 @@ export function resolveCancellationBranch({ cancelIntent } = {}) {
 }
 
 /**
+ * Contador of_refacturaciones (Bloque 3). Helper PURO.
+ *
+ * SOLO incrementa cuando el cancelIntent EXPLÍCITO es 'revert' (reversión
+ * deliberada para refacturar). Con intent null (webhook genérico, cron sweep
+ * propagateCancelledInvoicesForDeal — que re-propaga la MISMA invoice en cada
+ * corrida) devuelve null → no se escribe nada, si no el contador se inflaría
+ * solo. Con la llave maestra apagada el intent ya llega forzado a null →
+ * neutralidad garantizada.
+ *
+ * @param {Object} [params]
+ * @param {'cancel'|'revert'|null} [params.cancelIntent]
+ * @param {string|number|null} [params.actual] - valor actual de of_refacturaciones
+ * @returns {number|null} nuevo valor del contador, o null si no debe escribirse
+ */
+export function computeContadorRefacturaciones({ cancelIntent, actual } = {}) {
+  if (cancelIntent !== 'revert') return null;
+  const n = Number(String(actual ?? '').trim());
+  const base = Number.isFinite(n) && n > 0 ? n : 0;
+  return base + 1;
+}
+
+/**
  * Bloque 5b — "preparar ticket para refacturación" tras cancelarse una factura.
  *
  * ⚠️ COMPORTAMIENTO ACTUAL CONSERVADO TAL CUAL (extracción pura desde
@@ -185,6 +207,9 @@ export function resolveCancellationBranch({ cancelIntent } = {}) {
  * @param {string|null} params.lineItemId - primer line item del ticket (of_line_item_ids)
  * @param {Object|null} [params.cupoResult] - resultado de revertCupoForInvoice
  *                                  (null = llave apagada → aviso textual actual)
+ * @param {number|null} [params.contadorNuevo] - nuevo valor de of_refacturaciones
+ *                                  (null = no escribir el contador — default,
+ *                                  solo viene con valor en reversión explícita)
  */
 async function prepareTicketForRebillingAfterCancellation({
   invoiceId,
@@ -194,6 +219,7 @@ async function prepareTicketForRebillingAfterCancellation({
   fechaCreacionYMD,
   lineItemId,
   cupoResult = null,
+  contadorNuevo = null,
 }) {
   const mod = 'propagacion/invoice';
   const fn  = 'propagateInvoiceStateToTicket';
@@ -252,6 +278,11 @@ async function prepareTicketForRebillingAfterCancellation({
     cancelCleanup.hs_pipeline = String(
       isAutomated ? AUTOMATED_TICKET_PIPELINE : TICKET_PIPELINE
     );
+  }
+  // Contador of_refacturaciones: solo se escribe en reversión EXPLÍCITA
+  // (contadorNuevo !== null) y dentro del mismo update — sin writes extra.
+  if (contadorNuevo !== null) {
+    cancelCleanup.of_refacturaciones = String(contadorNuevo);
   }
 
   try {
@@ -484,7 +515,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
         filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
-        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo'],        limit: 1,
+        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo', 'of_refacturaciones'],        limit: 1,
       });
       ticket = resp?.results?.[0] || null;
     } catch (err) {
@@ -496,7 +527,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       ticket = await hubspotClient.crm.tickets.basicApi.getById(
         String(ip.ticket_id),
-        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id']
+        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_refacturaciones']
       );
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId: ip.ticket_id, err }, 'Error obteniendo ticket por ticket_id');
@@ -607,6 +638,14 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
         lineItemId,
       });
     } else {
+      // Contador of_refacturaciones: SOLO con cancelIntent EXPLÍCITO 'revert'
+      // (reversión deliberada). Con intent null (webhook genérico, cron sweep
+      // que re-propaga la misma invoice cancelada en cada corrida) devuelve
+      // null y NO se escribe — si no, el contador se inflaría solo.
+      const contadorNuevo = computeContadorRefacturaciones({
+        cancelIntent,
+        actual: tp.of_refacturaciones,
+      });
       await prepareTicketForRebillingAfterCancellation({
         invoiceId,
         ticketId,
@@ -615,6 +654,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
         fechaCreacionYMD,
         lineItemId,
         cupoResult,
+        contadorNuevo,
       });
     }
   }

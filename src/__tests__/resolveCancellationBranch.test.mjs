@@ -14,7 +14,8 @@ process.env.DATABASE_URL ||= 'postgres://u:p@localhost:5432/x';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { resolveCancellationBranch } = await import('../propagacion/invoice.js');
+const { resolveCancellationBranch, computeContadorRefacturaciones } =
+  await import('../propagacion/invoice.js');
 const { cancelRevertFlowEnabled, cupoRevertOnCancelEnabled } =
   await import('../config/cancelRevertFlags.js');
 
@@ -40,6 +41,46 @@ test('sin argumento / undefined / basura → revert (default seguro)', () => {
   assert.equal(resolveCancellationBranch({ cancelIntent: undefined }), 'revert');
   assert.equal(resolveCancellationBranch({ cancelIntent: 'CANCEL' }), 'revert');
   assert.equal(resolveCancellationBranch({ cancelIntent: 'cancelar' }), 'revert');
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// computeContadorRefacturaciones (puro — Bloque 3, contador of_refacturaciones)
+// Solo incrementa con cancelIntent EXPLÍCITO 'revert'; con null (webhook
+// genérico / cron sweep que re-propaga la misma invoice) devuelve null para
+// que el contador no se infle solo.
+// ═════════════════════════════════════════════════════════════════════════════
+
+test("'revert' + actual vacío/ausente → 1", () => {
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: '' }), 1);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: null }), 1);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: undefined }), 1);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert' }), 1);
+});
+
+test("'revert' + actual '2' → 3 (incrementa el valor existente)", () => {
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: '2' }), 3);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: 2 }), 3);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: ' 5 ' }), 6);
+});
+
+test("'revert' + actual basura → 1 (arranca de cero)", () => {
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: 'abc' }), 1);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: '-3' }), 1);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'revert', actual: 'NaN' }), 1);
+});
+
+test("'cancel' → null (cancelación definitiva no cuenta refacturación)", () => {
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'cancel', actual: '2' }), null);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'cancel', actual: '' }), null);
+});
+
+test('intent null/undefined/basura → null (cron sweep NO infla el contador)', () => {
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: null, actual: '2' }), null);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: undefined, actual: '2' }), null);
+  assert.equal(computeContadorRefacturaciones({ actual: '2' }), null);
+  assert.equal(computeContadorRefacturaciones({}), null);
+  assert.equal(computeContadorRefacturaciones(), null);
+  assert.equal(computeContadorRefacturaciones({ cancelIntent: 'REVERT', actual: '2' }), null);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

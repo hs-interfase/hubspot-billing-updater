@@ -20,6 +20,9 @@ import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { writeTicketBillingError } from '../notifications/dealAlerts.js';
 import { parseBool } from '../../utils/parsers.js';
+import { cancelRevertFlowEnabled } from '../../config/cancelRevertFlags.js';
+import { checkInvoiceRevertible, buildNodumBlockMessage } from '../invoices/nodumGate.js';
+import { propagateInvoiceStateToTicket } from '../../propagacion/invoice.js';
 import {
   AUTOMATED_TICKET_PIPELINE,
   CANCELLED_STAGE_BY_PIPELINE,
@@ -27,6 +30,8 @@ import {
 } from '../../config/constants.js';
 
 const MODULE = 'cancelTicketRequest';
+
+const INVOICE_OBJECT_TYPE = 'invoices';
 
 const MSG_AUTOMATICO =
   'Los tickets automáticos no se cancelan desde esta casilla. Hablá con administración.';
@@ -44,7 +49,13 @@ const MSG_FACTURA_VIVA =
  *   2. Ya en etapa CANCELADO     → solo reset de la casilla.
  *   3. Sin factura viva          → mover a la etapa CANCELADO de su pipeline
  *                                  (+ motivo_cancelacion_del_ticket, conserva of_ticket_key) + reset.
- *   4. Con factura viva          → aviso en of_billing_error + reset (no se toca nada más).
+ *   4. Con factura viva:
+ *        - CANCEL_REVERT_FLOW_ENABLED apagada (default) → aviso en
+ *          of_billing_error + reset (no se toca nada más — comportamiento actual).
+ *        - Llave prendida (Bloque 3) → gate Nodum; si pasa, se cancela la
+ *          factura (mismas props que el editor) y se propaga con
+ *          cancelIntent 'cancel' (cancelación DEFINITIVA: el propagate cierra
+ *          el ticket en CANCELADO, período cerrado).
  *
  * "Factura viva" = of_invoice_id presente Y of_invoice_status !== 'Cancelada'.
  *
@@ -52,12 +63,18 @@ const MSG_FACTURA_VIVA =
  * @param {Object} [deps] - inyección de dependencias (tests)
  * @param {Object}   [deps.client]                   - hubspotClient
  * @param {Function} [deps.updateTicketFn]           - (ticketId, props) => Promise
+ * @param {Function} [deps.updateInvoiceFn]          - (invoiceId, props) => Promise
  * @param {Function} [deps.writeTicketErrorFn]       - writeTicketBillingError
  * @param {Function} [deps.reportFn]                 - reportIfActionable
+ * @param {Function} [deps.flowEnabledFn]            - cancelRevertFlowEnabled
+ * @param {Function} [deps.checkRevertibleFn]        - checkInvoiceRevertible
+ * @param {Function} [deps.nodumBlockMessageFn]      - buildNodumBlockMessage
+ * @param {Function} [deps.propagateFn]              - propagateInvoiceStateToTicket
  * @param {string}   [deps.automatedPipelineId]      - AUTOMATED_TICKET_PIPELINE
  * @param {Object}   [deps.cancelledStageByPipeline] - CANCELLED_STAGE_BY_PIPELINE
  * @param {string}   [deps.fallbackCancelledStage]   - TICKET_STAGES.CANCELLED (si el pipeline no está en el map)
  * @param {Function} [deps.todayYMDFn]               - () => 'YYYY-MM-DD'
+ * @param {Function} [deps.todayEpochFn]             - () => epoch ms de hoy (00:00 UTC)
  * @returns {Promise<Object>} { cancelled?, skipped?, reason?, ... }
  */
 export async function processCancelTicketRequest(ticketId, deps = {}) {
@@ -65,14 +82,28 @@ export async function processCancelTicketRequest(ticketId, deps = {}) {
     client = hubspotClient,
     writeTicketErrorFn = writeTicketBillingError,
     reportFn = reportIfActionable,
+    flowEnabledFn = cancelRevertFlowEnabled,
+    checkRevertibleFn = checkInvoiceRevertible,
+    nodumBlockMessageFn = buildNodumBlockMessage,
+    propagateFn = propagateInvoiceStateToTicket,
     automatedPipelineId = AUTOMATED_TICKET_PIPELINE,
     cancelledStageByPipeline = CANCELLED_STAGE_BY_PIPELINE,
     fallbackCancelledStage = TICKET_STAGES.CANCELLED,
     todayYMDFn = () => new Date().toISOString().slice(0, 10),
+    todayEpochFn = () => {
+      const hoy = new Date();
+      hoy.setUTCHours(0, 0, 0, 0);
+      return hoy.getTime();
+    },
   } = deps;
 
   const updateTicketFn = deps.updateTicketFn || (async (id, properties) => {
     await client.crm.tickets.basicApi.update(String(id), { properties });
+  });
+
+  // Mismas props que el editor de facturas (POST /:id/cancelar).
+  const updateInvoiceFn = deps.updateInvoiceFn || (async (id, properties) => {
+    await client.crm.objects.basicApi.update(INVOICE_OBJECT_TYPE, String(id), { properties });
   });
 
   const fn = 'processCancelTicketRequest';
@@ -130,14 +161,71 @@ export async function processCancelTicketRequest(ticketId, deps = {}) {
     // "Factura viva" = of_invoice_id presente y no cancelada.
     const facturaViva = Boolean(invoiceId) && invoiceStatus !== 'Cancelada';
 
-    // 5. Con factura viva → NO tocar nada, avisar + reset.
+    // 5. Con factura viva:
+    //    - Llave apagada (default): NO tocar nada, avisar + reset (comportamiento actual).
+    //    - Llave prendida (Bloque 3): gate Nodum → cancelar la factura →
+    //      propagate con intent 'cancel' (definitivo: el propagate cierra el
+    //      ticket en CANCELADO vía finalizeTicketAfterDefinitiveCancellation).
     if (facturaViva) {
+      if (!flowEnabledFn()) {
+        logger.info(
+          { module: MODULE, fn, ticketId, invoiceId, invoiceStatus },
+          'Ticket con factura viva: no se cancela en esta etapa, aviso + reset'
+        );
+        await writeTicketErrorFn(ticketId, MSG_FACTURA_VIVA);
+        return { skipped: true, reason: 'invoice_alive', invoiceId };
+      }
+
+      // Gate Nodum (fail-closed): asentada en Nodum → nota de crédito.
+      const gate = await checkRevertibleFn(invoiceId);
+      if (!gate.revertible) {
+        const reason = gate.error ? 'nodum_gate_error' : 'nodum_asentada';
+        const msg = gate.error
+          ? 'No se pudo verificar si la factura está asentada en Nodum. Reintentá en unos minutos.'
+          : nodumBlockMessageFn(gate.nodumId);
+        logger.warn(
+          { module: MODULE, fn, ticketId, invoiceId, nodumId: gate.nodumId, reason },
+          'Cancelación con factura viva bloqueada por gate Nodum'
+        );
+        await writeTicketErrorFn(ticketId, msg);
+        return { skipped: true, reason, invoiceId };
+      }
+
+      // Cancelar la factura (mismas props que el editor) y propagar DEFINITIVO.
+      try {
+        await updateInvoiceFn(invoiceId, {
+          etapa_de_la_factura: 'Cancelada',
+          fecha_de_cancelacion: String(todayEpochFn()),
+        });
+        logger.info(
+          { module: MODULE, fn, ticketId, invoiceId },
+          'Factura cancelada por casilla cancelar_ticket, propagando (intent cancel)'
+        );
+      } catch (err) {
+        logger.error(
+          { module: MODULE, fn, ticketId, invoiceId, err: err?.message },
+          'Error cancelando la factura (la casilla se resetea igual)'
+        );
+        reportFn({ objectType: 'ticket', objectId: String(ticketId), message: `Error cancelando factura ${invoiceId} (cancelar_ticket)`, err });
+        return { cancelled: false, reason: 'invoice_patch_failed', invoiceId };
+      }
+
+      try {
+        await propagateFn(String(invoiceId), { cancelIntent: 'cancel' });
+      } catch (err) {
+        logger.error(
+          { module: MODULE, fn, ticketId, invoiceId, err: err?.message },
+          'Factura cancelada pero la propagación al ticket falló'
+        );
+        reportFn({ objectType: 'ticket', objectId: String(ticketId), message: `Factura ${invoiceId} cancelada pero la propagación falló (cancelar_ticket)`, err });
+        return { cancelled: false, reason: 'propagate_failed', invoiceId };
+      }
+
       logger.info(
-        { module: MODULE, fn, ticketId, invoiceId, invoiceStatus },
-        'Ticket con factura viva: no se cancela en esta etapa, aviso + reset'
+        { module: MODULE, fn, ticketId, invoiceId },
+        'Cancelación completada vía cancelación de la factura (definitiva)'
       );
-      await writeTicketErrorFn(ticketId, MSG_FACTURA_VIVA);
-      return { skipped: true, reason: 'invoice_alive', invoiceId };
+      return { cancelled: true, via: 'invoice_cancelled', invoiceId };
     }
 
     // 4. Sin factura viva → mover a la etapa CANCELADO de su pipeline.

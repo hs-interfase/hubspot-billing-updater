@@ -19,9 +19,19 @@ const PIPE_AUTO = 'PIPE_AUTO';
 const STAGE_CANCEL_MANUAL = 'STAGE_CANCEL_MANUAL';
 const STAGE_CANCEL_AUTO = 'STAGE_CANCEL_AUTO';
 const STAGE_FORECAST = 'STAGE_FORECAST';
+const EPOCH_HOY = 1753488000000;
 
-function makeCtx({ props, failStageWrite = false }) {
+function makeCtx({
+  props,
+  failStageWrite = false,
+  flowOn = false,                                  // default = llave apagada (comportamiento actual)
+  gate = { revertible: true, nodumId: null },
+  failInvoicePatch = false,
+  failPropagate = false,
+}) {
   const updateCalls = [];
+  const invoicePatches = [];
+  const propagateCalls = [];
   const errores = [];
   const reports = [];
 
@@ -43,17 +53,29 @@ function makeCtx({ props, failStageWrite = false }) {
       if (failStageWrite && patch.hs_pipeline_stage) throw new Error('boom stage write');
       updateCalls.push({ id: String(id), patch });
     },
+    updateInvoiceFn: async (id, patch) => {
+      if (failInvoicePatch) throw new Error('boom invoice patch');
+      invoicePatches.push({ id: String(id), patch });
+    },
     writeTicketErrorFn: async (id, msg) => { errores.push({ id: String(id), msg }); },
     reportFn: (arg) => { reports.push(arg); },
+    flowEnabledFn: () => flowOn,
+    checkRevertibleFn: async () => gate,
+    nodumBlockMessageFn: (nodumId) => `NODUM_BLOCK ${nodumId}`,
+    propagateFn: async (id, opts) => {
+      if (failPropagate) throw new Error('boom propagate');
+      propagateCalls.push({ id: String(id), opts });
+    },
     automatedPipelineId: PIPE_AUTO,
     cancelledStageByPipeline: {
       [PIPE_MANUAL]: STAGE_CANCEL_MANUAL,
       [PIPE_AUTO]: STAGE_CANCEL_AUTO,
     },
     todayYMDFn: () => '2026-07-26',
+    todayEpochFn: () => EPOCH_HOY,
   };
 
-  return { deps, updateCalls, errores, reports };
+  return { deps, updateCalls, invoicePatches, propagateCalls, errores, reports };
 }
 
 const resetCalls = (updateCalls) =>
@@ -141,13 +163,14 @@ test('factura Cancelada cuenta como sin factura viva: también cancela', async (
   assert.equal(resetCalls(updateCalls).length, 1);
 });
 
-// ── 4. Con factura viva ──────────────────────────────────────────────────────
-test('con factura viva: aviso y reset, sin tocar stage', async () => {
-  const { deps, updateCalls, errores } = makeCtx({
+// ── 4. Con factura viva (llave apagada = comportamiento actual) ──────────────
+test('con factura viva y llave apagada: aviso y reset, sin tocar stage ni factura', async () => {
+  const { deps, updateCalls, invoicePatches, propagateCalls, errores } = makeCtx({
     props: {
       hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
       of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
     },
+    flowOn: false,
   });
 
   const r = await processCancelTicketRequest('T1', deps);
@@ -160,6 +183,123 @@ test('con factura viva: aviso y reset, sin tocar stage', async () => {
   assert.equal(stageCalls(updateCalls).length, 0);
   assert.equal(resetCalls(updateCalls).length, 1);
   assert.equal(updateCalls.length, 1);
+  // Neutralidad: con la llave apagada NUNCA se toca la factura ni se propaga.
+  assert.equal(invoicePatches.length, 0);
+  assert.equal(propagateCalls.length, 0);
+});
+
+// ── 4b. Con factura viva + llave PRENDIDA (Bloque 3) ─────────────────────────
+test('llave prendida, feliz: PATCH invoice → propagate intent cancel + reset, sin stage write', async () => {
+  const { deps, updateCalls, invoicePatches, propagateCalls, errores, reports } = makeCtx({
+    props: {
+      hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
+      of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
+    },
+    flowOn: true,
+  });
+
+  const r = await processCancelTicketRequest('T1', deps);
+
+  assert.equal(r.cancelled, true);
+  assert.equal(r.via, 'invoice_cancelled');
+  assert.equal(r.invoiceId, 'INV-9');
+  assert.equal(errores.length, 0);
+  assert.equal(reports.length, 0);
+
+  assert.equal(invoicePatches.length, 1);
+  assert.equal(invoicePatches[0].id, 'INV-9');
+  assert.deepEqual(invoicePatches[0].patch, {
+    etapa_de_la_factura: 'Cancelada',
+    fecha_de_cancelacion: String(EPOCH_HOY),
+  });
+
+  assert.equal(propagateCalls.length, 1);
+  assert.equal(propagateCalls[0].id, 'INV-9');
+  assert.deepEqual(propagateCalls[0].opts, { cancelIntent: 'cancel' });
+
+  // El cierre del ticket lo hace el propagate — el handler NO toca el stage.
+  assert.equal(stageCalls(updateCalls).length, 0);
+  assert.equal(resetCalls(updateCalls).length, 1);
+});
+
+test('llave prendida, Nodum bloquea: aviso + reset, factura intacta', async () => {
+  const { deps, updateCalls, invoicePatches, propagateCalls, errores } = makeCtx({
+    props: {
+      hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
+      of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
+    },
+    flowOn: true,
+    gate: { revertible: false, nodumId: 'N-77' },
+  });
+
+  const r = await processCancelTicketRequest('T1', deps);
+
+  assert.equal(r.skipped, true);
+  assert.equal(r.reason, 'nodum_asentada');
+  assert.equal(errores.length, 1);
+  assert.equal(errores[0].msg, 'NODUM_BLOCK N-77');
+  assert.equal(invoicePatches.length, 0);
+  assert.equal(propagateCalls.length, 0);
+  assert.equal(stageCalls(updateCalls).length, 0);
+  assert.equal(resetCalls(updateCalls).length, 1);
+});
+
+test('llave prendida, Nodum con error (fail-closed): aviso de verificación + reset', async () => {
+  const { deps, invoicePatches, propagateCalls, errores } = makeCtx({
+    props: {
+      hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
+      of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
+    },
+    flowOn: true,
+    gate: { revertible: false, nodumId: null, error: true },
+  });
+
+  const r = await processCancelTicketRequest('T1', deps);
+
+  assert.equal(r.skipped, true);
+  assert.equal(r.reason, 'nodum_gate_error');
+  assert.equal(errores.length, 1);
+  assert.match(errores[0].msg, /No se pudo verificar/);
+  assert.equal(invoicePatches.length, 0);
+  assert.equal(propagateCalls.length, 0);
+});
+
+test('llave prendida, PATCH de la invoice falla: reportFn + reset, NO propaga y no lanza', async () => {
+  const { deps, updateCalls, propagateCalls, reports } = makeCtx({
+    props: {
+      hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
+      of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
+    },
+    flowOn: true,
+    failInvoicePatch: true,
+  });
+
+  const r = await processCancelTicketRequest('T1', deps);   // NO debe lanzar
+
+  assert.equal(r.cancelled, false);
+  assert.equal(r.reason, 'invoice_patch_failed');
+  assert.equal(propagateCalls.length, 0);
+  assert.equal(reports.length, 1);
+  assert.equal(resetCalls(updateCalls).length, 1);
+});
+
+test('llave prendida, propagate falla: reportFn + reset, no lanza (factura ya cancelada)', async () => {
+  const { deps, updateCalls, invoicePatches, reports } = makeCtx({
+    props: {
+      hs_pipeline: PIPE_MANUAL, hs_pipeline_stage: STAGE_FORECAST,
+      of_invoice_id: 'INV-9', of_invoice_status: 'Emitida', cancelar_ticket: 'true',
+    },
+    flowOn: true,
+    failPropagate: true,
+  });
+
+  const r = await processCancelTicketRequest('T1', deps);   // NO debe lanzar
+
+  assert.equal(r.cancelled, false);
+  assert.equal(r.reason, 'propagate_failed');
+  assert.equal(invoicePatches.length, 1);                   // el PATCH sí pasó
+  assert.equal(reports.length, 1);
+  assert.equal(resetCalls(updateCalls).length, 1);
 });
 
 // ── 5. Reset incluso si falla la escritura del stage ─────────────────────────

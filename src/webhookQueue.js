@@ -8,6 +8,8 @@ import { runPhasesForDealLocked } from './phases/index.js';
 import { propagateDealCancellation } from './propagacion/deals/cancelDeal.js';
 import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
 import { processCancelTicketRequest } from './services/tickets/cancelTicketRequest.js';
+import { processRevertTicketRequest } from './services/tickets/revertTicketInvoiceRequest.js';
+import { cancelRevertFlowEnabled } from './config/cancelRevertFlags.js';
 import { parseBool } from './utils/parsers.js';
 import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
@@ -79,7 +81,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -660,16 +662,79 @@ async function executeJob(job) {
     }
 
     case 'ticket_cancel_request': {
-      // Casilla cancelar_ticket (handler mínimo 26-jul): solo escribe props del
-      // TICKET (etapa/motivo/aviso/reset de casilla) — no toca deal, factura ni
-      // cupo, así que NO aplica el lock de deal (mismo criterio que urgent_ticket,
-      // que toma su propio lock solo porque emite factura; acá no se emite nada).
-      const result = await processCancelTicketRequest(object_id);
-      logger.info(
-        { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, ...result },
-        'ticket_cancel_request completado'
-      );
-      return result;
+      // Casilla cancelar_ticket. Con CANCEL_REVERT_FLOW_ENABLED apagada (default)
+      // el handler solo escribe props del TICKET (etapa/motivo/aviso/reset de
+      // casilla) — no toca deal, factura ni cupo, así que corre SIN lock de deal
+      // (exactamente como hoy). Con la llave PRENDIDA, el caso invoice_alive
+      // puede cancelar la factura y propagar (deal/cupo) → se toma el mismo
+      // candado de deal que deal_cancel para no pisarse con el cron/fases.
+      if (!cancelRevertFlowEnabled()) {
+        const result = await processCancelTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, ...result },
+          'ticket_cancel_request completado'
+        );
+        return result;
+      }
+
+      const dealId = deal_id || await getDealIdForTicket(object_id);
+      let lockToken = null;
+      if (dealId) {
+        lockToken = await acquireDealLock(dealId, 'ticket_cancel_request');
+        if (!lockToken) {
+          return { reason: 'deal_locked' };
+        }
+      } else {
+        // Sin of_deal_id no hay candado posible: el handler igual protege con
+        // sus propios guards (pipeline, factura viva, gate Nodum).
+        logger.warn(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id },
+          'ticket_cancel_request: ticket sin of_deal_id, se procesa sin lock de deal'
+        );
+      }
+
+      try {
+        const result = await processCancelTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, dealId, ...result },
+          'ticket_cancel_request completado'
+        );
+        return result;
+      } finally {
+        if (lockToken) await releaseDealLock(dealId, lockToken);
+      }
+    }
+
+    case 'ticket_revert_request': {
+      // Casilla revertir_factura (Bloque 3): puede cancelar la factura viva del
+      // ticket y propagar (ticket/deal/cupo) → CON candado de deal (patrón
+      // deal_cancel). Ocupado → deal_locked y processNext lo reencola.
+      const dealId = deal_id || await getDealIdForTicket(object_id);
+      let lockToken = null;
+      if (dealId) {
+        lockToken = await acquireDealLock(dealId, 'ticket_revert_request');
+        if (!lockToken) {
+          return { reason: 'deal_locked' };
+        }
+      } else {
+        // Sin of_deal_id no hay candado posible: el handler igual protege con
+        // sus propios guards (llave, pipeline, factura viva, gate Nodum).
+        logger.warn(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id },
+          'ticket_revert_request: ticket sin of_deal_id, se procesa sin lock de deal'
+        );
+      }
+
+      try {
+        const result = await processRevertTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, dealId, ...result },
+          'ticket_revert_request completado'
+        );
+        return result;
+      } finally {
+        if (lockToken) await releaseDealLock(dealId, lockToken);
+      }
     }
 
     default:

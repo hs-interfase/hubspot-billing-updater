@@ -293,6 +293,29 @@ export default async function handler(req, res) {
       return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'ticket_cancel_request' });
     }
 
+    // ====== RUTA 7: CASILLA REVERTIR FACTURA ======
+    // Flujo cancelar/revertir (Bloque 3): el usuario marca `revertir_factura` en
+    // el ticket para cancelar la factura viva y dejar el ticket listo para
+    // refacturar. El handler (processRevertTicketRequest) hace TODOS los guards
+    // (llave CANCEL_REVERT_FLOW_ENABLED, pipeline automático, factura viva,
+    // gate Nodum) y resetea la casilla siempre. Clon de la RUTA 6.
+    if (objectType === 'ticket' && propertyName === 'revertir_factura') {
+      if (!parseBool(propertyValue)) {
+        return res.status(200).json({ message: 'revertir_factura not true, skipped', receivedValue: propertyValue });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: null,
+        actionType: 'ticket_revert_request',
+        priority: 1,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'ticket_revert_request' });
+    }
+
     // ====== PROPIEDAD NO RECONOCIDA ======
     return res.status(200).json({ message: 'Property not supported, skipped', propertyName });
 
