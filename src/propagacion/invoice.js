@@ -41,6 +41,8 @@ import {
   cancelRevertFlowEnabled,
   cupoRevertOnCancelEnabled,
 } from '../config/cancelRevertFlags.js';
+import { notifyAdminOnRevert } from '../services/notifications/adminRevertAlert.js';
+import { notifyMirrorDealOnCancelOrRevert } from '../services/mirrorUtils.js';
 
 
 
@@ -515,7 +517,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
         filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
-        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo', 'of_refacturaciones'],        limit: 1,
+        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo', 'of_refacturaciones', 'motivo_del_ajuste'],        limit: 1,
       });
       ticket = resp?.results?.[0] || null;
     } catch (err) {
@@ -527,7 +529,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       ticket = await hubspotClient.crm.tickets.basicApi.getById(
         String(ip.ticket_id),
-        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_refacturaciones']
+        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_refacturaciones', 'motivo_del_ajuste']
       );
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId: ip.ticket_id, err }, 'Error obteniendo ticket por ticket_id');
@@ -628,6 +630,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     }
 
     const branch = resolveCancellationBranch({ cancelIntent });
+    let contadorNuevo = null;
     if (branch === 'cancel') {
       await finalizeTicketAfterDefinitiveCancellation({
         invoiceId,
@@ -642,7 +645,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
       // (reversión deliberada). Con intent null (webhook genérico, cron sweep
       // que re-propaga la misma invoice cancelada en cada corrida) devuelve
       // null y NO se escribe — si no, el contador se inflaría solo.
-      const contadorNuevo = computeContadorRefacturaciones({
+      contadorNuevo = computeContadorRefacturaciones({
         cancelIntent,
         actual: tp.of_refacturaciones,
       });
@@ -656,6 +659,57 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
         cupoResult,
         contadorNuevo,
       });
+    }
+
+    // Avisos (Bloque 4) — SOLO con cancelIntent EXPLÍCITO ('cancel'/'revert').
+    // ⚠️ NUNCA con intent null: el cron sweep propagateCancelledInvoicesForDeal
+    // re-propaga las MISMAS invoices canceladas en cada corrida; si estos
+    // avisos corrieran ahí, spamearían a administración y al espejo UY en cada
+    // pasada. Con la llave maestra apagada el intent ya llega forzado a null →
+    // con flags off este bloque no corre jamás (neutralidad garantizada).
+    // Fire-and-forget: nada de acá bloquea ni rompe la propagación.
+    if (cancelIntent === 'cancel' || cancelIntent === 'revert') {
+      const motivo = String(tp.motivo_del_ajuste || '').trim() || null;
+
+      // Aviso al deal espejo UY (ambas ramas): verificar el ticket UY a mano.
+      if (lineItemId) {
+        try {
+          notifyMirrorDealOnCancelOrRevert(lineItemId, {
+            tipo: cancelIntent,
+            invoiceId,
+            ticketId,
+          }).catch((err) => {
+            logger.warn({ module: mod, fn, invoiceId, ticketId, err: err?.message },
+              'Aviso a mirror cancel/revert falló (no bloquea)');
+          });
+        } catch (err) {
+          logger.warn({ module: mod, fn, invoiceId, ticketId, err: err?.message },
+            'Aviso a mirror cancel/revert falló (no bloquea)');
+        }
+      } else {
+        logger.debug({ module: mod, fn, invoiceId, ticketId },
+          'Ticket sin of_line_item_ids: sin lookup de espejo, aviso a mirror omitido');
+      }
+
+      // Email a administración: SOLO en la rama REVERTIR (refacturación).
+      if (cancelIntent === 'revert') {
+        try {
+          notifyAdminOnRevert({
+            dealId: (tp.of_deal_id || '').trim() || null,
+            ticketId,
+            invoiceId,
+            contador: contadorNuevo,
+            cupoResult,
+            motivo,
+          }).catch((err) => {
+            logger.warn({ module: mod, fn, invoiceId, ticketId, err: err?.message },
+              'Aviso a administración de reversión falló (no bloquea)');
+          });
+        } catch (err) {
+          logger.warn({ module: mod, fn, invoiceId, ticketId, err: err?.message },
+            'Aviso a administración de reversión falló (no bloquea)');
+        }
+      }
     }
   }
 

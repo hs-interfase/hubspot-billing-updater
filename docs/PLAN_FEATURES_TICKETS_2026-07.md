@@ -145,6 +145,7 @@ Antes "asociado = promovido/cerca de facturar"; ahora un ganado asocia TODO su c
 | 2026-07-26 | Fase 1 ejecutada en modo conservador: desconectado el disparador del LI (router+cola); handlers quedan deprecados sin borrar; limpieza de código → segunda etapa. Usuaria ya quitó la suscripción del webhook y la prop de las vistas del CRM (26-jul). |
 | 2026-07-26 | Stack de propiedades (revisión usuaria): `of_codigo_rubro` FUERA de la escucha LI→ticket (la prop se conserva en HubSpot, oculta de las vistas; el snapshot inicial la sigue copiando). Resto de la lista de 24 props vigente. |
 | 2026-07-26 | Avisos a mirror: destinatario default dedicado = usuaria María Bitencurt, vía env `MIRROR_ALERT_TO_EMAIL` (fallback `ALERT_TO_EMAIL`). Falta setear la env con su correo en .env/.env.real/Railway. |
+| 2026-07-27 | Núcleo cancelar/revertir implementado en `feat/cancelar-revertir-nucleo` (Bloques 1-4) detrás de `CANCEL_REVERT_FLOW_ENABLED` y `CUPO_REVERT_ON_CANCEL_ENABLED` (ambas off). Motivo de reversión = prop existente `motivo_del_ajuste`. Pendiente: validación sandbox + textos finales (bloque mensajería). |
 | (pendiente) | Stack de propiedades T3 (correo usuaria 6-jul). |
 | (pendiente) | Campos editables post-emisión (Paola) — define si T2 crece. |
 | (pendiente) | T4: todos vs solo manuales al cierre. |

@@ -387,6 +387,115 @@ export async function notifyMirrorDealOnManualEmission(pyLineItemId, billingYMD,
 }
 
 /**
+ * Cuando la factura de un ticket PY se CANCELA definitivamente o se REVIERTE
+ * para refacturar (flujo cancelar/revertir, Bloque 4), escribe un aviso en el
+ * deal UY espejo y manda el email de mirror, para que el equipo operativo
+ * verifique el ticket UY a mano (la promoción del ticket UY no se deshace
+ * automáticamente).
+ *
+ * ⚠️ SOLO debe llamarse con cancelIntent EXPLÍCITO ('cancel'/'revert') desde
+ * la rama 5b de propagacion/invoice.js. NUNCA con intent null: el cron sweep
+ * propagateCancelledInvoicesForDeal re-propaga las MISMAS invoices canceladas
+ * en cada corrida y este aviso spamearía el espejo en cada pasada.
+ *
+ * Clon estructural de notifyMirrorDealOnManualEmission:
+ * findMirrorLineItem → sin espejo: return silencioso → con espejo:
+ * reportHubSpotError al deal UY + emailAvisoMirror con el mismo texto.
+ *
+ * Diseñado para llamarse fire-and-forget. Nunca lanza.
+ *
+ * @param {string|number} pyLineItemId  ID del line item PY cuya factura cambió
+ * @param {Object} opts
+ * @param {'cancel'|'revert'} opts.tipo - rama del flujo que se completó
+ * @param {string|number} opts.invoiceId
+ * @param {string|number} [opts.ticketId] - ticket PY (se cita en el aviso)
+ * @param {Object} [deps] - inyección de dependencias (tests)
+ * @param {Function} [deps.findMirrorLineItemFn] - default findMirrorLineItem
+ * @param {Function} [deps.reportFn]             - default reportHubSpotError
+ * @param {Function} [deps.emailFn]              - default emailAvisoMirror
+ */
+export async function notifyMirrorDealOnCancelOrRevert(
+  pyLineItemId,
+  { tipo, invoiceId, ticketId = null } = {},
+  deps = {}
+) {
+  const {
+    findMirrorLineItemFn = findMirrorLineItem,
+    reportFn = reportHubSpotError,
+    emailFn = emailAvisoMirror,
+  } = deps;
+
+  const log = logger.child({
+    module: 'mirrorUtils',
+    fn: 'notifyMirrorDealOnCancelOrRevert',
+    pyLineItemId: String(pyLineItemId),
+    tipo: String(tipo),
+  });
+
+  try {
+    if (tipo !== 'cancel' && tipo !== 'revert') {
+      log.warn('Tipo desconocido (esperaba cancel|revert), no se notifica nada');
+      return;
+    }
+
+    // 1) Encontrar el LI UY espejo (valida deal_uy_mirror_id internamente)
+    let mirrorInfo;
+    try {
+      mirrorInfo = await findMirrorLineItemFn(pyLineItemId);
+    } catch (err) {
+      log.warn({ err }, 'Error buscando mirror line item, abortando aviso cancel/revert');
+      return;
+    }
+
+    if (!mirrorInfo) {
+      log.debug('Sin mirror UY para este LI PY, nada que notificar');
+      return;
+    }
+
+    const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
+
+    // 2) Componer el aviso según la rama completada
+    const refTicket = ticketId ? ` | Ticket PY: ${ticketId}` : '';
+    const contexto = `Deal PY: ${pyDealId} | LI PY: ${pyLineItemId} → LI UY: ${mirrorLineItemId}${refTicket}`;
+
+    const aviso = tipo === 'cancel'
+      ? `Factura ${invoiceId} del negocio original PY cancelada DEFINITIVAMENTE (período cerrado, no se refactura). ` +
+        `La promoción del ticket UY NO se deshace — verificar el ticket UY manualmente. ${contexto}`
+      : `Factura ${invoiceId} del negocio original PY revertida: el período se va a refacturar. ` +
+        `Verificar el ticket UY manualmente. ${contexto}`;
+
+    reportFn({
+      level: 'warn',
+      objectType: 'deal',
+      objectId: mirrorDealId,
+      message: aviso,
+    });
+
+    // Todos los avisos a mirror van también por correo (usuaria 25-jul).
+    await emailFn({
+      mirrorDealId,
+      title: tipo === 'cancel'
+        ? 'Factura PY cancelada definitivamente — verificar ticket UY'
+        : 'Factura PY revertida (se refactura) — verificar ticket UY',
+      message: aviso,
+      meta: {
+        deal_py: pyDealId,
+        li_py: String(pyLineItemId),
+        li_uy: mirrorLineItemId,
+        invoice_py: String(invoiceId),
+        ...(ticketId ? { ticket_py: String(ticketId) } : {}),
+        tipo: tipo === 'cancel' ? 'cancelación definitiva' : 'reversión para refacturar',
+      },
+    });
+
+    log.info({ mirrorDealId, aviso }, 'Aviso de cancelación/reversión PY escrito en deal UY');
+  } catch (err) {
+    // Nunca lanza: es fire-and-forget desde la propagación de invoices.
+    log.warn({ err: err?.message }, 'notifyMirrorDealOnCancelOrRevert falló (no bloquea nada)');
+  }
+}
+
+/**
  * Cuando un LI PY automático con uy=true cambia su estado de pausa (se pausa
  * o se reactiva), escribe un aviso en `billing_error` del deal UY espejo para
  * que el equipo —que factura manualmente en UY— pause o reactive allí también.

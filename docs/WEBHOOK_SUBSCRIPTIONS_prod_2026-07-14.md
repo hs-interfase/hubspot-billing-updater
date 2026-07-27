@@ -31,6 +31,14 @@ actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, disco
 > en `of_billing_error`); no toca factura/cupo/espejo. El flujo completo de
 > cancelar/revertir está en diseño.
 
+> ↩️ **Suscripción + ruteo `revertir_factura` (26-jul, usuaria):** la usuaria suscribió
+> `ticket.propertyChange / revertir_factura` el 26-jul (NO está en el conteo de 58 del 14-jul;
+> queda anotada acá igual que las altas del 20-jul). Rutea a `ticket_revert_request`
+> (RUTA 7 de `api/escuchar-cambios.js` → `processRevertTicketRequest`, Bloque 3 del flujo
+> cancelar/revertir): cancela la factura viva del ticket y lo deja listo para refacturar,
+> con guards de llave `CANCEL_REVERT_FLOW_ENABLED` (off → aviso "no habilitada" + reset de la
+> casilla), pipeline automático, factura viva y gate Nodum. La casilla se resetea SIEMPRE.
+
 ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, comentarios_pm, content, descuento_en_porcentaje, descuento_por_unidad_real, dolar, empresa_id, empresa_que_factura, entidad_facturadora, exonera_irae, facturacion_automatica, facturar_ahora, fecha_inicio_de_facturacion, fecha_real_de_facturacion, fecha_resolucion_esperada, fin_del_contrato, hay_ajuste, hs_resolution, inicio_del_contrato, momento_de_facturacion, monto_unitario_real, motivo_cancelacion_del_ticket, motivo_del_ajuste, nc, negocio_compartido, nombre_empresa, nota, observaciones, observaciones_ventas, of_aplica_para_cupo, of_cantidad_de_pagos, of_costo_usd, of_frecuencia_de_facturacion, of_line_item_ids, of_moneda, of_monto_total, of_motivo_pausa, of_pais_operativo, of_producto, of_producto_nombres, of_propietario_secundario, of_rubro, of_subrubro, opera_trading, producto_id, renovacion_automatica, repetitivo, reventa, revisado_por, servicio, source_type, subject, tipo_de_parametrica, unidad_de_negocio
 
 ## deal / "Negocio" — 17 (`deal.propertyChange`)

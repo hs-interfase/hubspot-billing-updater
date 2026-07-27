@@ -286,6 +286,100 @@ SELECT count(*) FROM webhook_queue
 
 ---
 
-## Próximo: cancelar/revertir ticket
+## 7. Cancelar vs Revertir (flags: `CANCEL_REVERT_FLOW_ENABLED` + `CUPO_REVERT_ON_CANCEL_ENABLED`)
 
-> Control de cambios aprobado (26-jul) — la checklist de validación se diseña aparte cuando esté la implementación; placeholder para no perderlo de vista.
+> Rama: `feat/cancelar-revertir-nucleo` (Bloques 1-4). Núcleo: casillas `cancelar_ticket` /
+> `revertir_factura`, bifurcación cancel/revert en `propagacion/invoice.js`, reversión real
+> de cupo (`revertCupoForInvoice`), contador `of_refacturaciones` y avisos (admin + espejo UY).
+
+**Recordatorio de envs a setear en el `.env` sandbox ANTES de arrancar (anotar valores):**
+
+- [ ] `CANCEL_REVERT_FLOW_ENABLED=true` (llave maestra; default OFF — solo `true`/`1`/`yes` prende)
+- [ ] `CUPO_REVERT_ON_CANCEL_ENABLED=true` (reversión real de cupo; misma semántica)
+- [ ] `ADMIN_ALERT_TO_EMAIL` (destino del email de reversión a administración; vacía → cae a `ALERT_TO_EMAIL`)
+- [ ] `MIRROR_ALERT_TO_EMAIL` (destino de avisos a espejo UY; vacía → cae a `ALERT_TO_EMAIL`)
+- [ ] `NC_TUTORIAL_URL` (link del tutorial de nota de crédito que cita el aviso de tickets automáticos)
+- [ ] `REBILL_ALERT_THRESHOLD` (umbral del título "⚠️ Período refacturado N veces"; default `2`; `0` o vacía = sin refuerzo)
+- [ ] `DEAL_ALERTS_ENABLED` ausente o `true` (si está en `false` NO esperar ninguno de los emails de esta checklist)
+- [ ] **Props ya creadas por la usuaria (26-jul)**: casillas `cancelar_ticket` y `revertir_factura` + contador `of_refacturaciones` en el ticket; suscripción `ticket.propertyChange / revertir_factura` activa (26-jul). El motivo de reversión usa la prop EXISTENTE `motivo_del_ajuste` (no hay prop nueva de motivo).
+
+Query genérica de la cola para todos los escenarios:
+
+```sql
+SELECT id, action_type, object_id, deal_id, status, error, created_at, finished_at
+  FROM webhook_queue
+ WHERE action_type IN ('ticket_cancel_request', 'ticket_revert_request')
+ ORDER BY id DESC LIMIT 10;
+```
+
+**Precondiciones generales**
+- [ ] Deal ganado con cupo configurado (`tipo_de_cupo`, `cupo_total`/`cupo_total_monto`) y un ticket manual EMITIDO con factura viva que consumió cupo (marker `cupo_consumo_invoice_id` = invoice). Anotar `DEAL_ID`, `TICKET_ID`, `INVOICE_ID` y valores de `cupo_consumido` / `cupo_restante` / `cupo_estado` / `of_cupo_historial`.
+- [ ] Un segundo juego equivalente para el escenario (c) cancelar definitivo.
+- [ ] Para (d): un ticket NC (cantidad/monto negativos) emitido con factura, que re-ACREDITÓ cupo al emitirse.
+- [ ] Para (g): deal ORIGINAL PY con espejo UY y ticket emitido. Anotar `LI_PY_ID`, `DEAL_UY_ID`.
+
+### (a) Revertir manual con cupo — camino feliz
+
+1. [ ] Completar `motivo_del_ajuste` en el ticket (texto distinguible) y marcar `revertir_factura=true`.
+2. [ ] Verificar job `ticket_revert_request` en `done` (query genérica).
+3. [ ] Verificar factura: `etapa_de_la_factura='Cancelada'` + `fecha_de_cancelacion` de hoy.
+4. [ ] Verificar deal: cupo re-acreditado (`cupo_consumido` -X, `cupo_restante` +X) y `cupo_estado` recalculado.
+5. [ ] Verificar ticket: marker de consumo limpio, `of_cupo_historial` con 2 líneas (consumo + reversion), `of_refacturaciones=1`, props de factura limpias, ticket en **Próximos a Facturar**, `revertir_factura` reseteada.
+6. [ ] Verificar bandeja de `ADMIN_ALERT_TO_EMAIL`: email "Factura revertida para refacturar" con negocio/ticket/invoice/motivo/refacturación N° 1/resultado del cupo.
+
+### (b) Refacturar tras revertir
+
+1. [ ] Emitir de nuevo el ticket (facturar ahora / flujo manual normal) → factura F2.
+2. [ ] Verificar: `consumeCupo` consume la F2 con marker NUEVO (`cupo_consumo_invoice_id` = F2) y `of_cupo_historial` acumula la nueva línea de consumo (3 líneas en total).
+
+### (c) Cancelar definitivo — el período se cierra
+
+1. [ ] En el segundo ticket, marcar `cancelar_ticket=true` (con factura viva y flujo prendido).
+2. [ ] Verificar job `ticket_cancel_request` en `done`; factura Cancelada; cupo re-acreditado (con `CUPO_REVERT_ON_CANCEL_ENABLED=true`).
+3. [ ] Verificar ticket: etapa **CANCELADO**, `of_invoice_id` **CONSERVADO** (no se limpia — es lo que evita que missedBillingGuard re-emita), `motivo_cancelacion_del_ticket` escrito.
+4. [ ] Correr `node ./src/runBilling.js --deal <DEAL_ID>` → el cron **NO refactura** ese período en la corrida siguiente (ni missedBillingGuard ni el sweep de canceladas lo reviven).
+
+### (d) NC: revertir la factura de una nota de crédito
+
+1. [ ] Revertir (`revertir_factura=true`) la factura del ticket NC.
+2. [ ] Verificar: el cupo se re-DEBITA (la NC había acreditado; la reversión deshace ese crédito — signo inverso al escenario (a)) y el historial lo registra.
+
+### (e) Gate Nodum
+
+1. [ ] En el editor de facturas, intentar cancelar/revertir una factura con `id_factura_nodum` asentado → **409** con el mensaje de bloqueo Nodum.
+2. [ ] Marcar `revertir_factura=true` en un ticket cuya factura está asentada en Nodum → aviso en `of_billing_error` (nota de crédito / tutorial) + casilla reseteada, factura INTACTA.
+
+### (f) Cupo agotado vs desactivado manual
+
+1. [ ] Con un deal en `cupo_estado='Agotado'` (`cupo_activo=false` apagado POR EL MOTOR): revertir una factura con cupo → `cupo_activo` vuelve a `true` (reactivación condicionada).
+2. [ ] Con un deal en `cupo_estado='Desactivado'` (apagado HUMANO): revertir → `cupo_activo` **NO** se reactiva (solo números y estado recalculado).
+
+### (g) Espejo PY→UY
+
+1. [ ] Revertir (y en otra corrida cancelar) la factura de un ticket del deal ORIGINAL PY con espejo UY.
+2. [ ] Verificar en el deal UY: `billing_error` con el aviso según el caso (revertida: "el período se va a refacturar" / cancelada: "DEFINITIVAMENTE… la promoción del ticket UY NO se deshace") + email a `MIRROR_ALERT_TO_EMAIL`.
+3. [ ] Verificar que el ticket UY quedó **INTACTO** (no se deshace la promoción; la verificación es manual).
+
+### (h) Doble disparo editor + casilla
+
+1. [ ] Cancelar la factura por el editor (o casilla) y ENSEGUIDA disparar la otra vía sobre el mismo período.
+2. [ ] Verificar: la segunda vía NO genera doble crédito de cupo (idempotencia por marker: `no_consumio_o_ya_revertido`) ni doble incremento del contador.
+
+### (i) Ambas flags OFF — neutralidad total
+
+1. [ ] Setear `CANCEL_REVERT_FLOW_ENABLED=false` y `CUPO_REVERT_ON_CANCEL_ENABLED=false`, reiniciar.
+2. [ ] Cancelar una factura por el editor y correr la pasada del deal: TODO como hoy — ticket vuelve a stage facturable con el aviso textual de cupo actual, SIN reversión real de cupo, SIN contador, SIN emails nuevos (admin/espejo), sin gate.
+
+### (j) Revertir con flag OFF
+
+1. [ ] Con `CANCEL_REVERT_FLOW_ENABLED=false`, marcar `revertir_factura=true` en un ticket con factura viva.
+2. [ ] Verificar: `of_billing_error` = aviso "La reversión de facturas todavía no está habilitada…", casilla reseteada a `false`, factura y cupo INTACTOS.
+
+**Resultado esperado global**
+- (a)-(h) con flags ON: cupo consistente (historial como libro mayor), contador solo en reversión explícita, avisos SOLO por acción deliberada (el sweep del cron que re-propaga canceladas NO manda emails ni toca contador).
+- (i)-(j) con flags OFF: cero diferencia contra el comportamiento actual, salvo el aviso "no habilitada" de la casilla.
+
+**Evidencia a registrar**
+- [ ] IDs (`DEAL_ID`/`TICKET_ID`/`INVOICE_ID`/jobs) por escenario + capturas de deal (cupo), ticket (historial/contador/etapa) y factura.
+- [ ] Capturas de los emails (admin y mirror) y de los `billing_error`/`of_billing_error`.
+- [ ] Salidas de las queries a `webhook_queue`.
