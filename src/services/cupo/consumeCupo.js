@@ -5,6 +5,7 @@ import { parseNumber, safeString, parseBool } from '../../utils/parsers.js';
 import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
+import { buildCupoHistorialLine, appendHistorial } from './cupoHistorial.js';
 
 /**
  * CÁLCULO PURO DEL CONSUMO DE CUPO (sin HubSpot, testeable).
@@ -88,7 +89,7 @@ export function calcularConsumoCupo({ tipoCupo, ticketProps = {}, dealProps = {}
  *
  * ESCRITURAS:
  * - Deal: cupo_consumido, cupo_restante, cupo_ultima_actualizacion, cupo_activo (si agotado)
- * - Ticket: of_cupo_consumido, of_cupo_consumo_valor
+ * - Ticket: of_cupo_consumido, of_cupo_consumo_valor, of_cupo_historial (append)
  */
 export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, invoiceId }) {
   logger.info(
@@ -126,6 +127,7 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
       'cupo_consumo_invoice_id',
       'of_cupo_consumido',
       'of_invoice_id',
+      'of_cupo_historial',
     ]);
 
     if (lineItemId && lineItemId !== 'undefined' && lineItemId !== 'null') {
@@ -300,6 +302,12 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
     of_cupo_consumo_valor: String(consumo),
     cupo_consumo_invoice_id: String(invoiceId),
     of_cupo_consumido_fecha: getTodayYMD(),
+    // Historial de eventos de cupo: la línea de consumo viaja DENTRO del mismo
+    // update (sin writes nuevos); si el update falla, cae en el catch de abajo.
+    of_cupo_historial: appendHistorial(
+      tp.of_cupo_historial,
+      buildCupoHistorialLine({ fecha: getTodayYMD(), tipo: 'consumo', valor: consumo, invoiceId })
+    ),
   };
 
   try {
@@ -313,7 +321,21 @@ export async function consumeCupoAfterInvoice({ dealId, ticketId, lineItemId, in
         'SKIP: sin props para actualizar ticket'
       );
     } else {
-      await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: cleanProps });
+      try {
+        await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: cleanProps });
+      } catch (errConHistorial) {
+        // SALVAGUARDA: el historial es trazabilidad; la marca de idempotencia es
+        // crítica. Si el update falló y llevaba of_cupo_historial (p.ej. la prop
+        // aún no existe en el portal), reintentar UNA vez sin el historial para
+        // que la marca llegue igual. Si esto también falla, cae al catch crítico.
+        if (!('of_cupo_historial' in cleanProps)) throw errConHistorial;
+        logger.warn(
+          { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId, err: errConHistorial?.message },
+          'Update del ticket falló con of_cupo_historial — reintentando sin historial (¿prop no creada en el portal?)'
+        );
+        const { of_cupo_historial: _omit, ...sinHistorial } = cleanProps;
+        await hubspotClient.crm.tickets.basicApi.update(ticketId, { properties: sinHistorial });
+      }
       logger.info(
         { module: 'consumeCupo', fn: 'consumeCupoAfterInvoice', ticketId },
         'Ticket marcado con consumo de cupo'
