@@ -400,6 +400,11 @@ export async function getDealWithLineItems(dealId) {
     "subrubro",
     "area",
     "reventa",
+    // NC: marca de nota de crédito del LI. Faltaba en esta lista → extractLineItemSnapshots
+    // recibía lp.nc undefined y escribía nc=false en TODOS los tickets (incluidas las NC
+    // migradas, que sí traen nc=true en el LI). Verificado en PROD 24-jul: LI 57417530802
+    // nc=true → ticket 47119728140 nc=false.
+    "nc",
     "hs_product_id",
     "nombre_producto", // select: producto elegido por el vendedor (autocompleta del hs_product_id; al cambiarlo, el motor reasocia el ID)
     "billing_error",
