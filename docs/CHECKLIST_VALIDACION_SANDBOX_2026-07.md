@@ -276,9 +276,23 @@ SELECT id, property_name, status, created_at, finished_at
 - Paso 5 (dedup por `(deal_id, action_type)`): si el worker toma un job teniendo otro `pending` más viejo del mismo deal, el viejo queda **`superseded`**. ⚠️ Como el worker atiende FIFO cada ~2s, con dos ediciones rápidas lo NORMAL es ver **ambos jobs en `done`** (el segundo recalc es idempotente y no cambia nada); `superseded` aparece recién cuando un job fue reencolado (deal_locked/reaper) o la cola venía cargada. **Ambos desenlaces son correctos**; lo que NO debe pasar es un `failed` ni un valor final incoherente en el deal.
 
 **Evidencia a registrar**
-- [ ] `TICKET_ID`, `TICKET_FC_ID`, `DEAL_ID`, ids de jobs.
-- [ ] Deal antes/después (captura de las 3 props de VALOR/MARGEN).
-- [ ] Salida de las 3 queries de arriba.
+- [x] `TICKET_ID`, `TICKET_FC_ID`, `DEAL_ID`, ids de jobs.
+- [x] Deal antes/después (captura de las 3 props de VALOR/MARGEN).
+- [x] Salida de las 3 queries de arriba.
+
+### ✅ CORRIDA 2026-07-29 — PASA
+
+Sobre el deal sembrado en la prueba 2 (`63252656430`). `TICKET_ID` = `47298308702`
+("Próximos a facturar") · `TICKET_FC_ID` = `47275177280` (85% Forecast).
+
+| Punto | Esperado | Real |
+|---|---|---|
+| Editar `monto_unitario_real` en "Próximos" encola | job con `deal_id` resuelto, `done` | **`#7730 valor_recalc` ticket → deal `63252656430` → `done`** ✅ |
+| VALOR del deal recalculado | 7000 → 7100 | **7100** (los 4 campos: `valor_total`, `..._moneda_original`, `margen_total_usd`, `amount`) ✅ |
+| Misma prop en ticket **forecast** | 0 jobs | **0 jobs** — guard anti-tormenta OK ✅ |
+| Dedup (2 ediciones seguidas) | ambas `done` o una `superseded`, ninguna `failed` | **`#7731` + `#7732` ambas `done`** ✅ |
+
+VALOR final coherente a mano: **8500** = manuales 5500 + automáticos 3000.
 
 ---
 
@@ -335,9 +349,43 @@ SELECT id, action_type, object_id, property_name, status, error, finished_at
 - Ojo colateral esperado: como `price` también recalcula el VALOR del deal (post `li_prop_sync`), `valor_total` puede moverse — es correcto.
 
 **Evidencia a registrar**
-- [ ] `LI_ID`/`TICKET_ID` de los escenarios (a)-(c) + `LI_PY_ID`/`DEAL_UY_ID` del (d) + ids de jobs.
-- [ ] Captura del ticket (props sincronizadas + `of_billing_error`) y de la tarea del workflow (a).
-- [ ] Captura del `billing_error` del deal UY + del correo recibido por el operativo (d).
+- [x] `LI_ID`/`TICKET_ID` de los escenarios (a)-(c) + `LI_PY_ID`/`DEAL_UY_ID` del (d) + ids de jobs.
+- [x] Captura del ticket (props sincronizadas + `of_billing_error`) y de la tarea del workflow (a).
+- [x] Captura del `billing_error` del deal UY (d). ⚠️ **El correo NO se pudo verificar** — decisión
+  29-jul de no poner `RESEND_API_KEY` en testing (ver arriba).
+
+### ✅ CORRIDA 2026-07-29 — PASA (con dos matices anotados)
+
+**(a) Ticket CON owner** — LI `57565277478` price 1000→1400 → job **`#7733 li_prop_sync` → `done`**;
+ticket `47298308702`: `monto_unitario_real` 1150 → **1400**, `subtotal_real` 2800; `of_billing_error`
+escrito con el texto completo: *"El vendedor modificó el elemento de pedido «…» (57565277478):
+propiedad **price**. Cambios aplicados a este ticket: monto_unitario_real="1400", of_margen="1400".
+Verificá los datos antes de facturar."* Colateral esperado confirmado: encadenó `#7734 valor_recalc`.
+
+**(b) Ticket SIN owner — NO SE PUEDE EJERCITAR COMO ESTÁ ESCRITO, y no hace falta.** HubSpot
+**no deja limpiar `hubspot_owner_id`** por API: el PATCH con `''` y con `null` devuelve **200 pero
+el valor persiste** (verificado dos veces). Y el aviso **no lee el owner**: el propio módulo lo
+documenta — `ticketOwnerId` *"hoy NO condiciona nada (el workflow de HubSpot resuelve el owner)"*
+(`liSyncTicketAlert.js:51-52`). Lo que el escenario quería probar (job `done`, prop escrita, sin
+`failed`) quedó demostrado igual en (a) y en la corrida de (b). **Sugerencia: reescribir el escenario
+(b) del checklist o eliminarlo.**
+
+**(c) Flag OFF** — `LI_SYNC_OWNER_ALERT_ENABLED=false` en Railway testing → price 1500→1600 → job
+`#7737` `done`, ticket **sí** actualizado a 1600, `of_billing_error` **vacío**. El sync se aplica y
+el aviso se omite, exactamente como se diseñó. Flag restaurada a `true`.
+
+**(d) Aviso a MIRROR** — original PY `62638758686` (MiRecibo-TIGO) · LI `57007904909` (`uy=true`) ·
+ticket `46740543151` en "Próximos" · espejo UY `62638808845`. Price 658.5→700→720 → sync aplicado al
+ticket PY **y** `billing_error` escrito en el **deal UY** con el detalle completo (*"Cambio en el
+negocio ORIGINAL … revisar el espejo UY. Deal PY … → Deal UY … LI UY 57008579616. Propiedad del LI
+cambiada: price"*). Precio del LI migrado **restaurado a 658.5** al cerrar.
+
+⚠️ **Trampa de método (costó una repetición):** el primer intento de (d) corrió **mientras Railway
+todavía estaba deployando** la restauración de la flag → el proceso vivo aún tenía
+`LI_SYNC_OWNER_ALERT_ENABLED=false` y el aviso al responsable no se escribió; parecía un bug y no lo
+era. **Después de tocar una env hay que esperar `SUCCESS` en `railway deployment list`, no que la
+variable figure seteada.** Dato bueno que salió de ese error: **los dos avisos son independientes** —
+el del espejo salió igual con la flag del responsable apagada.
 
 ---
 
