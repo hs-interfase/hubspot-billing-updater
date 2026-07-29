@@ -57,10 +57,33 @@ SELECT id, action_type, object_type, object_id, deal_id, property_name,
 - La factura asociada **NO cambia** (freeze rule: la factura emitida queda congelada; editar el ticket post-emisión NO la actualiza — para tocar la factura es por invoice-editor).
 
 **Evidencia a registrar**
-- [ ] `DEAL_ID`, `TICKET_ID`, `INVOICE_ID` + captura del ticket antes/después de la pasada.
-- [ ] Captura de la factura sin cambios.
-- [ ] Log de la pasada mostrando el ticket clasificado como protegido (buscar `protected` / Phase P en el log del deal).
+- [x] `DEAL_ID`, `TICKET_ID`, `INVOICE_ID` + captura del ticket antes/después de la pasada.
+- [x] Captura de la factura sin cambios.
+- [x] Log de la pasada mostrando el ticket clasificado como protegido (buscar `protected` / Phase P en el log del deal).
 - [ ] **Anotar la evidencia también en `docs/PLAN_FEATURES_TICKETS_2026-07.md` (Fase 0)** — el plan lo pide como criterio de cierre.
+
+### ✅ CORRIDA 2026-07-29 — PASA
+
+**Caso:** deal `62638017133` "MiFactura Soporte Toyotoshi 2025/2026" (original PY, espejo UY
+`62638858131`) · ticket `46740740632` (Emitido, pipeline manual) · factura `570496510292`
+(`id_factura_nodum=2087`).
+
+**Edición aplicada** (por API, equivalente a la edición de UI para el motor): `nota` + sufijo
+` -TEST-F0` · `content` vacío → `TEST-F0` · `monto_unitario_real` `1272.73` → `1333.33`.
+Pasada: `node ./src/runBilling.js --deal 62638017133`.
+
+**Resultado:** los **3 campos sobrevivieron** intactos. La **factura no cambió en ningún campo**
+(freeze rule confirmada). Lo único que se movió en el ticket fue **lo derivado**, correctamente:
+`subtotal_real` 1272.73 → 1333.33 (monto × cantidad) y `of_margen_usd` 318.73 → 379.33 (+60.60,
+el mismo delta del monto). En el log, Phase P: *"Key cubierta por ticket protegido, saltando
+creación"*.
+
+⚠️ **Gotcha de selección de caso (costó un intento):** el primer candidato (ticket `46722816942`,
+deal `62637996037` "Eidas … - UY") era un **espejo UY** → `runBilling` lo saltea
+(`isMirrorDealFromDeal`, `runBilling.js:144`: *"Mirror suelto, saltando — se procesa desde su
+original"*) y la pasada no ejercita nada. **Para cualquier prueba de esta checklist hay que elegir
+el deal ORIGINAL**, no el espejo: se reconoce por `es_mirror_de_py` o `deal_py_origen_id` con valor.
+Las ediciones de ese intento fallido se restauraron a sus valores originales.
 
 ---
 
