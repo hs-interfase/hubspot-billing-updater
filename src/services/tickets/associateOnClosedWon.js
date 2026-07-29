@@ -61,6 +61,7 @@ import {
 } from '../../config/constants.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { parseBool } from '../../utils/parsers.js';
+import { syncTicketCompanyLabels, ticketLabelSyncEnabled } from './syncTicketCompanyLabels.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'associateOnClosedWon';
@@ -227,6 +228,7 @@ export async function associateAllTicketsOnClosedWon({
   };
 
   const hoy = hoyYMD();
+  const consideredIds = [];
 
   // Regla 22-jul: del cronograma automático FUTURO se asocia el PRÓXIMO a facturar
   // de cada line item (fecha_resolucion_esperada más chica; empate → id más bajo,
@@ -278,6 +280,7 @@ export async function associateAllTicketsOnClosedWon({
       }
     }
     stats.considered++;
+    consideredIds.push(ticketId);
 
     try {
       const dealSet = await ticketAssocSet(client, ticketId, 'deals');
@@ -314,6 +317,26 @@ export async function associateAllTicketsOnClosedWon({
         err,
       });
       logger.warn({ module: MODULE, dealId, ticketId, err }, 'Error asociando ticket en closedwon (no bloquea el resto)');
+    }
+  }
+
+  // RE-SYNC de etiquetas de empresa (29-jul). El bloque de arriba sólo etiqueta los
+  // tickets que RECIÉN se vincularon (`linkedNow`); los que ya estaban asociados y los
+  // cambios posteriores de etiqueta en el negocio los corrige este paso, que compara y
+  // ajusta (agrega faltantes, quita sobrantes). Gateado por TICKET_LABEL_SYNC_ENABLED:
+  // apagado ⇒ comportamiento idéntico al anterior. Reusa la lectura de companies ya
+  // hecha (no gasta otro GET).
+  if (consideredIds.length && ticketLabelSyncEnabled()) {
+    try {
+      stats.labelSync = await syncTicketCompanyLabels({
+        dealId,
+        ticketIds: consideredIds,
+        client,
+        getDealCompaniesFn: () => companiesInfo,
+      });
+    } catch (err) {
+      stats.errors++;
+      logger.warn({ module: MODULE, dealId, err }, 'Error en el re-sync de etiquetas de empresa (no bloquea)');
     }
   }
 

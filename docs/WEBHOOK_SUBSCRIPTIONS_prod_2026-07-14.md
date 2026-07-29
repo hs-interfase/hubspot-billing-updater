@@ -10,6 +10,15 @@
 > line item → ticket de costo/margen nunca se disparaba. Detalle en
 > `definitivos/CRUCE_maria_vs_webhooks_2026-07-20.md`.
 >
+> 🆕 **29-jul — PRIMERA suscripción que NO es `propertyChange`:** la usuaria creó
+> **`deal.associationChange`** (negocio↔empresa) para bajar a los tickets las etiquetas
+> *Empresa Factura* / *Partner* del negocio (RUTA 8 → `ticket_label_sync`).
+> ⚠️ **Un evento de asociación no trae `objectId` ni `propertyName`**: el objeto que cambió viene en
+> `fromObjectId`, y el vínculo en `associationType` (`DEAL_TO_COMPANY`). El router lo atiende **antes**
+> del guard de `objectId` — con el código anterior devolvía **400**, y HubSpot puede deshabilitar una
+> suscripción tras reintentos fallidos. **Ese fix vive en `pruebas`: hasta el merge a `main`, en PROD
+> estos eventos siguen dando 400.**
+>
 > 🔁 **NO suscribir** props que escribe el propio motor (`subtotal_real`, `of_costo`, `of_margen`,
 > `of_pagos_restantes`): riesgo de bucle motor→webhook→motor. Sirve de checklist para replicar en la app de PRUEBAS (portal 51101688).
 

@@ -57,3 +57,42 @@ export function esTicketEditableParaValor({ pipeline, stage } = {}) {
   if (String(pipeline) !== String(TICKET_PIPELINE)) return false;
   return !FORECAST_MANUAL_STAGES.has(String(stage));
 }
+
+// ─── associationChange (RUTA 8: etiquetas de empresa del ticket) ──────────────
+//
+// Los eventos de asociación tienen OTRA forma que los propertyChange: NO traen
+// `objectId` ni `propertyName`; el objeto que cambió viene en `fromObjectId`, y el
+// tipo de vínculo en `associationType` (p.ej. "DEAL_TO_COMPANY"). Por eso el router
+// los atiende ANTES del guard de objectId — un 400 haría que HubSpot reintente 10
+// veces y pueda deshabilitar la suscripción.
+
+/** ¿Es un evento de cambio de asociación (cualquier objeto)? */
+export function esEventoAssociationChange(payload) {
+  return String(payload?.subscriptionType || '').endsWith('.associationChange');
+}
+
+/**
+ * Decide si un associationChange debe disparar el re-sync de etiquetas del ticket.
+ * Sólo aplica a negocio↔empresa: es el vínculo del que salen las etiquetas
+ * "Empresa Factura" / "Partner" que el ticket espeja.
+ *
+ * @param {Object} payload - evento crudo de HubSpot
+ * @returns {{aplica:boolean, dealId:string|null, associationType:string,
+ *   associationRemoved:boolean, motivo?:string}}
+ */
+export function rutearAssociationChangeDealCompany(payload) {
+  const objectType = String(payload?.subscriptionType || '').split('.')[0];
+  const associationType = String(payload?.associationType || '').toUpperCase();
+  const dealId = String(payload?.fromObjectId ?? payload?.objectId ?? '').trim();
+  const associationRemoved = Boolean(payload?.associationRemoved);
+
+  if (objectType !== 'deal' || !associationType.includes('COMPANY')) {
+    return { aplica: false, motivo: 'no_es_negocio_empresa', dealId: null, associationType, associationRemoved };
+  }
+  if (!dealId) {
+    return { aplica: false, motivo: 'sin_from_object_id', dealId: null, associationType, associationRemoved };
+  }
+  // Tanto el alta como la baja de la asociación importan: si sacaron del negocio a
+  // la empresa que facturaba, el ticket tiene que perder esa etiqueta.
+  return { aplica: true, dealId, associationType, associationRemoved };
+}

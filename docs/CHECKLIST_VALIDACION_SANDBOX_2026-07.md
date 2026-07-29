@@ -527,3 +527,47 @@ SELECT id, action_type, object_id, deal_id, status, error, created_at, finished_
 - [ ] IDs (`DEAL_ID`/`TICKET_ID`/`INVOICE_ID`/jobs) por escenario + capturas de deal (cupo), ticket (historial/contador/etapa) y factura.
 - [ ] Capturas de los emails (admin y mirror) y de los `billing_error`/`of_billing_error`.
 - [ ] Salidas de las queries a `webhook_queue`.
+
+---
+
+## 8. Etiquetas «Empresa Factura» / «Partner» en los tickets (llave `TICKET_LABEL_SYNC_ENABLED`)
+
+> Pedido 29-jul. Dos capas distintas, se validan por separado:
+> **(1) heredar al nacer/ganar** — ya prendido en los dos portales por env
+> (`ASSOC_TICKET_LABEL_EMPRESA_FACTURA` / `_PARTNER`: prod **13/11**, sandbox **5/7**), no necesita
+> código nuevo. **(2) re-sync** (`syncTicketCompanyLabels.js` + RUTA 8), llave **OFF por default**.
+
+**Precondiciones**
+- [ ] Sandbox: `ASSOC_TICKET_LABEL_EMPRESA_FACTURA=5`, `ASSOC_TICKET_LABEL_PARTNER=7` (ya seteadas
+      29-jul en los 4 servicios de testing) y `TICKET_LABEL_SYNC_ENABLED=true`.
+- [ ] Un deal **ORIGINAL** (⚠️ no un espejo: `runBilling.js:144` saltea los mirrors) con **3 empresas**
+      asociadas: la principal sin etiqueta, una con *Empresa Factura* (typeId 2 en sandbox) y otra con
+      *Partner* (typeId 3). Anotar `DEAL_ID` y los 3 `COMPANY_ID`.
+
+**Pasos**
+1. [ ] **Capa 1 — al ganar.** Deal no ganado con LIs que generen cronograma → correr una pasada →
+       pasarlo a `closedwon` + `facturacion_activa=true` → correr `node ./src/runBilling.js --deal <DEAL_ID>`.
+2. [ ] Verificar en un ticket recién vinculado: tiene las **3** empresas asociadas, y las etiquetas
+       caen en las **mismas** empresas que en el negocio.
+3. [ ] **Capa 2 — el gap.** Tomar un ticket que YA estaba asociado antes de este cambio (o quitarle a
+       mano la etiqueta a una de sus empresas) → correr la pasada de nuevo → la etiqueta **vuelve**.
+4. [ ] **Capa 2 — cambio posterior.** En el NEGOCIO, mover la etiqueta *Empresa Factura* de una empresa
+       a otra → esperar el evento (RUTA 8) o correr la pasada → el ticket **pierde** la etiqueta vieja y
+       **gana** la nueva. La empresa vieja **sigue asociada al ticket, sin etiqueta**.
+5. [ ] **Idempotencia.** Correr otra vez: `labelsAgregados:0 · labelsQuitados:0 · companiesAsociadas:0`.
+6. [ ] **Llave OFF.** `TICKET_LABEL_SYNC_ENABLED=false` + repetir el paso 4 → el ticket **no cambia**
+       (los tickets nuevos igual nacen etiquetados: eso no depende de esta llave).
+
+**Resultado esperado**
+- Ningún ticket **desasociado** en ningún escenario: sólo se agregan/quitan **etiquetas**.
+- Etiquetas puestas a mano de **otro** tipo (typeId que el motor no gestiona) quedan intactas.
+- En un **espejo**, la misma empresa (Interfase UY) aparece con *Empresa Factura* **y** *Partner* —
+  es correcto, viene así del negocio (`dealMirroring.js:1291`).
+- RUTA 8 responde **200** a todo evento de asociación, incluso a los que ignora (deal↔contacto,
+  deal↔line item): un 4xx repetido puede hacer que HubSpot deshabilite la suscripción.
+
+**Evidencia a registrar**
+- [ ] `DEAL_ID` + los 3 `COMPANY_ID` + `TICKET_ID` usados.
+- [ ] Log de `syncTicketCompanyLabels` de cada paso (`ticketsRevisados / companiesAsociadas /
+      labelsAgregados / labelsQuitados / errors`).
+- [ ] Id del job `ticket_label_sync` de la cola y su `status`.

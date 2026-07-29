@@ -35,8 +35,13 @@ process.env.BILLING_TICKET_FORECAST_95 = STAGE_FORECAST_95;
 process.env.BILLING_TICKET_STAGE_ID = STAGE_PROXIMOS;
 process.env.BILLING_TICKET_STAGE_READY = STAGE_LISTO;
 
-const { TICKET_VALOR_RECALC_PROPS, esEventoTicketValor, esTicketEditableParaValor } =
-  await import('../utils/webhookRouteRules.js');
+const {
+  TICKET_VALOR_RECALC_PROPS,
+  esEventoTicketValor,
+  esTicketEditableParaValor,
+  esEventoAssociationChange,
+  rutearAssociationChangeDealCompany,
+} = await import('../utils/webhookRouteRules.js');
 
 // ───────────────────────────── esEventoTicketValor ─────────────────────────────
 
@@ -90,4 +95,72 @@ test('numbers vs strings: se normaliza con String', () => {
   assert.equal(esTicketEditableParaValor({ pipeline: 101, stage: 21 }), true);
   assert.equal(esTicketEditableParaValor({ pipeline: 101, stage: 11 }), false); // forecast como number
   assert.equal(esTicketEditableParaValor({ pipeline: 202, stage: 21 }), false); // auto como number
+});
+
+// ─── RUTA 8: associationChange negocio↔empresa → ticket_label_sync ────────────
+//
+// Forma real del evento (v3 webhooks): sin `objectId` ni `propertyName`; el objeto que
+// cambió viene en `fromObjectId`. El router lo atiende antes del guard de objectId.
+
+const assocEvent = (over = {}) => ({
+  subscriptionType: 'deal.associationChange',
+  associationType: 'DEAL_TO_COMPANY',
+  fromObjectId: 63252656430,
+  toObjectId: 55480071766,
+  associationRemoved: false,
+  eventId: 1,
+  ...over,
+});
+
+test('esEventoAssociationChange distingue association de property', () => {
+  assert.equal(esEventoAssociationChange(assocEvent()), true);
+  assert.equal(esEventoAssociationChange({ subscriptionType: 'deal.propertyChange' }), false);
+  assert.equal(esEventoAssociationChange({}), false);
+  assert.equal(esEventoAssociationChange(), false);
+});
+
+test('deal↔company → aplica, con el dealId tomado de fromObjectId', () => {
+  const r = rutearAssociationChangeDealCompany(assocEvent());
+  assert.equal(r.aplica, true);
+  assert.equal(r.dealId, '63252656430');
+  assert.equal(r.associationType, 'DEAL_TO_COMPANY');
+  assert.equal(r.associationRemoved, false);
+});
+
+test('la BAJA de la asociación también aplica (hay que quitar la etiqueta del ticket)', () => {
+  const r = rutearAssociationChangeDealCompany(assocEvent({ associationRemoved: true }));
+  assert.equal(r.aplica, true);
+  assert.equal(r.associationRemoved, true);
+});
+
+test('otros vínculos del negocio (contacto, line item) NO aplican', () => {
+  for (const t of ['DEAL_TO_CONTACT', 'DEAL_TO_LINE_ITEM', 'DEAL_TO_TICKET', '']) {
+    const r = rutearAssociationChangeDealCompany(assocEvent({ associationType: t }));
+    assert.equal(r.aplica, false, t);
+    assert.equal(r.motivo, 'no_es_negocio_empresa', t);
+  }
+});
+
+test('association de otro objeto (ticket, company) NO aplica', () => {
+  for (const st of ['ticket.associationChange', 'company.associationChange', 'line_item.associationChange']) {
+    const r = rutearAssociationChangeDealCompany(assocEvent({ subscriptionType: st }));
+    assert.equal(r.aplica, false, st);
+  }
+});
+
+test('sin fromObjectId → no aplica, con motivo propio (se responde 200, no 400)', () => {
+  const r = rutearAssociationChangeDealCompany(assocEvent({ fromObjectId: undefined }));
+  assert.equal(r.aplica, false);
+  assert.equal(r.motivo, 'sin_from_object_id');
+});
+
+test('fallback a objectId si el payload lo trae en vez de fromObjectId', () => {
+  const r = rutearAssociationChangeDealCompany(assocEvent({ fromObjectId: undefined, objectId: 777 }));
+  assert.equal(r.aplica, true);
+  assert.equal(r.dealId, '777');
+});
+
+test('associationType en minúsculas se normaliza', () => {
+  const r = rutearAssociationChangeDealCompany(assocEvent({ associationType: 'deal_to_company' }));
+  assert.equal(r.aplica, true);
 });

@@ -16,6 +16,7 @@ import { reportIfActionable } from './utils/errorReporting.js';
 import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
 import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
 import { recalcValorTotal } from './services/deal/recalcValorTotal.js';
+import { syncTicketCompanyLabels } from './services/tickets/syncTicketCompanyLabels.js';
 import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
 
 const MODULE = 'webhookQueue';
@@ -81,7 +82,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request' | 'ticket_label_sync'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -735,6 +736,22 @@ async function executeJob(job) {
       } finally {
         if (lockToken) await releaseDealLock(dealId, lockToken);
       }
+    }
+
+    case 'ticket_label_sync': {
+      // Cambió una asociación negocio↔empresa (RUTA 8). Baja las etiquetas
+      // "Empresa Factura"/"Partner" del negocio a sus tickets: agrega las que
+      // faltan y quita las que sobran. Sólo toca ASOCIACIONES — no propiedades,
+      // ni facturación, ni cupo → sin candado de deal (es idempotente y aditivo
+      // respecto de lo que hace el cron).
+      const resolvedDealId = deal_id || object_id;
+      const result = await syncTicketCompanyLabels({ dealId: resolvedDealId });
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId,
+          associationType: property_name, ...result },
+        'ticket_label_sync completado'
+      );
+      return result;
     }
 
     default:
