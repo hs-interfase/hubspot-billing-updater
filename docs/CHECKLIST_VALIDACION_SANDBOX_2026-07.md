@@ -200,8 +200,33 @@ SELECT id, action_type, object_id, status, error, created_at, finished_at
 - (b) job `urgent_ticket` en `done`; invoice creada; stage movido; flag reseteado.
 
 **Evidencia a registrar**
-- [ ] `LI_ID`, `TICKET_ID`, `INVOICE_ID`, ids de job de la cola.
-- [ ] Captura de la respuesta/log 200 skipped del LI y del ticket facturado.
+- [x] `LI_ID`, `TICKET_ID`, `INVOICE_ID`, ids de job de la cola.
+- [x] Captura de la respuesta/log 200 skipped del LI y del ticket facturado.
+
+### ✅ CORRIDA 2026-07-29 — PASA (las dos capas)
+
+Sobre el deal sembrado en la prueba 2 (`63252656430`).
+
+**(a) LINE ITEM — nada pasa, verificado por DUPLICADO:**
+1. *Capa portal:* `facturar_ahora=true` en el LI `57565277478` → **cero jobs en la cola** en 10
+   minutos (ni `urgent_line_item` ni ningún otro). La suscripción está efectivamente retirada.
+2. *Capa código:* como la suscripción retirada impide probar el código, se mandó el evento
+   **firmado v3 a mano** contra el servicio real de testing (`webhooks-testing.up.railway.app`):
+   → **`HTTP 200 {"message":"facturar_ahora solo soportado en tickets, skipped","objectType":"line_item"}`**
+   y **ningún job encolado**. O sea: aunque alguien reponga la suscripción por error, el motor no
+   factura desde el LI.
+   > Cómo se reproduce: el endpoint **sí valida firma** (`verifyHubSpotSignature` está en
+   > `server.js:57`, no en el handler → un POST pelado da **401**). Hay que firmar con
+   > `HUBSPOT_CLIENT_SECRET`: `HMAC-SHA256('POST'+url+rawBody+timestamp)` en base64, headers
+   > `X-HubSpot-Signature-v3` + `X-HubSpot-Request-Timestamp` (ventana de 5 min).
+3. Confirmado el comportamiento ya previsto: **el flag del LI queda en `true`** (ya nadie lo
+   resetea) → se limpió a mano.
+
+**(b) TICKET manual — flujo urgente completo, intacto:** `facturar_ahora=true` en el ticket
+`47295677217` (manual, "Próximos a facturar", sin factura) → job **`#7729 urgent_ticket` → `done`**
+→ factura **`574967680541`** creada (Pendiente, USD 1.000, fecha de hoy) **y asociada al ticket**,
+ticket movido a **"Listo para facturar"**, `facturar_ahora` **reseteado a `false`**, `of_billing_error`
+vacío.
 
 ---
 
