@@ -395,7 +395,18 @@ el del espejo salió igual con la flag del responsable apagada.
 
 - [x] **Quitar la suscripción** `line_item.propertyChange / facturar_ahora` en la app privada — **HECHO 26-jul (usuaria)**. **Conservar** la de `ticket.propertyChange / facturar_ahora` (verificar que sigue activa al repasar esta lista).
 - [x] **Ocultar** la propiedad `facturar_ahora` de vistas, tarjetas y editores de LINE ITEM — **HECHO 26-jul (usuaria)**. **NO borrar la propiedad** (hay historia y el código de tickets la comparte por nombre).
-- [ ] **Revisar workflows** de HubSpot: ninguno debe escribir `facturar_ahora` en line items (buscar en workflows activos por la propiedad). ← **ÚNICO PUNTO QUE QUEDA DE ESTA CHECKLIST**
+- [x] **Revisar workflows** de HubSpot: ninguno debe escribir `facturar_ahora` en line items — ✅ **29-jul, verificado por API en los DOS portales** (`GET /automation/v4/flows` + la definición completa de cada flow, buscando la cadena `facturar_ahora`):
+
+| | Sandbox 51101688 | **Prod 50148277** |
+|---|---|---|
+| workflows totales | 30 (negocio 12 · ticket 17 · empresa 1) | 32 (negocio 12 · ticket 17 · empresa 2 · `0-115` 1) |
+| **de tipo LINE ITEM** | **0** | **0** |
+| mencionan `facturar_ahora` | **ninguno** | **ninguno** |
+
+  Doble refuerzo: no hay ningún workflow de line item (y un workflow sólo escribe propiedades del
+  objeto que inscribe), y además la propiedad no aparece en la definición de ninguno. La búsqueda
+  cubre también el custom code de Operations Hub, que viaja dentro de la definición del flow.
+  ⚠️ Lo que **no** cubre: escrituras desde integraciones externas o desde otra app privada.
 - [x] **Confirmar que la suscripción de TICKET quedó intacta** — ✅ **29-jul, probado por comportamiento**: en la prueba 3(b) marcar `facturar_ahora` en el ticket `47295677217` disparó el job `#7729 urgent_ticket` de verdad. Si la suscripción no estuviera activa, el evento nunca habría llegado.
 - [x] **Drenar la cola antes del deploy** — ✅ **29-jul: 0 filas** (`action_type='urgent_line_item' AND status IN ('pending','processing')`).
 
