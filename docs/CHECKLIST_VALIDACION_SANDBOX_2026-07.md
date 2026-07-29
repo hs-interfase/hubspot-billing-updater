@@ -113,9 +113,46 @@ Las ediciones de ese intento fallido se restauraron a sus valores originales.
 - Regresión intacta: promoción a "Próximos a Facturar" y emisión automática sin cambios de comportamiento.
 
 **Evidencia a registrar**
-- [ ] `DEAL_ID` + captura del negocio ANTES (0 asociados) y DESPUÉS (asociados por pipeline).
-- [ ] Conteo esperado vs. real: manuales / auto pasados / próximo auto.
-- [ ] Log de `associateOnClosedWon` (asociados/saltados).
+- [x] `DEAL_ID` + captura del negocio ANTES (0 asociados) y DESPUÉS (asociados por pipeline).
+- [x] Conteo esperado vs. real: manuales / auto pasados / próximo auto.
+- [x] Log de `associateOnClosedWon` (asociados/saltados).
+
+### ✅ CORRIDA 2026-07-29 — PASA
+
+**El sandbox no tenía ningún caso servible:** de los 58 deals abiertos, **0 tienen line items** (toda
+la data es migrada = ganada), y `seedTestDeals.mjs` nace en `closedwon` y apunta a una company que
+en sandbox **no existe** (`52069639218` → 404). Se sembró a medida: deal `63252656430`
+`[TEST-P2] Asociacion al ganar`, stage **`decisionmakerboughtin` (Calificado, 50%)**, company
+`55480071766` (LA HORQUILLA), con 2 LIs mensuales de plan finito elegidos para que el cronograma
+cayera a ambos lados de hoy:
+- LI `57565277478` **MANUAL** 4 pagos, start −1 mes → 2 pasados + 2 futuros
+- LI `57573566267` **AUTO** 6 pagos, start −2 meses → 3 pasados + 3 futuros
+
+**ANTES de ganar** (`runBilling --deal`): Phase P creó **10 tickets** y el hook registró
+`applies:false` → **0 asociados**, con los 10 igual encontrables por `of_deal_id`. Salió además el
+guard existente *"Facturación próxima/vencida en negocio no ganado"* en `billing_error` del deal.
+
+**DESPUÉS de pasar a `closedwon`** (+ `facturacion_activa=true` en deal y LIs — en el portal eso lo
+hace un workflow, el motor la lee pero no la escribe):
+
+| Regla | Esperado | Real |
+|---|---|---|
+| MANUAL → todos (pasados y futuros) | 4/4 | **4/4** ✅ |
+| AUTO pasado → se asocia | 3/3 | **3/3** ✅ |
+| AUTO futuro → sólo el próximo por LI | 1/3 (el de 2026-08-29) | **1/3** ✅ |
+
+Log del hook: `ticketsFound:10 · considered:8 · dealLinked:3 · companyLinked:3 · alreadyLinked:5 ·
+skippedByPipeline:2 · autoPastLinked:3 · autoNextLinked:1 · errors:0`. **8 asociados de 10**; los
+sueltos son los automáticos de sep y oct, que se asociarán solos cuando pasen a ser "el próximo".
+
+**Regresión OK:** Phase 3 emitió las **3 facturas** de los automáticos vencidos
+(`574939212119`, `574927393603`, `574928513945`).
+
+**Idempotencia OK:** segunda pasada → `dealLinked:0 · alreadyLinked:8 · autoInvoicesEmitted:0`;
+siguen siendo 10 tickets y 8 asociaciones. No duplica.
+
+🧹 **Datos de prueba a limpiar** cuando ya no hagan falta: deal `63252656430` + sus 2 LIs + 10 tickets
++ 3 invoices (llevan el prefijo `[TEST-P2]`).
 
 ---
 
