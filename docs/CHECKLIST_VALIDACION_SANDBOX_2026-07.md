@@ -395,9 +395,9 @@ el del espejo salió igual con la flag del responsable apagada.
 
 - [x] **Quitar la suscripción** `line_item.propertyChange / facturar_ahora` en la app privada — **HECHO 26-jul (usuaria)**. **Conservar** la de `ticket.propertyChange / facturar_ahora` (verificar que sigue activa al repasar esta lista).
 - [x] **Ocultar** la propiedad `facturar_ahora` de vistas, tarjetas y editores de LINE ITEM — **HECHO 26-jul (usuaria)**. **NO borrar la propiedad** (hay historia y el código de tickets la comparte por nombre).
-- [ ] **Revisar workflows** de HubSpot: ninguno debe escribir `facturar_ahora` en line items (buscar en workflows activos por la propiedad).
-- [ ] **Confirmar que la suscripción de TICKET quedó intacta**: `ticket.propertyChange / facturar_ahora` activa en la app privada.
-- [ ] **Drenar la cola antes del deploy**: no debe quedar ningún urgente de LI en vuelo:
+- [ ] **Revisar workflows** de HubSpot: ninguno debe escribir `facturar_ahora` en line items (buscar en workflows activos por la propiedad). ← **ÚNICO PUNTO QUE QUEDA DE ESTA CHECKLIST**
+- [x] **Confirmar que la suscripción de TICKET quedó intacta** — ✅ **29-jul, probado por comportamiento**: en la prueba 3(b) marcar `facturar_ahora` en el ticket `47295677217` disparó el job `#7729 urgent_ticket` de verdad. Si la suscripción no estuviera activa, el evento nunca habría llegado.
+- [x] **Drenar la cola antes del deploy** — ✅ **29-jul: 0 filas** (`action_type='urgent_line_item' AND status IN ('pending','processing')`).
 
 ```sql
 SELECT count(*) FROM webhook_queue
