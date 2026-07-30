@@ -588,8 +588,9 @@ const C = {
   <div class="note ni">ℹ️ Si el ticket cancelado era el único para esa fecha, el sistema creará uno nuevo la próxima vez que corra. Para evitarlo, pausá la línea de pedido o cancelá el negocio.</div>`,
 
 'cancelar-factura': `
+  <div class="note nw">⚠️ <strong>Cancelar una factura CIERRA el período.</strong> La factura queda anulada y el <strong>ticket queda Cancelado</strong>: ese cobro no se vuelve a facturar. Si lo que querés es <strong>facturarlo de nuevo</strong>, no lo canceles — mirá <em>Revertir una factura</em>.</div>
   <div class="steps">
-    <div class="step"><div class="sn">A</div><div class="sb2"><div class="st">Desde el editor de facturas (recomendado)</div><div class="sd">Ir a <code>/invoice-editor</code>, buscar por ID y usar el botón "Cancelar". El sistema propaga al ticket y registra la fecha sola.</div></div></div>
+    <div class="step"><div class="sn">A</div><div class="sb2"><div class="st">Desde el editor de facturas (recomendado)</div><div class="sd">Ir a <code>/invoice-editor</code>, buscar por ID y poner la <strong>Etapa de la factura</strong> en <strong>Cancelada</strong>. Antes de guardar, la pantalla te avisa qué le va a pasar al ticket.</div></div></div>
     <div class="step"><div class="sn">B</div><div class="sb2"><div class="st">Desde HubSpot directamente</div><div class="sd">Cambiar la Etapa de la factura a "Cancelada". Si no tiene fecha de cancelación, el sistema pone la de hoy.</div></div></div>
   </div>
   <div class="sl">Propiedades de la factura <span class="tag tin">Factura</span></div>
@@ -598,7 +599,27 @@ const C = {
     ${fila('Fecha de cancelación','Fecha','sistema','Si no hay ninguna, el sistema pone la fecha de hoy.')}
     ${fila('Motivo de cancelación','Texto','usuario','Para dejar un registro claro de por qué se canceló.')}
   </div>
-  <div class="note nw">⚠️ Cancelar una factura no cancela el ticket. Si corresponde, hay que cancelarlo por separado.</div>`,
+  <div class="note nok">✅ El <strong>cupo vuelve solo</strong>: lo que esa factura había consumido se re-acredita en el negocio, y queda anotado en el historial de cupo del ticket.</div>
+  <div class="note ne">🔴 Si la factura ya está <strong>asentada en Nodum</strong>, no se puede cancelar: corresponde <strong>Nota de Crédito</strong>. El sistema te lo va a frenar con ese mensaje.</div>`,
+
+'revertir-factura': `
+  <div class="note ni">ℹ️ <strong>Revertir</strong> es "esta factura salió mal, la quiero hacer de nuevo". Anula la factura y deja el ticket <strong>listo para volver a facturar</strong>, con el mismo período. <strong>Cancelar</strong>, en cambio, cierra el período para siempre.</div>
+  <div class="note nw">⚠️ <strong>Solo para facturas MANUALES.</strong> Las automáticas no se revierten: el sistema las volvería a emitir solo, igual que antes. Si una automática salió mal, <strong>editá la factura</strong> o emití una <strong>Nota de Crédito</strong>.</div>
+  <div class="steps">
+    <div class="step"><div class="sn">1</div><div class="sb2"><div class="st">Ir al ticket de esa factura</div><div class="sd">El del pipeline <strong>Órdenes de Facturación</strong> (manual).</div></div></div>
+    <div class="step"><div class="sn">2</div><div class="sb2"><div class="st">Escribir el <strong>Motivo del ajuste</strong></div><div class="sd">Para que quede registro de por qué se rehace el cobro.</div></div></div>
+    <div class="step"><div class="sn">3</div><div class="sb2"><div class="st">Marcar <strong>Revertir factura</strong></div><div class="sd">El sistema anula la factura, re-acredita el cupo y devuelve el ticket a <strong>Próximos a Facturar</strong>. La casilla se destilda sola.</div></div></div>
+    <div class="step"><div class="sn">4</div><div class="sb2"><div class="st">Corregir lo que estaba mal y volver a facturar</div><div class="sd">Se emite con <strong>Facturar Ahora</strong>, como cualquier ticket manual.</div></div></div>
+  </div>
+  <div class="sl">Propiedades del ticket <span class="tag ttk">Ticket</span></div>
+  <div class="pb">${CAB}
+    ${fila('Revertir factura','Sí/No','usuario','Marcala para anular la factura y dejar el ticket listo para refacturar. Se destilda sola cuando el sistema termina.')}
+    ${fila('Motivo del ajuste','Texto','usuario','Por qué se rehace el cobro. Viaja en el aviso a administración.')}
+    ${fila('Refacturaciones','Número','sistema','Cuántas veces se rehizo este período. Sube solo cuando revertís a propósito.')}
+    ${fila('Cupo historial','Texto','sistema','El libro mayor del cupo: una línea por consumo y una por devolución.')}
+  </div>
+  <div class="note ne">🔴 Si la factura ya está <strong>asentada en Nodum</strong> no se puede revertir: corresponde <strong>Nota de Crédito</strong>. El sistema te avisa en el ticket con el link al tutorial.</div>
+  <div class="note nok">✅ Administración recibe un correo con el motivo, el resultado del cupo y el número de refacturación.</div>`,
 
 'pausar-li': `
   <div class="sl">Línea de pedido <span class="tag tlp">Línea de pedido</span></div>
@@ -790,7 +811,8 @@ const SECS = {
   cancelaciones:{icon:'🛑',title:'Cancelaciones y Pausas',hc:'sr',sub:[
     {k:'cancelar-deal',    ic:'❌',bg:'rgba(248,113,113,.13)',tt:'Cancelar un negocio',         sb:'Perdido, Suspendido o Anulado'},
     {k:'cancelar-ticket',  ic:'🎫',bg:'rgba(248,113,113,.13)',tt:'Cancelar un ticket',          sb:'Sin afectar el negocio ni otras líneas'},
-    {k:'cancelar-factura', ic:'🧾',bg:'rgba(248,113,113,.13)',tt:'Cancelar una factura',        sb:'Desde el editor o directamente en HubSpot'},
+    {k:'cancelar-factura', ic:'🧾',bg:'rgba(248,113,113,.13)',tt:'Cancelar una factura',        sb:'Cierra el período: el ticket queda cancelado'},
+    {k:'revertir-factura', ic:'🔁',bg:'rgba(248,113,113,.13)',tt:'Revertir una factura',        sb:'Rehacer un cobro que salió mal — solo manuales'},
     {k:'pausar-li',        ic:'⏸️',bg:'rgba(248,113,113,.13)',tt:'Pausar una línea de pedido', sb:'Sin cancelar el negocio'},
     {k:'nota-credito',     ic:'↩️',bg:'rgba(248,113,113,.13)',tt:'Emitir una Nota de Crédito',  sb:'Revertir un cobro y devolver el cupo'},
   ]},
@@ -832,7 +854,8 @@ const SUBCOMS = {
   'editar-factura':'Ponés el ID, editás, y el sistema actualiza el ticket solo. 🎛️',
   'cancelar-deal':'El sistema limpia lo que todavía no salió. Lo que ya se facturó, eso ya fue. 😔',
   'cancelar-ticket':'El ticket se cancela, el negocio sigue vivo. Quirúrgico. 🔪',
-  'cancelar-factura':'Las facturas no se borran, se cancelan. El sistema guarda el rastro de todo. 📋',
+  'cancelar-factura':'Cancelar cierra el período: ese cobro no vuelve. Si lo querés rehacer, revertí. 🛑',
+  'revertir-factura':'Revertir es el "rehacer" del cobro: anula la factura y te deja facturar de nuevo. 🔁',
   'pausar-li':'Congelar una línea sin afectar el resto del negocio. ❄️',
   'nota-credito':'Una NC es como un "deshacer" del cobro: factura en negativo y te devuelve el cupo. ↩️',
   'resp-flujo':'Tu misión: revisar, corregir y disparar. Sin tu OK, la factura no sale. 🫡',
