@@ -682,6 +682,27 @@ secciones. ⚠️ **Describe el comportamiento CON la llave prendida**: si se me
 `CANCEL_REVERT_FLOW_ENABLED` apagada, la guía dice algo que todavía no pasa → **prender la llave en el
 mismo movimiento del merge**.
 
+#### ✅ VALIDACIÓN EN SANDBOX de la definición, contra el servicio DEPLOYADO (30-jul, `9ec0940`)
+
+No contra un servidor local: `https://webhooks-testing.up.railway.app`, con el deploy en `SUCCESS` y
+el commit verificado por hash.
+
+| | Resultado |
+|---|---|
+| **A.** `GET` de una automática | `es_automatica: true` (resuelve `ticket_id → hs_pipeline`) |
+| **B.** `revertir` sobre automática | **409** con el texto de nota de crédito |
+| **C.** sin `modo` sobre automática | **200 `modo:"cancelar"`** · ticket `47285972996` → **CANCELADO** conservando `of_invoice_id` |
+| **D.** `revertir` sobre manual | `es_automatica: false` · **200** · ticket a Próximos a Facturar, contador 1→2 |
+| **E.** `PATCH etapa=Cancelada` (la vía de la pantalla) | ticket **CANCELADO**, no a facturable · `motivo_cancelacion_del_ticket` escrito |
+| **F.** factura con `id_factura_nodum` | **409 por las DOS vías** (`PATCH` y `POST`), factura **intacta en Pendiente** |
+| **G.** pasada del deal después de todo | `propagated: 0` · `invoicesEmitted: 0` · **los 5 tickets cancelados siguen CANCELADOS con su factura conservada** (2 manuales, 2 automáticos, 1 manual del `PATCH`) |
+
+**Un hallazgo lateral, y es buena noticia:** al intentar re-emitir el ticket `47298308702` el motor
+**se negó** — *"Invoice activa ya existe para este período (guard `invoiceExistsForKey`)"*. Era la
+factura huérfana `574976225542` que había dejado el bug de ayer (el sweep viejo le borró al ticket la
+referencia a su factura nueva). O sea: **el guard anti-duplicado aguantó** y el período nunca corrió
+riesgo de facturarse dos veces. Se re-vinculó la factura al ticket y se siguió la prueba con ella.
+
 ⚠️ **De paso:** `associateOnClosedWon.test.mjs` estaba **rojo desde el 29-jul** y no por el código —
 el re-sync de etiquetas (`TICKET_LABEL_SYNC_ENABLED=true` en el `.env` real) corre al final de
 `associateAllTicketsOnClosedWon` sobre TODOS los tickets considerados, así que el happy path veía un
