@@ -185,6 +185,89 @@ export function computeContadorRefacturaciones({ cancelIntent, actual } = {}) {
 }
 
 /**
+ * GUARDA DE RE-PROPAGACIÓN DE FACTURAS CANCELADAS. Helper PURO.
+ *
+ * EL PROBLEMA (validación sandbox 29/30-jul, prueba 7): el sweep
+ * propagateCancelledInvoicesForDeal re-propaga **todas** las facturas
+ * `Cancelada` del deal en **cada** pasada, con `cancelIntent=null` → rama
+ * 'revert' → "este ticket tiene que estar facturable". Sin memoria y sin mirar
+ * el resto de los hechos del período, eso rompe dos cosas:
+ *
+ *   1. **Deshace la cancelación DEFINITIVA**: saca el ticket de CANCELADO y le
+ *      borra `of_invoice_id` (lo que finalizeTicketAfterDefinitiveCancellation
+ *      marca como CRÍTICO conservar). En el pipeline automático la pasada
+ *      siguiente RE-EMITE el período anulado (medido: invoice 575082098724).
+ *   2. **Deshace la refacturación**: una refacturación reusa la misma
+ *      `of_invoice_key`, así que la factura VIEJA cancelada encuentra el ticket
+ *      que ya apunta a la NUEVA viva y le borra la referencia → la nueva queda
+ *      huérfana y el período parece sin facturar. Esto pasa HOY, sin flags.
+ *
+ * CRITERIO (el de cualquier sistema de facturación: comprobantes inmutables,
+ * `void` terminal, y el estado del período se decide desde el documento
+ * VIGENTE, no desde uno superado):
+ *
+ *   A. `periodo_cerrado`  — el ticket ya está en la etapa CANCELADO de su
+ *      pipeline: estado terminal, no se re-abre.
+ *   B. `factura_superada` — el ticket apunta a OTRA factura: sólo la factura
+ *      que el ticket tiene apuntada decide su estado. (El caller verifica que
+ *      esa otra factura esté viva; si no puede verificarlo, NO saltea →
+ *      fail-open al comportamiento actual.)
+ *   C. `ya_limpio`        — el ticket ya está en el estado post-reversión
+ *      (sin factura, sin status, en la etapa facturable): no hay nada que
+ *      escribir. Evita que cada pasada reescriba el mismo aviso y su timestamp
+ *      por facturas canceladas hace meses.
+ *
+ * ⚠️ Sólo aplica a re-propagaciones **automáticas** (`cancelIntent == null`:
+ * cron sweep + webhook genérico de invoice). Una acción DELIBERADA (editor o
+ * casilla, que llegan con intent 'cancel'/'revert') nunca se saltea.
+ *
+ * @param {Object} [params]
+ * @param {'cancel'|'revert'|null} [params.cancelIntent]
+ * @param {Object} [params.ticketProps]     - props del ticket (pre-update)
+ * @param {string|number} [params.invoiceId] - factura que se está propagando
+ * @param {string} [params.cancelledStage]   - etapa CANCELADO de su pipeline
+ * @param {string} [params.facturableStage]  - etapa destino de la rama revert
+ * @returns {{skip:boolean, reason?:string, checkPointedInvoice?:string}}
+ */
+export function resolveCancelledPropagationGuard({
+  cancelIntent = null,
+  ticketProps = {},
+  invoiceId,
+  cancelledStage,
+  facturableStage,
+} = {}) {
+  // Acción deliberada: manda el intent, sin guardas.
+  if (cancelIntent != null) return { skip: false };
+
+  const tp = ticketProps || {};
+  const stage = String(tp.hs_pipeline_stage || '').trim();
+  const pointed = String(tp.of_invoice_id || '').trim();
+  const status = String(tp.of_invoice_status || '').trim();
+
+  // A. Período cerrado: CANCELADO es terminal.
+  if (cancelledStage && stage === String(cancelledStage).trim()) {
+    return { skip: true, reason: 'periodo_cerrado' };
+  }
+
+  // B. Documento superado: el ticket ya siguió con otra factura.
+  if (pointed && pointed !== String(invoiceId)) {
+    return { skip: false, checkPointedInvoice: pointed };
+  }
+
+  // C. Nada que hacer: ya quedó en el estado post-reversión.
+  if (
+    !pointed &&
+    !status &&
+    facturableStage &&
+    stage === String(facturableStage).trim()
+  ) {
+    return { skip: true, reason: 'ya_limpio' };
+  }
+
+  return { skip: false };
+}
+
+/**
  * Bloque 5b — "preparar ticket para refacturación" tras cancelarse una factura.
  *
  * ⚠️ COMPORTAMIENTO ACTUAL CONSERVADO TAL CUAL (extracción pura desde
@@ -525,7 +608,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
         filterGroups: [{ filters: [{ propertyName: 'of_invoice_key', operator: 'EQ', value: invoiceKey }] }],
-        properties: ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo', 'of_refacturaciones', 'motivo_del_ajuste'],        limit: 1,
+        properties: ['of_invoice_status', 'of_invoice_id', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_aplica_para_cupo', 'of_refacturaciones', 'motivo_del_ajuste'],        limit: 1,
       });
       ticket = resp?.results?.[0] || null;
     } catch (err) {
@@ -537,7 +620,7 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     try {
       ticket = await hubspotClient.crm.tickets.basicApi.getById(
         String(ip.ticket_id),
-        ['of_invoice_status', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_refacturaciones', 'motivo_del_ajuste']
+        ['of_invoice_status', 'of_invoice_id', 'hs_pipeline', 'hs_pipeline_stage', 'of_line_item_ids', 'fecha_real_de_facturacion', 'of_deal_id', 'of_refacturaciones', 'motivo_del_ajuste']
       );
     } catch (err) {
       logger.warn({ module: mod, fn, invoiceId, ticketId: ip.ticket_id, err }, 'Error obteniendo ticket por ticket_id');
@@ -555,6 +638,63 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
   const currentPipeline = tp.hs_pipeline;
   const lineItemId   = String(tp.of_line_item_ids || '').split(',')[0].trim() || null;
   const isAutomated  = String(currentPipeline) === String(AUTOMATED_TICKET_PIPELINE);
+
+  // 2b. GUARDAS de re-propagación (sólo para facturas Cancelada y sólo cuando
+  // NO hay intent explícito). Van ANTES de cualquier escritura: el paso 4/5 ya
+  // escribe of_invoice_status='Cancelada' y mueve el stage a CANCELADO, y la
+  // rama 5b lo revertiría — ese ida y vuelta es justamente el churn a evitar.
+  // Detalle del criterio en resolveCancelledPropagationGuard.
+  if (etapa === 'Cancelada') {
+    const cancelledStage = String(
+      CANCELLED_STAGE_BY_PIPELINE[String(currentPipeline || '').trim()] ||
+      (isAutomated ? BILLING_AUTOMATED_CANCELLED : TICKET_STAGES.CANCELLED) ||
+      ''
+    ).trim();
+    const facturableStage = String(
+      (isAutomated ? process.env.BILLING_AUTOMATED_READY : TICKET_STAGES.NEW) || ''
+    ).trim();
+
+    const guard = resolveCancelledPropagationGuard({
+      cancelIntent,
+      ticketProps: tp,
+      invoiceId,
+      cancelledStage,
+      facturableStage,
+    });
+
+    // B necesita IO: ¿la factura que el ticket tiene apuntada sigue viva? Si no
+    // se puede verificar, NO se saltea (fail-open al comportamiento actual).
+    let reason = guard.skip ? guard.reason : null;
+    if (!reason && guard.checkPointedInvoice) {
+      try {
+        const pointedInv = await hubspotClient.crm.objects.basicApi.getById(
+          INVOICE_OBJECT_TYPE,
+          guard.checkPointedInvoice,
+          ['etapa_de_la_factura']
+        );
+        const pointedEtapa = pointedInv?.properties?.etapa_de_la_factura;
+        if (pointedEtapa && pointedEtapa !== 'Cancelada') reason = 'factura_superada';
+      } catch (err) {
+        logger.warn(
+          { module: mod, fn, invoiceId, ticketId, pointedInvoiceId: guard.checkPointedInvoice, err: err?.message },
+          'No se pudo verificar la factura apuntada por el ticket: se propaga igual (fail-open)'
+        );
+      }
+    }
+
+    if (reason) {
+      logger.info(
+        {
+          module: mod, fn, invoiceId, ticketId, reason,
+          ticketStage: currentStage,
+          ticketInvoiceId: tp.of_invoice_id || null,
+          ...(guard.checkPointedInvoice && { pointedInvoiceId: guard.checkPointedInvoice }),
+        },
+        'Re-propagación de factura cancelada salteada (el ticket no se toca)'
+      );
+      return { status: 'skipped', reason, invoiceId, ticketId };
+    }
+  }
 
   // 3. Resolver stage destino
   const targetStage = resolveTargetStage({ etapa, nodumId, currentStage, isAutomated });

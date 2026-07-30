@@ -528,7 +528,7 @@ SELECT id, action_type, object_id, deal_id, status, error, created_at, finished_
 - [x] Capturas de los emails (admin y mirror) y de los `billing_error`/`of_billing_error`.
 - [x] Salidas de las queries a `webhook_queue`.
 
-### ⚠️ CORRIDA 2026-07-29/30 — 9 de 10 escenarios PASAN · (c) FALLA (bloqueante)
+### ✅ CORRIDA 2026-07-29/30 — 10 de 10 PASAN (la (c) falló, se corrigió y se re-validó el 30-jul)
 
 **Entorno.** Flags `true` en el servicio `webhooks` de testing (verificado por `railway variables`
 DESPUÉS del `SUCCESS` del deploy). **Drift corregido:** en `CRON hs-billing-updater` de testing
@@ -584,10 +584,50 @@ Medido, con las dos flags prendidas:
   `cupo_consumo_invoice_id`: la 2ª pasada ve el marker limpio y hace skip) y **contador sin inflarse**
   (`computeContadorRefacturaciones` con intent null devuelve null). Tampoco se mandan avisos.
 
-Dirección de fix sugerida (a decidir): que la propagación **no re-abra** un período ya cerrado —
-p. ej. skip si el ticket ya está en la etapa CANCELADO de su pipeline, o persistir la intención
-(`motivo_cancelacion_del_ticket` + stage) y que `resolveCancellationBranch` la lea. Con las flags
-apagadas el problema no existe (nunca hay rama `cancel`).
+#### ✅ FIX 30-jul + re-validación — `resolveCancelledPropagationGuard`
+
+Criterio aplicado, el de cualquier sistema de facturación (comprobantes inmutables, `void` terminal,
+y el estado del período se decide desde el documento **vigente**, no desde uno superado). `of_invoice_id`
+queda definido como **"la factura que gobierna el período"** — la viva, o la última si el período se
+cerró; el historial completo lo llevan las asociaciones ticket↔factura de HubSpot. **El estado se
+decide desde datos (etapa + ids), nunca desde texto**; el texto (`motivo_cancelacion_del_ticket`,
+`of_billing_error`, `of_cupo_historial`) queda para humanos. Sin props nuevas.
+
+Tres guardas en `propagateInvoiceStateToTicket`, **antes de cualquier escritura** (el paso 4/5 ya
+movía el stage a CANCELADO y la rama 5b lo revertía — ese ida y vuelta era parte del churn), y sólo
+para `etapa='Cancelada'` **sin intent explícito**: una acción deliberada (editor o casilla) nunca se
+saltea.
+
+| Guarda | Condición | Qué cierra |
+|---|---|---|
+| `periodo_cerrado` | el ticket ya está en la etapa CANCELADO de su pipeline | la cancelación definitiva ya no se re-abre |
+| `factura_superada` | el ticket apunta a OTRA factura **y esa factura está viva** (se verifica; si no se puede, **no** se saltea → fail-open al comportamiento actual) | la refacturación ya no se deshace |
+| `ya_limpio` | el ticket ya está sin factura, sin status y en la etapa facturable | no se reescribe el mismo aviso (ni su timestamp) en cada pasada |
+
+**Re-validación en sandbox (30-jul), las tres guardas vistas en vivo:**
+
+- **(c) manual:** ticket `47275177280` cancelado definitivo (factura `575231373738`) → pasada del deal
+  → **sigue en CANCELADO `1311451813` con `of_invoice_id` y `of_invoice_status='Cancelada'` intactos**.
+  Sweep: `propagated: 0 · skipped: 13`, todas con `reason: periodo_cerrado`.
+- **(c) automático — el caso de plata:** ticket `47295259060` cancelado definitivo desde el editor
+  (`modo:'cancelar'`, factura `575082098724`) → pasada → **sigue en `1311404155`,
+  `invoicesEmitted: 0` y el período `…::2026-05-29` sigue con 2 facturas (las dos Canceladas): NO se
+  emitió ninguna nueva.** Antes de la guarda, esta misma secuencia emitía factura nueva.
+- **(b) refacturación:** ticket `47295677217` revertido y refacturado (F2 `575230632306`) → pasada →
+  **conserva F2 y su etapa**; la factura vieja `574967680541` se saltea con
+  `reason: factura_superada · pointedInvoiceId: 575230632306`.
+- **`ya_limpio`** observado en los tickets que quedaron en el estado post-reversión
+  (`47298308702`, `47295259060` antes del re-test): ya no reescriben el aviso en cada pasada.
+
+**14 tests unitarios nuevos** (`src/__tests__/cancelledPropagationGuard.test.mjs`), suite completa
+**358/358**. Las guardas `factura_superada` y `ya_limpio` **no dependen de las flags**: corrigen
+también el comportamiento actual de producción (donde el problema 2 ya ocurre).
+
+⚠️ **De paso:** `associateOnClosedWon.test.mjs` estaba **rojo desde el 29-jul** y no por el código —
+el re-sync de etiquetas (`TICKET_LABEL_SYNC_ENABLED=true` en el `.env` real) corre al final de
+`associateAllTicketsOnClosedWon` sobre TODOS los tickets considerados, así que el happy path veía un
+`create` extra sobre el ticket ya vinculado. El test se aisló fijando la llave en `false` antes de los
+imports (valida la mecánica de asociación; el re-sync tiene su propio archivo de tests).
 
 #### Otros 3 hallazgos
 
