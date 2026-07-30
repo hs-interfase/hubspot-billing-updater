@@ -407,6 +407,17 @@ el del espejo salió igual con la flag del responsable apagada.
   objeto que inscribe), y además la propiedad no aparece en la definición de ninguno. La búsqueda
   cubre también el custom code de Operations Hub, que viaja dentro de la definición del flow.
   ⚠️ Lo que **no** cubre: escrituras desde integraciones externas o desde otra app privada.
+- [ ] 🆕 **30-jul — lo que SÍ apareció al revisar por API: 3 workflows de PROD escriben `cancelar_ticket=true`.**
+  - `1767305350` **Propagacion de cierre** (16 acciones, 2 ponen la casilla) — **uso legítimo**: cancela los tickets cuando se cae el negocio. **Dejar como está.**
+  - `1780939532` *«Órdenes de Facturación», estado del ticket «Cancelado»* → **una sola acción**: `cancelar_ticket=true`.
+  - `1782918733` *«Órdenes de facturación Automáticas», estado «Cancelada»* → **una sola acción**: idem.
+
+  Los dos últimos son un **eco**: el ticket YA está en la etapa Cancelado y sólo marcan la casilla, que
+  el motor **resetea a `false` enseguida** → no dejan nada durable, sólo un job por cancelación. Y en el
+  pipeline **automático** el handler responde *"Los tickets automáticos no se cancelan desde esta
+  casilla"* y **eso pisa el `of_billing_error`** de la cancelación definitiva (visto en vivo el 30-jul,
+  ticket `47295259060`: el aviso bueno quedó tapado). **Sugerencia: apagar esos dos.** Los mismos existen
+  en sandbox (`1782915938`, `1782918796`). ⚠️ Decisión de la usuaria — **no se tocó nada en PROD**.
 - [x] **Confirmar que la suscripción de TICKET quedó intacta** — ✅ **29-jul, probado por comportamiento**: en la prueba 3(b) marcar `facturar_ahora` en el ticket `47295677217` disparó el job `#7729 urgent_ticket` de verdad. Si la suscripción no estuviera activa, el evento nunca habría llegado.
 - [x] **Drenar la cola antes del deploy** — ✅ **29-jul: 0 filas** (`action_type='urgent_line_item' AND status IN ('pending','processing')`).
 
@@ -660,10 +671,16 @@ a Próximos a Facturar (contador 1→2) · `PATCH etapa=Cancelada` sobre manual 
 a facturable · `PATCH etapa=Cancelada` sobre factura con `id_factura_nodum` → **409** y factura
 intacta. Suite completa **371/371**.
 
-⚠️ **Pendiente de la guía web** (`/guia`, bloque `cancelar-factura`): dice *"Cancelar una factura no
-cancela el ticket"* y menciona un botón "Cancelar" que la pantalla no tiene. Con la llave prendida eso
-pasa a ser falso — **hay que reescribirlo el día que se prenda**, no antes (hoy en PROD sigue siendo
-cierto).
+✅ **Guía web `/guia` actualizada (30-jul).** El bloque `cancelar-factura` decía *"Cancelar una
+factura no cancela el ticket"* y mencionaba un botón "Cancelar" que la pantalla no tiene: reescrito con
+la semántica nueva (cancelar cierra el período · el cupo vuelve solo y queda en el historial · Nodum →
+nota de crédito), y **se agregó la sección `revertir-factura`**: qué es, que es **sólo para manuales** y
+por qué, los 4 pasos desde el ticket (motivo del ajuste → casilla → corregir → facturar ahora), las 4
+propiedades y el aviso a administración. Más entrada en el índice y tip. Verificado: backticks
+balanceados, `node --check` del JS de la página y la guía servida respondiendo 200 con las dos
+secciones. ⚠️ **Describe el comportamiento CON la llave prendida**: si se mergea `main` con
+`CANCEL_REVERT_FLOW_ENABLED` apagada, la guía dice algo que todavía no pasa → **prender la llave en el
+mismo movimiento del merge**.
 
 ⚠️ **De paso:** `associateOnClosedWon.test.mjs` estaba **rojo desde el 29-jul** y no por el código —
 el re-sync de etiquetas (`TICKET_LABEL_SYNC_ENABLED=true` en el `.env` real) corre al final de
