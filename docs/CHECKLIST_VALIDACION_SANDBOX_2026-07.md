@@ -623,6 +623,48 @@ saltea.
 **358/358**. Las guardas `factura_superada` y `ya_limpio` **no dependen de las flags**: corrigen
 también el comportamiento actual de producción (donde el problema 2 ya ocurre).
 
+#### ✅ DEFINICIÓN 30-jul — el nombre dice lo que le pasa al ticket (y revertir es sólo para manuales)
+
+Salió de mirar el resultado de la (c): el endpoint se llamaba `/cancelar` pero por dentro hacía un
+**revert** (`modo` default `'revertir'`), y la vía que usa de verdad la pantalla —el `PATCH` de
+`etapa_de_la_factura` → `Cancelada`— propagaba **sin intención**, o sea también revert. El nombre y el
+efecto no coincidían por ninguno de los dos caminos.
+
+| Acción | Factura | Ticket | Automáticos |
+|---|---|---|---|
+| **Cancelar** | Cancelada | **CANCELADO** — período cerrado, no se refactura | sí |
+| **Revertir** | Cancelada | vuelve a facturable, listo para refacturar | **NO** → cancelar, editar o nota de crédito |
+
+Por qué revertir no aplica a automáticos: revertir un **manual** deja el período **parado** esperando
+que una persona apriete "facturar ahora"; revertir un **automático** **re-arma el cron**, que lo emite
+solo en el próximo ciclo — idéntico si nadie corrigió nada, y corriendo una carrera contra el usuario
+si estaba corrigiendo (el mensaje viejo lo admitía: *"pause el line item, o modifique o cancele el
+ticket antes del próximo ciclo"*). Es la misma regla que las casillas del ticket aplican desde el
+26-jul; el editor era el hueco.
+
+**Qué cambió** (todo bajo `CANCEL_REVERT_FLOW_ENABLED`; apagada, comportamiento idéntico al de hoy):
+- `POST /:id/cancelar` — **default `modo='cancelar'`**; `revertir` sobre una factura automática →
+  **409** con el texto de nota de crédito; si no se puede resolver el pipeline → **409 fail-closed**
+  (mismo criterio que el gate Nodum). Helper puro `resolveEditorCancelMode` + 10 tests.
+- `PATCH /:id` con `etapa='Cancelada'` — ahora propaga con intent `'cancel'` (cierra el período) **y
+  pasa por el gate Nodum**, que antes esquivaba: el gate sólo estaba en el POST.
+- `GET /:id` devuelve **`es_automatica`** (resuelve `ticket_id → hs_pipeline`).
+- Pantalla: antes de guardar, si la etapa pasa a Cancelada, aparece un aviso con **qué le va a pasar al
+  ticket**; en automáticas dice que no se puede revertir y cuáles son las alternativas, y en manuales
+  apunta a la casilla *Revertir factura* del ticket.
+
+**Prueba en vivo (30-jul, editor local contra el sandbox):** `revertir` sobre automática → **409** ·
+`modo` inválido → **400** · sin `modo` sobre automática → **200 `modo:"cancelar"`** y ticket
+`47276414521` a **CANCELADO conservando `of_invoice_id`** · `revertir` sobre manual → **200** y ticket
+a Próximos a Facturar (contador 1→2) · `PATCH etapa=Cancelada` sobre manual → ticket **CANCELADO**, no
+a facturable · `PATCH etapa=Cancelada` sobre factura con `id_factura_nodum` → **409** y factura
+intacta. Suite completa **371/371**.
+
+⚠️ **Pendiente de la guía web** (`/guia`, bloque `cancelar-factura`): dice *"Cancelar una factura no
+cancela el ticket"* y menciona un botón "Cancelar" que la pantalla no tiene. Con la llave prendida eso
+pasa a ser falso — **hay que reescribirlo el día que se prenda**, no antes (hoy en PROD sigue siendo
+cierto).
+
 ⚠️ **De paso:** `associateOnClosedWon.test.mjs` estaba **rojo desde el 29-jul** y no por el código —
 el re-sync de etiquetas (`TICKET_LABEL_SYNC_ENABLED=true` en el `.env` real) corre al final de
 `associateAllTicketsOnClosedWon` sobre TODOS los tickets considerados, así que el happy path veía un

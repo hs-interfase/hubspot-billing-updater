@@ -86,6 +86,14 @@
     .btn-success:hover { background: #009e8c; }
     .btn-success:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-sm { padding: 6px 12px; font-size: 12px; }
+    /* Aviso de cancelación: qué le pasa al TICKET al anular la factura (30-jul) */
+    .cancel-warning {
+      border: 1px solid #d97706; background: rgba(217, 119, 6, 0.10); color: var(--text);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 13px; line-height: 1.5;
+    }
+    .cancel-warning strong { color: #d97706; }
+    .cancel-warning ul { margin: 8px 0 0 18px; padding: 0; }
+    .cancel-warning li { margin-bottom: 4px; }
 
     /* ── Mensajes ── */
     .message {
@@ -285,6 +293,7 @@
   <div class="modal">
     <h3>✅ Confirmar cambios</h3>
     <div class="modal-sub" id="confirmModalSub">Revisá los cambios antes de guardar</div>
+    <div id="cancelWarning" class="hidden"></div>
     <div class="diff-list" id="diffList"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -299,6 +308,8 @@
 <script>
 let FIELDS_CONFIG = [];
 let currentInvoiceId = null;
+// null = no se pudo determinar (el backend igual bloquea lo que corresponda)
+let currentInvoiceIsAutomated = null;
 let originalValues = {};
 let pendingChanges = {};
 
@@ -349,6 +360,7 @@ async function searchInvoice() {
     const data = await res.json();
     if (!res.ok) { showMessage('searchMessage', 'error', data.error || 'Error al buscar la factura.'); return; }
     currentInvoiceId = id;
+    currentInvoiceIsAutomated = data.es_automatica === true;
     renderInvoice(data);
   } catch (err) {
     showMessage('searchMessage', 'error', 'Error de conexión. Intentá de nuevo.');
@@ -474,7 +486,35 @@ function prepareSave() {
   }
   const n = Object.keys(pendingChanges).length;
   document.getElementById('confirmModalSub').textContent = `Se van a actualizar ${n} campo${n !== 1 ? 's' : ''} en la factura ${currentInvoiceId}`;
+  renderCancelWarning();
   document.getElementById('confirmModal').classList.remove('hidden');
+}
+
+// Cancelar factura = cerrar el período (definición 30-jul): la factura se anula
+// y el TICKET queda CANCELADO, NO se refactura. Antes esta misma pantalla dejaba
+// el ticket listo para refacturar, así que conviene decirlo antes de guardar.
+// Revertir para refacturar es otra acción, deliberada, y sólo para MANUALES.
+function renderCancelWarning() {
+  const box = document.getElementById('cancelWarning');
+  const cambioEtapa = pendingChanges['etapa_de_la_factura'];
+  const cancela = cambioEtapa && cambioEtapa.after === 'Cancelada';
+  if (!cancela) { box.className = 'hidden'; box.innerHTML = ''; return; }
+
+  const revertir = currentInvoiceIsAutomated === true
+    ? '<li><strong>Esta factura es automática:</strong> no se puede revertir para refacturar ' +
+      '(el cron la volvería a emitir sola). Si el período se facturó mal, editá la factura ' +
+      'o emití una nota de crédito.</li>'
+    : '<li>Si lo que querés es <strong>refacturar</strong> el período, no lo canceles acá: ' +
+      'usá la casilla <em>Revertir factura</em> en el ticket, que lo deja listo para emitir de nuevo.</li>';
+
+  box.className = 'cancel-warning';
+  box.innerHTML =
+    '<strong>⚠️ Vas a CANCELAR esta factura</strong>' +
+    '<ul>' +
+    '<li>La factura queda <strong>Cancelada</strong> (es irreversible) y el <strong>ticket queda CANCELADO</strong>: ' +
+    'el período se cierra y <strong>no se refactura</strong>.</li>' +
+    revertir +
+    '</ul>';
 }
 
 function closeModal() { document.getElementById('confirmModal').classList.add('hidden'); }
@@ -523,7 +563,7 @@ function resetForm() {
 }
 
 function resetApp() {
-  currentInvoiceId = null; originalValues = {}; pendingChanges = {};
+  currentInvoiceId = null; currentInvoiceIsAutomated = null; originalValues = {}; pendingChanges = {};
   document.getElementById('invoiceIdInput').value = '';
   document.getElementById('invoiceSection').classList.add('hidden');
   hideMessage('searchMessage'); hideMessage('formMessage');
