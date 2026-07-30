@@ -6,6 +6,10 @@ import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
 import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
+import {
+  esEventoAssociationChange,
+  rutearAssociationChangeDealCompany,
+} from '../src/utils/webhookRouteRules.js';
 
 const MODULE = 'escuchar-cambios';
 
@@ -47,6 +51,45 @@ export default async function handler(req, res) {
     const eventId = payload?.eventId;
 
     logger.info({ module: MODULE, fn: 'handler', objectId, objectType, propertyName, propertyValue, eventId }, 'Evento webhook recibido');
+
+    // ====== RUTA 8: CAMBIO DE ASOCIACIÓN DEL NEGOCIO (empresas) ======
+    // `deal.associationChange` NO trae `objectId` ni `propertyName`: el objeto que
+    // cambió viene en `fromObjectId`. Por eso esta ruta va ANTES del guard de objectId
+    // (si no, HubSpot recibiría 400, reintentaría 10 veces y podría deshabilitar la
+    // suscripción). Sólo interesa deal↔company: al cambiar qué empresa tiene la etiqueta
+    // "Empresa Factura"/"Partner" en el negocio, hay que bajar ese cambio a los tickets.
+    // Cualquier otro tipo de asociación se responde 200 y se ignora.
+    if (esEventoAssociationChange(payload)) {
+      const ruta = rutearAssociationChangeDealCompany(payload);
+
+      if (!ruta.aplica) {
+        if (ruta.motivo === 'sin_from_object_id') {
+          logger.warn({ module: MODULE, fn: 'handler', eventId, payload }, 'associationChange sin fromObjectId');
+        }
+        return res.status(200).json({
+          message: `associationChange skipped (${ruta.motivo})`,
+          subscriptionType: payload?.subscriptionType, associationType: ruta.associationType,
+        });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType: 'deal',
+        objectId: ruta.dealId,
+        propertyName: ruta.associationType,
+        propertyValue: String(ruta.associationRemoved),
+        dealId: ruta.dealId,
+        actionType: 'ticket_label_sync',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({
+        queued: true, queueId, objectId: ruta.dealId, objectType: 'deal',
+        action: 'ticket_label_sync', associationType: ruta.associationType,
+        associationRemoved: ruta.associationRemoved,
+      });
+    }
 
     if (!objectId) {
       logger.error({ module: MODULE, fn: 'handler' }, 'Missing objectId');
