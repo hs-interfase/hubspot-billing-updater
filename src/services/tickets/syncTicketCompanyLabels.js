@@ -47,7 +47,9 @@ export function ticketLabelSyncEnabled() {
 }
 
 /**
- * Mapa companyId → Set(typeId) de las asociaciones actuales del ticket.
+ * Mapa companyId → Map(typeId → category) de las asociaciones actuales del ticket.
+ * Se guarda la CATEGORÍA además del typeId porque hace falta para no destruir nada
+ * al escribir (ver `specsPreservando`).
  * 404 (ticket inexistente) ⇒ mapa vacío.
  */
 async function ticketCompanyTypes(client, ticketId) {
@@ -58,10 +60,12 @@ async function ticketCompanyTypes(client, ticketId) {
     const mapa = new Map();
     for (const r of resp?.results || []) {
       const cid = String(r.toObjectId);
-      const tipos = new Set((r.associationTypes || []).map(t => Number(t.typeId)));
       // Un mismo par puede venir repetido por tipo según la respuesta: se acumula.
-      if (mapa.has(cid)) for (const t of tipos) mapa.get(cid).add(t);
-      else mapa.set(cid, tipos);
+      if (!mapa.has(cid)) mapa.set(cid, new Map());
+      const m = mapa.get(cid);
+      for (const t of r.associationTypes || []) {
+        m.set(Number(t.typeId), String(t.category || 'USER_DEFINED'));
+      }
     }
     return mapa;
   } catch (err) {
@@ -69,6 +73,38 @@ async function ticketCompanyTypes(client, ticketId) {
     if (status === 404) return new Map();
     throw err;
   }
+}
+
+/**
+ * Specs para el PUT de etiquetas de UN par ticket↔empresa.
+ *
+ * ⚠️ EL PUT REEMPLAZA los tipos del par, no los suma (verificado en sandbox el
+ * 29-jul: marcar la empresa como **Primary** y después aplicar "Empresa Factura"
+ * dejaba el par SIN el Primary). Por eso los specs incluyen:
+ *   - todo lo que el par ya tiene (con su categoría) — Primary, otras etiquetas
+ *     puestas a mano, etc. — EXCEPTO las etiquetas gestionadas que ya no
+ *     corresponden (esas se van, que es justo el objetivo del re-sync);
+ *   - más las etiquetas gestionadas que sí corresponden.
+ * El tipo "sin etiqueta" (HUBSPOT_DEFINED 339 en ticket→company) HubSpot lo
+ * repone solo, pero se manda igual: es idempotente y evita depender de eso.
+ *
+ * @param {Map<number,string>} actualesDelPar typeId → category
+ * @param {Set<number>}        deseadas       typeIds gestionados que corresponden
+ * @param {number[]}           gestionados    typeIds que este módulo administra
+ */
+function specsPreservando(actualesDelPar, deseadas, gestionados) {
+  const specs = [];
+  for (const [typeId, category] of actualesDelPar || []) {
+    const esGestionada = gestionados.includes(typeId) && category === 'USER_DEFINED';
+    if (esGestionada && !deseadas.has(typeId)) continue;   // sobrante: no se re-manda
+    specs.push({ associationCategory: category, associationTypeId: typeId });
+  }
+  for (const typeId of deseadas) {
+    if (!specs.some(s => s.associationTypeId === typeId && s.associationCategory === 'USER_DEFINED')) {
+      specs.push({ associationCategory: 'USER_DEFINED', associationTypeId: typeId });
+    }
+  }
+  return specs;
 }
 
 /** Tickets asociados al negocio (paginado). */
@@ -190,33 +226,37 @@ export async function syncTicketCompanyLabels({
         if (!dryRun) {
           await client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', cid, []);
         }
-        actual.set(cid, new Set());
+        actual.set(cid, new Map());
         stats.companiesAsociadas++;
       }
 
-      // 2) Etiquetas faltantes. Se manda el set COMPLETO deseado del par en una
-      //    sola llamada: el endpoint de labels define los USER_DEFINED del par,
-      //    así mandar EF+Partner juntos (caso espejo) no se pisa a sí mismo.
+      // 2) Etiquetas faltantes. Se manda el set COMPLETO del par en una sola
+      //    llamada (ver specsPreservando: el PUT reemplaza, así que hay que
+      //    re-mandar lo que ya estaba). Mandar EF+Partner juntos —el caso
+      //    espejo— tampoco se pisa a sí mismo.
       for (const [cid, tipos] of deseado.entries()) {
         const tieneTodos = [...tipos].every(t => actual.get(cid)?.has(t));
         if (tieneTodos) continue;
-        const specs = [...tipos].map(t => ({
-          associationCategory: 'USER_DEFINED',
-          associationTypeId: t,
-        }));
+        const faltantes = [...tipos].filter(t => !actual.get(cid)?.has(t));
+        const specs = specsPreservando(actual.get(cid), tipos, gestionados);
         if (!dryRun) {
           await client.crm.associations.v4.basicApi.create('tickets', ticketId, 'companies', cid, specs);
         }
-        stats.labelsAgregados += [...tipos].filter(t => !actual.get(cid)?.has(t)).length;
+        // El PUT ya dejó el par en su estado final: se refleja en el mapa local
+        // para que el paso 3 no intente archivar algo que este PUT ya quitó.
+        const nuevo = new Map();
+        for (const s of specs) nuevo.set(Number(s.associationTypeId), s.associationCategory);
+        actual.set(cid, nuevo);
+        stats.labelsAgregados += faltantes.length;
       }
 
       // 3) Etiquetas sobrantes: el par tiene una etiqueta GESTIONADA que ya no le
       //    corresponde (cambió la empresa que factura / el partner, o la empresa
       //    salió del negocio). Se archiva SOLO el label; la asociación queda.
       for (const [cid, tipos] of actual.entries()) {
-        const sobrantes = [...tipos].filter(
-          t => gestionados.includes(t) && !deseado.get(cid)?.has(t)
-        );
+        const sobrantes = [...tipos.entries()]
+          .filter(([t, cat]) => cat === 'USER_DEFINED' && gestionados.includes(t) && !deseado.get(cid)?.has(t))
+          .map(([t]) => t);
         if (!sobrantes.length) continue;
         if (!dryRun) {
           await client.crm.associations.v4.batchApi.archiveLabels('tickets', 'companies', {

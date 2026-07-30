@@ -17,17 +17,34 @@ import { syncTicketCompanyLabels } from '../services/tickets/syncTicketCompanyLa
 
 const EF = 13;        // typeId "Empresa Factura" ticket→company (PROD)
 const PARTNER = 11;   // typeId "Partner" ticket→company (PROD)
+const SIN_ETIQUETA = 339;  // HUBSPOT_DEFINED ticket→company
+const PRIMARY = 26;        // HUBSPOT_DEFINED "Primary" ticket→company
 
 // ─────────────────────────────────────────────────────────────
-// Fake client: asociaciones ticket→company CON sus typeIds.
-//   estado: Map(`${ticketId}`, Map(companyId → Set(typeId)))
-// Registra creates y archiveLabels para poder afirmar exactamente qué se escribió.
+// Fake client: asociaciones ticket→company con typeId Y CATEGORÍA.
+//   estado: Map(ticketId, Map(companyId → Map(typeId → category)))
+//
+// ⚠️ Modela el comportamiento REAL del endpoint: el create con specs es un PUT que
+// REEMPLAZA los tipos del par (verificado contra el sandbox el 29-jul: marcar
+// Primary y luego aplicar una etiqueta dejaba el par sin Primary). Con un fake que
+// sólo sumara tipos, ese bug pasaría desapercibido.
+// En la notación de `estado`, un número suelto es USER_DEFINED; para HUBSPOT_DEFINED
+// se escribe [typeId, 'HUBSPOT_DEFINED'].
 // ─────────────────────────────────────────────────────────────
 function makeFakeClient({ estado = {}, ticketsDelDeal = [] } = {}) {
   const asoc = new Map();
   for (const [tid, comps] of Object.entries(estado)) {
     const m = new Map();
-    for (const [cid, tipos] of Object.entries(comps)) m.set(String(cid), new Set(tipos));
+    for (const [cid, tipos] of Object.entries(comps)) {
+      const tm = new Map();
+      // Toda asociación real trae el tipo "sin etiqueta".
+      tm.set(SIN_ETIQUETA, 'HUBSPOT_DEFINED');
+      for (const t of tipos) {
+        if (Array.isArray(t)) tm.set(Number(t[0]), t[1]);
+        else tm.set(Number(t), 'USER_DEFINED');
+      }
+      m.set(String(cid), tm);
+    }
     asoc.set(String(tid), m);
   }
 
@@ -38,6 +55,7 @@ function makeFakeClient({ estado = {}, ticketsDelDeal = [] } = {}) {
     creates,
     archived,
     estado: asoc,
+    tipos: (tid, cid) => asoc.get(String(tid))?.get(String(cid)),
     crm: {
       associations: {
         v4: {
@@ -50,7 +68,7 @@ function makeFakeClient({ estado = {}, ticketsDelDeal = [] } = {}) {
               return {
                 results: [...m.entries()].map(([cid, tipos]) => ({
                   toObjectId: cid,
-                  associationTypes: [...tipos].map(t => ({ typeId: t, category: 'USER_DEFINED' })),
+                  associationTypes: [...tipos.entries()].map(([typeId, category]) => ({ typeId, category })),
                 })),
               };
             },
@@ -58,8 +76,16 @@ function makeFakeClient({ estado = {}, ticketsDelDeal = [] } = {}) {
               creates.push({ ticketId: String(fromId), companyId: String(toId), specs: specs || [] });
               if (!asoc.has(String(fromId))) asoc.set(String(fromId), new Map());
               const m = asoc.get(String(fromId));
-              if (!m.has(String(toId))) m.set(String(toId), new Set());
-              for (const s of specs || []) m.get(String(toId)).add(Number(s.associationTypeId));
+              if (!(specs || []).length) {
+                // create con [] = asociación default (no borra nada)
+                if (!m.has(String(toId))) m.set(String(toId), new Map([[SIN_ETIQUETA, 'HUBSPOT_DEFINED']]));
+                return;
+              }
+              // PUT con specs: REEMPLAZA el set de tipos del par (HubSpot repone el
+              // "sin etiqueta" solo).
+              const tm = new Map([[SIN_ETIQUETA, 'HUBSPOT_DEFINED']]);
+              for (const s of specs) tm.set(Number(s.associationTypeId), s.associationCategory);
+              m.set(String(toId), tm);
             },
             async archive() {
               throw new Error('El re-sync NO debe desasociar empresas del ticket');
@@ -132,10 +158,15 @@ test('EL GAP: ticket ya asociado sin etiqueta → recibe "Empresa Factura"', asy
   assert.equal(r.labelsAgregados, 1);
   assert.equal(r.labelsQuitados, 0);
   assert.equal(r.companiesAsociadas, 0);
-  assert.deepEqual(client.creates, [{
-    ticketId: 'T1', companyId: 'C_FACT',
-    specs: [{ associationCategory: 'USER_DEFINED', associationTypeId: EF }],
-  }]);
+  assert.equal(client.creates.length, 1);
+  assert.equal(client.creates[0].companyId, 'C_FACT');
+  // Los specs llevan la etiqueta nueva y re-mandan lo que el par ya tenía (el PUT
+  // reemplaza, ver specsPreservando).
+  assert.deepEqual(client.creates[0].specs, [
+    { associationCategory: 'HUBSPOT_DEFINED', associationTypeId: SIN_ETIQUETA },
+    { associationCategory: 'USER_DEFINED', associationTypeId: EF },
+  ]);
+  assert.equal(client.tipos('T1', 'C_FACT').get(EF), 'USER_DEFINED');
 });
 
 test('cambió la empresa que factura → quita la etiqueta vieja y la pone en la nueva', async () => {
@@ -180,8 +211,14 @@ test('espejo: la MISMA empresa lleva Empresa Factura y Partner en una sola llama
   }));
 
   assert.equal(r.labelsAgregados, 2);
-  assert.equal(client.creates.length, 1);
-  assert.deepEqual(client.creates[0].specs.map(s => s.associationTypeId).sort((a, b) => a - b), [PARTNER, EF]);
+  assert.equal(client.creates.length, 1, 'las dos etiquetas van en una sola llamada');
+  const userDefined = client.creates[0].specs
+    .filter(s => s.associationCategory === 'USER_DEFINED')
+    .map(s => s.associationTypeId).sort((a, b) => a - b);
+  assert.deepEqual(userDefined, [PARTNER, EF]);
+  const tipos = client.tipos('T1', 'C_INTERFASE');
+  assert.equal(tipos.get(EF), 'USER_DEFINED');
+  assert.equal(tipos.get(PARTNER), 'USER_DEFINED');
 });
 
 test('idempotente: ya está todo bien → cero escrituras', async () => {
@@ -286,4 +323,54 @@ test('un ticket que falla no frena a los demás', async () => {
   assert.equal(r.errors, 1);
   assert.equal(r.labelsAgregados, 1);             // T2 sí se etiquetó
   assert.deepEqual(client.creates.map(c => c.ticketId), ['T2']);
+});
+
+// ─── No destruir nada al escribir (bug encontrado en sandbox el 29-jul) ───────
+
+test('aplicar una etiqueta NO borra el Primary del par', async () => {
+  // El PUT de etiquetas reemplaza los tipos del par: sin preservarlos, el Primary
+  // (HUBSPOT_DEFINED 26) desaparecía en silencio.
+  const client = makeFakeClient({ estado: { T1: { C_FACT: [[PRIMARY, 'HUBSPOT_DEFINED']] } } });
+  const r = await syncTicketCompanyLabels(base(client, {
+    ticketIds: ['T1'],
+    getDealCompaniesFn: () => ({ ids: ['C_FACT'], facturaId: 'C_FACT', partnerId: null }),
+  }));
+
+  assert.equal(r.labelsAgregados, 1);
+  const tipos = client.tipos('T1', 'C_FACT');
+  assert.equal(tipos.get(PRIMARY), 'HUBSPOT_DEFINED', 'el Primary debe sobrevivir');
+  assert.equal(tipos.get(EF), 'USER_DEFINED');
+  assert.equal(tipos.get(SIN_ETIQUETA), 'HUBSPOT_DEFINED');
+  // Y el spec enviado lo incluye explícitamente
+  assert.ok(client.creates[0].specs.some(s => s.associationTypeId === PRIMARY && s.associationCategory === 'HUBSPOT_DEFINED'));
+});
+
+test('aplicar una etiqueta NO borra una etiqueta ajena del mismo par', async () => {
+  const AJENA = 99;
+  const client = makeFakeClient({ estado: { T1: { C_FACT: [AJENA] } } });
+  const r = await syncTicketCompanyLabels(base(client, {
+    ticketIds: ['T1'],
+    getDealCompaniesFn: () => ({ ids: ['C_FACT'], facturaId: 'C_FACT', partnerId: null }),
+  }));
+
+  assert.equal(r.labelsAgregados, 1);
+  const tipos = client.tipos('T1', 'C_FACT');
+  assert.equal(tipos.get(AJENA), 'USER_DEFINED', 'la etiqueta ajena debe sobrevivir');
+  assert.equal(tipos.get(EF), 'USER_DEFINED');
+});
+
+test('un par con etiqueta sobrante Y faltante queda correcto sin doble escritura', async () => {
+  // C tiene EF (que ya no corresponde) y le falta Partner: el PUT deja el estado
+  // final de una vez y el paso de archivado no vuelve a tocar lo mismo.
+  const client = makeFakeClient({ estado: { T1: { C: [EF] } } });
+  const r = await syncTicketCompanyLabels(base(client, {
+    ticketIds: ['T1'],
+    getDealCompaniesFn: () => ({ ids: ['C'], facturaId: null, partnerId: 'C' }),
+  }));
+
+  const tipos = client.tipos('T1', 'C');
+  assert.equal(tipos.has(EF), false, 'EF ya no corresponde');
+  assert.equal(tipos.get(PARTNER), 'USER_DEFINED');
+  assert.equal(r.labelsAgregados, 1);
+  assert.equal(client.archived.length, 0, 'el PUT ya lo dejó bien: no hace falta archivar');
 });
