@@ -438,13 +438,13 @@ SELECT count(*) FROM webhook_queue
 
 **Recordatorio de envs a setear en el `.env` sandbox ANTES de arrancar (anotar valores):**
 
-- [ ] `CANCEL_REVERT_FLOW_ENABLED=true` (llave maestra; default OFF — solo `true`/`1`/`yes` prende)
-- [ ] `CUPO_REVERT_ON_CANCEL_ENABLED=true` (reversión real de cupo; misma semántica)
-- [ ] `ADMIN_ALERT_TO_EMAIL` (destino del email de reversión a administración; vacía → cae a `ALERT_TO_EMAIL`)
-- [ ] `MIRROR_ALERT_TO_EMAIL` (destino de avisos a espejo UY; vacía → cae a `ALERT_TO_EMAIL`)
-- [ ] `NC_TUTORIAL_URL` (link del tutorial de nota de crédito que cita el aviso de tickets automáticos)
-- [ ] `REBILL_ALERT_THRESHOLD` (umbral del título "⚠️ Período refacturado N veces"; default `2`; `0` o vacía = sin refuerzo)
-- [ ] `DEAL_ALERTS_ENABLED` ausente o `true` (si está en `false` NO esperar ninguno de los emails de esta checklist)
+- [x] `CANCEL_REVERT_FLOW_ENABLED=true` (llave maestra; default OFF — solo `true`/`1`/`yes` prende)
+- [x] `CUPO_REVERT_ON_CANCEL_ENABLED=true` (reversión real de cupo; misma semántica)
+- [x] `ADMIN_ALERT_TO_EMAIL` (destino del email de reversión a administración; vacía → cae a `ALERT_TO_EMAIL`)
+- [x] `MIRROR_ALERT_TO_EMAIL` (destino de avisos a espejo UY; vacía → cae a `ALERT_TO_EMAIL`)
+- [x] `NC_TUTORIAL_URL` (link del tutorial de nota de crédito que cita el aviso de tickets automáticos)
+- [x] `REBILL_ALERT_THRESHOLD` (umbral del título "⚠️ Período refacturado N veces"; default `2`; `0` o vacía = sin refuerzo)
+- [x] `DEAL_ALERTS_ENABLED` ausente o `true` (si está en `false` NO esperar ninguno de los emails de esta checklist)
 - [ ] **Props ya creadas por la usuaria (26-jul)**: casillas `cancelar_ticket` y `revertir_factura` + contador `of_refacturaciones` en el ticket; suscripción `ticket.propertyChange / revertir_factura` activa (26-jul). El motivo de reversión usa la prop EXISTENTE `motivo_del_ajuste` (no hay prop nueva de motivo).
 
 Query genérica de la cola para todos los escenarios:
@@ -524,9 +524,109 @@ SELECT id, action_type, object_id, deal_id, status, error, created_at, finished_
 - (i)-(j) con flags OFF: cero diferencia contra el comportamiento actual, salvo el aviso "no habilitada" de la casilla.
 
 **Evidencia a registrar**
-- [ ] IDs (`DEAL_ID`/`TICKET_ID`/`INVOICE_ID`/jobs) por escenario + capturas de deal (cupo), ticket (historial/contador/etapa) y factura.
-- [ ] Capturas de los emails (admin y mirror) y de los `billing_error`/`of_billing_error`.
-- [ ] Salidas de las queries a `webhook_queue`.
+- [x] IDs (`DEAL_ID`/`TICKET_ID`/`INVOICE_ID`/jobs) por escenario + capturas de deal (cupo), ticket (historial/contador/etapa) y factura.
+- [x] Capturas de los emails (admin y mirror) y de los `billing_error`/`of_billing_error`.
+- [x] Salidas de las queries a `webhook_queue`.
+
+### ⚠️ CORRIDA 2026-07-29/30 — 9 de 10 escenarios PASAN · (c) FALLA (bloqueante)
+
+**Entorno.** Flags `true` en el servicio `webhooks` de testing (verificado por `railway variables`
+DESPUÉS del `SUCCESS` del deploy). **Drift corregido:** en `CRON hs-billing-updater` de testing
+`NC_TUTORIAL_URL` estaba en `true` (el mismo error de dedo que se había arreglado sólo en webhooks el
+29-jul) → seteada a la URL real. No la lee ningún path del cron (el gate vive en webhooks + editor),
+pero se corrige para no repetir el patrón B8. `REBILL_ALERT_THRESHOLD` y `DEAL_ALERTS_ENABLED`
+ausentes = defaults (2 / ON). `RESEND_API_KEY` sigue **fuera** de testing por la decisión del 29-jul.
+
+**Siembra (el sandbox no tenía NADA de cupo:** 0 tickets con `cupo_consumo_invoice_id`, 1 solo deal
+con `tipo_de_cupo` y en 0/Agotado**).** Sobre el deal de pruebas `63252656430` `[TEST-P2]`:
+`tipo_de_cupo='Por Monto'`, `cupo_total_monto=20000`, `cupo_activo=true`, `cupo_umbral=2000` +
+`parte_del_cupo=true` en el LI manual `57565277478`. Los consumos se generaron **de verdad**
+(`facturar_ahora` en el ticket → `consumeCupoAfterInvoice`), no a mano.
+
+| Esc. | Resultado | Evidencia |
+|---|---|---|
+| (a) | ✅ PASA | ticket `47298308702` · factura `574991796999` → **Cancelada** + `fecha_de_cancelacion` hoy · job `#7748 done` · cupo 4400→**1200** / restante 15600→**18800** (+3200 exacto) · historial 2 líneas (consumo+reversion) · `of_refacturaciones=1` · stage → `1311451807` · casilla reseteada · log `adminRevertAlert` *"Email de reversión a administración enviado… destinoDedicado=promichfsd@gmail.com"* + `alertService` *"RESEND_API_KEY no configurado — email omitido"* (el mail se arma y direcciona bien; no se envía por decisión) |
+| (b) | ✅ PASA | F2 `574976225542` con marker NUEVO · historial 3 líneas · cupo vuelve a 4400/15600 (sin doble consumo) · contador **sigue en 1** |
+| (c) | 🔴 **FALLA** | La cancelación en sí es correcta (job `#7750 done` · factura Cancelada · cupo +1200 · ticket a **CANCELADO `1311451813` conservando `of_invoice_id`** · `motivo_cancelacion_del_ticket` escrito · contador NO se toca). **La primera pasada la deshace** — ver el bloque de abajo |
+| (d) | ✅ PASA | NC del ticket `47275177280` (`nc=true`, `cantidad_real=-1` → `subtotal_real=-1200` recalculada por HubSpot): emisión acredita (consumido 3200→**2000**), y la reversión **RE-DEBITA** (2000→**3200**) con línea `reversion \| -1200` en el historial |
+| (e) | ✅ PASA | **Editor: HTTP 409** *"Esta factura ya está asentada en Nodum (id 9001)… emití una nota de crédito. Tutorial: https://webhooks-testing.up.railway.app/guia"* · **Casilla:** mismo texto en `of_billing_error`, casilla reseteada, **factura INTACTA** (Pendiente, sin fecha de cancelación) y ticket conserva `of_invoice_id` |
+| (f) | ✅ PASA | **Agotado (apagado por el motor):** revertir → consumido 4400→3200, restante 0→1200, **`cupo_activo` vuelve a `true`**, estado recalculado a `Bajo Umbral` (umbral 2000). **Desactivado (humano):** revertir → números se corrigen igual (4400→3200 / 1200) y **`cupo_activo` SIGUE en `false`**, estado `Desactivado` |
+| (g) | ✅ PASA | Par PY→UY sembrado (deal UY `63261409185`, LI UY `57563014574`, `deal_uy_mirror_id` en el PY). **Revertir** → `billing_error` en el UY: *"…revertida: el período se va a refacturar. Verificar el ticket UY manualmente. Deal PY: 63252656430 \| LI PY: 57565277478 → LI UY: 57563014574 \| Ticket PY: 47275177280"*. **Cancelar** → *"…cancelada DEFINITIVAMENTE (período cerrado, no se refactura). La promoción del ticket UY NO se deshace…"*. **Ticket UY `47280694534` INTACTO** (historial de `hs_pipeline_stage`: un solo valor, el de su creación) |
+| (h) | ✅ PASA | **Editor→casilla:** editor 200 (`modo:"revertir"`) → contador 5→6, cupo re-acreditado **una** vez (4400→3200); casilla enseguida → *"No hay factura emitida para revertir en este ticket."*, contador **sigue 6**, cupo sin segundo crédito. **Casilla→editor:** editor **400** *"La factura ya está cancelada."* (Cancelada terminal), un solo crédito |
+| (i) | ✅ PASA | Flags a `false` (deploy `f1de51b1` esperado hasta `SUCCESS`): editor 200 **sin `modo`** en la respuesta y **sin gate** · ticket a stage facturable · **cupo NO revertido** (consumido sigue 4400, marker sin limpiar, historial sin línea de reversión) · **contador sin cambios** · pasada del deal: `propagated: 11` con el comportamiento de hoy, sin avisos |
+| (j) | ✅ PASA | `of_billing_error` = *"La reversión de facturas todavía no está habilitada en el sistema. Hablá con administración."* · casilla reseteada · factura Pendiente y cupo **intactos** · contador sin cambios |
+
+Flags **restauradas a `true`** al cerrar, con `SUCCESS` de deploy confirmado.
+
+#### 🔴 BLOQUEANTE — la cancelación DEFINITIVA no sobrevive a la pasada siguiente
+
+`propagateCancelledInvoicesForDeal` (`invoice.js:846`, corre en cada pasada del deal) re-propaga
+**toda** factura `Cancelada` con `cancelIntent=null` → `resolveCancellationBranch(null)` = `'revert'`
+→ `prepareTicketForRebillingAfterCancellation` **saca el ticket de CANCELADO, lo manda a stage
+facturable y le borra `of_invoice_id`** — justo lo que el docstring de
+`finalizeTicketAfterDefinitiveCancellation` marca como ⚠️ CRÍTICO conservar.
+
+Medido, con las dos flags prendidas:
+
+- **Manual** (ticket `47275177280`, factura `574991465568`): cancelado definitivo 22:41 → CANCELADO;
+  a las 22:42 la pasada lo devolvió a `1311451807` con `of_invoice_id` vacío. El período anulado queda
+  abierto y refacturable, y `missedBillingGuard` ya no lo ve resuelto.
+- **Automático** (ticket `47295259060`, factura `574939212119`, cancelado definitivo desde el editor
+  con `modo:'cancelar'` → stage `1311404155`): la pasada siguiente lo devolvió a READY `1311404151` y
+  **`sweepAutoBacklog` EMITIÓ UNA FACTURA NUEVA del período anulado** — `575082098724` (*"Backlog:
+  factura emitida"*). Dos facturas para la misma `of_invoice_key`: la anulada y una nueva viva.
+  **Es exactamente el hallazgo #4 que esta feature venía a cerrar.**
+- **Efecto colateral sobre la refacturación (b):** el sweep re-propaga la factura VIEJA cancelada
+  sobre el ticket que ya tiene la NUEVA viva (las dos comparten `of_invoice_key`) y le borra la
+  referencia a la nueva → la F2 queda huérfana y el ticket vuelve a "Próximos a Facturar" como si no
+  se hubiera facturado.
+- Lo que **sí** aguantó: **cupo sin doble crédito** en todos los casos (idempotencia por
+  `cupo_consumo_invoice_id`: la 2ª pasada ve el marker limpio y hace skip) y **contador sin inflarse**
+  (`computeContadorRefacturaciones` con intent null devuelve null). Tampoco se mandan avisos.
+
+Dirección de fix sugerida (a decidir): que la propagación **no re-abra** un período ya cerrado —
+p. ej. skip si el ticket ya está en la etapa CANCELADO de su pipeline, o persistir la intención
+(`motivo_cancelacion_del_ticket` + stage) y que `resolveCancellationBranch` la lea. Con las flags
+apagadas el problema no existe (nunca hay rama `cancel`).
+
+#### Otros 3 hallazgos
+
+1. **`of_billing_error` se cortaba a 250** (`cancelMsg.slice(0, 250)` hardcodeado ×3) y el resultado
+   del cupo va al FINAL del mensaje → *"Cupo re-acreditado: +3200. Restante: 18800."* **nunca llegaba**
+   (el mensaje base de la rama revertir ya mide ~270). También se comía el aviso textual viejo
+   *"⚠️ Este ticket tenía cupo…"* de la rama con flags OFF. La usuaria pasó `of_billing_error` del
+   ticket a **texto largo** el 29-jul (las dos props son `textarea` en los dos portales) → **CORREGIDO**
+   con la constante `AVISO_MAX_LEN = 2000` (`invoice.js:283/315/410`). Suite 323/323.
+2. **`Período: desconocido` siempre.** `invoiceDateToYMD(ip.hs_createdate)` recibe ISO 8601
+   (`2026-07-29T19:29:11.615Z`): no matchea `YYYY-MM-DD` y `Number(s)` es `NaN` → devuelve `null`.
+   **NO se corrigió a propósito:** ese mismo valor alimenta `ticketUpdate.fecha_de_facturacion`
+   (`invoice.js:568-569`), o sea que hoy esa fecha **nunca se escribe** desde la propagación y
+   arreglarlo la empieza a escribir — dato real y sensible a TZ (`hs_createdate` es un instante UTC;
+   convertirlo en America/Montevideo puede dar el día anterior → trampa del "día menos").
+3. **Un workflow del portal de pruebas vuelve a poner `cancelar_ticket=true`** unos segundos después
+   de que el motor la resetea (`src=AUTOMATION_PLATFORM`, visto en los dos tickets del escenario (c) y
+   en el automático de (i)). Los handlers lo absorben (ya en CANCELADO → sólo reset; automático →
+   aviso + reset), pero **hay que revisarlo en PROD** — es del mismo tipo que el punto abierto de la
+   checklist 6 (workflows que escriben nuestras props).
+
+#### Gotchas de método (para la próxima corrida)
+
+- **HubSpot perdió 2 de 8 eventos de `revertir_factura`** (el PATCH quedó registrado en el historial
+  de la prop, y del mismo PATCH llegó el evento de `motivo_del_ajuste` pero **no** el de la casilla).
+  Consecuencia operativa real: **la casilla queda en `true` sin que pase nada**, y como ya está en
+  `true` volver a marcarla **no genera evento nuevo** → hay que destildar y volver a tildar. Sin
+  aviso al usuario. Vale evaluar un barrido periódico de casillas pendientes (patrón del reaper).
+- `subtotal_real` y `total_real_a_facturar` son **props calculadas**: no se pueden setear por API
+  (400 `READ_ONLY_VALUE`). Para armar una NC se toca `cantidad_real` y HubSpot recalcula.
+- Un `node ... | grep` **enmascara el exit code** del node (el del pipe es el de grep): un PATCH que
+  falló con 400 dejó seguir la cadena `&&` y emitió una factura que no correspondía.
+- La pasada del deal **borra tickets forecast duplicados**: el `47295102726` desapareció (404) entre
+  dos corridas.
+
+**Datos de prueba que quedan EN PIE a propósito** (para re-validar el fix de (c) sin volver a
+sembrar): deal `63252656430` `[TEST-P2]` con cupo configurado + espejo `[TEST-P7]` `63261409185`
+(LI `57563014574`, ticket `47280694534`). El `id_factura_nodum=9001` falso de la factura
+`574967680541` **ya se limpió**.
 
 ---
 

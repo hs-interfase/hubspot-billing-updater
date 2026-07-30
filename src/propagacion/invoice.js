@@ -53,6 +53,14 @@ const INVOICE_OBJECT_TYPE = 'invoices';
 // y billing_last_billed_date en el line item.
 const ETAPAS_CON_FECHA_REAL = ['Emitida', 'Enviada', 'Paga'];
 
+// Tope de los avisos que se escriben en of_billing_error / billing_error.
+// Antes eran 250: el mensaje de cancelación ya mide ~270 y el resultado del
+// cupo va al FINAL, así que el dato accionable ("Cupo re-acreditado: +X.
+// Restante: Y.") se cortaba SIEMPRE (validación sandbox 29-jul, prueba 7).
+// Las dos props son `textarea` en los dos portales (verificado 29-jul), el
+// límite real de HubSpot es 65.536 — este tope solo evita textos runaway.
+const AVISO_MAX_LEN = 2000;
+
 // ─────────────────────────────────────────────
 // Helpers internos
 // ─────────────────────────────────────────────
@@ -272,7 +280,7 @@ async function prepareTicketForRebillingAfterCancellation({
     of_invoice_status: '',
     of_fecha_de_facturacion: '',
     fecha_real_de_facturacion: '',
-    of_billing_error: cancelMsg.slice(0, 250),
+    of_billing_error: cancelMsg.slice(0, AVISO_MAX_LEN),
     of_billing_error_at: String(Date.now()),
   };
   if (cancelTargetStage) {
@@ -304,7 +312,7 @@ async function prepareTicketForRebillingAfterCancellation({
   if (dealId) {
     try {
       await hubspotClient.crm.deals.basicApi.update(String(dealId), {
-        properties: { billing_error: cancelMsg.slice(0, 250) },
+        properties: { billing_error: cancelMsg.slice(0, AVISO_MAX_LEN) },
       });
       logger.info({ module: mod, fn, invoiceId, dealId },
         'Billing error escrito en deal post-cancelación');
@@ -399,7 +407,7 @@ async function finalizeTicketAfterDefinitiveCancellation({
   // of_fecha_de_facturacion / fecha_real_de_facturacion (ver docstring).
   const finalProps = {
     motivo_cancelacion_del_ticket: `Cancelación definitiva de la factura ${invoiceId} — ${hoy}`,
-    of_billing_error: closeMsg.slice(0, 250),
+    of_billing_error: closeMsg.slice(0, AVISO_MAX_LEN),
     of_billing_error_at: String(Date.now()),
   };
   if (cancelledStage) {
