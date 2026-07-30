@@ -711,3 +711,39 @@ sembrar): deal `63252656430` `[TEST-P2]` con cupo configurado + espejo `[TEST-P7
 - [ ] Log de `syncTicketCompanyLabels` de cada paso (`ticketsRevisados / companiesAsociadas /
       labelsAgregados / labelsQuitados / errors`).
 - [ ] Id del job `ticket_label_sync` de la cola y su `status`.
+
+### ✅ CORRIDA 2026-07-30 — PASA (y encontró un bug, ya corregido)
+
+**Escenario:** se reusó el deal **`63252656430` `[TEST-P2]`** (el de la prueba 2, ya ganado, con
+tickets ya asociados = justo el caso del gap). Se le agregaron 2 empresas etiquetadas en el NEGOCIO:
+**`55485729366` INTERFASE S.A. → Empresa Factura** y **`55486545410` INTERFASE S.A SUCURSAL PARAGUAY
+→ Partner**; la principal `55480071766` LA HORQUILLA quedó sin etiqueta.
+
+| # | Qué se probó | Resultado |
+|---|---|---|
+| 1 | **Herencia por webhook (RUTA 8)** — al etiquetar en el negocio | ✅ **Sin correr el motor.** Jobs `#7774`/`#7775` `ticket_label_sync` → `done`: `ticketsRevisados=8 · companiesAsociadas=16 · labelsAgregados=16 · errors=0` (16 = 8 tickets × 2 empresas nuevas) |
+| 2 | **Idempotencia (en vivo)** | ✅ El **segundo** evento (`#7775`) dio `companiesAsociadas=0 · labelsAgregados=0 · labelsQuitados=0` sin que nadie lo forzara |
+| 3 | **Cambio posterior de etiqueta** — mover *Empresa Factura* a otra empresa | ✅ `labelsAgregados=8 · labelsQuitados=8 · errors=0`. La empresa vieja **quedó asociada al ticket, sin etiqueta** |
+| 4 | **Llave OFF** (`TICKET_LABEL_SYNC_ENABLED=false` en `webhooks`) | ✅ Se movió la etiqueta en el negocio y **los tickets no se movieron** ⚠️ ojo: la llave hay que apagarla **en los dos servicios** — el `CRON hs-billing-updater` la tenía en `true` y corrigió por su cuenta un rato después |
+| 5 | **Pieza (a): re-sync desde el hook de closedwon** | ✅ Corrida local `runBilling --deal`: el log de `associateOnClosedWon` trae `labelSync:{ticketsRevisados:7, labelsAgregados:1, labelsQuitados:0, errors:0}` — recuperó exactamente la etiqueta que se había quitado a mano |
+| 6 | **Idempotencia (corrida controlada)** | ✅ Segunda corrida: `companiesAsociadas=0 · labelsAgregados=0 · labelsQuitados=0` |
+| 7 | **Estado final** | ✅ Los 7 tickets asociados tienen **las 3 empresas del negocio**, con `EF` y `PARTNER` en las mismas que allá y la principal sin etiqueta |
+
+#### 🐛 Bug encontrado y corregido durante la prueba: el PUT de etiquetas BORRABA el `Primary`
+
+El endpoint de etiquetas **reemplaza** los tipos del par, no los suma. Verificado contra el portal:
+
+```
+1. marco la empresa como Primary   → ["HUBSPOT_DEFINED:26","HUBSPOT_DEFINED:339"]
+2. aplico "Empresa Factura"        → ["HUBSPOT_DEFINED:339","USER_DEFINED:5"]   ← se perdió el 26
+3. con el fix (specs preservados)  → ["HUBSPOT_DEFINED:339","HUBSPOT_DEFINED:26","USER_DEFINED:5"]
+```
+
+O sea: etiquetar una empresa **le borraba en silencio la marca de PRINCIPAL en el ticket**, y habría
+borrado cualquier etiqueta puesta a mano en ese par. Corregido con `specsPreservando`
+(`pruebas 88e96ef` · `main 9d6084e`), **verificado en vivo**: tras el re-sync el par quedó
+`USER_DEFINED:5=Empresa Factura` **+** `HUBSPOT_DEFINED:26=Primary`. El fake client de los tests
+también se corrigió — sólo sumaba tipos, así que el bug le pasaba por debajo. Suite **361/361**.
+
+🧹 **Datos de prueba:** las 2 empresas quedaron asociadas al deal `[TEST-P2]` (sirven para re-validar).
+El `Primary` del par ticket `47285972996` ↔ `55485729366` se puso a mano durante la prueba.
