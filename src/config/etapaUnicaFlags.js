@@ -13,26 +13,34 @@
 // demás (ausente, vacío, 'false', basura) = OFF. Evaluación POR LLAMADA (sin
 // cache), para que tests y runtime puedan cambiar process.env libremente.
 //
-// 🔴 NO PRENDER ESTA LLAVE HASTA QUE ESTÉ LA TANDA C (las tres fechas y los
-// contadores). Verificado el 31-jul al cerrar la TANDA B: con la etapa única,
-// tres cosas siguen leyendo la partición vieja forecast / no-forecast y quedan
-// mal. No rompen con la llave apagada; con la llave prendida, sí:
+// ✅ LOS TRES BLOQUEANTES DE CÓDIGO ESTÁN CERRADOS — TANDA C (31-jul).
+// Eran los tres puntos que seguían leyendo la partición vieja forecast /
+// no-forecast. Quedaron resueltos así (§2.5 del plan):
 //
-//   1. recalcFromTickets.js:408-428 — `promotedCount` cuenta PROMOTED_STAGES,
-//      que incluye «Próximos a facturar». Con todo el cronograma ganado en la
-//      etapa única, un plan fijo de 12 da promotedCount=12 ≥ 12 ⇒ el invariante
-//      I3 lo toma por COMPLETO y vacía `billing_next_date` sin haber facturado.
-//   2. recalcFromTickets.js:382 y syncBillingNextDateFromTickets.js:40 —
-//      `billing_next_date` se deriva SÓLO de etapas forecast ⇒ con la etapa
-//      única se congela (el invariante I4 evita que se vacíe, salvo el caso 1).
-//   3. `pagos_restantes` lo descuenta syncAfterPromotion desde la promoción de
-//      Phase 2, que bajo esta llave ya no ocurre (la etapa es una sola) ⇒ deja
-//      de descontarse por ese camino. Y buildDesiredDates corta con
-//      `pagos_restantes === 0` (phasep.js), así que el número importa.
+//   1. `promotedCount` incluía «Próximos» ⇒ I3 daba el plan por completo y
+//      vaciaba `billing_next_date` sin haber facturado. → recalcFromTickets
+//      cuenta CONSUMIDOS = lo que cruzó la frontera (`contarConsumidos`).
+//   2. `billing_next_date` salía sólo de etapas forecast ⇒ se congelaba. →
+//      recalcFromTickets y syncBillingNextDateFromTickets toman la próxima
+//      fecha NO NOTIFICADA (`fechaProximaNoNotificada` / isTicketEngineManaged).
+//   3. `pagos_restantes` dejaba de descontarse. → pasa de contador decremental
+//      a DERIVADO (total − consumidos) en recalcFromTickets; el descuento cae
+//      en el paso a «Notificado», que es la decisión de la usuaria del 31-jul.
+//      syncAfterPromotion deja de escribirlo, y `buildDesiredDates` deja de
+//      leer la prop (usa la misma cuenta derivada).
 //
-// El nuevo punto de descuento y la definición de las tres fechas (próxima /
-// notificado / confirmado) son la TANDA C — ver
-// definitivos/PLAN_proximos_cambios_tickets_2026-07-29.md §2.5.
+// Y `last_ticketed_date` quedó ELIMINADA: no se escribe más. Los lectores que
+// no tienen los tickets a mano usan `fechaNotificadaDelLineItem`
+// (utils/ticketFrontera.js), que devuelve `last_billing_period` = NOTIFICADO.
+//
+// 🔴 LO QUE FALTA ANTES DE PRENDERLA — no es código:
+//   a. Las 6 pruebas de sandbox (§2.6 del plan) con la llave prendida, que
+//      validan B+C juntas. Escriben en el portal de verdad.
+//   b. Crear la prop `of_aviso_1mes_enviado` (booleana, en el TICKET) en
+//      sandbox y en producción. Es el único bloqueante de portal que queda de
+//      la TANDA A.
+//   c. Apagar el workflow `1771474299` de PROD el mismo día que se prenda, o
+//      llegan DOS avisos por ticket (§2.7).
 
 function flagOn(name) {
   const raw = (process.env[name] ?? '').trim().toLowerCase();

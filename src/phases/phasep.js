@@ -50,6 +50,8 @@ import {
   hasTicketCrossedFrontier,
   esTicketManual,
   fechaDelTicket,
+  fechaUltimaNotificada,
+  contarConsumidos,
 } from '../utils/ticketFrontera.js';
 import { notifyTicketsCancelledByEngine } from '../services/notifications/ticketCancelledByEngineAlert.js';
 
@@ -405,12 +407,18 @@ export function warnFacturacionDealNoGanado({ deal, dealId, dealStage, li, dates
  *
  * Bajo ETAPA_UNICA_ENABLED el piso pasa a ser LA ÚLTIMA FECHA QUE CRUZÓ LA
  * FRONTERA (notificada o posterior, o período cerrado), derivada de los tickets
- * reales — no de la prop. Las tres fechas nuevas son TANDA C; acá no se tocan.
+ * reales — no de la prop. Es la misma cuenta que la fecha NOTIFICADO de la
+ * TANDA C (`fechaUltimaNotificada`, en utils/ticketFrontera.js): el piso del
+ * cronograma y la fecha que se muestra tienen que ser EL MISMO número.
  *
  * Red de seguridad: si la búsqueda de tickets vino vacía (lag del Search API,
- * error absorbido) pero el line item tiene historial en `last_ticketed_date`,
- * se usa la prop. Sin eso, un search vacío regeneraría el cronograma desde el
- * arranque del contrato.
+ * error absorbido) se cae a las props. Sin eso, un search vacío regeneraría el
+ * cronograma desde el arranque del contrato. Acá SÍ se mira
+ * `last_ticketed_date` aunque la TANDA C la dé por eliminada — con la lista
+ * vacía no hay ticket vivo que proteger, así que un piso de más no cuesta nada
+ * y un piso de menos cuesta el cronograma entero. Se prefiere
+ * `last_billing_period` (la fecha NOTIFICADO) y sólo si está vacía se usa el
+ * histórico de `last_ticketed_date`.
  *
  * Flag apagada ⇒ devuelve `last_ticketed_date`, igual que siempre.
  *
@@ -421,15 +429,11 @@ export function resolveFloorSourceYmd(lineItemProps = {}, allTickets = []) {
   if (!etapaUnicaEnabled()) return lastTicketedYmd;
 
   const tickets = allTickets || [];
-  if (!tickets.length) return lastTicketedYmd;
-
-  let ultimaCruzada = '';
-  for (const t of tickets) {
-    if (!hasTicketCrossedFrontier(t)) continue;
-    const ymd = fechaDelTicket(t);
-    if (ymd && ymd > ultimaCruzada) ultimaCruzada = ymd;
+  if (!tickets.length) {
+    return toYmd(lineItemProps?.last_billing_period) || lastTicketedYmd;
   }
-  return ultimaCruzada;
+
+  return fechaUltimaNotificada(tickets);
 }
 
 /**
@@ -489,7 +493,16 @@ const isAutoRenew =
   !(term > 0);
 
   // Plan fijo con todos los tickets ya promovidos → early return
-  if (!isAutoRenew && safeInt(p.pagos_restantes) === 0) {
+  //
+  // ETAPA ÚNICA (flag ON): este gate DEJA DE LEER LA PROP.
+  // `pagos_restantes` era un contador decremental que escribía la promoción de
+  // Phase 2 — que bajo esta llave ya no ocurre. Peor: las líneas que vienen del
+  // esquema viejo pueden traer un 0 congelado (se les descontó al pasar a
+  // «Próximos», que hoy ya no es consumir) y ese 0 apagaría el cronograma de un
+  // plan que todavía no notificó nada. Bajo la llave el número se DERIVA de los
+  // tickets (TANDA C), así que el gate usa la misma cuenta que el `maxCount` de
+  // abajo y no depende de nada persistido.
+  if (!isAutoRenew && !etapaUnicaEnabled() && safeInt(p.pagos_restantes) === 0) {
     logger.debug(
       { module: 'phaseP', fn: 'buildDesiredDates', lineItemId: lineItem?.id, pagos_restantes: 0 },
       '[buildDesiredDates] PLAN_FIJO: pagos_restantes=0, early return'
@@ -509,12 +522,11 @@ const isAutoRenew =
   // (esos no se refacturan: consumieron su cuota igual).
   let maxCount;
   if (!isAutoRenew && term > 0) {
-    const yaCruzo = etapaUnicaEnabled()
-      ? (t) => hasTicketCrossedFrontier(t)
-      : (t) => !isManagedTicket(t);
-    const consumidos = allTickets.filter(
-      t => yaCruzo(t) && String(t?.properties?.of_ticket_key || '').trim()
-    ).length;
+    const consumidos = etapaUnicaEnabled()
+      ? contarConsumidos(allTickets)
+      : allTickets.filter(
+          t => !isManagedTicket(t) && String(t?.properties?.of_ticket_key || '').trim()
+        ).length;
     maxCount = Math.min(Math.max(0, term - consumidos), hardMax);
   } else {
     maxCount = hardMax;
@@ -1116,7 +1128,8 @@ export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
           lineItemId: li.id,
           allTickets: [],          // forzar vacío — ya borramos los forecasts
           todayYmd: nowMontevideoYmd(),
-          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          // TANDA C: el piso es la fecha NOTIFICADO, no `last_ticketed_date`.
+          lastTicketedYmd: resolveFloorSourceYmd(p, allTickets),
           currentBillingNextDate: toYmd(p.billing_next_date),
         });
         continue;
@@ -1463,7 +1476,8 @@ for (const t of allTickets) {
           lineItemId: li.id,
           allTickets,
           todayYmd: nowMontevideoYmd(),
-          lastTicketedYmd: toYmd(p.last_ticketed_date),
+          // TANDA C: el piso es la fecha NOTIFICADO, no `last_ticketed_date`.
+          lastTicketedYmd: resolveFloorSourceYmd(p, allTickets),
           currentBillingNextDate: toYmd(p.billing_next_date),
         });
       } catch (err) {

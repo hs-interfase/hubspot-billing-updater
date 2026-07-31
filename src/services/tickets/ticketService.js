@@ -17,6 +17,8 @@ import {
   ASSOC_TICKET_LABEL_EMPRESA_FACTURA,
   ASSOC_TICKET_LABEL_PARTNER,
 } from '../../config/constants.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import { isTicketEngineManaged } from '../../utils/ticketFrontera.js';
 import { createTicketSnapshots } from '../snapshotService.js';
 import { getTodayYMD, getTomorrowYMD, toYMDInBillingTZ } from '../../utils/dateUtils.js';
 import { parseBool, safeString } from '../../utils/parsers.js';
@@ -128,8 +130,18 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
 
   const tp = ticket?.properties || {};
 
-  // Si el ticket sigue en FORECAST, no tocar fechas de line item
-  if (isForecastTicketStage(tp.hs_pipeline_stage)) {
+  // Si el ticket sigue en FORECAST, no tocar fechas de line item.
+  //
+  // TANDA C — con la llave prendida el guard pasa a ser la FRONTERA: un ticket
+  // en «Próximos a facturar» deja de ser forecast pero SIGUE sin notificarse,
+  // y con el guard viejo esta función le escribiría `last_ticketed_date` al
+  // line item apenas se crea el ticket. Era un quinto escritor de la propiedad
+  // que la tanda C elimina, y el mismo agujero del hallazgo rojo #1.
+  if (
+    etapaUnicaEnabled()
+      ? isTicketEngineManaged(ticket)
+      : isForecastTicketStage(tp.hs_pipeline_stage)
+  ) {
     return;
   }
 
@@ -166,8 +178,15 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     return;
   }
 
+  const etapaUnica = etapaUnicaEnabled();
+
   const lp = lineItem?.properties || {};
-  const currentLastTicketedYMD = (lp.last_ticketed_date || '').slice(0, 10);
+  // TANDA C: con la llave prendida la referencia de "lo último que ya pasó" es
+  // la fecha NOTIFICADO (`last_billing_period`); `last_ticketed_date` está
+  // eliminada y por eso tampoco se escribe más abajo.
+  const currentLastTicketedYMD = etapaUnica
+    ? (lp.last_billing_period || '').slice(0, 10)
+    : (lp.last_ticketed_date || '').slice(0, 10);
   const currentNextYMD = (lp.billing_next_date || '').slice(0, 10);
 
   let newLastTicketedYMD = currentLastTicketedYMD;
@@ -197,7 +216,7 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
     if (issued >= totalPayments) {
       const updates = {};
 
-      if (newLastTicketedYMD !== currentLastTicketedYMD) {
+      if (!etapaUnica && newLastTicketedYMD !== currentLastTicketedYMD) {
         updates.last_ticketed_date = newLastTicketedYMD;
       }
 
@@ -247,7 +266,9 @@ async function syncLineItemAfterCanonicalTicket({ dealId, lineItemId, ticketId, 
   }
 
   const updates = {};
-  if (newLastTicketedYMD !== currentLastTicketedYMD) updates.last_ticketed_date = newLastTicketedYMD;
+  if (!etapaUnica && newLastTicketedYMD !== currentLastTicketedYMD) {
+    updates.last_ticketed_date = newLastTicketedYMD;
+  }
   if (newNextYMD !== currentNextYMD) updates.billing_next_date = newNextYMD;
 
   if (!Object.keys(updates).length) return;

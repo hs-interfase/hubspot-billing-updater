@@ -175,6 +175,25 @@ stateless" lo rompe (doble decremento / reset). Y como **alimenta el gating de
 Phase P y las alertas**, convertirlo a stateless es un refactor con riesgo real,
 no cosmético → tratar en task aparte si hace falta.
 
+> 🔴 **[TANDA C, 31-jul] Con `ETAPA_UNICA_ENABLED` prendida, `pagos_restantes`
+> DEJA DE SER STATEFUL.** Ese "task aparte" es esta tanda, y no fue opcional: el
+> decremento lo hacía la promoción de Phase 2, que bajo la llave **ya no
+> ocurre** (la etapa es una sola), así que el contador se quedaba clavado en el
+> total. Pasa a **derivarse**: `pagos_restantes = max(0, total − consumidos)`,
+> con `consumidos` = tickets que cruzaron la frontera
+> (`contarConsumidos`, `utils/ticketFrontera.js`). Consecuencias:
+> - **El punto de descuento es el paso a «Notificado»** (decisión de la usuaria).
+> - **Writer nuevo:** `recalcFromTickets`. `syncAfterPromotion` deja de
+>   escribirlo bajo la llave — si escribieran los dos, una promoción se contaría
+>   dos veces.
+> - **La alerta `alertPagosCompletos`** se emite desde `recalcFromTickets` y
+>   **sólo en la transición** a 0 (antes salía del decremento).
+> - **`buildDesiredDates` deja de leer la prop**: usa la misma cuenta derivada.
+>   Era necesario porque las líneas del esquema viejo pueden traer un **0
+>   congelado** (se les descontó al pasar a «Próximos», que ya no es consumir) y
+>   ese 0 apagaría el cronograma de un plan que todavía no notificó nada.
+> - Se vuelve **idempotente**: deja de poder desincronizarse.
+
 ---
 
 ### 7. `pagos_emitidos` — ⚠️ SIN WRITER (bug latente)  **[CORRECCIÓN]**
@@ -214,10 +233,29 @@ fuente de verdad de `facturas_restantes`).
 | Propiedad | Writer(s) reales |
 |---|---|
 | `billing_next_date` | `billingEngine.js` `updateLineItemSchedule` (recurrente / pago único), `syncBillingState.js` (solo AUTO_RENEW), `syncAfterPromotion.js`, `recalcFromTickets` / `syncBillingNextDateFromTickets`. En **PLAN_FIJO la fuente de verdad son los tickets**, no `syncBillingState`. |
-| `last_ticketed_date` | `billingEngine.js:514,624,661`, `syncAfterPromotion.js`, `recalcFromTickets`. |
+| `last_ticketed_date` | `syncAfterPromotion.js`, `recalcFromTickets`, `ticketService.js` (`syncLineItemAfterCanonicalTicket`). **[CORRECCIÓN 31-jul]** La versión previa listaba también `billingEngine.js:514,624,661`: es **falso**, ahí la propiedad sólo aparece como **campo de log** — `billingEngine` la LEE, nunca la escribe. |
 | `last_billing_period` | `invoiceService.js:78,314,535` (al crear invoice / sync), `recalcFromTickets`. |
 | `billing_last_billed_date` | `propagacion/invoice.js:367` (fecha **real** de emisión confirmada por Nodum). |
 | `billing_anchor_date` | `billingEngine.js:553,561` `updateLineItemSchedule` — solo si está vacía o si el LI no inició (`!lastTicketedYmd && pagosEmitidos === 0`). |
+
+### 🔴 Con `ETAPA_UNICA_ENABLED` prendida esta tabla cambia (TANDA C, 31-jul)
+
+Las cuatro fechas derivadas de etapas pasan a ser **tres**, alineadas con la
+frontera de la notificación (`PLAN_proximos_cambios_tickets_2026-07-29.md` §2.5):
+
+| | Propiedad | Definición nueva |
+|---|---|---|
+| **PRÓXIMA** | `billing_next_date` | la próxima `fecha_resolucion_esperada` **no notificada** (antes: sólo etapas forecast) |
+| **NOTIFICADO** | `last_billing_period` | la última fecha que **cruzó la frontera** — notificada, emitida, o período cerrado por cancelación definitiva |
+| **CONFIRMADO** | `billing_last_billed_date` | sin cambios: la fecha **real** de Nodum |
+| — | `last_ticketed_date` | **SE ELIMINA: no se escribe más.** Sus tres writers la saltean bajo la llave |
+
+Los valores viejos de `last_ticketed_date` **no se borran** del portal (sería un
+write masivo). Por eso el accesor `fechaNotificadaDelLineItem`
+(`utils/ticketFrontera.js`) **no tiene fallback** a esa propiedad: si lo tuviera,
+el valor viejo —contaminado con «Próximos a facturar»— ganaría para siempre.
+La única excepción es `resolveFloorSourceYmd` (`phasep.js`), donde el riesgo es
+el inverso y está documentado en el propio código.
 
 ---
 

@@ -5,7 +5,10 @@ import {
   AUTOMATED_TICKET_PIPELINE,
   FORECAST_MANUAL_STAGES,
   FORECAST_AUTO_STAGES,
+  PROXIMOS_A_FACTURAR_STAGE,
 } from '../../config/constants.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import { fechaNotificadaDelLineItem } from '../../utils/ticketFrontera.js';
 import logger from '../../../lib/logger.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { alertPagosCompletos } from '../notifications/dealAlerts.js'
@@ -23,13 +26,14 @@ async function findNextForecastYMDForLineItemKeyInPipeline({
   afterYMD,
   forecastStageIds,
   pipelineId,
+  client = hubspotClient,
 }) {
   if (!lineItemKey) return '';
   if (!afterYMD) return '';
 
   let res;
   try {
-    res = await hubspotClient.crm.tickets.searchApi.doSearch({
+    res = await client.crm.tickets.searchApi.doSearch({
       filterGroups: [
         {
           filters: [
@@ -78,6 +82,9 @@ export async function syncLineItemAfterPromotion({
   lineItemId,
   lineItemKey,  // LIK
   expectedYMD,  // fecha_resolucion_esperada del ticket promovido (YYYY-MM-DD)
+  // Cliente inyectable (default: el de producción), misma convención que
+  // recalcFromTickets y las tandas A/B — permite testear el camino real.
+  client = hubspotClient,
 }) {
   if (!lineItemId) throw new Error('syncLineItemAfterPromotion: lineItemId requerido');
   if (!lineItemKey) throw new Error('syncLineItemAfterPromotion: lineItemKey requerido');
@@ -86,7 +93,7 @@ export async function syncLineItemAfterPromotion({
   // 1) Leer line item (mínimo)
   let lineItem;
   try {
-    lineItem = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+    lineItem = await client.crm.lineItems.basicApi.getById(String(lineItemId), [
     'billing_next_date',
     'last_ticketed_date',
     'last_billing_period',
@@ -99,11 +106,22 @@ export async function syncLineItemAfterPromotion({
     return;
   }
 
+  const etapaUnica = etapaUnicaEnabled();
+
   const lp = lineItem?.properties || {};
-  const currentLast = (lp.last_ticketed_date || '').slice(0, 10);
+  // TANDA C: con la llave prendida `last_ticketed_date` está eliminada, así que
+  // la referencia de "lo último que ya pasó" es la fecha NOTIFICADO.
+  const currentLast = etapaUnica
+    ? fechaNotificadaDelLineItem(lp)
+    : (lp.last_ticketed_date || '').slice(0, 10);
   const currentNext = (lp.billing_next_date || '').slice(0, 10);
 
   // ====== PAGOS RESTANTES (promesas) ======
+  // TANDA C — con la llave prendida este decremento NO CORRE.
+  // `pagos_restantes` deja de ser un contador acumulado y pasa a derivarse de
+  // los tickets en recalcFromTickets (total − consumidos), con el descuento en
+  // el paso a «Notificado». Si además se decrementara acá, una promoción se
+  // contaría dos veces y el número quedaría por debajo del real.
   const totalPaymentsRaw = lp.hs_recurring_billing_number_of_payments;
   const totalPayments = Number.parseInt(String(totalPaymentsRaw ?? ''), 10);
   const hasTotalPayments = Number.isFinite(totalPayments) && totalPayments > 0;
@@ -113,23 +131,29 @@ export async function syncLineItemAfterPromotion({
 
   // init: si pagos_restantes no está seteado, lo arrancamos en totalPayments
   let newRemaining = currentRemaining;
-  if (!Number.isFinite(currentRemaining) || currentRemaining < 0) {
-    newRemaining = hasTotalPayments ? totalPayments : currentRemaining; // si no hay total, no inventamos
-  }
+  if (!etapaUnica) {
+    if (!Number.isFinite(currentRemaining) || currentRemaining < 0) {
+      newRemaining = hasTotalPayments ? totalPayments : currentRemaining; // si no hay total, no inventamos
+    }
 
-  // decrement por promoción (consume 1 promesa)
-  if (Number.isFinite(newRemaining)) {
-    newRemaining = Math.max(0, newRemaining - 1);
+    // decrement por promoción (consume 1 promesa)
+    if (Number.isFinite(newRemaining)) {
+      newRemaining = Math.max(0, newRemaining - 1);
+    }
   }
 
   // 2) last_ticketed_date monotónico
   let newLast = currentLast;
   if (!currentLast || expectedYMD > currentLast) newLast = expectedYMD;
 
-  // 3) stages forecast (unión de ambos sets)
+  // 3) stages "todavía no notificado" para buscar la próxima fecha.
+  //    Con la llave prendida se suma «Próximos a facturar»: si no, con todo el
+  //    cronograma manual en la etapa única no habría candidato y la próxima
+  //    fecha se quedaría clavada.
   const forecastStageIds = [
     ...FORECAST_MANUAL_STAGES,
     ...FORECAST_AUTO_STAGES,
+    ...(etapaUnica && PROXIMOS_A_FACTURAR_STAGE ? [PROXIMOS_A_FACTURAR_STAGE] : []),
   ].map(String);
 
   // 4) nextForecastYMD: buscar en manual y auto, quedarnos con la más próxima
@@ -139,12 +163,14 @@ export async function syncLineItemAfterPromotion({
       afterYMD: expectedYMD,
       forecastStageIds,
       pipelineId: TICKET_PIPELINE,
+      client,
     }),
     findNextForecastYMDForLineItemKeyInPipeline({
       lineItemKey,
       afterYMD: expectedYMD,
       forecastStageIds,
       pipelineId: AUTOMATED_TICKET_PIPELINE,
+      client,
     }),
   ]);
 
@@ -160,12 +186,14 @@ export async function syncLineItemAfterPromotion({
         afterYMD: newLast,
         forecastStageIds,
         pipelineId: TICKET_PIPELINE,
+        client,
       }),
       findNextForecastYMDForLineItemKeyInPipeline({
         lineItemKey,
         afterYMD: newLast,
         forecastStageIds,
         pipelineId: AUTOMATED_TICKET_PIPELINE,
+        client,
       }),
     ]);
 
@@ -184,12 +212,15 @@ export async function syncLineItemAfterPromotion({
   if (newNext && newNext === newLast) newNext = '';
 
   // 7) Update mínimo
+  // TANDA C: con la llave prendida no se escriben ni `last_ticketed_date`
+  // (eliminada) ni `pagos_restantes` (derivado en recalcFromTickets, que corre
+  // inmediatamente después en los tres call sites de promoción).
   const updates = {};
-  if (newLast !== currentLast) updates.last_ticketed_date = newLast;
+  if (!etapaUnica && newLast !== currentLast) updates.last_ticketed_date = newLast;
   if (newNext !== currentNext) updates.billing_next_date = newNext;
 
   // guardar pagos_restantes si es válido
-  if (Number.isFinite(newRemaining)) {
+  if (!etapaUnica && Number.isFinite(newRemaining)) {
     const cur = Number.isFinite(currentRemaining) ? currentRemaining : null;
     if (cur === null || newRemaining !== cur) {
       updates.pagos_restantes = String(newRemaining);
@@ -211,7 +242,7 @@ export async function syncLineItemAfterPromotion({
   }
 
   try {
-    await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
+    await client.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
     logger.info({
       module: 'syncAfterPromotion',
       fn: 'syncLineItemAfterPromotion',
@@ -223,7 +254,9 @@ export async function syncLineItemAfterPromotion({
     }, '[syncLineItemAfterPromotion] LineItem actualizado');
 
     // ── Alerta: pagos_restantes llegó a 0 ──
-    if (Number.isFinite(newRemaining) && newRemaining === 0) {
+    // Con la llave prendida la emite recalcFromTickets, que es quien mueve el
+    // número; acá se sale para no mandar dos avisos por la misma transición.
+    if (!etapaUnica && Number.isFinite(newRemaining) && newRemaining === 0) {
       alertPagosCompletos({ dealId, lineItemId, lineItemName: null })
         .catch(err => logger.warn({ module: 'syncAfterPromotion', lineItemId, err: err?.message },
           'alertPagosCompletos falló (no bloquea)'));
