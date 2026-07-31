@@ -136,6 +136,16 @@ export const FORECAST_MANUAL_STAGES = new Set([
   BILLING_TICKET_FORECAST_95,
 ]);
 
+// Subconjunto hasta el 75% — bajo ETAPA_UNICA_ENABLED, el 85%/95% manual se
+// retira del uso (esos tickets nacen directo en «Próximos a facturar»), así
+// que el escaneo de vencidos por ETAPA sólo tiene sentido hasta acá.
+// Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2 / TANDA A punto 1.
+export const FORECAST_MANUAL_STAGES_UP_TO_75 = new Set([
+  BILLING_TICKET_FORECAST,
+  BILLING_TICKET_FORECAST_50,
+  BILLING_TICKET_FORECAST_75,
+]);
+
 // ===============================
 // Stages post-emisión — MANUALES
 // ===============================

@@ -62,6 +62,11 @@ import {
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { parseBool } from '../../utils/parsers.js';
 import { syncTicketCompanyLabels, ticketLabelSyncEnabled } from './syncTicketCompanyLabels.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import {
+  notifyDealWonScheduleSummary,
+  RESUMEN_ENVIADO_PROP,
+} from '../notifications/dealWonScheduleSummaryAlert.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'associateOnClosedWon';
@@ -167,6 +172,7 @@ export async function associateAllTicketsOnClosedWon({
   client = hubspotClient,
   getDealCompaniesFn = getDealCompanies,
   getDealContactsFn = getDealContacts,
+  notifyDealWonScheduleSummaryFn = notifyDealWonScheduleSummary,
 }) {
   dealId = String(dealId);
   const stats = {
@@ -181,6 +187,7 @@ export async function associateAllTicketsOnClosedWon({
     autoPastLinked: 0,      // automáticos PASADOS que sí se asocian (regla 19-jul)
     autoNextLinked: 0,      // el PRÓXIMO automático por facturar (regla 22-jul)
     errors: 0,
+    scheduleSummarySent: false, // resumen de cronograma al cierre ganado (ETAPA_UNICA_ENABLED)
   };
 
   // Solo al ganar el negocio (facturación activa). Antes del cierre los forecast
@@ -337,6 +344,32 @@ export async function associateAllTicketsOnClosedWon({
     } catch (err) {
       stats.errors++;
       logger.warn({ module: MODULE, dealId, err }, 'Error en el re-sync de etiquetas de empresa (no bloquea)');
+    }
+  }
+
+  // Resumen de cronograma al cierre ganado (bajo ETAPA_UNICA_ENABLED, TANDA A
+  // punto 3): UN email con todo el cronograma, no uno por ticket. Este hook
+  // corre en CADA pasada de phases sobre negocios ya ganados (ver cabecera del
+  // módulo), así que el marker RESUMEN_ENVIADO_PROP evita reenviarlo — sólo se
+  // escribe si el email efectivamente salió (si DEAL_ALERTS_ENABLED=false lo
+  // omitió, se reintenta en la próxima pasada, ya con alertas prendidas).
+  if (etapaUnicaEnabled() && !parseBool(dealProps?.[RESUMEN_ENVIADO_PROP])) {
+    try {
+      const r = await notifyDealWonScheduleSummaryFn({
+        dealId,
+        dealName: dealProps?.dealname || null,
+        dealOwnerId: dealProps?.hubspot_owner_id || null,
+        tickets,
+      });
+      if (r?.emailed) {
+        await client.crm.deals.basicApi.update(dealId, {
+          properties: { [RESUMEN_ENVIADO_PROP]: 'true' },
+        });
+        stats.scheduleSummarySent = true;
+      }
+    } catch (err) {
+      stats.errors++;
+      logger.warn({ module: MODULE, dealId, err }, 'Resumen de cronograma al cierre ganado falló (no bloquea)');
     }
   }
 
