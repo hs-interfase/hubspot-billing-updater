@@ -36,11 +36,15 @@
 // 🔴 LO QUE FALTA ANTES DE PRENDERLA — no es código:
 //   a. Las 6 pruebas de sandbox (§2.6 del plan) con la llave prendida, que
 //      validan B+C juntas. Escriben en el portal de verdad.
-//   b. Crear la prop `of_aviso_1mes_enviado` (booleana, en el TICKET) en
-//      sandbox y en producción. Es el único bloqueante de portal que queda de
-//      la TANDA A.
-//   c. Apagar el workflow `1771474299` de PROD el mismo día que se prenda, o
+//   b. Apagar el workflow `1771474299` de PROD el mismo día que se prenda, o
 //      llegan DOS avisos por ticket (§2.7).
+//
+// ✅ Ya NO hay props nuevas que crear en el portal. Los dos avisos al
+// responsable (resumen al cierre ganado · individual a 1 mes) los manda un
+// WORKFLOW DE HUBSPOT, no el motor — decisión de la usuaria del 30 y 31-jul.
+// Por eso se borraron `dealWonScheduleSummaryAlert.js` (30-jul) e
+// `individualBillingReminderAlert.js` (31-jul), y ni `of_resumen_cronograma_enviado`
+// ni `of_aviso_1mes_enviado` hacen falta.
 
 function flagOn(name) {
   const raw = (process.env[name] ?? '').trim().toLowerCase();

@@ -346,7 +346,12 @@ export async function associateAllTicketsOnClosedWon({
   // ese aviso lo arma ella con un WORKFLOW de HubSpot, así que el motor no
   // manda ninguno — dos fuentes del mismo aviso = dos correos por negocio.
   // La prop `of_resumen_cronograma_enviado` YA NO VA: no hay que crearla.
-  // El aviso individual de 1 mes (phase2.js + of_aviso_1mes_enviado) SÍ queda.
+  //
+  // 31-jul: el aviso individual de 1 mes siguió el MISMO camino — también lo
+  // manda un workflow de HubSpot, así que se borró del motor
+  // (`individualBillingReminderAlert.js` + los dos hooks de phase2.js) y la
+  // prop `of_aviso_1mes_enviado` TAMPOCO va. El motor no manda NINGUNO de los
+  // dos avisos al responsable: los dos son de HubSpot.
 
   logger.info({ module: MODULE, dealId, ...stats }, 'Asociación de tickets al closedwon completada');
   return stats;

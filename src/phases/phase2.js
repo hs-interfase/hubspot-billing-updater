@@ -23,13 +23,8 @@ import {
   FORECAST_MANUAL_STAGES,
   DEAL_STAGE_FINALIZADO,
   PROXIMOS_A_FACTURAR_STAGE,
-  isCancelledTicketStage,
 } from '../config/constants.js';
 import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
-import {
-  notifyIndividualBillingReminder,
-  AVISO_1MES_ENVIADO_PROP,
-} from '../services/notifications/individualBillingReminderAlert.js';
 
 /**
  * PHASE 2 (MANUAL):
@@ -95,92 +90,6 @@ async function findTicketByTicketKey(ticketKey) {
   return (resp?.results || [])[0] || null;
 }
 
-async function findTicketForReminder(ticketKey, client) {
-  const body = {
-    filterGroups: [
-      { filters: [{ propertyName: 'of_ticket_key', operator: 'EQ', value: String(ticketKey) }] },
-    ],
-    properties: [
-      'hs_pipeline_stage',
-      'fecha_resolucion_esperada',
-      'hubspot_owner_id',
-      AVISO_1MES_ENVIADO_PROP,
-    ],
-    limit: 2,
-  };
-
-  const resp = await withRetry(
-    () => client.crm.tickets.searchApi.doSearch(body),
-    { module: 'phase2', fn: 'findTicketForReminder', ticketKey }
-  );
-  const results = resp?.results || [];
-  // Bajo la etapa única, una fecha puede tener un ticket CANCELADO por el motor
-  // y otro vivo re-armado después (§2.4): el aviso va al vivo.
-  return results.find(t => !isCancelledTicketStage(t?.properties?.hs_pipeline_stage)) || results[0] || null;
-}
-
-/**
- * Aviso individual al responsable cuando falta ~1 mes para la fecha de un
- * ticket manual no notificado (bajo ETAPA_UNICA_ENABLED). ADITIVO: no toca la
- * promoción de etapa (promoteManualForecastTicketToProximos) ni ningún otro
- * comportamiento existente — sólo avisa. Idempotente por AVISO_1MES_ENVIADO_PROP
- * en el ticket. Flag apagada (default): no-op inmediato.
- *
- * Deps inyectables sólo para tests (defaults = producción).
- */
-export async function maybeSendIndividualBillingReminder({ dealId, dealName, dealOwnerId, lineItemKey, lineItemName, ymd }, deps = {}) {
-  const {
-    client = hubspotClient,
-    findTicketForReminderFn = findTicketForReminder,
-    notifyIndividualBillingReminderFn = notifyIndividualBillingReminder,
-  } = deps;
-
-  if (!etapaUnicaEnabled()) return { sent: false, reason: 'flag_off' };
-  if (!lineItemKey || !ymd) return { sent: false, reason: 'missing_params' };
-
-  const ticketKey = buildTicketKeyFromLineItemKey(dealId, lineItemKey, ymd);
-  let t;
-  try {
-    t = await findTicketForReminderFn(ticketKey, client);
-  } catch (err) {
-    logger.warn(
-      { module: 'phase2', fn: 'maybeSendIndividualBillingReminder', dealId, lineItemKey, err },
-      'Error buscando ticket para aviso individual'
-    );
-    return { sent: false, reason: 'error_buscando_ticket' };
-  }
-  if (!t) return { sent: false, reason: 'missing_forecast_ticket' };
-
-  if (parseBool(t.properties?.[AVISO_1MES_ENVIADO_PROP])) {
-    return { sent: false, reason: 'ya_enviado', ticketId: t.id };
-  }
-
-  try {
-    const r = await notifyIndividualBillingReminderFn({
-      dealId,
-      dealName,
-      dealOwnerId,
-      ticketId: t.id,
-      ticketOwnerId: t.properties?.hubspot_owner_id || null,
-      fechaResolucionEsperada: String(t.properties?.fecha_resolucion_esperada || '').slice(0, 10) || ymd,
-      lineItemName,
-    });
-    if (r?.emailed) {
-      await client.crm.tickets.basicApi.update(String(t.id), {
-        properties: { [AVISO_1MES_ENVIADO_PROP]: 'true' },
-      });
-      return { sent: true, ticketId: t.id };
-    }
-    return { sent: false, reason: r?.reason || 'no_emailed', ticketId: t.id };
-  } catch (err) {
-    logger.warn(
-      { module: 'phase2', fn: 'maybeSendIndividualBillingReminder', dealId, ticketId: t.id, err },
-      'Aviso individual falló (no bloquea)'
-    );
-    return { sent: false, reason: 'error', ticketId: t.id };
-  }
-}
-
 async function moveTicketToStage(ticketId, stageId) {
   return hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
     properties: { hs_pipeline_stage: String(stageId) },
@@ -203,9 +112,14 @@ export async function promoteManualForecastTicketToProximos({
   //
   // Ya no hay a dónde promover: del cierre ganado en adelante la etapa es una
   // sola y el ticket NACE en «Próximos a facturar» (resolveForecastStage en
-  // phasep.js). Los 30 días sobreviven sólo como disparador del AVISO
-  // individual al responsable — maybeSendIndividualBillingReminder, que se
-  // llama ANTES que esta función en los dos call sites y no se toca acá.
+  // phasep.js).
+  //
+  // Los 30 días sobreviven sólo como disparador del AVISO individual al
+  // responsable, y ese aviso NO LO HACE EL MOTOR: lo manda un workflow de
+  // HubSpot (decisión de la usuaria, 31-jul — mismo criterio que el resumen al
+  // cierre ganado, que salió del motor el 30-jul). El código que lo hacía acá
+  // se borró en esa fecha, junto con la prop `of_aviso_1mes_enviado`: si el
+  // motor también lo mandara, llegarían DOS avisos por ticket.
   //
   // Efecto lateral asumido: un negocio que TODAVÍA no está ganado (buckets
   // 25/50/75) deja de tener su ticket movido a «Próximos» por cercanía de
@@ -441,17 +355,6 @@ export async function runPhase2({ deal, lineItems }) {
           const daysUntil = diffDays(today, ftDate);
           if (daysUntil === null || daysUntil > MANUAL_TICKET_LOOKAHEAD_DAYS) continue;
 
-          // Aditivo, bajo ETAPA_UNICA_ENABLED: aviso individual al responsable
-          // (no toca la promoción de abajo). Ver §3 del comentario del módulo.
-          await maybeSendIndividualBillingReminder({
-            dealId,
-            dealName: dp.dealname || null,
-            dealOwnerId: dp.hubspot_owner_id || null,
-            lineItemKey: mirrorLineItemKey,
-            lineItemName: null,
-            ymd: ftDate,
-          });
-
           const promoted = await promoteManualForecastTicketToProximos({
             dealId,
             dealStage,
@@ -520,17 +423,6 @@ export async function runPhase2({ deal, lineItems }) {
         );
         continue;
       }
-
-      // Aditivo, bajo ETAPA_UNICA_ENABLED: aviso individual al responsable
-      // (no toca la promoción de abajo). Ver §3 del comentario del módulo.
-      await maybeSendIndividualBillingReminder({
-        dealId,
-        dealName: dp.dealname || null,
-        dealOwnerId: dp.hubspot_owner_id || null,
-        lineItemKey,
-        lineItemName: lp.name || null,
-        ymd: planYMD,
-      });
 
       const promoted = await promoteManualForecastTicketToProximos({
         dealId,
