@@ -5,10 +5,10 @@ import logger from '../../../lib/logger.js';
 import {
   CANCELLED_STAGE_BY_PIPELINE,
   TICKET_PIPELINE,
-  PROXIMOS_A_FACTURAR_STAGE,
   isForecastStage,
 } from '../../config/constants.js';
 import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import { isTicketEngineManaged } from '../../utils/ticketFrontera.js';
 import { getTodayYMD, diffDays } from '../../utils/dateUtils.js';
 import { notifyTicketKeptAlive } from '../../services/notifications/ticketKeptAliveAlert.js';
 
@@ -17,14 +17,15 @@ function isForecastTicket(ticket) {
   return isForecastStage(stage);
 }
 
-// Bajo ETAPA_UNICA_ENABLED: "no notificado" = forecast (manual hasta 75% +
-// auto completo) O «Próximos a facturar» manual — todo lo que está del lado
-// futuro de la frontera (ver PLAN_proximos_cambios_tickets_2026-07-29.md §2.0).
+// "No notificado" = todo lo que está del lado futuro de la frontera (ver
+// PLAN_proximos_cambios_tickets_2026-07-29.md §2.0): forecast (manual hasta
+// 75% + auto completo) y, bajo ETAPA_UNICA_ENABLED, «Próximos a facturar».
 // Los tickets ya en Notificado/Emitido/etc. no entran acá: son intocables.
-function isNotNotifiedTicket(ticket) {
-  const stage = String(ticket?.properties?.hs_pipeline_stage || '');
-  return isForecastStage(stage) || (Boolean(PROXIMOS_A_FACTURAR_STAGE) && stage === PROXIMOS_A_FACTURAR_STAGE);
-}
+//
+// El predicado es el MISMO que usa Phase P (utils/ticketFrontera.js) — TANDA B
+// lo centralizó ahí para que no haya dos definiciones de la frontera. Con la
+// flag apagada devuelve exactamente los forecast, igual que isForecastTicket.
+const isNotNotifiedTicket = isTicketEngineManaged;
 
 async function findTicketsByLineItemKey(lineItemKey, client) {
   if (!lineItemKey) return [];

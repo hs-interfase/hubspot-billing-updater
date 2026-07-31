@@ -36,12 +36,22 @@ import {
   BILLING_AUTOMATED_READY,
   TICKET_PIPELINE,
   FORECAST_TICKET_STAGES,
-  isForecastStage,
-  DEAL_STAGE_EN_EJECUCION, 
+  DEAL_STAGE_EN_EJECUCION,
   DEAL_STAGE_FINALIZADO,
   TICKET_STAGES,
   BILLING_AUTOMATED_CANCELLED,
+  PROXIMOS_A_FACTURAR_STAGE,
+  CANCELLED_STAGE_BY_PIPELINE,
 } from '../config/constants.js';
+import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
+import {
+  isTicketEngineManaged,
+  isTicketProtegido,
+  hasTicketCrossedFrontier,
+  esTicketManual,
+  fechaDelTicket,
+} from '../utils/ticketFrontera.js';
+import { notifyTicketsCancelledByEngine } from '../services/notifications/ticketCancelledByEngineAlert.js';
 
 const BILLING_TZ = 'America/Montevideo';
 
@@ -153,7 +163,7 @@ function parseLikFromTicketKey(ticketKey) {
   return rest.slice(0, j).trim();
 }
 
-async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
+async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks, deal = null }) {
   const body = {
     filterGroups: [
       {
@@ -162,7 +172,16 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
         ],
       },
     ],
-    properties: ['hs_pipeline_stage', 'of_ticket_key', 'hs_pipeline'],
+    properties: [
+      'hs_pipeline_stage',
+      'of_ticket_key',
+      'hs_pipeline',
+      // Bajo la flag hacen falta para decidir y para avisar: of_invoice_id
+      // separa el cancelado-con-período-cerrado del cancelado por el motor.
+      'of_invoice_id',
+      'fecha_resolucion_esperada',
+      'hubspot_owner_id',
+    ],
     limit: 100,
   };
 
@@ -171,9 +190,10 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
     { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId }
   );
   const allTickets = resp?.results || [];
-  const forecastTickets = allTickets.filter(isForecastTicket);
+  const forecastTickets = allTickets.filter(isManagedTicket);
 
   let orphanDeleted = 0;
+  const orphanCancelados = [];
 
   for (const t of forecastTickets) {
     try {
@@ -185,15 +205,45 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
       if (!lik) continue;
 
       if (!validLiks.has(lik)) {
-        await deleteTicket(ticketId);
+        const r = await retirarTicket(t, {
+          motivo: 'El elemento de pedido ya no existe en el negocio — cronograma rearmado por el motor',
+          dealId,
+          contexto: 'orphan_lik',
+        });
+        if (!r.retirado) continue;
         orphanDeleted++;
+        if (r.cancelado) {
+          orphanCancelados.push({
+            ticketId: String(ticketId),
+            fecha: fechaDelTicket(t) || null,
+            ownerId: t?.properties?.hubspot_owner_id || null,
+          });
+        }
         logger.info(
-          { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId, ticketKey },
-          'Orphan forecast ticket eliminado'
+          { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId, ticketKey, cancelado: r.cancelado },
+          r.cancelado ? 'Orphan ticket CANCELADO (el motor no borra)' : 'Orphan forecast ticket eliminado'
         );
       }
     } catch (err) {
       logger.error({ module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t?.id, err }, 'unit_failed');
+    }
+  }
+
+  // Aviso único por negocio (§2.4). Nunca bloquea la limpieza.
+  if (orphanCancelados.length) {
+    try {
+      await notifyTicketsCancelledByEngine({
+        dealId,
+        dealName: deal?.properties?.dealname || null,
+        dealOwnerId: deal?.properties?.hubspot_owner_id || null,
+        cancelados: orphanCancelados,
+        motivo: 'El elemento de pedido al que pertenecían ya no está en el negocio',
+      });
+    } catch (err) {
+      logger.warn(
+        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, err },
+        'Aviso de huérfanos cancelados falló (no bloquea)'
+      );
     }
   }
 // Cleanup: tickets sin of_ticket_key en pipelines de facturación
@@ -206,17 +256,28 @@ async function cleanupOrphanForecastTicketsForDeal({ dealId, validLiks }) {
     const pipeline = String(t?.properties?.hs_pipeline || '').trim();
     if (!BILLING_PIPELINES.has(pipeline)) continue;
 
+    // Bajo la flag, un ticket ya CANCELADO (o notificado en adelante) sin key no
+    // se toca: sólo se limpia lo que el motor maneja.
+    if (etapaUnicaEnabled() && !isManagedTicket(t)) continue;
+
     try {
-      await deleteTicket(t.id);
+      const r = await retirarTicket(t, {
+        motivo: 'Ticket sin clave de facturación en un pipeline del motor',
+        dealId,
+        contexto: 'sin_of_ticket_key',
+      });
+      if (!r.retirado) continue;
       orphanDeleted++;
       logger.info(
-        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t.id, pipeline },
-        'Ticket sin of_ticket_key en pipeline de facturación eliminado'
+        { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t.id, pipeline, cancelado: r.cancelado },
+        r.cancelado
+          ? 'Ticket sin of_ticket_key CANCELADO (el motor no borra)'
+          : 'Ticket sin of_ticket_key en pipeline de facturación eliminado'
       );
     } catch (err) {
       logger.warn(
         { module: 'phaseP', fn: 'cleanupOrphanForecastTicketsForDeal', dealId, ticketId: t.id, err },
-        'Error eliminando ticket sin key'
+        'Error retirando ticket sin key'
       );
     }
   }
@@ -254,16 +315,23 @@ function resolveBucketFromDealStage(dealStage) {
   return null;
 }
 
-function resolveForecastStage({ dealStage, automated }) {
+export function resolveForecastStage({ dealStage, automated }) {
   const bucket = resolveBucketFromDealStage(dealStage);
   if (!bucket) return null;
 
   if (!automated) {
+    // ETAPA ÚNICA (flag ON): del cierre ganado en adelante hay UNA sola etapa
+    // manual antes de «Notificado» — «Próximos a facturar». Los buckets 85/95/100
+    // dejan de tener etapa forecast propia (en PROD «Backlog cierre ganado» y
+    // «Backlog avanzado»): el ticket NACE en la etapa única. Los ids viejos
+    // siguen reconocidos como "no notificado" (constants.js) para poder
+    // reubicar los tickets que quedaron parados ahí.
+    const unificado = etapaUnicaEnabled() && Boolean(PROXIMOS_A_FACTURAR_STAGE);
     if (bucket === '50') return STAGE.MANUAL_FORECAST_50;
     if (bucket === '75') return STAGE.MANUAL_FORECAST_75;
-    if (bucket === '85') return STAGE.MANUAL_FORECAST_85;
-    if (bucket === '95') return STAGE.MANUAL_FORECAST_95;
-    if (bucket === '100') return STAGE.MANUAL_FORECAST_95; // 100% usa mismo stage que 95
+    if (bucket === '85') return unificado ? PROXIMOS_A_FACTURAR_STAGE : STAGE.MANUAL_FORECAST_85;
+    if (bucket === '95') return unificado ? PROXIMOS_A_FACTURAR_STAGE : STAGE.MANUAL_FORECAST_95;
+    if (bucket === '100') return unificado ? PROXIMOS_A_FACTURAR_STAGE : STAGE.MANUAL_FORECAST_95; // 100% usa mismo stage que 95
     return STAGE.MANUAL_FORECAST_25;
   }
 
@@ -324,6 +392,44 @@ export function warnFacturacionDealNoGanado({ deal, dealId, dealStage, li, dates
     );
     return null;
   }
+}
+
+/**
+ * EL PISO del cronograma (plan fijo).
+ *
+ * Hoy sale de `last_ticketed_date`, que recalcFromTickets deriva de
+ * PROMOTED_STAGES — un set que INCLUYE «Próximos a facturar». Con la etapa
+ * única eso es fatal: el ticket próximo a facturar levanta el piso por encima
+ * de su propia fecha, esa fecha no entra en desiredKeys y el paso 7 lo borra
+ * (hallazgo rojo #1 del plan, §2.3).
+ *
+ * Bajo ETAPA_UNICA_ENABLED el piso pasa a ser LA ÚLTIMA FECHA QUE CRUZÓ LA
+ * FRONTERA (notificada o posterior, o período cerrado), derivada de los tickets
+ * reales — no de la prop. Las tres fechas nuevas son TANDA C; acá no se tocan.
+ *
+ * Red de seguridad: si la búsqueda de tickets vino vacía (lag del Search API,
+ * error absorbido) pero el line item tiene historial en `last_ticketed_date`,
+ * se usa la prop. Sin eso, un search vacío regeneraría el cronograma desde el
+ * arranque del contrato.
+ *
+ * Flag apagada ⇒ devuelve `last_ticketed_date`, igual que siempre.
+ *
+ * @returns {string} YYYY-MM-DD o '' si no hay piso
+ */
+export function resolveFloorSourceYmd(lineItemProps = {}, allTickets = []) {
+  const lastTicketedYmd = toYmd(lineItemProps?.last_ticketed_date);
+  if (!etapaUnicaEnabled()) return lastTicketedYmd;
+
+  const tickets = allTickets || [];
+  if (!tickets.length) return lastTicketedYmd;
+
+  let ultimaCruzada = '';
+  for (const t of tickets) {
+    if (!hasTicketCrossedFrontier(t)) continue;
+    const ymd = fechaDelTicket(t);
+    if (ymd && ymd > ultimaCruzada) ultimaCruzada = ymd;
+  }
+  return ultimaCruzada;
 }
 
 /**
@@ -394,9 +500,21 @@ const isAutoRenew =
   const hardMax = 24;
 
   // CAMBIO: descontar pagos ya emitidos para plan fijo
+  //
+  // ETAPA ÚNICA (flag ON) — CONSUMIDO ES LO QUE CRUZÓ LA FRONTERA.
+  // Hoy se cuenta "todo lo que no es forecast", y con la etapa única el ticket
+  // en «Próximos a facturar» dejaría de descontarse ⇒ un plan de 12 termina en
+  // 13 (hallazgo rojo #2 del plan, §2.3). Pasa a contar lo NOTIFICADO o
+  // posterior, más los períodos cerrados por cancelación definitiva de factura
+  // (esos no se refacturan: consumieron su cuota igual).
   let maxCount;
   if (!isAutoRenew && term > 0) {
-    const consumidos = allTickets.filter(t => !isForecastTicket(t) && String(t?.properties?.of_ticket_key || '').trim()).length;
+    const yaCruzo = etapaUnicaEnabled()
+      ? (t) => hasTicketCrossedFrontier(t)
+      : (t) => !isManagedTicket(t);
+    const consumidos = allTickets.filter(
+      t => yaCruzo(t) && String(t?.properties?.of_ticket_key || '').trim()
+    ).length;
     maxCount = Math.min(Math.max(0, term - consumidos), hardMax);
   } else {
     maxCount = hardMax;
@@ -404,7 +522,7 @@ const isAutoRenew =
 if (maxCount === 0) return { desiredCount: 0, dates: [] };
 
   const todayYmd = overrideToday || nowMontevideoYmd();
-  const lastTicketedYmd = toYmd(p.last_ticketed_date);
+  const lastTicketedYmd = resolveFloorSourceYmd(p, allTickets);
   const billingNextYmd = toYmd(p.billing_next_date);
   const anchorYmd = toYmd(p.billing_anchor_date);
 
@@ -574,6 +692,11 @@ async function findTicketsByLineItemKey(lineItemKey) {
       'of_ticket_key',
       'subject',
       'of_snapshot_source_modified',
+      // of_invoice_id: separa el ticket CANCELADO con período cerrado (protege
+      // su fecha, cuenta como consumido) del que canceló el motor (no protege).
+      'of_invoice_id',
+      // hubspot_owner_id: responsable a avisar cuando el motor cancela (§2.4).
+      'hubspot_owner_id',
     ],
     limit: 100,
   };
@@ -585,9 +708,32 @@ async function findTicketsByLineItemKey(lineItemKey) {
   return resp?.results || [];
 }
 
-function isForecastTicket(ticket) {
-  const stage = String(ticket?.properties?.hs_pipeline_stage || '');
-  return isForecastStage(stage);
+/**
+ * ¿El motor manda sobre la ESTRUCTURA de este ticket (existe / en qué fecha)?
+ *
+ * Flag apagada: exactamente los stages FORECAST — el comportamiento de siempre.
+ * Flag prendida: además «Próximos a facturar», que pasa a ser la etapa única
+ * del tramo no notificado (ver config/constants.js, sección de la frontera).
+ *
+ * El predicado vive en utils/ticketFrontera.js (una sola definición de la
+ * frontera para Phase P, cancelForecastTickets y el sync quirúrgico).
+ */
+function isManagedTicket(ticket) {
+  return isTicketEngineManaged(ticket);
+}
+
+/**
+ * ¿Este ticket PROTEGE su clave (el upsert no crea otro para esa fecha)?
+ *
+ * Flag apagada: todo lo que no es forecast protege — incluidos los CANCELADO
+ * (comportamiento de hoy, textual).
+ * Flag prendida: un ticket cancelado SIN factura detrás (lo canceló el motor o
+ * la pérdida del negocio) deja de proteger, para que esa fecha se pueda volver
+ * a armar más adelante (§2.4). El cancelado CON factura (período cerrado)
+ * sigue protegiendo.
+ */
+function protegeSuClave(ticket) {
+  return etapaUnicaEnabled() ? isTicketProtegido(ticket) : !isManagedTicket(ticket);
 }
 
 function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
@@ -600,6 +746,81 @@ function getTicketKeyOrDerive({ ticket, dealId, lineItemKey }) {
 
 async function deleteTicket(ticketId) {
   return hubspotClient.crm.tickets.basicApi.archive(String(ticketId));
+}
+
+/**
+ * REGLA PURA — cómo se retira un ticket que le sobra al motor (PLAN §2.4).
+ *
+ * Flag apagada  → 'archivar'  (comportamiento de siempre).
+ * Flag prendida → 'cancelar'  a la etapa CANCELADO de su pipeline.
+ * Sin etapa CANCELADO conocida para ese pipeline → 'omitir': ante la duda no se
+ * pierde el ticket. Un ticket migrado o promovido a mano que desaparece no se
+ * nota hasta el mes siguiente.
+ *
+ * @returns {{modo:'archivar'|'cancelar'|'omitir', cancelledStage?:string}}
+ */
+export function resolveRetiroDeTicket(ticket) {
+  if (!etapaUnicaEnabled()) return { modo: 'archivar' };
+
+  const pipeline = String(ticket?.properties?.hs_pipeline || '');
+  const cancelledStage = CANCELLED_STAGE_BY_PIPELINE[pipeline];
+  if (!cancelledStage) return { modo: 'omitir' };
+
+  return { modo: 'cancelar', cancelledStage: String(cancelledStage) };
+}
+
+/**
+ * REGLA PURA — ¿el contenido de este ticket lo maneja el sync quirúrgico y no
+ * el re-snapshot masivo? (PLAN §2.2: el motor manda sobre la ESTRUCTURA).
+ * Sólo tickets MANUALES no notificados, y sólo bajo la flag.
+ */
+export function debeOmitirResnapshot(ticket) {
+  return etapaUnicaEnabled() && esTicketManual(ticket) && isTicketEngineManaged(ticket);
+}
+
+/**
+ * REGLA PURA — ¿hay que dejarle la etapa como está aunque no coincida con la
+ * que le tocaría por el bucket del negocio? Sí cuando ya está en «Próximos a
+ * facturar»: la etapa no retrocede (migrados, espejo UY, promoción a mano).
+ */
+export function debeConservarEtapa(ticket) {
+  if (!etapaUnicaEnabled() || !PROXIMOS_A_FACTURAR_STAGE) return false;
+  return String(ticket?.properties?.hs_pipeline_stage || '') === String(PROXIMOS_A_FACTURAR_STAGE);
+}
+
+/**
+ * EL MOTOR NO BORRA (PLAN §2.4). Aplica resolveRetiroDeTicket.
+ *
+ * @returns {Promise<{retirado:boolean, cancelado:boolean}>}
+ */
+async function retirarTicket(ticket, { motivo, dealId = null, lineItemId = null, contexto = '' }) {
+  const ticketId = ticket?.id;
+  const { modo, cancelledStage } = resolveRetiroDeTicket(ticket);
+  const pipeline = String(ticket?.properties?.hs_pipeline || '');
+
+  if (modo === 'archivar') {
+    await deleteTicket(ticketId);
+    return { retirado: true, cancelado: false };
+  }
+
+  if (modo === 'omitir') {
+    logger.warn(
+      { module: 'phaseP', fn: 'retirarTicket', dealId, lineItemId, ticketId, pipeline, contexto },
+      'Pipeline sin etapa CANCELADO conocida: el ticket sobrante NO se toca (el motor no borra)'
+    );
+    return { retirado: false, cancelado: false };
+  }
+
+  await updateTicket(ticketId, {
+    hs_pipeline_stage: String(cancelledStage),
+    motivo_cancelacion_del_ticket: motivo,
+  });
+
+  logger.info(
+    { module: 'phaseP', fn: 'retirarTicket', dealId, lineItemId, ticketId, pipeline, cancelledStage, contexto },
+    'Ticket sobrante CANCELADO por el motor (no archivado)'
+  );
+  return { retirado: true, cancelado: true };
 }
 
 async function updateLineItemLastGeneratedAt(lineItemId) {
@@ -649,7 +870,7 @@ export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
     if (lik) validLiks.add(String(lik).trim());
   }
 
-  await cleanupOrphanForecastTicketsForDeal({ dealId, validLiks });
+  await cleanupOrphanForecastTicketsForDeal({ dealId, validLiks, deal });
 
   for (const li of lineItems || []) {
     try {
@@ -853,14 +1074,40 @@ export async function runPhaseP({ deal, lineItems, writeBuffer = null }) {
         { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, lik: lineItemKey, desiredCount, count: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null },
         'Fechas deseadas para line item'
       );
-      const forecastTickets = allTickets.filter(isForecastTicket);
+      const forecastTickets = allTickets.filter(isManagedTicket);
 
-      // 3) Si desiredCount=0 → borrar SOLO forecast existentes
+      // 3) Si desiredCount=0 → retirar SOLO los que maneja el motor
+      //    (flag ON: cancelar y avisar; flag OFF: borrar, como siempre)
       if (desiredCount === 0) {
         if (forecastTickets.length) {
+          const cancelados = [];
           for (const t of forecastTickets) {
-            await deleteTicket(t.id);
+            const r = await retirarTicket(t, {
+              motivo: 'El elemento de pedido ya no tiene fechas de facturación pendientes',
+              dealId,
+              lineItemId: li.id,
+              contexto: 'desired_count_0',
+            });
+            if (!r.retirado) continue;
             deleted++;
+            if (r.cancelado) {
+              cancelados.push({
+                ticketId: String(t.id),
+                fecha: fechaDelTicket(t) || null,
+                ownerId: t?.properties?.hubspot_owner_id || null,
+              });
+            }
+          }
+          if (cancelados.length) {
+            await notifyTicketsCancelledByEngine({
+              dealId,
+              dealName: deal?.properties?.dealname || null,
+              dealOwnerId: deal?.properties?.hubspot_owner_id || null,
+              lineItemName: p.name || null,
+              lineItemId: li.id,
+              cancelados,
+              motivo: 'El elemento de pedido ya no tiene fechas de facturación pendientes',
+            });
           }
           await updateLineItemLastGeneratedAt(li.id);
         }
@@ -902,27 +1149,38 @@ for (const t of allTickets) {
         const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
         if (!k) continue;
 
-        if (isForecastTicket(t)) {
+        if (isManagedTicket(t)) {
           if (existingForecastByKey.has(k)) {
-            // Duplicado forecast para la misma key (ej: cambio de dealstage generó
-            // un segundo ticket en distinto stage sin borrar el anterior).
-            // Lo eliminamos aquí para que el paso 6 trabaje con un único canónico.
+            // Duplicado para la misma key (ej: cambio de dealstage generó un
+            // segundo ticket en distinto stage sin retirar el anterior). Se
+            // retira acá para que el paso 6 trabaje con un único canónico.
+            // SIN aviso a propósito: la fecha sigue viva en el ticket que queda
+            // — avisar "se canceló" sería engañoso (§2.4 es para lo que sobra).
             try {
-              await deleteTicket(t.id);
-              deleted++;
-              logger.info(
-                { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, key: k },
-                'Ticket forecast duplicado eliminado (misma key, stage distinto)'
-              );
+              const r = await retirarTicket(t, {
+                motivo: 'Duplicado del cronograma: ya existe otro ticket para esa misma fecha',
+                dealId,
+                lineItemId: li.id,
+                contexto: 'duplicado_misma_key',
+              });
+              if (r.retirado) {
+                deleted++;
+                logger.info(
+                  { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, key: k, cancelado: r.cancelado },
+                  'Ticket duplicado retirado (misma key, stage distinto)'
+                );
+              }
             } catch (err) {
               logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
             }
           } else {
             existingForecastByKey.set(k, t);
           }
-        } else {
+        } else if (protegeSuClave(t)) {
           if (!existingProtectedByKey.has(k)) existingProtectedByKey.set(k, t);
         }
+        // else: cancelado por el motor / por la pérdida del negocio → ni lo
+        // maneja ni protege su fecha: esa fecha se puede volver a armar (§2.4).
 
         // Indexar por of_ticket_key explícito independientemente del LIK
         const explicitKey = String(t?.properties?.of_ticket_key || '').trim();
@@ -941,7 +1199,7 @@ for (const t of allTickets) {
         if (!existingForecast) {
           const existingByKey = existingByTicketKey.get(key);
           const foundProtected = existingProtected ||
-            (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+            (existingByKey && protegeSuClave(existingByKey) ? existingByKey : null);
 
           if (foundProtected) {
             const storedLik = String(foundProtected?.properties?.of_line_item_key || '').trim();
@@ -1024,17 +1282,26 @@ for (const t of allTickets) {
         {
           const existingByKey = existingByTicketKey.get(key);
           const foundProtected = existingProtected ||
-            (existingByKey && !isForecastTicket(existingByKey) ? existingByKey : null);
+            (existingByKey && protegeSuClave(existingByKey) ? existingByKey : null);
 
           if (foundProtected) {
             logger.info(
               { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, key, forecastTicketId: existingForecast.id, protectedTicketId: foundProtected.id },
-              'Forecast redundante eliminado: key ya cubierta por ticket protegido'
+              'Ticket redundante: la key ya está cubierta por un ticket protegido'
             );
+            // Sin aviso a propósito: la fecha sigue cubierta por el protegido,
+            // no se está perdiendo nada del cronograma.
             try {
-              await deleteTicket(existingForecast.id);
-              deleted++;
-              changed = true;
+              const r = await retirarTicket(existingForecast, {
+                motivo: 'Redundante: esa fecha ya está cubierta por un ticket notificado o cerrado',
+                dealId,
+                lineItemId: li.id,
+                contexto: 'redundante_key_protegida',
+              });
+              if (r.retirado) {
+                deleted++;
+                changed = true;
+              }
             } catch (err) {
               logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: existingForecast?.id, err }, 'unit_failed');
             }
@@ -1051,8 +1318,25 @@ for (const t of allTickets) {
           patch.hs_pipeline = String(hsPipeline);
         }
 
-        if (String(existing?.properties?.hs_pipeline_stage || '') !== String(targetStage)) {
-          patch.hs_pipeline_stage = String(targetStage);
+        // La etapa NUNCA retrocede desde «Próximos a facturar» (flag ON).
+        // El ticket llega a la etapa única por tres caminos legítimos que el
+        // motor no puede deshacer: la migración deja ahí a los manuales
+        // (promoverManualForecast.mjs), el espejo UY se promueve a propósito
+        // para que el admin lo revise (mirrorUtils.js:232-238) y administración
+        // lo mueve a mano. Sin este guard, un negocio en bucket 25/50/75 lo
+        // arrastraría de vuelta a forecast en cada pasada (hallazgo rojo #4).
+        const stageActual = String(existing?.properties?.hs_pipeline_stage || '');
+        const yaEnEtapaUnica = debeConservarEtapa(existing);
+
+        if (stageActual !== String(targetStage)) {
+          if (yaEnEtapaUnica) {
+            logger.debug(
+              { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: existing.id, stageActual, targetStage },
+              'Ticket ya en «Próximos a facturar»: la etapa no retrocede'
+            );
+          } else {
+            patch.hs_pipeline_stage = String(targetStage);
+          }
         }
 
         if (!String(existing?.properties?.of_ticket_key || '').trim()) {
@@ -1069,7 +1353,22 @@ for (const t of allTickets) {
         const ticketSnapshotMod = String(existing?.properties?.of_snapshot_source_modified || '').trim();
         const liLastMod = String(p.hs_lastmodifieddate || '').trim();
 
-        if (liLastMod && liLastMod !== ticketSnapshotMod) {
+        // EL MOTOR MANDA SOBRE LA ESTRUCTURA, NO SOBRE EL CONTENIDO (§2.2).
+        // Bajo la flag, el re-snapshot deja de escribir la hoja entera en los
+        // tickets MANUALES no notificados: ahí manda la edición a mano, y el
+        // contenido se propaga renglón por renglón desde el line item vía el
+        // sync quirúrgico (syncLineItemPropToTicket). Los automáticos y todo lo
+        // que ya cruzó la frontera siguen igual.
+        const contenidoLoManejaElSync = debeOmitirResnapshot(existing);
+
+        if (contenidoLoManejaElSync && liLastMod && liLastMod !== ticketSnapshotMod) {
+          logger.info(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: existing.id },
+            'Re-snapshot OMITIDO: ticket manual no notificado — el contenido lo maneja el sync quirúrgico'
+          );
+        }
+
+        if (!contenidoLoManejaElSync && liLastMod && liLastMod !== ticketSnapshotMod) {
           const freshProps = await buildTicketFullProps({
             deal,
             lineItem: li,
@@ -1105,7 +1404,10 @@ for (const t of allTickets) {
         }
       } 
 
-      // 7) Borrar sobrantes: SOLO forecast editables cuyo key no esté en desiredKeys
+      // 7) Sobrantes: los que maneja el motor y cuya key no está en desiredKeys.
+      //    Flag OFF: se archivan (comportamiento de siempre).
+      //    Flag ON : SE CANCELAN Y SE AVISA — el motor no borra (§2.4).
+      const sobrantesCancelados = [];
       for (const t of forecastTickets) {
         const k = getTicketKeyOrDerive({ ticket: t, dealId, lineItemKey });
         if (!k) continue;
@@ -1113,14 +1415,46 @@ for (const t of allTickets) {
           try {
             logger.info(
               { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, ticketId: t.id, ticketKey: k },
-              'Eliminando ticket forecast sobrante'
+              'Retirando ticket sobrante del cronograma'
             );
-            await deleteTicket(t.id);
+            const r = await retirarTicket(t, {
+              motivo: 'El cronograma se rearmó y esta fecha ya no corresponde',
+              dealId,
+              lineItemId: li.id,
+              contexto: 'sobrante_paso7',
+            });
+            if (!r.retirado) continue;
             deleted++;
             changed = true;
+            if (r.cancelado) {
+              sobrantesCancelados.push({
+                ticketId: String(t.id),
+                fecha: fechaDelTicket(t) || null,
+                ownerId: t?.properties?.hubspot_owner_id || null,
+              });
+            }
           } catch (err) {
             logger.error({ module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li?.id, ticketId: t?.id, err }, 'unit_failed');
           }
+        }
+      }
+
+      if (sobrantesCancelados.length) {
+        try {
+          await notifyTicketsCancelledByEngine({
+            dealId,
+            dealName: deal?.properties?.dealname || null,
+            dealOwnerId: deal?.properties?.hubspot_owner_id || null,
+            lineItemName: p.name || null,
+            lineItemId: li.id,
+            cancelados: sobrantesCancelados,
+            motivo: 'El cronograma del elemento de pedido se rearmó (cambió la frecuencia, el plazo o la fecha de inicio)',
+          });
+        } catch (err) {
+          logger.warn(
+            { module: 'phaseP', fn: 'runPhaseP', dealId, lineItemId: li.id, err },
+            'Aviso de tickets cancelados falló (no bloquea)'
+          );
         }
       }
 

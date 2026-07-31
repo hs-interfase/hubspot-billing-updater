@@ -213,8 +213,12 @@ export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = 
 // Sólo bajo ETAPA_UNICA_ENABLED. Reemplaza, para el 85%/95%, la búsqueda por
 // ETAPA de ticket vencida: en su lugar busca NEGOCIOS en esas etapas de deal
 // (85/95/100 — BILLING_ACTIVE_DEAL_STAGES) y verifica que tengan algún ticket
-// en «Próximos a facturar». Sin filtro de fecha: la señal ya no es "vencido",
-// es "negocio ganado con cronograma vivo en la etapa única".
+// en «Próximos a facturar».
+//
+// ⚠️ ACÁ VA SIN FILTRO DE FECHA, a propósito (decisión usuaria 30-jul): el del
+// fin de semana es el barrido COMPLETO de consistencia, la señal es "negocio
+// ganado con cronograma vivo en la etapa única", no "vencido". El que sí acota
+// a lo vencido es el cron DIARIO (cronDealsBatch, `soloVencidos: true`).
 // Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2 / TANDA A punto 1.
 // client/withRetryFn/findDealIdsWithTicketInStageFn inyectables sólo para tests.
 export async function searchGanadoDealsWithProximosTickets({ after, limit }, {

@@ -154,3 +154,59 @@ test('sanity: etapaUnicaEnabled queda apagada al cerrar la suite', () => {
   delete process.env.ETAPA_UNICA_ENABLED;
   assert.equal(etapaUnicaEnabled(), false);
 });
+
+// ─── AJUSTE 30-jul (remate de la TANDA A): el filtro de fecha en S5 ──────────
+// El cron DIARIO acota S5 a lo vencido (fecha_resolucion_esperada <= hoy): es
+// la red de seguridad de siempre, y sin el filtro traería casi toda la cartera
+// ganada en cada corrida. El de FIN DE SEMANA va sin filtro, a propósito: ese
+// es el barrido completo de consistencia.
+
+function clientQueEspia(filtrosPorLlamada) {
+  return {
+    crm: {
+      deals: { searchApi: { doSearch: async () => ({ results: [{ id: 'D1' }], paging: {} }) } },
+      tickets: { searchApi: { doSearch: async (body) => {
+        filtrosPorLlamada.push(body.filterGroups[0].filters.map(f => f.propertyName));
+        return { results: [{ properties: { of_deal_id: 'D1' } }] };
+      } } },
+    },
+  };
+}
+
+test('cronDealsBatch (diario): S5 filtra por fecha vencida', async () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+  const filtros = [];
+  const r = await cronDealsBatch.searchGanadoDealsWithProximosTickets(
+    { after: null, limit: 10 },
+    { client: clientQueEspia(filtros), withRetryFn }
+  );
+  assert.deepEqual(r.results, [{ properties: { of_deal_id: 'D1' } }]);
+  assert.equal(filtros.length, 1);
+  assert.ok(filtros[0].includes('fecha_resolucion_esperada'), `filtros: ${filtros[0].join(',')}`);
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('cronWeekendFull (fin de semana): S5 va SIN filtro de fecha — barrido completo', async () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+  const filtros = [];
+  const r = await cronWeekendFull.searchGanadoDealsWithProximosTickets(
+    { after: null, limit: 10 },
+    { client: clientQueEspia(filtros), withRetryFn }
+  );
+  assert.deepEqual(r.results, [{ properties: { of_deal_id: 'D1' } }]);
+  assert.equal(filtros.length, 1);
+  assert.equal(filtros[0].includes('fecha_resolucion_esperada'), false, `filtros: ${filtros[0].join(',')}`);
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('cronDealsBatch: findDealIdsWithTicketInStage sin soloVencidos no agrega el filtro', async () => {
+  const filtros = [];
+  const client = {
+    crm: { tickets: { searchApi: { doSearch: async (body) => {
+      filtros.push(body.filterGroups[0].filters.map(f => f.propertyName));
+      return { results: [] };
+    } } } },
+  };
+  await cronDealsBatch.findDealIdsWithTicketInStage(['D1'], 'STAGE_PROXIMOS', { client, withRetryFn });
+  assert.equal(filtros[0].includes('fecha_resolucion_esperada'), false);
+});

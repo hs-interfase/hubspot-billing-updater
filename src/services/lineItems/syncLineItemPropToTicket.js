@@ -22,7 +22,8 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { extractLineItemSnapshots } from '../snapshotService.js';
 import { updateTicket } from '../tickets/ticketService.js';
-import { PROXIMOS_A_FACTURAR_STAGE, TICKET_PIPELINE } from '../../config/constants.js';
+import { PROXIMOS_A_FACTURAR_STAGE, TICKET_PIPELINE, isEngineManagedStage } from '../../config/constants.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 import { findMirrorLineItem } from '../mirrorUtils.js';
@@ -217,7 +218,17 @@ export async function syncLineItemPropToTickets({
     const pipeline = String(t?.properties?.hs_pipeline || '');
     // SOLO "Próximos a Facturar" del pipeline MANUAL (definición usuaria 14-jul).
     // Forecast → lo cubre el re-snapshot del cron; automático no se edita; emitido congelado.
-    if (!(pipeline === TICKET_PIPELINE && stage === PROXIMOS_A_FACTURAR_STAGE)) { stats.skipped++; continue; }
+    //
+    // ETAPA ÚNICA (flag ON): alcanza TODO lo no notificado del pipeline manual
+    // — «Próximos a facturar» y los forecast, incluidos los viejos 85/95. Bajo
+    // la misma flag el re-snapshot del cron ya NO reescribe esos tickets
+    // (phasep.js §2.2), así que este sync pasa a ser el único camino por el que
+    // el contenido del line item llega al ticket: si se dejara sólo en
+    // «Próximos», el tramo forecast se quedaría con datos viejos.
+    const alcanzaAlTicket = etapaUnicaEnabled()
+      ? (pipeline === TICKET_PIPELINE && isEngineManagedStage(stage))
+      : (pipeline === TICKET_PIPELINE && stage === PROXIMOS_A_FACTURAR_STAGE);
+    if (!alcanzaAlTicket) { stats.skipped++; continue; }
 
     // Patch mínimo: solo las claves cuyo valor difiere.
     const patch = {};

@@ -7,10 +7,13 @@
 // este aviso. Ver definitivos/PLAN_proximos_cambios_tickets_2026-07-29.md
 // TANDA A punto 3 / §2.2.
 //
-// ⚠️ Junto con el resumen al cierre ganado (dealWonScheduleSummaryAlert.js),
-// este aviso reemplaza al workflow 1771474299 de PROD (dispara con «Próximos a
-// facturar» y notifica al responsable). Apagar ese workflow el día que se
-// prenda ETAPA_UNICA_ENABLED, o llegan dos avisos por ticket.
+// ⚠️ Este es el ÚNICO aviso al responsable que manda el motor. El resumen al
+// cierre ganado que había implementado la TANDA A se SACÓ el 30-jul (decisión
+// usuaria: lo arma ella con un workflow de HubSpot), junto con la prop
+// `of_resumen_cronograma_enviado`, que ya no va.
+// Sigue en pie apagar el workflow 1771474299 de PROD (dispara con «Próximos a
+// facturar» y notifica al responsable) el día que se prenda
+// ETAPA_UNICA_ENABLED, o llegan dos avisos por ticket.
 //
 // Idempotencia: prop booleana en el TICKET (AVISO_1MES_ENVIADO_PROP). El
 // caller (phase2.js) decide cuándo llamar esto (una vez por line item y

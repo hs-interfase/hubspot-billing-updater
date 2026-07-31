@@ -127,3 +127,43 @@ test('sin lineItemKey o sin ymd → no-op (guard de params)', async () => {
 
   delete process.env.ETAPA_UNICA_ENABLED;
 });
+
+// ─── TANDA B punto 7: la ventana de 30 días deja de mover la etapa ───────────
+// Bajo ETAPA_UNICA_ENABLED no hay a dónde promover (la etapa es una sola y el
+// ticket nace ahí), así que promoteManualForecastTicketToProximos sale por
+// arriba SIN tocar HubSpot. El aviso individual de la TANDA A no se toca: es
+// otro camino, y sigue probado por los tests de arriba.
+
+const { promoteManualForecastTicketToProximos } = await import('../phases/phase2.js');
+
+test('flag ON: la promoción de etapa no ocurre (ni siquiera busca el ticket)', async () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+
+  const r = await promoteManualForecastTicketToProximos({
+    dealId: 'D1',
+    dealStage: 'closedwon',
+    lineItemKey: 'LIK1',
+    nextBillingDate: '2026-09-01',
+    lineItemId: 'LI1',
+  });
+
+  assert.deepEqual(r, { moved: false, reason: 'etapa_unica_sin_promocion' });
+
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('flag OFF (default): el guard nuevo no se interpone — sigue el camino de siempre', async () => {
+  delete process.env.ETAPA_UNICA_ENABLED;
+
+  // Sin lineItemKey corta antes de tocar la red: alcanza para ver que NO salió
+  // por el guard de etapa única.
+  const r = await promoteManualForecastTicketToProximos({
+    dealId: 'D1',
+    dealStage: 'closedwon',
+    lineItemKey: '',
+    nextBillingDate: '2026-09-01',
+    lineItemId: 'LI1',
+  });
+
+  assert.deepEqual(r, { moved: false, reason: 'missing_line_item_key' });
+});

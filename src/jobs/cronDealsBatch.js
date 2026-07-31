@@ -217,9 +217,15 @@ export async function searchOverdueForecasts({ after, limit }, { client = hubspo
 // Paginado completo: junta los of_deal_id de los tickets en `stageId` cuyo
 // of_deal_id esté en `dealIds` (chunks de <=100, límite del operador IN).
 // client/withRetryFn inyectables sólo para tests (defaults = producción).
-export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = hubspotClient, withRetryFn = withRetry } = {}) {
+export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = hubspotClient, withRetryFn = withRetry, soloVencidos = false } = {}) {
   const found = new Set();
   if (!dealIds.length || !stageId) return found;
+
+  // soloVencidos: acota a los tickets cuya fecha de facturación ya llegó. Mismo
+  // criterio y mismo formato (epoch-ms) que searchOverdueForecasts.
+  const filtroVencido = soloVencidos
+    ? [{ propertyName: 'fecha_resolucion_esperada', operator: 'LTE', value: String(Date.now()) }]
+    : [];
 
   for (let i = 0; i < dealIds.length; i += 100) {
     const chunk = dealIds.slice(i, i + 100);
@@ -231,6 +237,7 @@ export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = 
             filters: [
               { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stageId },
               { propertyName: 'of_deal_id', operator: 'IN', values: chunk },
+              ...filtroVencido,
             ],
           }],
           properties: ['of_deal_id'],
@@ -252,14 +259,20 @@ export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = 
 // Sólo bajo ETAPA_UNICA_ENABLED. Reemplaza, para el 85%/95%, la búsqueda por
 // ETAPA de ticket vencida: en su lugar busca NEGOCIOS en esas etapas de deal
 // (85/95/100 — BILLING_ACTIVE_DEAL_STAGES) y verifica que tengan algún ticket
-// en «Próximos a facturar». Sin filtro de fecha: la señal ya no es "vencido",
-// es "negocio ganado con cronograma vivo en la etapa única".
+// en «Próximos a facturar».
+//
+// ⚠️ EN EL CRON DIARIO VA CON `soloVencidos: true` (decisión usuaria 30-jul):
+// el diario es la red de seguridad de siempre, acotada a lo vencido. Sin ese
+// filtro traería casi toda la cartera ganada en cada corrida. El barrido
+// completo de consistencia es el del fin de semana (cronWeekendFull), que sí
+// corre sin filtro.
 // Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2 / TANDA A punto 1.
 // client/withRetryFn/findDealIdsWithTicketInStageFn inyectables sólo para tests.
 export async function searchGanadoDealsWithProximosTickets({ after, limit }, {
   client = hubspotClient,
   withRetryFn = withRetry,
   findDealIdsWithTicketInStageFn = findDealIdsWithTicketInStage,
+  soloVencidos = true,
 } = {}) {
   const dealStages = [...BILLING_ACTIVE_DEAL_STAGES].filter(Boolean);
   if (!dealStages.length || !PROXIMOS_A_FACTURAR_STAGE) {
@@ -286,7 +299,7 @@ export async function searchGanadoDealsWithProximosTickets({ after, limit }, {
     return { results: [], paging: dealsResp?.paging || {} };
   }
 
-  const dealIdsConProximos = await findDealIdsWithTicketInStageFn(dealIds, PROXIMOS_A_FACTURAR_STAGE, { client, withRetryFn });
+  const dealIdsConProximos = await findDealIdsWithTicketInStageFn(dealIds, PROXIMOS_A_FACTURAR_STAGE, { client, withRetryFn, soloVencidos });
 
   const results = dealIds
     .filter(id => dealIdsConProximos.has(id))

@@ -22,7 +22,8 @@ import {
   BILLING_TICKET_FORECAST_95,
   FORECAST_MANUAL_STAGES,
   DEAL_STAGE_FINALIZADO,
-  PROXIMOS_A_FACTURAR_STAGE
+  PROXIMOS_A_FACTURAR_STAGE,
+  isCancelledTicketStage,
 } from '../config/constants.js';
 import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
 import {
@@ -112,7 +113,10 @@ async function findTicketForReminder(ticketKey, client) {
     () => client.crm.tickets.searchApi.doSearch(body),
     { module: 'phase2', fn: 'findTicketForReminder', ticketKey }
   );
-  return (resp?.results || [])[0] || null;
+  const results = resp?.results || [];
+  // Bajo la etapa única, una fecha puede tener un ticket CANCELADO por el motor
+  // y otro vivo re-armado después (§2.4): el aviso va al vivo.
+  return results.find(t => !isCancelledTicketStage(t?.properties?.hs_pipeline_stage)) || results[0] || null;
 }
 
 /**
@@ -188,13 +192,37 @@ async function moveTicketToStage(ticketId, stageId) {
  * la ventana editable por admin. NO es "Listo para Facturar" (TICKET_STAGES.READY):
  * la emisión sigue requiriendo confirmación del admin.
  */
-async function promoteManualForecastTicketToProximos({
+export async function promoteManualForecastTicketToProximos({
   dealId,
   dealStage,
   lineItemKey,
   nextBillingDate,
   lineItemId,
 }) {
+  // ETAPA ÚNICA (flag ON): LA VENTANA DE 30 DÍAS DEJA DE SER UN CAMBIO DE ETAPA.
+  //
+  // Ya no hay a dónde promover: del cierre ganado en adelante la etapa es una
+  // sola y el ticket NACE en «Próximos a facturar» (resolveForecastStage en
+  // phasep.js). Los 30 días sobreviven sólo como disparador del AVISO
+  // individual al responsable — maybeSendIndividualBillingReminder, que se
+  // llama ANTES que esta función en los dos call sites y no se toca acá.
+  //
+  // Efecto lateral asumido: un negocio que TODAVÍA no está ganado (buckets
+  // 25/50/75) deja de tener su ticket movido a «Próximos» por cercanía de
+  // fecha. Es coherente con lo que ya avisa el motor en ese caso ("no se
+  // facturará hasta ganar el negocio", warnFacturacionDealNoGanado) y evita el
+  // ping-pong con Phase P, que bajo la flag maneja «Próximos» y lo devolvería a
+  // su etapa forecast en la misma corrida.
+  //
+  // Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2.2 y §2.6.
+  if (etapaUnicaEnabled()) {
+    logger.debug(
+      { module: 'phase2', fn: 'promoteManualForecastTicketToProximos', dealId, lineItemId, nextBillingDate },
+      'Etapa única: sin promoción de etapa (la ventana de 30 días es sólo aviso)'
+    );
+    return { moved: false, reason: 'etapa_unica_sin_promocion' };
+  }
+
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
   const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, nextBillingDate);
@@ -368,7 +396,14 @@ export async function runPhase2({ deal, lineItems }) {
       // antes de que Phase 2 corra en el mismo cron run.
       const mirrorLineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
       if (mirrorLineItemKey) {
-        const forecastStageIds = [...FORECAST_MANUAL_STAGES];
+        // Bajo ETAPA_UNICA_ENABLED el ticket manual del espejo vive en «Próximos
+        // a facturar» (nace ahí, o lo promovió mirrorUtils a propósito): si el
+        // scan siguiera mirando sólo las etapas forecast, este line item se
+        // quedaría sin el aviso individual de 1 mes. La promoción de etapa ya no
+        // ocurre bajo la flag — acá sólo se amplía a qué tickets se les avisa.
+        const forecastStageIds = etapaUnicaEnabled() && PROXIMOS_A_FACTURAR_STAGE
+          ? [...FORECAST_MANUAL_STAGES, PROXIMOS_A_FACTURAR_STAGE]
+          : [...FORECAST_MANUAL_STAGES];
         let searchResp;
         try {
           searchResp = await withRetry(
