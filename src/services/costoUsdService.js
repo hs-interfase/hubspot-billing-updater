@@ -49,22 +49,54 @@ export async function ensureDealDolar(deal) {
 
   const necesitaInicial = !(actual > 0);
   const necesitaCierre = enGanado && !cierreYaAsignado;
+
+  // `tc_pesos` (30-jul, pedido Paola 21-jul): TC INFORMATIVO a pesos — UYU, o PYG si el
+  // país operativo es Paraguay — SIEMPRE, aunque el negocio esté en USD. Se congela en
+  // los MISMOS momentos que `dolar` (alta y cierre-ganado) para que el reporte muestre
+  // el TC vigente al día que corresponda y no el de hoy.
+  // 🔴 NO es divisor y NO reemplaza a `dolar`: `monto_usd` = price×qty ÷ `dolar` y
+  // hs_cost_of_goods_sold = costo_total_usd × `dolar`. En un negocio USD `dolar` vale 1
+  // y DEBE seguir valiendo 1 — escribirle acá el TC a pesos rompería ambos cálculos.
+  // ⚠️ Se escribe SÓLO en esos dos momentos, nunca "para rellenar el que falta": completar
+  // un negocio viejo con la cotización de HOY estamparía un valor de hoy haciéndolo pasar
+  // por congelado. Los negocios previos quedan vacíos a propósito — el reporte ya cae al
+  // TC del día sin afirmar que sea el histórico. Poblarlos es un backfill aparte, que debe
+  // leer `exchange_rates` por la fecha de congelamiento.
+  const monedaPesos = String(dp.pais_operativo || '').trim().toLowerCase() === 'paraguay' ? 'PYG' : 'UYU';
+
   if (!necesitaInicial && !necesitaCierre) return { dolar: actual, updated: false };
 
-  const nuevo = await getDolar(cur);
-  if (!(nuevo > 0)) {
-    logger.warn({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, cur },
-      '[COSTO_USD] sin cotización — se mantiene el dólar actual (o queda vacío)');
+  const properties = {};
+
+  if (necesitaInicial || necesitaCierre) {
+    const nuevo = await getDolar(cur);
+    if (nuevo > 0) {
+      properties.dolar = String(nuevo);
+      if (enGanado) properties.dolar_cierre_asignado = 'true';
+    } else {
+      logger.warn({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, cur },
+        '[COSTO_USD] sin cotización — se mantiene el dólar actual (o queda vacío)');
+    }
+  }
+
+  // Se congela junto con el dólar, en el mismo evento (alta o cierre-ganado).
+  {
+    const tcPesos = await getDolar(monedaPesos);
+    if (tcPesos > 0) properties.tc_pesos = String(tcPesos);
+    else logger.warn({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, monedaPesos },
+      '[COSTO_USD] sin cotización a pesos — tc_pesos queda como estaba');
+  }
+
+  if (!Object.keys(properties).length) {
     return { dolar: actual > 0 ? actual : null, updated: false };
   }
 
-  const properties = { dolar: String(nuevo) };
-  if (enGanado) properties.dolar_cierre_asignado = 'true';
   await hubspotClient.crm.deals.basicApi.update(String(deal.id), { properties });
   deal.properties = { ...dp, ...properties };
-  logger.info({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, cur, dolar: nuevo, evento: necesitaCierre ? 'cierre_ganado' : 'inicial' },
-    `[COSTO_USD] dólar del negocio ${necesitaCierre ? 're-asignado al cierre' : 'asignado'}: ${nuevo} (${cur})`);
-  return { dolar: nuevo, updated: true };
+  const dolarFinal = properties.dolar != null ? Number(properties.dolar) : actual;
+  logger.info({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, cur, dolar: dolarFinal, tcPesos: properties.tc_pesos, monedaPesos, evento: necesitaCierre ? 'cierre_ganado' : 'inicial' },
+    `[COSTO_USD] dólar del negocio ${necesitaCierre ? 're-asignado al cierre' : 'asignado'}: ${dolarFinal} (${cur})${properties.tc_pesos ? ` · tc_pesos=${properties.tc_pesos} (${monedaPesos})` : ''}`);
+  return { dolar: dolarFinal > 0 ? dolarFinal : null, updated: true };
 }
 
 /**

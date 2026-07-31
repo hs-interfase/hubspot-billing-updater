@@ -132,7 +132,15 @@ const frecuenciaDisplay = (v) => (safe(v) === 'Único' ? 'Pago único' : safe(v)
 // prioridad como TC sellado); los tickets YA FACTURADOS traen su propio TC real de Nodum
 // (prop `dolar` del ticket, pisada al facturar). Cuando el dólar del negocio esté cargado,
 // este fallback al TC del día deja de aparecer solo.
-function tcInformativo(tcSellado, pais, rates) {
+// Orden de preferencia (decisión usuaria 30-jul):
+//   1. `tc_pesos` del NEGOCIO — TC a pesos (UYU/PYG por país operativo) CONGELADO en el
+//      alta y en el cierre-ganado. Es la respuesta al pedido de Paola ("el TC vigente al
+//      día que corresponda", 21-jul). Lo escribe `ensureDealDolar`.
+//   2. El TC sellado de la fila, si NO es 1 (un negocio en pesos ya lo trae bien).
+//   3. El TC de HOY — último recurso para negocios viejos sin `tc_pesos` todavía.
+// 🔴 Esta columna es INFORMATIVA: nunca multiplica ni divide montos.
+function tcInformativo(tcSellado, pais, rates, tcPesosDeal) {
+  if (tcPesosDeal != null && tcPesosDeal > 0) return tcPesosDeal;
   if (tcSellado != null && tcSellado !== 1) return tcSellado;
   const dia = safe(pais).toLowerCase() === 'paraguay' ? rates?.PYG : rates?.UYU;
   return dia != null ? dia : tcSellado;
@@ -141,18 +149,42 @@ function tcInformativo(tcSellado, pais, rates) {
 // ── Intercompany (definición Paola 22-jul) ──────────────────────────────────
 // "Dentro de Uruguay se facturan entre sí": el CLIENTE que recibe la factura es ISA
 // Uruguay o Interfase Uruguay y la EMITE otra empresa del grupo. Detección por NOMBRE
-// del Cliente Factura contra el registro de empresas (⚠️ si esas empresas todavía no
-// existen en el CRM, ninguna fila marca SI — es dato, no bug). Ajustable sin código
-// con EXPORT_INTERCO_CLIENTES (nombres separados por ;).
+// del Cliente Factura contra el registro de empresas. Ajustable sin código con
+// EXPORT_INTERCO_CLIENTES (nombres separados por ;).
+//
+// ⚠️ CORREGIDO 30-jul: el default viejo era 'ISA URUGUAY;INTERFASE URUGUAY' y NO matcheaba
+// NUNCA. Esas dos empresas SÍ existen en el CRM, pero con OTRO nombre — "ISA LTDA" y
+// "INTERFASE S.A." (verificado por API). Como el match es por substring, la columna
+// quedaba en NO incluso en casos genuinos. Los nombres viejos quedan como alias
+// inofensivos por si algún día las renombran.
 const normEmp = (s) => safe(s).toUpperCase().normalize('NFD')
   .replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 
-const INTERCO_CLIENTES_UY = (process.env.EXPORT_INTERCO_CLIENTES || 'ISA URUGUAY;INTERFASE URUGUAY')
+// ⚠️ Los nombres DIFIEREN por portal (verificado por API 30-jul): en PROD la empresa es
+// "Interfase" a secas; en sandbox es "INTERFASE S.A.". El token corto 'INTERFASE' cubre
+// las dos (el match es por substring). ISA UY es "ISA LTDA" en sandbox y NO EXISTE aún
+// en PROD — hasta que se cree, ninguna fila con ISA UY de cliente puede marcar SI.
+const INTERCO_CLIENTES_UY = (process.env.EXPORT_INTERCO_CLIENTES
+  || 'ISA LTDA;ISA URUGUAY;INTERFASE')
+  .split(';').map((s) => normEmp(s)).filter(Boolean);
+
+// El match es por substring: un token corto de más (p.ej. 'ISA' solo) haría entrar
+// clientes ajenos como "INDUFAR CISA" → mantener los tokens largos.
+// Y las entidades del grupo en PARAGUAY NO son intercompany (la definición es UY↔UY):
+// se excluyen explícitamente en vez de depender de que el punto final de "INTERFASE S.A."
+// sea lo único que las separa de "INTERFASE S.A SUCURSAL PARAGUAY".
+const INTERCO_EXCLUIR = (process.env.EXPORT_INTERCO_EXCLUIR || 'PARAGUAY')
   .split(';').map((s) => normEmp(s)).filter(Boolean);
 
 function esFilaIntercompany(row) {
-  const cli = normEmp(row['Cliente Factura']);
+  // El cliente que RECIBE la factura: la empresa con etiqueta "Empresa Factura" si existe;
+  // si no, la Primary — que en ese caso ES el cliente facturado (la mayoría de los negocios
+  // sólo tienen Primary). ⚠️ Sin este fallback la detección moría acá: el caso real de PROD
+  // ("Portal Barbados", cliente Interfase, emite ISA UY) tiene la empresa como Primary(5),
+  // NO como Empresa Factura(9) → 'Cliente Factura' venía vacío y nunca marcaba (30-jul).
+  const cli = normEmp(row['Cliente Factura']) || normEmp(row['Cliente Beneficiario']);
   if (!cli) return false;
+  if (INTERCO_EXCLUIR.some((x) => cli.includes(x))) return false;
   const token = INTERCO_CLIENTES_UY.find((t) => cli.includes(t));
   if (!token) return false;
   // "la entidad facturadora es LA OTRA": si la emisora es la misma empresa que recibe,
@@ -207,7 +239,7 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
-  'dolar', 'tipo_de_venta',
+  'dolar', 'tc_pesos', 'tipo_de_venta',
   // condiciones_de_pago NO va acá: en el DEAL nunca existió (se pedía y HubSpot la
   // ignoraba en silencio → columna siempre vacía). Vive en el LINE ITEM (creada 23-jul).
 ];
@@ -443,6 +475,9 @@ function buildDealBase(deal, companies, ownerName) {
     'Intercompany': 'NO',
     // Dólar congelado del negocio (no es columna: la usan las filas como fallback del TC).
     '__dolarNegocio': safeNum(dp.dolar),
+    // TC informativo a pesos congelado en el negocio (30-jul). Las filas de TICKET no
+    // tienen el deal en scope, sólo dealBase → viaja por acá.
+    '__tcPesosNegocio': safeNum(dp.tc_pesos),
   };
 }
 
@@ -483,7 +518,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
   // del día (UYU; PYG si el país operativo es Paraguay). Sin dato → queda el sellado.
   const dealDolar = safeNum(deal.properties?.dolar);
   const tcSellado = dolarLi != null ? dolarLi : dealDolar;
-  const tc = tcInformativo(tcSellado, dealBase['País Operativo'], latestRates);
+  const tc = tcInformativo(tcSellado, dealBase['País Operativo'], latestRates, safeNum(deal.properties?.tc_pesos));
   // Columnas USD = props CALCULADAS de HubSpot (monto_usd/margen_usd usan el dólar asignado).
   // Fallback USD→valor en moneda (la fórmula monto_usd divide por `dolar`, que en USD puede faltar).
   const montoUSD = safeNum(lp.monto_usd) != null ? safeNum(lp.monto_usd) : (esUSD ? monto : null);
@@ -567,7 +602,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
   const tcSellado = safeNum(tp.dolar) != null
     ? safeNum(tp.dolar)
     : (safeNum(lp?.dolar) != null ? safeNum(lp?.dolar) : dealBase['__dolarNegocio']);
-  const tc = tcInformativo(tcSellado, safe(tp.of_pais_operativo) || dealBase['País Operativo'], latestRates);
+  const tc = tcInformativo(tcSellado, safe(tp.of_pais_operativo) || dealBase['País Operativo'], latestRates, dealBase['__tcPesosNegocio']);
 
   // Columnas USD = props CALCULADAS de HubSpot (usan el dólar sellado del ticket).
   const costoUSD = safeNum(tp.of_costo_usd) != null ? safeNum(tp.of_costo_usd) : (esUSD ? costo : null);
