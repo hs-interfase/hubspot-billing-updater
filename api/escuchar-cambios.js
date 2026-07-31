@@ -7,11 +7,16 @@ import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
 import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
 import {
+  esEventoTicketValor,
+  esTicketEditableParaValor,
   esEventoAssociationChange,
   rutearAssociationChangeDealCompany,
 } from '../src/utils/webhookRouteRules.js';
 
 const MODULE = 'escuchar-cambios';
+
+// Prop del ticket que apunta a su deal (misma que usan processUrgentTicket y recalcValorTotal)
+const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
 
 // ─── Helper: resolver dealId desde line item (para deduplicación en la cola) ─
 
@@ -36,6 +41,28 @@ async function getDealIdForLineItem(lineItemId) {
   }
 }
 
+// ─── Helper: info de ruteo de un ticket (deal + pipeline/stage para el guard) ─
+
+async function getTicketRoutingInfo(ticketId) {
+  try {
+    const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+      PROP_TICKET_DEAL_ID, 'hs_pipeline', 'hs_pipeline_stage',
+    ]);
+    const props = ticket?.properties || {};
+    return {
+      dealId: (props[PROP_TICKET_DEAL_ID] || '').trim() || null,
+      pipeline: props.hs_pipeline,
+      stage: props.hs_pipeline_stage,
+    };
+  } catch (err) {
+    logger.warn(
+      { module: MODULE, fn: 'getTicketRoutingInfo', ticketId, err: err?.message },
+      'No se pudo leer el ticket pre-enqueue, se resolverá en el worker'
+    );
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -50,7 +77,7 @@ export default async function handler(req, res) {
     const propertyValue = payload?.propertyValue;
     const eventId = payload?.eventId;
 
-    logger.info({ module: MODULE, fn: 'handler', objectId, objectType, propertyName, propertyValue, eventId }, 'Evento webhook recibido');
+    logger.info({ module: MODULE, fn: 'handler', objectId, objectType, propertyName, propertyValue, eventId, changeSource: payload?.changeSource }, 'Evento webhook recibido');
 
     // ====== RUTA 8: CAMBIO DE ASOCIACIÓN DEL NEGOCIO (empresas) ======
     // `deal.associationChange` NO trae `objectId` ni `propertyName`: el objeto que
@@ -125,20 +152,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ message: 'Property value not true, skipped' });
       }
 
-      if (objectType === 'line_item') {
-        const dealId = await getDealIdForLineItem(objectId);
-        const queueId = await enqueue({
-          source: 'escuchar-cambios',
-          objectType, objectId, propertyName, propertyValue,
-          dealId,
-          actionType: 'urgent_line_item',
-          priority: 1,
-          eventId,
-          rawPayload: payload,
-        });
-        return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_line_item' });
-
-      } else if (objectType === 'ticket') {
+      if (objectType === 'ticket') {
         // Tickets no tienen dealId directo para deduplicar, se encolan sin él
         const queueId = await enqueue({
           source: 'escuchar-cambios',
@@ -150,10 +164,12 @@ export default async function handler(req, res) {
           rawPayload: payload,
         });
         return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'urgent_ticket' });
-
-      } else {
-        return res.status(400).json({ error: `Unsupported object type: ${objectType}` });
       }
+
+      // Flujo "facturar ahora" de line item ELIMINADO (2026-07, control de cambios N°5).
+      // Responder 200 (no 4xx): HubSpot puede seguir mandando eventos de LI hasta que
+      // se quite la suscripción, y un 4xx provoca reintentos/deshabilitación del webhook.
+      return res.status(200).json({ message: 'facturar_ahora solo soportado en tickets, skipped', objectType });
     }
 
     // ====== RUTA 2: RECALCULACIÓN ======
@@ -271,6 +287,77 @@ export default async function handler(req, res) {
         rawPayload: payload,
       });
       return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId, action: 'valor_recalc' });
+    }
+
+    // ====== RUTA 5b: MONTOS DEL TICKET EDITABLE → RECALCULAR VALOR ======
+    // Para plan fijo / pago único el VALOR del deal = Σ subtotal_real de sus TICKETS
+    // (recalcValorTotal). Si el responsable corrige montos de un ticket editable
+    // (monto_unitario_real / cantidad_real / of_costo_usd / dolar), recalcular el VALOR.
+    // Guard anti-tormenta: el motor escribe estas mismas props en tickets FORECAST
+    // (re-snapshot masivo de phasep) → solo se encola si el ticket está en el pipeline
+    // manual y su etapa NO es forecast (ver src/utils/webhookRouteRules.js).
+    if (esEventoTicketValor(objectType, propertyName)) {
+      const info = await getTicketRoutingInfo(objectId);
+
+      if (info && !esTicketEditableParaValor(info)) {
+        return res.status(200).json({ message: 'Ticket no editable (forecast/automático), skipped', propertyName });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: info?.dealId ?? null,
+        actionType: 'valor_recalc',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, propertyName, dealId: info?.dealId ?? null, action: 'valor_recalc' });
+    }
+
+    // ====== RUTA 6: CASILLA CANCELAR TICKET ======
+    // Handler MÍNIMO (26-jul): el usuario marca `cancelar_ticket` en el ticket.
+    // Solo cubre el caso simple (ticket manual sin factura viva → etapa CANCELADO);
+    // NO toca factura, NO toca cupo, NO toca el espejo — eso llega con el flujo
+    // completo de cancelar/revertir (en diseño). El worker resetea la casilla siempre.
+    if (objectType === 'ticket' && propertyName === 'cancelar_ticket') {
+      if (!parseBool(propertyValue)) {
+        return res.status(200).json({ message: 'cancelar_ticket not true, skipped', receivedValue: propertyValue });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: null,
+        actionType: 'ticket_cancel_request',
+        priority: 1,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'ticket_cancel_request' });
+    }
+
+    // ====== RUTA 7: CASILLA REVERTIR FACTURA ======
+    // Flujo cancelar/revertir (Bloque 3): el usuario marca `revertir_factura` en
+    // el ticket para cancelar la factura viva y dejar el ticket listo para
+    // refacturar. El handler (processRevertTicketRequest) hace TODOS los guards
+    // (llave CANCEL_REVERT_FLOW_ENABLED, pipeline automático, factura viva,
+    // gate Nodum) y resetea la casilla siempre. Clon de la RUTA 6.
+    if (objectType === 'ticket' && propertyName === 'revertir_factura') {
+      if (!parseBool(propertyValue)) {
+        return res.status(200).json({ message: 'revertir_factura not true, skipped', receivedValue: propertyValue });
+      }
+
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType, objectId, propertyName, propertyValue,
+        dealId: null,
+        actionType: 'ticket_revert_request',
+        priority: 1,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'ticket_revert_request' });
     }
 
     // ====== PROPIEDAD NO RECONOCIDA ======

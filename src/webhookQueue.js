@@ -2,11 +2,14 @@
 import pool, { acquireDealLock, releaseDealLock } from './db.js';
 import logger from '../lib/logger.js';
 import { sendAlert } from '../lib/alertService.js';
-import { processUrgentLineItem, processUrgentTicket } from './services/urgentBillingService.js';
+import { processUrgentTicket } from './services/urgentBillingService.js';
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { runPhasesForDealLocked } from './phases/index.js';
 import { propagateDealCancellation } from './propagacion/deals/cancelDeal.js';
 import { processTicketUpdate } from './services/tickets/ticketUpdateService.js';
+import { processCancelTicketRequest } from './services/tickets/cancelTicketRequest.js';
+import { processRevertTicketRequest } from './services/tickets/revertTicketInvoiceRequest.js';
+import { cancelRevertFlowEnabled } from './config/cancelRevertFlags.js';
 import { parseBool } from './utils/parsers.js';
 import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
@@ -79,7 +82,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_line_item' | 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_label_sync'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request' | 'ticket_label_sync'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -361,22 +364,6 @@ async function executeJob(job) {
   const { action_type, object_id, object_type, deal_id, property_name, property_value } = job;
 
   switch (action_type) {
-    case 'urgent_line_item': {
-      const result = await processUrgentLineItem(object_id);
-      if (result.skipped) {
-        logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, reason: result.reason },
-          'Facturación urgente de LI skipped'
-        );
-      } else {
-        logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, invoiceId: result.invoiceId },
-          'Facturación urgente de LI completada'
-        );
-      }
-      return result;
-    }
-
     case 'urgent_ticket': {
       const result = await processUrgentTicket(object_id);
       if (result.skipped) {
@@ -649,14 +636,19 @@ async function executeJob(job) {
     }
 
     case 'valor_recalc': {
-      // Frecuencia / nº de pagos del LI cambian la clasificación auto-renew y el
-      // multiplicador anual del VALOR (regla 21-jul). Recalcula SOLO el VALOR del deal,
-      // sin re-correr las phases (no crea tickets ni toca facturación).
+      // Dos orígenes (mismo efecto): frecuencia / nº de pagos del LI cambian la
+      // clasificación auto-renew y el multiplicador anual del VALOR (regla 21-jul);
+      // y ediciones de montos de TICKETS editables (monto_unitario_real / cantidad_real /
+      // of_costo_usd / dolar — RUTA 5b) cambian el Σ subtotal_real del plan fijo.
+      // Recalcula SOLO el VALOR del deal, sin re-correr las phases (no crea tickets
+      // ni toca facturación).
       let resolvedDealId = deal_id;
       if (!resolvedDealId) {
-        resolvedDealId = await getDealIdForLineItem(object_id);
+        resolvedDealId = object_type === 'ticket'
+          ? await getDealIdForTicket(object_id)
+          : await getDealIdForLineItem(object_id);
         if (!resolvedDealId) {
-          throw new Error(`No se encontró deal asociado al line item ${object_id}`);
+          throw new Error(`No se encontró deal asociado al ${object_type} ${object_id}`);
         }
         await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
       }
@@ -668,6 +660,82 @@ async function executeJob(job) {
         'valor_recalc completado'
       );
       return result;
+    }
+
+    case 'ticket_cancel_request': {
+      // Casilla cancelar_ticket. Con CANCEL_REVERT_FLOW_ENABLED apagada (default)
+      // el handler solo escribe props del TICKET (etapa/motivo/aviso/reset de
+      // casilla) — no toca deal, factura ni cupo, así que corre SIN lock de deal
+      // (exactamente como hoy). Con la llave PRENDIDA, el caso invoice_alive
+      // puede cancelar la factura y propagar (deal/cupo) → se toma el mismo
+      // candado de deal que deal_cancel para no pisarse con el cron/fases.
+      if (!cancelRevertFlowEnabled()) {
+        const result = await processCancelTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, ...result },
+          'ticket_cancel_request completado'
+        );
+        return result;
+      }
+
+      const dealId = deal_id || await getDealIdForTicket(object_id);
+      let lockToken = null;
+      if (dealId) {
+        lockToken = await acquireDealLock(dealId, 'ticket_cancel_request');
+        if (!lockToken) {
+          return { reason: 'deal_locked' };
+        }
+      } else {
+        // Sin of_deal_id no hay candado posible: el handler igual protege con
+        // sus propios guards (pipeline, factura viva, gate Nodum).
+        logger.warn(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id },
+          'ticket_cancel_request: ticket sin of_deal_id, se procesa sin lock de deal'
+        );
+      }
+
+      try {
+        const result = await processCancelTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, dealId, ...result },
+          'ticket_cancel_request completado'
+        );
+        return result;
+      } finally {
+        if (lockToken) await releaseDealLock(dealId, lockToken);
+      }
+    }
+
+    case 'ticket_revert_request': {
+      // Casilla revertir_factura (Bloque 3): puede cancelar la factura viva del
+      // ticket y propagar (ticket/deal/cupo) → CON candado de deal (patrón
+      // deal_cancel). Ocupado → deal_locked y processNext lo reencola.
+      const dealId = deal_id || await getDealIdForTicket(object_id);
+      let lockToken = null;
+      if (dealId) {
+        lockToken = await acquireDealLock(dealId, 'ticket_revert_request');
+        if (!lockToken) {
+          return { reason: 'deal_locked' };
+        }
+      } else {
+        // Sin of_deal_id no hay candado posible: el handler igual protege con
+        // sus propios guards (llave, pipeline, factura viva, gate Nodum).
+        logger.warn(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id },
+          'ticket_revert_request: ticket sin of_deal_id, se procesa sin lock de deal'
+        );
+      }
+
+      try {
+        const result = await processRevertTicketRequest(object_id);
+        logger.info(
+          { module: MODULE, fn: 'executeJob', jobId: job.id, objectId: object_id, dealId, ...result },
+          'ticket_revert_request completado'
+        );
+        return result;
+      } finally {
+        if (lockToken) await releaseDealLock(dealId, lockToken);
+      }
     }
 
     case 'ticket_label_sync': {
@@ -704,6 +772,17 @@ async function getDealIdForLineItem(lineItemId) {
     .map(r => String(r.toObjectId))
     .filter(Boolean);
   return dealIds.length ? dealIds[0] : null;
+}
+
+// ─── Helper: resolver dealId desde ticket (prop of_deal_id, como recalcValorTotal) ─
+
+const PROP_TICKET_DEAL_ID = process.env.PROP_TICKET_DEAL_ID || 'of_deal_id';
+
+async function getDealIdForTicket(ticketId) {
+  const ticket = await hubspotClient.crm.tickets.basicApi.getById(String(ticketId), [
+    PROP_TICKET_DEAL_ID,
+  ]);
+  return (ticket?.properties?.[PROP_TICKET_DEAL_ID] || '').trim() || null;
 }
 
 // ─── Health check (para healthAudit.js) ──────────────────────────────────────

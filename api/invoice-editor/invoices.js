@@ -9,6 +9,11 @@ import logger from '../../lib/logger.js'
 import { syncInvoiceToTicket, buildTicketPropsFromInvoice } from './syncInvoiceToTicket.js'
 import { propagateInvoiceStateToTicket } from '../../src/propagacion/invoice.js'
 import { tryAdvanceDealToEnEjecucion } from './advanceDealToEnEjecucion.js'
+import { esTransicionEtapaPermitida, ETAPA_CANCELADA } from './stageTransitions.js'
+import { acquireDealLock, releaseDealLock } from '../../src/db.js'
+import { checkInvoiceRevertible, buildNodumBlockMessage } from '../../src/services/invoices/nodumGate.js'
+import { cancelRevertFlowEnabled } from '../../src/config/cancelRevertFlags.js'
+import { AUTOMATED_TICKET_PIPELINE } from '../../src/config/constants.js'
 
 const MOD = 'invoice-editor/invoices'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -31,6 +36,99 @@ const ALL_FIELD_NAMES      = fieldsConfig.map(f => f.internalName)
 const WRITABLE_FIELD_NAMES = fieldsConfig.filter(f => !f.readOnly).map(f => f.internalName)
 
 // ── Audit logger ──
+// ─────────────────────────────────────────────
+// Cancelar vs Revertir en el editor (30-jul)
+//
+// Hasta ahora el endpoint se llamaba `/cancelar` pero por dentro hacía un
+// REVERT (`modo` default 'revertir'): el nombre y el efecto no coincidían. Y la
+// vía que usa de verdad la pantalla es el PATCH de `etapa_de_la_factura` →
+// 'Cancelada', que propagaba SIN intención, o sea también revert.
+//
+// Definición (usuaria, 30-jul): **el nombre dice lo que le pasa al ticket.**
+//   - CANCELAR factura  → factura Cancelada + ticket CANCELADO (período cerrado).
+//   - REVERTIR factura  → factura Cancelada + ticket a facturable (refacturable),
+//                         y **sólo para MANUALES**.
+//
+// Por qué revertir no aplica a automáticos: revertir un manual deja el período
+// parado esperando que una persona apriete "facturar ahora"; revertir un
+// automático **re-arma el cron**, que lo vuelve a emitir solo en el próximo
+// ciclo — idéntico si nadie corrigió nada, y corriendo una carrera contra el
+// usuario si estaba corrigiendo. En automáticos las operaciones que cierran son
+// anular (cancelar) o corregir (editar la factura / emitir nota de crédito).
+// Es la misma regla que ya aplican las casillas del ticket desde el 26-jul.
+//
+// Todo esto vive bajo CANCEL_REVERT_FLOW_ENABLED: apagada, el `modo` se ignora
+// y el comportamiento es el de siempre (revert).
+const MSG_AUTOMATICA_NO_REVIERTE =
+  'Las reversiones son sólo para facturas MANUALES. Esta factura es automática: ' +
+  'no se puede revertir para refacturar (el cron la volvería a emitir sola). ' +
+  'Lo que podés hacer es cancelarla, editarla, o emitir una nota de crédito.'
+
+const MSG_PIPELINE_INDETERMINADO =
+  'No se pudo verificar si la factura es automática o manual. Reintentá en unos segundos.'
+
+/**
+ * Resuelve el modo efectivo de una cancelación en el editor. Helper PURO.
+ *
+ * @param {Object} params
+ * @param {string|undefined|null} params.modo     - 'cancelar' | 'revertir' | null
+ * @param {boolean} params.flowEnabled            - CANCEL_REVERT_FLOW_ENABLED
+ * @param {boolean|null} params.isAutomated       - null = no se pudo determinar
+ * @returns {{mode:'cancelar'|'revertir', intent:'cancel'|'revert'|null}
+ *          |{error:string, status:number, reason:string}}
+ */
+export function resolveEditorCancelMode({ modo, flowEnabled, isAutomated } = {}) {
+  // Llave apagada: el modo se ignora por completo (comportamiento actual).
+  if (!flowEnabled) return { mode: 'revertir', intent: null }
+
+  if (modo != null && modo !== 'cancelar' && modo !== 'revertir') {
+    return {
+      error: "El campo 'modo' debe ser 'cancelar' o 'revertir'.",
+      status: 400,
+      reason: 'modo_invalido',
+    }
+  }
+
+  // Default: el endpoint se llama CANCELAR → cancela (cierra el período).
+  const mode = modo ?? 'cancelar'
+
+  if (mode === 'revertir') {
+    if (isAutomated === null || isAutomated === undefined) {
+      // Fail-closed, igual que el gate Nodum: si no se puede verificar, no se
+      // revierte (una reversión indebida en un automático = factura re-emitida).
+      return { error: MSG_PIPELINE_INDETERMINADO, status: 409, reason: 'pipeline_indeterminado' }
+    }
+    if (isAutomated) {
+      return { error: MSG_AUTOMATICA_NO_REVIERTE, status: 409, reason: 'automatica_no_revierte' }
+    }
+  }
+
+  return { mode, intent: mode === 'cancelar' ? 'cancel' : 'revert' }
+}
+
+/**
+ * ¿La factura pertenece a un ticket del pipeline AUTOMÁTICO?
+ * Resuelve invoice.ticket_id → ticket.hs_pipeline.
+ *
+ * @returns {Promise<boolean|null>} null si no se pudo determinar
+ */
+async function invoiceIsAutomated(ticketId) {
+  const tid = String(ticketId || '').trim()
+  if (!tid) return null
+  try {
+    const { data } = await hs().get(`/crm/v3/objects/tickets/${tid}`, {
+      params: { properties: 'hs_pipeline' },
+    })
+    const pipeline = String(data?.properties?.hs_pipeline || '').trim()
+    if (!pipeline) return null
+    return pipeline === String(AUTOMATED_TICKET_PIPELINE)
+  } catch (err) {
+    logger.warn({ module: MOD, fn: 'invoiceIsAutomated', ticketId: tid, err: err?.message },
+      'No se pudo resolver el pipeline del ticket de la factura')
+    return null
+  }
+}
+
 async function writeAuditLog(entry) {
   try {
     await pool.query(
@@ -116,10 +214,15 @@ router.get('/:id', async (req, res) => {
       }
     }
 
+    // ¿Automática? La pantalla lo usa para avisar que no se puede revertir.
+    // No bloquea la lectura: si no se puede resolver, va null y la UI no afirma nada.
+    const esAutomatica = await invoiceIsAutomated(ticketId)
+
     return res.json({
       id: data.id,
       updatedAt: data.updatedAt,
       properties,
+      es_automatica: esAutomatica,
     })
 
   } catch (err) {
@@ -185,7 +288,7 @@ router.patch('/:id', async (req, res) => {
 
   // Si se cancela y no viene fecha_de_cancelacion → inyectar fecha del día
   if (
-    filteredProperties.etapa_de_la_factura === 'Cancelada' &&
+    filteredProperties.etapa_de_la_factura === ETAPA_CANCELADA &&
     !filteredProperties.fecha_de_cancelacion
   ) {
     try {
@@ -204,6 +307,92 @@ router.patch('/:id', async (req, res) => {
       hoy.setUTCHours(0, 0, 0, 0)
       filteredProperties.fecha_de_cancelacion = String(hoy.getTime())
     }
+  }
+
+  // Guard de transición de etapa (hallazgo #4): Cancelada es terminal e
+  // irreversible. Solo hace falta verificar cuando el body pide una etapa
+  // distinta de Cancelada (X → Cancelada siempre está permitido hoy).
+  const etapaSolicitada = filteredProperties.etapa_de_la_factura
+  if (etapaSolicitada != null && etapaSolicitada !== ETAPA_CANCELADA) {
+    let etapaActual
+    try {
+      const { data: invEtapa } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
+        params: { properties: 'etapa_de_la_factura' },
+      })
+      etapaActual = invEtapa.properties?.etapa_de_la_factura ?? null
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return res.status(404).json({ error: `No se encontró la factura con ID ${id}.` })
+      }
+      // Fail-closed: si no podemos verificar la etapa actual, no aplicamos un
+      // cambio de etapa (podría estar reviviendo una Cancelada).
+      logger.error({ module: MOD, fn, invoiceId: id, err: err.response?.data || err.message },
+        'No se pudo leer la etapa actual para validar la transición')
+      return res.status(500).json({
+        error: 'No se pudo verificar la etapa actual de la factura. Reintentá en unos segundos.',
+      })
+    }
+
+    if (etapaSolicitada !== etapaActual && !esTransicionEtapaPermitida(etapaActual, etapaSolicitada)) {
+      logger.warn({ module: MOD, fn, invoiceId: id, etapaActual, etapaSolicitada },
+        'Transición de etapa bloqueada (Cancelada es terminal)')
+      writeAuditLog({
+        timestamp: new Date().toISOString(),
+        invoiceId: id,
+        user: req.headers['x-app-user'] || 'admin',
+        changes: {
+          etapa_de_la_factura: {
+            from: etapaActual,
+            to: etapaSolicitada,
+            rejected: true,
+            reason: 'transicion_no_permitida_cancelada_terminal',
+          },
+        },
+      })
+      return res.status(409).json({
+        error: 'La factura está Cancelada: es irreversible. Para facturar el período de nuevo usá la refacturación del ticket.',
+      })
+    }
+  }
+
+  // ── Cancelar desde el formulario (etapa → Cancelada) ──
+  // Con la llave prendida, poner la etapa en Cancelada desde la pantalla
+  // significa CANCELAR: la factura se anula y el ticket queda CANCELADO
+  // (período cerrado, no se refactura). Antes propagaba SIN intención, o sea
+  // revert: el ticket volvía a facturable — el efecto no coincidía con lo que
+  // el usuario creía estar haciendo.
+  //
+  // Revertir para refacturar queda como una acción DELIBERADA y aparte:
+  // POST /:id/cancelar {modo:'revertir'} (sólo manuales) o la casilla
+  // `revertir_factura` del ticket.
+  //
+  // Gate Nodum también acá: una factura asentada no se anula desde el
+  // formulario. Antes este camino lo esquivaba (el gate sólo estaba en el POST).
+  let patchCancelIntent = null
+  if (etapaSolicitada === ETAPA_CANCELADA && cancelRevertFlowEnabled()) {
+    const gate = await checkInvoiceRevertible(id)
+    if (!gate.revertible) {
+      const reason = gate.error ? 'nodum_gate_error' : 'nodum_asentada'
+      logger.warn({ module: MOD, fn, invoiceId: id, nodumId: gate.nodumId, reason },
+        'Cancelación desde el formulario bloqueada por gate Nodum')
+      writeAuditLog({
+        timestamp: new Date().toISOString(),
+        invoiceId: id,
+        user: req.headers['x-app-user'] || 'admin',
+        changes: {
+          etapa_de_la_factura: {
+            from: null, to: ETAPA_CANCELADA, rejected: true, reason, via: 'PATCH',
+            ...(gate.nodumId && { nodumId: gate.nodumId }),
+          },
+        },
+      })
+      return res.status(409).json({
+        error: gate.error
+          ? 'No se pudo verificar si la factura está asentada en Nodum. Reintentá en unos segundos.'
+          : buildNodumBlockMessage(gate.nodumId),
+      })
+    }
+    patchCancelIntent = 'cancel'
   }
 
   try {
@@ -255,7 +444,7 @@ router.patch('/:id', async (req, res) => {
       logger.info({ module: MOD, fn, invoiceId: id, etapa: filteredProperties.etapa_de_la_factura, hasNodum: !!filteredProperties.id_factura_nodum },
         'Iniciando propagación invoice→ticket')
       try {
-        const propagateResult = await propagateInvoiceStateToTicket(id)
+        const propagateResult = await propagateInvoiceStateToTicket(id, { cancelIntent: patchCancelIntent })
         logger.info({ module: MOD, fn, invoiceId: id, propagateResult },
           'Propagación invoice→ticket completada')
       } catch (propagateErr) {
@@ -316,6 +505,26 @@ router.post('/:id/cancelar', async (req, res) => {
     return res.status(400).json({ error: 'El Invoice ID debe ser un número.' })
   }
 
+  // ── Flujo cancelar/revertir (llave CANCEL_REVERT_FLOW_ENABLED) ──
+  // Body opcional: { motivo?, modo? } — modo ∈ {'cancelar','revertir'}.
+  //   'cancelar' (DEFAULT desde el 30-jul, el endpoint se llama así) → el ticket
+  //              queda CANCELADO: período cerrado, no se refactura.
+  //   'revertir' → el ticket vuelve a un stage facturable, listo para
+  //              refacturación. SÓLO MANUALES (ver MSG_AUTOMATICA_NO_REVIERTE).
+  // Con la llave APAGADA el modo se ignora (log) y el endpoint entero se
+  // comporta exactamente como hoy (sin gate Nodum, sin lock, sin intent).
+  const flowEnabled = cancelRevertFlowEnabled()
+  const { motivo, modo } = req.body || {}
+  let modoEfectivo = 'revertir'
+  let cancelIntent = null
+  if (!flowEnabled && modo != null) {
+    logger.info({ module: MOD, fn, invoiceId: id, modo },
+      'CANCEL_REVERT_FLOW_ENABLED off — modo ignorado, se aplica la semántica actual (revertir)')
+  }
+
+  let lockDealId = null
+  let lockToken = null
+
   try {
     const { data: invoice } = await hs().get(`/crm/v3/objects/invoices/${id}`, {
       params: { properties: 'etapa_de_la_factura,ticket_id,fecha_de_cancelacion' },
@@ -325,11 +534,100 @@ router.post('/:id/cancelar', async (req, res) => {
     const ticketId     = invoice.properties?.ticket_id
     const fechaExiste  = invoice.properties?.fecha_de_cancelacion
 
-    if (etapaActual === 'Cancelada') {
+    // Modo efectivo: necesita saber si el ticket es automático, así que se
+    // resuelve DESPUÉS de leer la factura (y sólo si la llave está prendida).
+    if (flowEnabled) {
+      const isAutomated = modo === 'revertir' || modo == null
+        ? await invoiceIsAutomated(ticketId)
+        : false // 'cancelar' aplica igual a los dos pipelines: no hace falta leer
+      const resolved = resolveEditorCancelMode({ modo, flowEnabled, isAutomated })
+      if (resolved.error) {
+        logger.warn({ module: MOD, fn, invoiceId: id, ticketId, modo, reason: resolved.reason },
+          'Cancelación/reversión rechazada en el editor')
+        if (resolved.status === 409) {
+          writeAuditLog({
+            timestamp: new Date().toISOString(),
+            invoiceId: id,
+            user,
+            changes: {
+              etapa_de_la_factura: {
+                from: etapaActual, to: ETAPA_CANCELADA,
+                rejected: true, reason: resolved.reason, modo,
+              },
+            },
+          })
+        }
+        return res.status(resolved.status).json({ error: resolved.error })
+      }
+      modoEfectivo = resolved.mode
+      cancelIntent = resolved.intent
+    }
+
+    // Coherente con stageTransitions: Cancelada es terminal; cancelar dos veces
+    // no tiene sentido (y X → Cancelada siempre está permitido por la matriz).
+    if (etapaActual === ETAPA_CANCELADA) {
       return res.status(400).json({ error: 'La factura ya está cancelada.' })
     }
 
-    const propsToUpdate = { etapa_de_la_factura: 'Cancelada' }
+    if (flowEnabled) {
+      // ── Gate Nodum, ANTES de tocar la factura: una factura ya asentada en
+      // Nodum no se cancela/revierte desde acá — corresponde nota de crédito.
+      // Fail-closed: si la verificación falla, también se bloquea.
+      const gate = await checkInvoiceRevertible(id)
+      if (!gate.revertible) {
+        const reason = gate.error ? 'nodum_gate_error' : 'nodum_asentada'
+        logger.warn({ module: MOD, fn, invoiceId: id, nodumId: gate.nodumId, reason },
+          'Cancelación bloqueada por gate Nodum')
+        writeAuditLog({
+          timestamp: new Date().toISOString(),
+          invoiceId: id,
+          user,
+          changes: {
+            etapa_de_la_factura: {
+              from: etapaActual,
+              to: ETAPA_CANCELADA,
+              rejected: true,
+              reason,
+              modo: modoEfectivo,
+              ...(gate.nodumId && { nodumId: gate.nodumId }),
+            },
+          },
+        })
+        return res.status(409).json({
+          error: gate.error
+            ? 'No se pudo verificar si la factura está asentada en Nodum. Reintentá en unos segundos.'
+            : buildNodumBlockMessage(gate.nodumId),
+        })
+      }
+
+      // ── Lock de deal: no pisarse con el motor (cron/fases). Derivación:
+      // invoice.ticket_id → ticket.of_deal_id. Si no se puede derivar el deal,
+      // se sigue SIN lock (warn) — no se bloquea la operación por eso.
+      if (ticketId) {
+        try {
+          const { data: ticketData } = await hs().get(`/crm/v3/objects/tickets/${ticketId}`, {
+            params: { properties: 'of_deal_id' },
+          })
+          lockDealId = (ticketData.properties?.of_deal_id || '').trim() || null
+        } catch (ticketErr) {
+          logger.warn({ module: MOD, fn, invoiceId: id, ticketId, err: ticketErr.message },
+            'No se pudo leer of_deal_id del ticket para el lock (se sigue sin lock)')
+        }
+      }
+      if (lockDealId) {
+        lockToken = await acquireDealLock(lockDealId, 'invoice-editor-cancel')
+        if (!lockToken) {
+          logger.warn({ module: MOD, fn, invoiceId: id, dealId: lockDealId },
+            'Deal lockeado por otro proceso: cancelación rechazada (423)')
+          return res.status(423).json({ error: 'El motor está procesando este negocio. Reintentá en un minuto.' })
+        }
+      } else {
+        logger.warn({ module: MOD, fn, invoiceId: id, ticketId },
+          'No se pudo derivar dealId: la cancelación sigue SIN lock de deal')
+      }
+    }
+
+    const propsToUpdate = { etapa_de_la_factura: ETAPA_CANCELADA }
     if (!fechaExiste) {
       const hoy = new Date()
       hoy.setUTCHours(0, 0, 0, 0)
@@ -338,11 +636,17 @@ router.post('/:id/cancelar', async (req, res) => {
 
     await hs().patch(`/crm/v3/objects/invoices/${id}`, { properties: propsToUpdate })
 
-    logger.info({ module: MOD, fn, invoiceId: id, ticketId, etapaAnterior: etapaActual },
+    logger.info({ module: MOD, fn, invoiceId: id, ticketId, etapaAnterior: etapaActual, ...(flowEnabled && { modo: modoEfectivo }) },
       'Factura cancelada, propagando al ticket')
 
     try {
-      await propagateInvoiceStateToTicket(id)
+      if (flowEnabled) {
+        await propagateInvoiceStateToTicket(id, {
+          cancelIntent,
+        })
+      } else {
+        await propagateInvoiceStateToTicket(id)
+      }
     } catch (propagateErr) {
       logger.error({ module: MOD, fn, invoiceId: id, err: propagateErr?.message },
         'Error en propagación invoice→ticket (cancelación)')
@@ -354,6 +658,8 @@ router.post('/:id/cancelar', async (req, res) => {
       user,
       changes: {
         etapa_de_la_factura: { from: etapaActual, to: 'Cancelada' },
+        ...(flowEnabled && { modo: modoEfectivo }),
+        ...(flowEnabled && motivo && { motivo }),
         ...(ticketId && { ticketActualizado: ticketId }),
       },
     })
@@ -363,6 +669,7 @@ router.post('/:id/cancelar', async (req, res) => {
       invoiceId: id,
       ticketId: ticketId || null,
       etapaAnterior: etapaActual,
+      ...(flowEnabled && { modo: modoEfectivo }),
     })
 
   } catch (err) {
@@ -375,6 +682,11 @@ router.post('/:id/cancelar', async (req, res) => {
       error: 'Error al cancelar la factura.',
       detail: err.response?.data?.message || err.message,
     })
+  } finally {
+    // El lock se suelta SIEMPRE (releaseDealLock solo borra si el token es nuestro).
+    if (lockToken) {
+      await releaseDealLock(lockDealId, lockToken)
+    }
   }
 })
 

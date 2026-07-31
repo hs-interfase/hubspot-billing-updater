@@ -14,6 +14,16 @@
 //   DATABASE_URL='postgres://u:p@localhost:5432/x' BILLING_TICKET_PIPELINE_ID='PIPE_MANUAL' \
 //     node --test src/__tests__/associateOnClosedWon.test.mjs
 
+// ⚠️ Aislar del entorno: este archivo valida la MECÁNICA de asociación, no el
+// re-sync de etiquetas (`syncTicketCompanyLabels`, 29-jul), que corre al final
+// de associateAllTicketsOnClosedWon sobre TODOS los tickets considerados — los
+// ya asociados incluidos. Con `TICKET_LABEL_SYNC_ENABLED=true` en el `.env`
+// real, el happy path veía un create extra sobre el ticket ya vinculado y
+// fallaba, aunque el código está bien (el re-sync tiene su propio archivo de
+// tests). Se fija en `false` ANTES de importar para que la suite dé lo mismo
+// con la llave prendida o apagada.
+process.env.TICKET_LABEL_SYNC_ENABLED = 'false';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { associateAllTicketsOnClosedWon } from '../services/tickets/associateOnClosedWon.js';

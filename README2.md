@@ -258,7 +258,8 @@ El servidor expone estas rutas (detalle completo en Capítulo 4):
 | `/api/actualizar-webhook` | POST | Webhook de HubSpot para actualizaciones de line items |
 | `/api/debug-urgent` | POST | Diagnóstico de facturación urgente + mirror |
 | `/invoice-editor` | GET | UI del editor de facturas (con Basic Auth) |
-| `/invoice-editor/api/:id` | GET/PATCH | API del editor de facturas |
+| `/invoice-editor/api/:id` | GET/PATCH | API del editor de facturas. El `GET` devuelve además `es_automatica` (resuelve `ticket_id → hs_pipeline`). Un `PATCH` que pone `etapa_de_la_factura='Cancelada'` **cancela**: ticket a CANCELADO, período cerrado (con `CANCEL_REVERT_FLOW_ENABLED` prendida; apagada, comportamiento de siempre) |
+| `/invoice-editor/api/:id/cancelar` | POST | Body `{motivo?, modo?}` — `modo` ∈ `cancelar` \| `revertir`. **Default `cancelar`**: el nombre dice lo que le pasa al ticket. `revertir` es **sólo para MANUALES** (en automáticos → `409`: el cron la re-emitiría sola; ahí corresponde cancelar, editar o nota de crédito). Gate Nodum en las dos vías |
 | `/invoice-editor/api/audit/*` | GET | Logs de auditoría del editor |
 | `/invoice-editor/audit` | GET | UI de auditoría del editor |
 | `/nodum` | GET | UI de upload de archivos Nodum |

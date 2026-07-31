@@ -443,8 +443,11 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   // Producto del ticket (select of_producto, mismo catálogo que deal.producto)
   const ofProducto = deriveProductoTicket(dp.producto, lp.name);
 
-  // Motivo cancelación: primero motivo_pausa del line item, luego closed_lost_reason del deal
-  const motivoCancelacion = safeString(lp.motivo_pausa) || safeString(dp.closed_lost_reason);
+  // Motivo cancelación: primero motivo_de_pausa del line item, luego closed_lost_reason del deal.
+  // (24-jul: decía `motivo_pausa`, prop que NO existe en el portal → la rama del LI estaba
+  // muerta y siempre caía al closed_lost_reason del deal. El nombre real es motivo_de_pausa,
+  // que sí viaja en la lista de getDealWithLineItems.)
+  const motivoCancelacion = safeString(lp.motivo_de_pausa) || safeString(dp.closed_lost_reason);
 
   // ✅ C) Construir título del invoice
   const liShort = safeString(lp.name) || `Flota`;

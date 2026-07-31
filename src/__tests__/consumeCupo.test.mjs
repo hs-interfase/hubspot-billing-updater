@@ -7,10 +7,18 @@
 // Correr con:  node --test src/__tests__/consumeCupo.test.mjs
 //
 // No toca HubSpot: calcularConsumoCupo es una función pura sobre properties.
+// El último bloque prueba consumeCupoAfterInvoice con el hubspotClient
+// parcheado en memoria (el SDK cachea crm/deals/basicApi, así que el patch
+// pega) — tampoco toca HubSpot; requiere DATABASE_URL dummy porque el grafo
+// de imports carga src/db.js.
+
+process.env.DATABASE_URL ||= 'postgres://u:p@localhost:5432/x';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calcularConsumoCupo } from '../services/cupo/consumeCupo.js';
+
+const { calcularConsumoCupo, consumeCupoAfterInvoice } = await import('../services/cupo/consumeCupo.js');
+const { hubspotClient } = await import('../hubspotClient.js');
 
 // ---------- Cupo Por Monto ----------
 
@@ -130,4 +138,52 @@ test('NC dentro de lo consumido: sin sobre-crédito (cupoSobreCredito=false)', (
   assert.equal(r.cupoConsumidoNuevo, 200);   // 500 + (-300)
   assert.equal(r.cupoRestanteNuevo, 800);
   assert.equal(r.cupoSobreCredito, false);
+});
+
+// ---------- Historial (of_cupo_historial) en el update del ticket ----------
+
+test('consumeCupoAfterInvoice: el update del ticket appendea la línea de consumo a of_cupo_historial', async () => {
+  // Monkey-patch del singleton (el SDK cachea client.crm/.deals/.basicApi, y el
+  // proxy de retry escribe/lee sobre esos objetos cacheados → el patch pega).
+  const ticketUpdates = [];
+  const dealUpdates = [];
+
+  hubspotClient.crm.deals.basicApi.getById = async () => ({
+    properties: {
+      cupo_activo: 'true', tipo_de_cupo: 'Por Monto', cupo_consumido: '200',
+      cupo_restante: '800', cupo_total: '', cupo_total_monto: '1000',
+      cupo_umbral: '', cupo_estado: 'Ok',
+    },
+  });
+  hubspotClient.crm.tickets.basicApi.getById = async () => ({
+    properties: {
+      subtotal_real: '300', cupo_consumo_invoice_id: '', of_cupo_consumido: '',
+      of_cupo_historial: '2026-07-01 | consumo | 100 | invoice INV-0',
+    },
+  });
+  hubspotClient.crm.lineItems.basicApi.getById = async () => ({
+    properties: { parte_del_cupo: 'true' },
+  });
+  hubspotClient.crm.deals.basicApi.update = async (id, body) => { dealUpdates.push(body); };
+  hubspotClient.crm.tickets.basicApi.update = async (id, body) => { ticketUpdates.push(body); };
+
+  const r = await consumeCupoAfterInvoice({
+    dealId: 'D1', ticketId: 'T1', lineItemId: 'LI1', invoiceId: 'INV-1',
+  });
+
+  assert.equal(r.consumed, true);
+  assert.equal(r.consumo, 300);
+  assert.equal(dealUpdates.length, 1);
+
+  // El historial va DENTRO del mismo update existente del ticket (sin writes nuevos)
+  // y NO cambia el resto de las props del consumo.
+  assert.equal(ticketUpdates.length, 1);
+  const props = ticketUpdates[0].properties;
+  assert.equal(props.of_cupo_consumido, 'true');
+  assert.equal(props.of_cupo_consumo_valor, '300');
+  assert.equal(props.cupo_consumo_invoice_id, 'INV-1');
+
+  const hist = props.of_cupo_historial;
+  assert.match(hist, /^2026-07-01 \| consumo \| 100 \| invoice INV-0\n/);   // lo previo se conserva
+  assert.match(hist, /\n\d{4}-\d{2}-\d{2} \| consumo \| 300 \| invoice INV-1$/); // la línea nueva, última
 });

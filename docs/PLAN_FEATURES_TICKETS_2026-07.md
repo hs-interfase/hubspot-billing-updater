@@ -52,15 +52,15 @@ Camino crítico: Fase 3. Fases 0 y 1 arrancan ya; la 2 apenas esté el stack.
 **Estado actual:** el disparador existe en LI y en ticket, independientes. LI: webhook `api/escuchar-cambios.js:83-95` encola `urgent_line_item` → `processUrgentLineItem` (`src/services/urgentBillingService.js:755`). Ticket: `escuchar-cambios.js:96-107` → `processUrgentTicket` (`:984`). Eliminar el del LI NO afecta el del ticket.
 
 **Pasos código (esta rama):**
-- [ ] `api/escuchar-cambios.js`: eliminar la rama `objectType === 'line_item'` para `facturar_ahora` (dejar intacta la de ticket).
-- [ ] `src/webhookQueue.js`: retirar el dispatch de `actionType: 'urgent_line_item'`.
-- [ ] Decidir destino de `processUrgentLineItem` y `_executeUrgentBillingForLineItem` en `urgentBillingService.js`: eliminar vs dejar muertos con comentario. Propuesta: **eliminar** (git conserva la historia).
-- [ ] Revisar tests que referencien el flujo LI urgente y ajustarlos.
-- [ ] Buscar y limpiar referencias en `public/guia-facturacion-interfase.html`, `public/doc-responsable-of.html`, `public/doc-admin-facturacion.html`.
+- [x] `api/escuchar-cambios.js`: eliminar la rama `objectType === 'line_item'` para `facturar_ahora` (dejar intacta la de ticket). *(26-jul: responde 200 "skipped" a eventos de LI, no 4xx, para no gatillar reintentos/deshabilitación del webhook.)*
+- [x] `src/webhookQueue.js`: retirar el dispatch de `actionType: 'urgent_line_item'`. *(26-jul: también rama `urgent_line_item` de `webhookQueueRules.js`.)*
+- [x] Decidir destino de `processUrgentLineItem` y `_executeUrgentBillingForLineItem` en `urgentBillingService.js`: eliminar vs dejar muertos con comentario. **Resuelto 26-jul (modo conservador): quedan deprecados con comentario; eliminación → segunda etapa de limpieza.**
+- [x] Revisar tests que referencien el flujo LI urgente y ajustarlos. *(26-jul: `webhookQueueReaper.test.mjs`.)*
+- [x] Buscar y limpiar referencias en `public/guia-facturacion-interfase.html`, `public/doc-responsable-of.html`, `public/doc-admin-facturacion.html`. *(26-jul: guía actualizada; doc-responsable-of solo tenía flujo de ticket, sin cambios; doc-admin-facturacion sin menciones.)*
 
 **Pasos HubSpot (fuera del código, checklist aparte):**
-- [ ] Quitar la suscripción del webhook a `facturar_ahora` en line items (dejar la de tickets).
-- [ ] Ocultar la prop `facturar_ahora` de vistas/editor de line items (prod + sandbox).
+- [x] Quitar la suscripción del webhook a `facturar_ahora` en line items (dejar la de tickets). *(Hecho por la usuaria, 26-jul.)*
+- [x] Ocultar la prop `facturar_ahora` de vistas/editor de line items (prod + sandbox). *(Hecho por la usuaria, 26-jul.)*
 - [ ] Revisar si algún workflow de HubSpot escribe `facturar_ahora` en LIs.
 
 **Validación sandbox:**
@@ -142,6 +142,10 @@ Antes "asociado = promovido/cerca de facturar"; ahora un ganado asocia TODO su c
 | 2026-07-07 | Propietario de tickets: mecanismo `assignTicketOwners` ya existe (asigna al closedwon desde `responsable_asignado` del LI → la notificación de HubSpot recién sale al ganar, como pide la usuaria; no se puede asignar-sin-notificar por API). Falta fallback al vendedor del deal — esperando lógica de Paola/Victoria. |
 | 2026-07-08 | Usuaria: "ahora no subiré las assoc" → código de asociaciones etiquetadas + snapshot `of_producto` quedó SIN commitear en el working tree (pasó por el stash `assoc-wip-mirrors-A-F`, popeado el mismo día; junto con fixes mirrors A-F). Backfills area/of_producto ya corridos en ambos portales quedan firmes. |
 | 2026-07-08 | Propietario de tickets confirmado por usuaria: **vendedor del deal** como fallback cuando el LI no tiene `responsable_asignado` — implementado en `assignTicketOwners` (sigue gateado a closedwon+; suite 89/89). |
+| 2026-07-26 | Fase 1 ejecutada en modo conservador: desconectado el disparador del LI (router+cola); handlers quedan deprecados sin borrar; limpieza de código → segunda etapa. Usuaria ya quitó la suscripción del webhook y la prop de las vistas del CRM (26-jul). |
+| 2026-07-26 | Stack de propiedades (revisión usuaria): `of_codigo_rubro` FUERA de la escucha LI→ticket (la prop se conserva en HubSpot, oculta de las vistas; el snapshot inicial la sigue copiando). Resto de la lista de 24 props vigente. |
+| 2026-07-26 | Avisos a mirror: destinatario default dedicado = usuaria María Bitencurt, vía env `MIRROR_ALERT_TO_EMAIL` (fallback `ALERT_TO_EMAIL`). Falta setear la env con su correo en .env/.env.real/Railway. |
+| 2026-07-27 | Núcleo cancelar/revertir implementado en `feat/cancelar-revertir-nucleo` (Bloques 1-4) detrás de `CANCEL_REVERT_FLOW_ENABLED` y `CUPO_REVERT_ON_CANCEL_ENABLED` (ambas off). Motivo de reversión = prop existente `motivo_del_ajuste`. Pendiente: validación sandbox + textos finales (bloque mensajería). |
 | (pendiente) | Stack de propiedades T3 (correo usuaria 6-jul). |
 | (pendiente) | Campos editables post-emisión (Paola) — define si T2 crece. |
 | (pendiente) | T4: todos vs solo manuales al cierre. |

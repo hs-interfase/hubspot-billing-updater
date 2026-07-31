@@ -10,6 +10,15 @@
 > line item → ticket de costo/margen nunca se disparaba. Detalle en
 > `definitivos/CRUCE_maria_vs_webhooks_2026-07-20.md`.
 >
+> 🆕 **29-jul — PRIMERA suscripción que NO es `propertyChange`:** la usuaria creó
+> **`deal.associationChange`** (negocio↔empresa) para bajar a los tickets las etiquetas
+> *Empresa Factura* / *Partner* del negocio (RUTA 8 → `ticket_label_sync`).
+> ⚠️ **Un evento de asociación no trae `objectId` ni `propertyName`**: el objeto que cambió viene en
+> `fromObjectId`, y el vínculo en `associationType` (`DEAL_TO_COMPANY`). El router lo atiende **antes**
+> del guard de `objectId` — con el código anterior devolvía **400**, y HubSpot puede deshabilitar una
+> suscripción tras reintentos fallidos. **Ese fix vive en `pruebas`: hasta el merge a `main`, en PROD
+> estos eventos siguen dando 400.**
+>
 > 🔁 **NO suscribir** props que escribe el propio motor (`subtotal_real`, `of_costo`, `of_margen`,
 > `of_pagos_restantes`): riesgo de bucle motor→webhook→motor. Sirve de checklist para replicar en la app de PRUEBAS (portal 51101688).
 
@@ -17,6 +26,28 @@
 actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, discount, empresa_que_factura, es_definitivo, exonera_irae, facturacion_automatica, facturar_ahora, fecha_de_baja, fecha_vencimiento_contrato, fin_del_contrato, hs_billing_start_delay_type, hs_discount_percentage, hs_recurring_billing_period, hs_recurring_billing_start_date, hs_tax_rate_group_id, hubspot_owner_id, inicio_del_contrato, line_item_key, mensaje_para_responsable, momento_de_facturacion, monto_unitario_actual, motivo_de_pausa, name, nc, nombre_producto, nota, opera_trading, pais_operativo, parte_del_cupo, pausa, price, quantity, recurringbillingfrequency, responsable_asignado, reventa, servicio, subrubro, terceros, tipo_de_parametrica, unidad_de_negocio, uy
 
 ## ticket / "Ticket" — 58 (`ticket.propertyChange`)
+
+> 🧮 **Ruteo valor_recalc (semana tickets, fase 1):** `monto_unitario_real`, `cantidad_real`,
+> `of_costo_usd` y `dolar` ahora rutean a `valor_recalc` (RUTA 5b de `api/escuchar-cambios.js`)
+> — solo tickets EDITABLES del pipeline manual; anti-bucle por stage (los tickets forecast,
+> que el motor re-snapshotea en phasep, se descartan). Las props que escribe el motor en
+> emisión (`subtotal_real`, `of_costo`, `of_margen`) siguen SIN suscribirse.
+
+> 🗑️ **Ruteo cancelar_ticket (26-jul):** `cancelar_ticket` ya no cae en el fallback
+> "Property not supported" — ahora rutea a `ticket_cancel_request` (RUTA 6 de
+> `api/escuchar-cambios.js` → `processCancelTicketRequest`). Handler MÍNIMO: solo mueve a
+> CANCELADO tickets sin factura viva (los automáticos y los con factura solo reciben aviso
+> en `of_billing_error`); no toca factura/cupo/espejo. El flujo completo de
+> cancelar/revertir está en diseño.
+
+> ↩️ **Suscripción + ruteo `revertir_factura` (26-jul, usuaria):** la usuaria suscribió
+> `ticket.propertyChange / revertir_factura` el 26-jul (NO está en el conteo de 58 del 14-jul;
+> queda anotada acá igual que las altas del 20-jul). Rutea a `ticket_revert_request`
+> (RUTA 7 de `api/escuchar-cambios.js` → `processRevertTicketRequest`, Bloque 3 del flujo
+> cancelar/revertir): cancela la factura viva del ticket y lo deja listo para refacturar,
+> con guards de llave `CANCEL_REVERT_FLOW_ENABLED` (off → aviso "no habilitada" + reset de la
+> casilla), pipeline automático, factura viva y gate Nodum. La casilla se resetea SIEMPRE.
+
 ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, comentarios_pm, content, descuento_en_porcentaje, descuento_por_unidad_real, dolar, empresa_id, empresa_que_factura, entidad_facturadora, exonera_irae, facturacion_automatica, facturar_ahora, fecha_inicio_de_facturacion, fecha_real_de_facturacion, fecha_resolucion_esperada, fin_del_contrato, hay_ajuste, hs_resolution, inicio_del_contrato, momento_de_facturacion, monto_unitario_real, motivo_cancelacion_del_ticket, motivo_del_ajuste, nc, negocio_compartido, nombre_empresa, nota, observaciones, observaciones_ventas, of_aplica_para_cupo, of_cantidad_de_pagos, of_costo_usd, of_frecuencia_de_facturacion, of_line_item_ids, of_moneda, of_monto_total, of_motivo_pausa, of_pais_operativo, of_producto, of_producto_nombres, of_propietario_secundario, of_rubro, of_subrubro, opera_trading, producto_id, renovacion_automatica, repetitivo, reventa, revisado_por, servicio, source_type, subject, tipo_de_parametrica, unidad_de_negocio
 
 ## deal / "Negocio" — 17 (`deal.propertyChange`)
