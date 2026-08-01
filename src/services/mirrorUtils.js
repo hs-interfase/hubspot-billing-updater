@@ -7,6 +7,9 @@ import { hubspotClient } from '../hubspotClient.js';
 import logger from '../../lib/logger.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
 import { emailAvisoMirror } from './notifications/mirrorAlert.js';
+import { avisarTicketEspejo } from './notifications/mirrorTicketAlert.js';
+import { mirrorPuntualEnabled } from '../config/mirrorPuntualFlags.js';
+import { parseTicketKeyFromLineItemKey } from '../utils/ticketKey.js';
 import { getAllAssociatedIds } from '../utils/hubspotAssociations.js';
 import { withRetry } from '../utils/withRetry.js';
 import {
@@ -268,6 +271,40 @@ const { mirrorLineItemId, mirrorDealId, pyDealId } = mirrorInfo;
 
 
 /**
+ * Período (YYYY-MM-DD) del ticket PY que originó la cancelación/reversión: es
+ * lo que enlaza con el ticket del espejo del MISMO período (TANDA D). Sin
+ * ticket o sin fecha devuelve '' → el aviso cae al deal espejo.
+ */
+async function ymdDelTicketPy(ticketId, deps = {}) {
+  if (!ticketId) return '';
+  const { client = hubspotClient } = deps;
+  try {
+    const tk = await client.crm.tickets.basicApi.getById(String(ticketId), [
+      'fecha_resolucion_esperada',
+      'of_ticket_key',
+    ]);
+    const directa = String(tk?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(directa)) return directa;
+    const parsed = parseTicketKeyFromLineItemKey(tk?.properties?.of_ticket_key);
+    return parsed?.ok ? parsed.ymd : '';
+  } catch {
+    return '';
+  }
+}
+
+/** line_item_key del LI espejo, para poder armar la clave de su ticket. */
+async function lineItemKeyDelEspejo(mirrorLineItemId, deps = {}) {
+  if (!mirrorLineItemId) return '';
+  const { client = hubspotClient } = deps;
+  try {
+    const li = await client.crm.lineItems.basicApi.getById(String(mirrorLineItemId), ['line_item_key']);
+    return String(li?.properties?.line_item_key || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Decide si una emisión PY es NOTA DE CRÉDITO a partir de señales del ticket y del LI.
  * Prioriza el SIGNO del ticket (mismo criterio que consumeCupo / Paso D: cantidad o
  * monto negativos) y usa el flag `nc` del LI PY solo como respaldo. Pura y testeable.
@@ -423,6 +460,7 @@ export async function notifyMirrorDealOnCancelOrRevert(
     findMirrorLineItemFn = findMirrorLineItem,
     reportFn = reportHubSpotError,
     emailFn = emailAvisoMirror,
+    avisarTicketFn = avisarTicketEspejo,
   } = deps;
 
   const log = logger.child({
@@ -464,6 +502,42 @@ export async function notifyMirrorDealOnCancelOrRevert(
       : `Factura ${invoiceId} del negocio original PY revertida: el período se va a refacturar. ` +
         `Verificar el ticket UY manualmente. ${contexto}`;
 
+    const title = tipo === 'cancel'
+      ? 'Factura PY cancelada definitivamente — verificar ticket UY'
+      : 'Factura PY revertida (se refactura) — verificar ticket UY';
+    const meta = {
+      deal_py: pyDealId,
+      li_py: String(pyLineItemId),
+      li_uy: mirrorLineItemId,
+      invoice_py: String(invoiceId),
+      ...(ticketId ? { ticket_py: String(ticketId) } : {}),
+      tipo: tipo === 'cancel' ? 'cancelación definitiva' : 'reversión para refacturar',
+    };
+
+    // ── TANDA D: el aviso va al TICKET del espejo, no sólo al deal ───────────
+    // Es LO COMPROMETIDO POR CORREO el 29-jul (hilo "VALOR TOTAL - notas"):
+    // «ante una reversión o cancelación del ticket original, se avise al mirror».
+    // Va al ticket del MISMO período, resuelto por clave; si el espejo no tiene
+    // ticket de ese período, avisarTicketEspejo cae solo al deal espejo — o sea
+    // el comportamiento de hoy, nunca menos.
+    if (mirrorPuntualEnabled()) {
+      const ymd = await ymdDelTicketPy(ticketId, deps);
+      const r = await avisarTicketFn(
+        {
+          mirrorDealId,
+          mirrorLineItemId,
+          mirrorLineItemKey: await lineItemKeyDelEspejo(mirrorLineItemId, deps),
+          ymd,
+          mensaje: aviso,
+          title,
+          meta,
+        },
+        deps
+      );
+      log.info({ mirrorDealId, ymd, via: r?.via }, 'Aviso de cancelación/reversión PY enviado al espejo (TANDA D)');
+      return;
+    }
+
     reportFn({
       level: 'warn',
       objectType: 'deal',
@@ -472,21 +546,7 @@ export async function notifyMirrorDealOnCancelOrRevert(
     });
 
     // Todos los avisos a mirror van también por correo (usuaria 25-jul).
-    await emailFn({
-      mirrorDealId,
-      title: tipo === 'cancel'
-        ? 'Factura PY cancelada definitivamente — verificar ticket UY'
-        : 'Factura PY revertida (se refactura) — verificar ticket UY',
-      message: aviso,
-      meta: {
-        deal_py: pyDealId,
-        li_py: String(pyLineItemId),
-        li_uy: mirrorLineItemId,
-        invoice_py: String(invoiceId),
-        ...(ticketId ? { ticket_py: String(ticketId) } : {}),
-        tipo: tipo === 'cancel' ? 'cancelación definitiva' : 'reversión para refacturar',
-      },
-    });
+    await emailFn({ mirrorDealId, title, message: aviso, meta });
 
     log.info({ mirrorDealId, aviso }, 'Aviso de cancelación/reversión PY escrito en deal UY');
   } catch (err) {

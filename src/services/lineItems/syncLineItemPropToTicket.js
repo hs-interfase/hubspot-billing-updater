@@ -29,6 +29,9 @@ import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 import { findMirrorLineItem } from '../mirrorUtils.js';
 import { avisarResponsableTicketPorSyncLI } from '../notifications/liSyncTicketAlert.js';
 import { emailAvisoMirror } from '../notifications/mirrorAlert.js';
+import { mirrorPuntualEnabled } from '../../config/mirrorPuntualFlags.js';
+import { propagarCambioLiAlEspejo } from '../mirror/mirrorLiPuntualSync.js';
+import { parseTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'syncLineItemPropToTicket';
@@ -104,6 +107,18 @@ const DEAL_PROPS_TO_FETCH = [
   'deal_currency_code', 'dolar', 'pais_operativo', 'es_mirror_de_py', 'tipo_de_cupo',
 ];
 
+/**
+ * Período (YYYY-MM-DD) del ticket: la fecha esperada y, si falta, la que trae su
+ * clave. Es lo que enlaza el ticket del ORIGINAL con el ticket del ESPEJO del
+ * mismo período (TANDA D, §3.2 caso 8). (pura, testeable)
+ */
+export function ymdDelTicket(ticket) {
+  const directa = String(ticket?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(directa)) return directa;
+  const parsed = parseTicketKeyFromLineItemKey(ticket?.properties?.of_ticket_key);
+  return parsed?.ok ? parsed.ymd : '';
+}
+
 /** ¿La prop del LI se transfiere al ticket? (pura, testeable) */
 export function isTransferableLiProp(propertyName) {
   if (!propertyName) return false;
@@ -159,8 +174,9 @@ export async function syncLineItemPropToTickets({
   reportErrorFn = reportHubSpotError,
   notifyOwnerFn = avisarResponsableTicketPorSyncLI,
   emailMirrorFn = emailAvisoMirror,
+  propagarEspejoFn = propagarCambioLiAlEspejo,
 }) {
-  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false, ownersNotified: 0 };
+  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false, ownersNotified: 0, mirrorLiCopiado: false, mirrorAvisos: 0 };
 
   if (!isTransferableLiProp(propertyName)) {
     return { ...stats, reason: TRANSFER_EXCLUDED_LI_PROPS.has(propertyName) ? 'excluded' : 'not_mapped' };
@@ -201,7 +217,7 @@ export async function syncLineItemPropToTickets({
   try {
     const resp = await client.crm.tickets.searchApi.doSearch({
       filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) }] }],
-      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'hubspot_owner_id', 'subject', ...affectedKeys],
+      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'fecha_resolucion_esperada', 'hubspot_owner_id', 'subject', ...affectedKeys],
       limit: 100,
     });
     tickets = resp?.results || [];
@@ -231,10 +247,17 @@ export async function syncLineItemPropToTickets({
     if (!alcanzaAlTicket) { stats.skipped++; continue; }
 
     // Patch mínimo: solo las claves cuyo valor difiere.
+    // `antes` guarda lo que el ticket TENÍA: es el único lugar del motor donde
+    // existe el valor anterior, y es lo que el aviso al espejo necesita para
+    // decir "pasó de X a Y" (TANDA D).
     const patch = {};
+    const antes = {};
     for (const k of affectedKeys) {
       const nv = affected[k];
-      if (String(nv ?? '') !== String(t?.properties?.[k] ?? '')) patch[k] = nv;
+      if (String(nv ?? '') !== String(t?.properties?.[k] ?? '')) {
+        patch[k] = nv;
+        antes[k] = t?.properties?.[k];
+      }
     }
     if (!Object.keys(patch).length) continue;
 
@@ -246,6 +269,8 @@ export async function syncLineItemPropToTickets({
         ownerId: t?.properties?.hubspot_owner_id || null,
         subject: t?.properties?.subject || null,
         patch,
+        antes,
+        ymd: ymdDelTicket(t),
       });
       logger.info(
         { module: MODULE, lineItemId, ticketId: t.id, propertyName, patchKeys: Object.keys(patch) },
@@ -258,10 +283,51 @@ export async function syncLineItemPropToTickets({
     }
   }
 
+  // ── TANDA D — EL ESPEJO (flag MIRROR_PUNTUAL_ENABLED, default OFF) ─────────
+  // Con la llave prendida, el espejo deja de enterarse sólo por el deal: se
+  // COPIA la prop al line item espejo (puntual, con traducción costo→precio) y
+  // se AVISA al ticket del espejo del MISMO período, con el antes y el después.
+  //
+  // Este es el único punto del motor donde el valor ANTERIOR existe: `t.properties[k]`
+  // es lo que el ticket tenía y `patch[k]` lo que se le acaba de escribir. Por eso
+  // el antes/después se arma acá y se le pasa hecho al orquestador del espejo.
+  //
+  // Corre aunque no se haya actualizado ningún ticket del original (la copia al
+  // espejo no depende de eso); si no hay períodos, el aviso cae al deal espejo,
+  // que es el comportamiento de hoy.
+  if (mirrorPuntualEnabled()) {
+    try {
+      const cambiosPorPeriodo = [];
+      for (const ut of updatedTickets) {
+        const ymd = ut.ymd || '';
+        if (!ymd) continue;
+        cambiosPorPeriodo.push({ ymd, antes: ut.antes || {}, despues: ut.patch || {} });
+      }
+      const r = await propagarEspejoFn(
+        {
+          lineItemId,
+          propertyName,
+          cambiosPorPeriodo,
+          valorNuevo: lp[propertyName],
+          sourceCurrency: deal?.properties?.deal_currency_code || 'USD',
+        },
+        {}
+      );
+      stats.mirrorLiCopiado = !!r?.copiado;
+      stats.mirrorAvisos = r?.avisos || 0;
+      if (r?.avisos) stats.mirrorNotified = true;
+    } catch (err) {
+      logger.warn({ module: MODULE, lineItemId, err: err?.message }, 'Propagación al espejo falló (no bloquea el sync)');
+    }
+  }
+
   // Aviso puntual al mirror: si cambió algún ticket del ORIGINAL y ese LI tiene mirror (UY),
   // avisar en el deal UY qué prop cambió. findMirrorLineItem trae anti-loop (si el LI ya es de
   // un deal mirror, devuelve null → no avisa). Fire-and-forget: nunca frena el sync.
-  if (stats.ticketsUpdated > 0) {
+  //
+  // Con MIRROR_PUNTUAL_ENABLED el aviso ya salió arriba, al TICKET del espejo (que es
+  // lo que pedía §3.2 caso 2): repetirlo en el deal sería el mismo aviso dos veces.
+  if (stats.ticketsUpdated > 0 && !mirrorPuntualEnabled()) {
     try {
       const mirror = await findMirrorFn(lineItemId);
       if (mirror?.mirrorDealId) {
