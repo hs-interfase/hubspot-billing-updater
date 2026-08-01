@@ -49,7 +49,15 @@ export function ts() {
 export async function resolveOwnerEmail(ownerId) {
   if (!ownerId) return null;
   try {
-    const owner = await hubspotClient.crm.owners.defaultApi.getById(Number(ownerId));
+    // ⚠️ `ownersApi`, NO `defaultApi`: en esta versión del SDK `crm.owners` sólo
+    // expone `ownersApi`, así que `defaultApi` era `undefined` y el getById
+    // tiraba TypeError — que el catch de abajo se tragaba. Resultado:
+    // resolveOwnerEmail devolvía SIEMPRE null, para todo owner, y los avisos
+    // que resuelven destinatarios por acá (los 3 de dealAlerts,
+    // ticketCancelledByEngineAlert y ticketKeptAliveAlert) cortaban en
+    // "sin destinatarios" antes de llegar a sendAlertTo. Detectado en la ronda
+    // de sandbox B+C (1-ago-2026); venía desde e1e315e (18-may-2026).
+    const owner = await hubspotClient.crm.owners.ownersApi.getById(Number(ownerId));
     return owner?.email || null;
   } catch (err) {
     logger.warn({ module: MOD, fn: 'resolveOwnerEmail', ownerId, err: err?.message }, 'No se pudo resolver email del owner');

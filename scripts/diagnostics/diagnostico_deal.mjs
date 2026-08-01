@@ -27,7 +27,7 @@ async function main() {
   console.log('══════════════════════════════════════');
   if (dp.hubspot_owner_id) {
     try {
-      const owner = await hubspot.crm.owners.defaultApi.getById(parseInt(dp.hubspot_owner_id));
+      const owner = await hubspot.crm.owners.ownersApi.getById(parseInt(dp.hubspot_owner_id));
       console.log('Nombre:', `${owner.firstName} ${owner.lastName}`.trim());
       console.log('Email:', owner.email);
     } catch (e) {
