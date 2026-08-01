@@ -15,6 +15,7 @@ import { isDealCancelledStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
 import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
 import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
+import { syncDealPropToTickets } from './services/deal/syncDealPropToTicket.js';
 import { recalcValorTotal } from './services/deal/recalcValorTotal.js';
 import { syncTicketCompanyLabels } from './services/tickets/syncTicketCompanyLabels.js';
 import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
@@ -82,7 +83,7 @@ export async function initWebhookQueueTable() {
  * @param {string} [params.propertyName]
  * @param {string} [params.propertyValue]
  * @param {string} [params.dealId]       - puede ser null, se resuelve en el worker
- * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request' | 'ticket_label_sync'
+ * @param {string} params.actionType     - 'urgent_ticket' | 'recalc' | 'ticket_update' | 'deal_cancel' | 'product_reassign' | 'li_prop_sync' | 'deal_prop_sync' | 'valor_recalc' | 'ticket_cancel_request' | 'ticket_revert_request' | 'ticket_label_sync'
  * @param {number} [params.priority=0]   - 1 = urgente, 0 = normal
  * @param {string} [params.eventId]
  * @param {Object} [params.rawPayload]
@@ -631,6 +632,23 @@ async function executeJob(job) {
       logger.info(
         { module: MODULE, fn: 'executeJob', jobId: job.id, lineItemId: object_id, propertyName: property_name, ...result },
         'li_prop_sync completado'
+      );
+      return result;
+    }
+
+    case 'deal_prop_sync': {
+      // TANDA E (§5.bis): cambió el VENDEDOR (hubspot_owner_id) o la MONEDA
+      // (deal_currency_code) DEL NEGOCIO → bajar sólo esa prop a los tickets del negocio
+      // que el motor todavía manda (pipeline manual, no notificados). Gemelo del
+      // li_prop_sync pero del lado del negocio: estas dos props NO salen del line item.
+      // El guard de llave vive adentro de syncDealPropToTickets (devuelve flag_off).
+      const result = await syncDealPropToTickets({
+        dealId: object_id,
+        propertyName: property_name,
+      });
+      logger.info(
+        { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: object_id, propertyName: property_name, ...result },
+        'deal_prop_sync completado'
       );
       return result;
     }
