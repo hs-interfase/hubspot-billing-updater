@@ -40,6 +40,7 @@ import { getDolar } from '../services/fxService.js';
 import { setCronState } from '../db.js';
 import { sendAlert, pingHeartbeat } from '../../lib/alertService.js';
 import { resolverEntidadFacturadora } from '../services/billing/resolverEntidadFacturadora.js';
+import { subirReporteASharepoint } from '../services/export/sharepointUploader.js';
 import { lastBusinessDayOfMonth, formatDateISO } from '../utils/dateUtils.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -1032,8 +1033,18 @@ export async function runExportCron({ dry = false, localOnly = false } = {}) {
     if (!localOnly) {
       const sendResult = await sendToExternalUrl(buffer, filename);
       result.externalSend = sendResult;
+
+      // SharePoint de Interfase (pedido de Pablo 31-jul): los 3 CSV a "Output Hubspot".
+      // Queda inerte mientras no estén las credenciales; nunca corta el cron.
+      result.sharepoint = await subirReporteASharepoint({
+        csvData,
+        xlsxBuffer: buffer,
+        xlsxFilename: filename,
+        fecha: new Date().toISOString().slice(0, 10),
+      });
     } else {
       result.externalSend = { sent: false, reason: 'local_only_mode' };
+      result.sharepoint = { subido: false, motivo: 'local_only_mode' };
     }
 
     result.success = true;
