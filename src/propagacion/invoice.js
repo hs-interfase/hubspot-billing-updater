@@ -37,9 +37,12 @@ import {
 import { recalcFacturasRestantes } from '../services/billing/recalcFacturasRestantes.js';
 import { buildPagoDisplay } from '../services/billing/syncBillingState.js';
 import { revertCupoForInvoice } from '../services/cupo/revertCupo.js';
+import { consumeCupoAfterInvoice } from '../services/cupo/consumeCupo.js';
 import {
   cancelRevertFlowEnabled,
   cupoRevertOnCancelEnabled,
+  cupoAsientoEnEmisionEnabled,
+  esEtapaFacturaAsentable,
 } from '../config/cancelRevertFlags.js';
 import { notifyAdminOnRevert } from '../services/notifications/adminRevertAlert.js';
 import { notifyMirrorDealOnCancelOrRevert } from '../services/mirrorUtils.js';
@@ -749,6 +752,55 @@ export async function propagateInvoiceStateToTicket(invoiceId, { cancelIntent = 
     }
   } else {
     logger.info({ module: mod, fn, invoiceId, ticketId }, 'Ticket sin cambios necesarios, skip update');
+  }
+
+  // 5a-bis. ASIENTO DEL CUPO EN LA EMISIÓN (§1 del plan, decisión D2).
+  //
+  // Con CUPO_ASIENTO_EN_EMISION_ENABLED prendida, el cupo se asienta ACÁ —
+  // cuando la factura llega a «Emitida» o posterior — en vez de al crearla
+  // (invoiceService.js paso 11, que bajo la misma llave no consume).
+  // Es el punto correcto porque por acá pasan los dos caminos por los que el
+  // sistema se entera de que la factura se emitió de verdad: el editor externo
+  // (PATCH → propagateInvoiceStateToTicket) y el pipeline de Nodum.
+  //
+  // «Cancelada» NO cae acá: tiene su propia rama abajo, que REVIERTE.
+  //
+  // Idempotencia: consumeCupoAfterInvoice ya corta por el marker
+  // `cupo_consumo_invoice_id` del ticket, así que las re-propagaciones de la
+  // misma factura (el cron que re-propaga, un PATCH que vuelve a mandar la
+  // etapa) no consumen dos veces.
+  //
+  // 🔴 Y no confundir con un freno: esto REGISTRA, no impide. Hoy no existe
+  // ningún chequeo que impida facturar por encima del cupo (ver el comentario
+  // largo en config/cancelRevertFlags.js).
+  if (cupoAsientoEnEmisionEnabled() && esEtapaFacturaAsentable(etapa)) {
+    const dealIdAsiento = (tp.of_deal_id || '').trim() || null;
+    if (!dealIdAsiento) {
+      logger.warn(
+        { module: mod, fn, invoiceId, ticketId, etapa },
+        'Sin of_deal_id en el ticket: no se puede asentar el cupo automáticamente'
+      );
+    } else {
+      try {
+        const asiento = await consumeCupoAfterInvoice({
+          dealId: dealIdAsiento,
+          ticketId,
+          lineItemId,
+          invoiceId,
+        });
+        logger.info(
+          { module: mod, fn, invoiceId, ticketId, etapa, asiento },
+          'Asiento de cupo en la emisión'
+        );
+      } catch (err) {
+        // Mismo criterio que el consumo al crear la factura: el cupo es
+        // contabilidad, no puede tumbar la propagación de una factura ya emitida.
+        logger.error(
+          { module: mod, fn, invoiceId, ticketId, etapa, err },
+          'Error asentando cupo en la emisión (no interrumpe la propagación)'
+        );
+      }
+    }
   }
 
 // 5b. Lógica de cancelación — bifurcación cancel/revert:

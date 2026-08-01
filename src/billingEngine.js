@@ -5,6 +5,10 @@ import logger from '../lib/logger.js';
 import { reportHubSpotWarn } from "./utils/hubspotErrorCollector.js";
 import { reportIfActionable } from "./utils/errorReporting.js";
 import { createLineItemWriteBuffer } from './services/lineItems/lineItemWriteBuffer.js';
+// TANDA C — `last_ticketed_date` se elimina; el piso de "lo que ya pasó" es la
+// fecha NOTIFICADO. Acá no hay tickets a mano, así que se lee la prop del LI
+// (`last_billing_period`), que mantiene recalcFromTickets.
+import { fechaNotificadaDelLineItem } from './utils/ticketFrontera.js';
 
 /**
  * =============================================================================
@@ -494,8 +498,9 @@ if (dealContext?.dealId) {
   // Si llegamos acá, hay startDate y es regular
   const todayYmd = getTodayYMD();
 
-  // ✅ si ya hay last_ticketed_date, la próxima debe ser DESPUÉS de esa fecha
-  const lastTicketedYmd = (p.last_ticketed_date || '').toString().slice(0, 10);
+  // ✅ si ya hay una fecha NOTIFICADA, la próxima debe ser DESPUÉS de esa fecha
+  // (llave apagada: `last_ticketed_date`, igual que siempre)
+  const lastTicketedYmd = fechaNotificadaDelLineItem(p);
 
   let effectiveTodayYmd = todayYmd;
   if (lastTicketedYmd) {
@@ -725,13 +730,22 @@ function startOfDay(date) {
   return d;
 }
 
+/**
+ * La última fecha facturada A NIVEL NEGOCIO (deal.facturacion_ultima_fecha).
+ *
+ * TANDA C: pasa a leer la fecha NOTIFICADO del line item. Con la llave
+ * prendida `last_ticketed_date` deja de escribirse, y si esto la siguiera
+ * leyendo la propiedad del negocio se congelaría en el último valor viejo —
+ * exactamente el "se vacía en silencio y nadie lo nota hasta que alguien mira
+ * un informe" que esta tanda tiene que evitar.
+ */
 export function computeLastBillingDateFromLineItems(lineItems, today = new Date()) {
   const todayStart = startOfDay(today);
   let maxPast = null;
 
   for (const li of lineItems) {
     const p = li?.properties || {};
-    const raw = (p.last_ticketed_date || "").toString().slice(0, 10);
+    const raw = fechaNotificadaDelLineItem(p);
     if (!raw) continue;
 
     const d = parseLocalDate(raw);
@@ -761,7 +775,7 @@ function collectAllBillingDatesFromLineItem(lineItem) {
     dates.push(d);
   };
 
-  add((p.last_ticketed_date || "").toString().slice(0, 10));
+  add(fechaNotificadaDelLineItem(p));
   add((p.billing_next_date || "").toString().slice(0, 10));
   add(p.fecha_inicio_de_facturacion || p.hs_recurring_billing_start_date);
   add((p.fecha_irregular_puntual || "").toString().slice(0, 10));
@@ -802,9 +816,9 @@ export function getNextBillingDateForLineItem(lineItem, today = new Date()) {
   const interval = config?.interval ?? null;
   const startDate = config?.startDate ?? null;
 
-  // 4) Floor: max(hoy, lastTicketed+1)
+  // 4) Floor: max(hoy, últimaNotificada+1)
   // Nota: >= hoy permite facturar hoy si el anchor cae hoy
-  const lastTicketedYmd = (p.last_ticketed_date || '').toString().slice(0, 10);
+  const lastTicketedYmd = fechaNotificadaDelLineItem(p);
   let floorYmd = todayYmd;
   if (lastTicketedYmd) {
     const d = parseLocalDate(lastTicketedYmd);
@@ -878,7 +892,7 @@ export function computeLineItemCounters(lineItem, today = new Date()) {
   const proximaFecha = getNextBillingDateForLineItem(lineItem, today);
 
   let ultimaFecha = null;
-  const lastTicketedYmd = (props.last_ticketed_date || "").toString().slice(0, 10);
+  const lastTicketedYmd = fechaNotificadaDelLineItem(props);
   if (lastTicketedYmd) {
     const d = parseLocalDate(lastTicketedYmd);
     if (d && !Number.isNaN(d.getTime())) {
@@ -914,7 +928,7 @@ export function computeBillingCountersForLineItem(lineItem, today = new Date()) 
   const proximaFecha = getNextBillingDateForLineItem(lineItem, today);
 
   let ultimaFecha = null;
-  const lastTicketedYmd = (p.last_ticketed_date || "").toString().slice(0, 10);
+  const lastTicketedYmd = fechaNotificadaDelLineItem(p);
   if (lastTicketedYmd) {
     const d = parseLocalDate(lastTicketedYmd);
     if (d && !Number.isNaN(d.getTime())) {

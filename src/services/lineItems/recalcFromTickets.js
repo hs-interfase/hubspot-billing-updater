@@ -14,6 +14,29 @@
 //   I3: billing_next_date = '' cuando promotedCount + emittedCount >= numberOfPayments
 //   I4: Si no hay forecasts visibles → NO borrar billing_next_date existente
 //
+// ═══════════════════════════════════════════════════════════════════════════
+// TANDA C — CON ETAPA_UNICA_ENABLED PRENDIDA, ESTE MÓDULO ES LA FUENTE ÚNICA
+// ═══════════════════════════════════════════════════════════════════════════
+// Ver definitivos/PLAN_proximos_cambios_tickets_2026-07-29.md §2.5. Las cuatro
+// fechas pasan a ser TRES y los contadores dejan de ser estado acumulado:
+//
+//   PRÓXIMA    billing_next_date        = la próxima fecha NO NOTIFICADA
+//   NOTIFICADO last_billing_period      = la última que cruzó la frontera
+//   CONFIRMADO billing_last_billed_date = la última fecha REAL de Nodum (sin cambio)
+//   last_ticketed_date                  → YA NO SE ESCRIBE (se elimina)
+//   pagos_restantes                     = total − consumidos (DERIVADO, no decremental)
+//
+// El punto donde se descuenta una cuota pasa a ser EL PASO A «NOTIFICADO»
+// (decisión de la usuaria, 31-jul): como el número se deriva del conteo de
+// tickets que cruzaron la frontera, el descuento ocurre exactamente ahí, sin
+// evento que perder ni doble descuento que arrastrar.
+//
+// 🙋 No hay suscripción de webhook sobre `ticket.propertyChange /
+// hs_pipeline_stage` (ver docs/WEBHOOK_SUBSCRIPTIONS_prod_2026-07-14.md): el
+// motor se entera de la notificación en su próxima pasada sobre el negocio
+// (cron diario / fin de semana / «Actualizar»), no en el instante. Para un
+// número derivado eso es latencia, no error — converge solo.
+//
 // Diseñada para ser llamada desde:
 //   - Phase 1 (recalcula al inicio del ciclo, corrige drift)
 //   - Phase 2 / Phase 3 (después de promover un ticket)
@@ -38,6 +61,14 @@ import { getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
 import { createTicketAssociations, getDealCompanies, getDealContacts } from '../tickets/ticketService.js';
 import { syncLineItemAfterPromotion } from './syncAfterPromotion.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import {
+  fechaUltimaNotificada,
+  fechaProximaNoNotificada,
+  contarConsumidos,
+  isTicketEngineManaged,
+} from '../../utils/ticketFrontera.js';
+import { alertPagosCompletos } from '../notifications/dealAlerts.js';
 
 const MOD = 'recalcFromTickets';
 
@@ -64,9 +95,22 @@ function toYmd(raw) {
 
 /**
  * Busca TODOS los tickets no-cancelados para un lineItemKey en un pipeline.
- * Retorna array de { id, stage, pipelineId, fechaEsperada, fechaReal }.
+ * Retorna array de { id, stage, pipelineId, fechaEsperada, fechaReal, properties }.
+ *
+ * TANDA C — con ETAPA_UNICA_ENABLED los CANCELADO **dejan de descartarse en
+ * bloque**: el cancelado CON `of_invoice_id` es un período CERRADO por
+ * cancelación definitiva de su factura, así que consumió su cuota y fija la
+ * fecha NOTIFICADO igual que un emitido. Descartarlo acá haría que el motor
+ * volviera a armar esa fecha y refacturara el período. Quién es quién lo
+ * decide `hasTicketCrossedFrontier` (utils/ticketFrontera.js), no este filtro.
+ * Con la llave apagada se siguen excluyendo todos, como hoy.
+ *
+ * `properties` viaja con la fecha ya normalizada a YYYY-MM-DD para que los
+ * helpers de la frontera lean exactamente el mismo valor que este módulo (el
+ * search puede devolver epoch ms).
  */
-async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
+async function fetchTicketsForLIK({ lineItemKey, pipelineId, client = hubspotClient }) {
+  const excluirCancelados = !etapaUnicaEnabled();
   const cancelledStages = new Set([
     TICKET_STAGES.CANCELLED,
     BILLING_AUTOMATED_CANCELLED,
@@ -91,6 +135,7 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
         'fecha_resolucion_esperada',
         'fecha_real_de_facturacion',
         'of_ticket_key',
+        'of_invoice_id',   // TANDA C: separa el CANCELADO con período cerrado del que canceló el motor
       ],
       sorts: [{ propertyName: 'fecha_resolucion_esperada', direction: 'ASCENDING' }],
       limit: 100,
@@ -102,7 +147,7 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
 
     let res;
     try {
-      res = await hubspotClient.crm.tickets.searchApi.doSearch(searchBody);
+      res = await client.crm.tickets.searchApi.doSearch(searchBody);
     } catch (err) {
       logger.warn({ module: MOD, fn: 'fetchTicketsForLIK', lineItemKey, pipelineId, err },
         'Error buscando tickets para LIK');
@@ -114,8 +159,8 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
       const p = t?.properties || {};
       const stage = String(p.hs_pipeline_stage || '');
 
-      // Excluir cancelados
-      if (cancelledStages.has(stage)) continue;
+      // Excluir cancelados (flag OFF: todos, como hoy)
+      if (excluirCancelados && cancelledStages.has(stage)) continue;
 
       // Extraer fecha esperada (preferir propiedad, fallback a ticket key)
       let fechaEsperada = toYmd(p.fecha_resolucion_esperada);
@@ -131,6 +176,11 @@ async function fetchTicketsForLIK({ lineItemKey, pipelineId }) {
         pipelineId, // sabemos el pipeline porque el search filtra por él
         fechaEsperada,
         fechaReal: toYmd(p.fecha_real_de_facturacion),
+        properties: {
+          ...p,
+          hs_pipeline: String(pipelineId),
+          fecha_resolucion_esperada: fechaEsperada,
+        },
       });
     }
 
@@ -167,7 +217,7 @@ function resolveTargetPromotionStage(pipelineId) {
  * Promueve un ticket forecast con fecha pasada (auto→READY / manual→PRÓXIMOS).
  * Retorna true si se promovió, false si falló.
  */
-async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId, lineItemId }) {
+async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lineItemKey, dealId, lineItemId, client = hubspotClient }) {
   const targetStage = resolveTargetPromotionStage(pipelineId);
   if (!targetStage) {
     logger.warn({ module: MOD, fn: 'promotePastDueForecast', ticketId, pipelineId },
@@ -176,7 +226,7 @@ async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lin
   }
 
   try {
-    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
+    await client.crm.tickets.basicApi.update(String(ticketId), {
       properties: { hs_pipeline_stage: String(targetStage) },
     });
 
@@ -243,9 +293,13 @@ async function promotePastDueForecast({ ticketId, pipelineId, fechaEsperada, lin
  * @param {boolean} [params.applyUpdate=true] - si false, solo retorna los valores sin escribir
  * @param {object} [params.lineItemProps] - propiedades del line item ya leídas (evita un getById extra)
  * @param {boolean} [params.facturacionActiva=false] - si true, habilita I1 (promover forecasts pasados)
+ * @param {object} [params.client] - cliente de HubSpot inyectable (default: el de producción).
+ *   Existe para poder ejercitar el camino real en los tests, igual que en las tandas A y B.
+ * @param {string} [params.overrideToday] - YYYY-MM-DD para fijar "hoy" (tests).
+ *   Misma convención que buildDesiredDates en phasep.js.
  * @returns {object} { lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate,
  *                     updates, changed, skipped, promotedCount, emittedCount, forecastCount,
- *                     pastDuePromoted }
+ *                     pastDuePromoted, consumidos, pagosRestantes }
  */
 export async function recalcFromTickets({
   lineItemKey,
@@ -254,13 +308,16 @@ export async function recalcFromTickets({
   applyUpdate = true,
   lineItemProps = null,
   facturacionActiva = false,
+  client = hubspotClient,
+  overrideToday = '',
 }) {
   const fn = 'recalcFromTickets';
-  const todayYmd = getTodayYMD();
+  const todayYmd = overrideToday || getTodayYMD();
   const EMPTY_RESULT = {
     lastTicketedDate: '', lastBillingPeriod: '', billingLastBilledDate: '',
     billingNextDate: '', updates: {}, changed: false, skipped: true,
     promotedCount: 0, emittedCount: 0, forecastCount: 0, pastDuePromoted: 0,
+    consumidos: 0, pagosRestantes: null,
   };
 
   if (!lineItemKey) {
@@ -291,8 +348,8 @@ export async function recalcFromTickets({
 
   // 1) Traer todos los tickets de ambos pipelines
   const [ticketsManual, ticketsAuto] = await Promise.all([
-    fetchTicketsForLIK({ lineItemKey, pipelineId: TICKET_PIPELINE }),
-    fetchTicketsForLIK({ lineItemKey, pipelineId: AUTOMATED_TICKET_PIPELINE }),
+    fetchTicketsForLIK({ lineItemKey, pipelineId: TICKET_PIPELINE, client }),
+    fetchTicketsForLIK({ lineItemKey, pipelineId: AUTOMATED_TICKET_PIPELINE, client }),
   ]);
 
   const allTickets = [...ticketsManual, ...ticketsAuto];
@@ -308,7 +365,7 @@ export async function recalcFromTickets({
   let skipPastDuePromotion = false;
   if (facturacionActiva && dealId) {
     try {
-      const dealForMirrorCheck = await hubspotClient.crm.deals.basicApi.getById(
+      const dealForMirrorCheck = await client.crm.deals.basicApi.getById(
         String(dealId), ['es_mirror_de_py']
       );
       if (parseBool(dealForMirrorCheck?.properties?.es_mirror_de_py)) {
@@ -336,11 +393,16 @@ export async function recalcFromTickets({
         lineItemKey,
         dealId,
         lineItemId,   // ← nuevo
+        client,
       });
 
       if (promoted) {
-        // Reclasificar en memoria para que el cálculo de abajo lo trate como PROMOTED
+        // Reclasificar en memoria para que el cálculo de abajo lo trate como PROMOTED.
+        // `properties` va en el mismo movimiento: es lo que leen los helpers de
+        // la frontera, y si queda con la etapa vieja el ticket recién promovido
+        // se contaría del lado equivocado.
         t.stage = resolveTargetPromotionStage(t.pipelineId);
+        t.properties = { ...t.properties, hs_pipeline_stage: t.stage };
         pastDuePromoted++;
       }
     }
@@ -392,37 +454,70 @@ export async function recalcFromTickets({
     billingNextDate = forecastDatesAll[0];
   }
 
-  // ====== I2: billing_next_date nunca puede ser < last_ticketed_date ======
-  if (billingNextDate && lastTicketedDate && billingNextDate < lastTicketedDate) {
+  // ══════════════════════════════════════════════════════════════════════
+  // TANDA C — LAS TRES FECHAS (reemplazan lo calculado arriba, flag ON)
+  // ══════════════════════════════════════════════════════════════════════
+  const etapaUnica = etapaUnicaEnabled();
+
+  // Candidatas NO NOTIFICADAS y futuras (equivalente de forecastDatesAll bajo
+  // la frontera nueva) — se necesita la lista, no sólo el mínimo, para I2.
+  const noNotificadasFuturas = etapaUnica
+    ? allTickets
+        .filter(t => isTicketEngineManaged(t) && t.fechaEsperada && t.fechaEsperada > todayYmd)
+        .map(t => t.fechaEsperada)
+        .sort()
+    : forecastDatesAll;
+
+  if (etapaUnica) {
+    // NOTIFICADO — la última fecha que cruzó la frontera. Es el mismo número
+    // que el piso del cronograma (resolveFloorSourceYmd en phasep.js).
+    lastBillingPeriod = fechaUltimaNotificada(allTickets);
+    // PRÓXIMA — la próxima fecha no notificada.
+    billingNextDate = fechaProximaNoNotificada(allTickets, todayYmd);
+    // last_ticketed_date SE ELIMINA: no se calcula ni se escribe.
+    lastTicketedDate = '';
+    // CONFIRMADO (billingLastBilledDate) queda como está: la fecha real de Nodum
+    // no depende de la frontera.
+  }
+
+  // ====== I2: la PRÓXIMA nunca puede ser anterior a lo ya NOTIFICADO ======
+  // (flag OFF: billing_next_date >= last_ticketed_date, igual que hoy)
+  const pisoI2 = etapaUnica ? lastBillingPeriod : lastTicketedDate;
+  if (billingNextDate && pisoI2 && billingNextDate < pisoI2) {
     logger.warn({
       module: MOD, fn, lineItemKey, dealId,
-      billingNextDate, lastTicketedDate,
-    }, 'INVARIANT_I2: billing_next_date < last_ticketed_date → buscando siguiente válido');
+      billingNextDate, piso: pisoI2, etapaUnica,
+    }, 'INVARIANT_I2: billing_next_date anterior al piso → buscando siguiente válido');
 
-    // Buscar el primer forecast con fecha > lastTicketedDate
-    const valid = forecastDatesAll.filter(d => d > lastTicketedDate);
+    const valid = noNotificadasFuturas.filter(d => d > pisoI2);
     billingNextDate = valid.length > 0 ? valid[0] : '';
   }
 
   // ====== CONTEO ======
   const promotedCount = allTickets.filter(t => PROMOTED_STAGES.has(t.stage)).length;
   const emittedCount = allTickets.filter(t => EMITTED_STAGES.has(t.stage)).length;
-  const forecastCount = forecastDatesAll.length;
+  const forecastCount = noNotificadasFuturas.length;
+
+  // CONSUMIDOS — cuántas cuotas del plan ya se gastaron.
+  // Flag OFF: `promotedCount`, que cuenta PROMOTED_STAGES e **incluye «Próximos
+  // a facturar»**. Con la etapa única eso es el bloqueante #1 anotado en
+  // etapaUnicaFlags.js: todo el cronograma de un plan ganado vive en «Próximos»
+  // ⇒ promotedCount = 12 ≥ 12 ⇒ I3 da el plan por completo y vacía
+  // billing_next_date SIN HABER FACTURADO NADA.
+  // Flag ON: consumido = cruzó la frontera (notificado, emitido, o período
+  // cerrado). Misma cuenta que el `maxCount` de buildDesiredDates.
+  const consumidos = etapaUnica ? contarConsumidos(allTickets) : promotedCount;
 
   // ====== I3: billing_next_date = '' cuando el plan terminó ======
   if (numberOfPayments > 0) {
-    const totalResolved = promotedCount + emittedCount;
-    // Nota: promotedCount incluye emittedCount (EMITTED ⊂ PROMOTED),
-    // pero lo que importa es: ¿ya hay suficientes tickets no-forecast?
-    // promotedCount ya cuenta READY + INVOICED + LATE + PAID,
-    // por lo que promotedCount >= emittedCount siempre.
-    // Usamos solo promotedCount (que incluye todos los no-forecast no-cancelled).
-    if (promotedCount >= numberOfPayments) {
+    // Nota (flag OFF): promotedCount incluye emittedCount (EMITTED ⊂ PROMOTED),
+    // por lo que alcanza con promotedCount (todos los no-forecast no-cancelled).
+    if (consumidos >= numberOfPayments) {
       if (billingNextDate) {
         logger.info({
           module: MOD, fn, lineItemKey, dealId,
-          promotedCount, numberOfPayments, billingNextDate,
-        }, 'INVARIANT_I3: plan completo (promoted >= payments) → billing_next_date = vacío');
+          consumidos, numberOfPayments, billingNextDate, etapaUnica,
+        }, 'INVARIANT_I3: plan completo (consumidos >= payments) → billing_next_date = vacío');
       }
       billingNextDate = '';
     }
@@ -430,7 +525,7 @@ export async function recalcFromTickets({
 
   logger.debug({
     module: MOD, fn, lineItemKey, dealId,
-    promotedCount, emittedCount, forecastCount, pastDuePromoted,
+    promotedCount, emittedCount, forecastCount, pastDuePromoted, consumidos,
     lastTicketedDate, lastBillingPeriod, billingLastBilledDate, billingNextDate,
   }, 'Recalc ticket summary');
 
@@ -438,11 +533,16 @@ export async function recalcFromTickets({
   let currentProps = {};
   if (lineItemId && applyUpdate) {
     try {
-      const liResp = await hubspotClient.crm.lineItems.basicApi.getById(String(lineItemId), [
+      const liResp = await client.crm.lineItems.basicApi.getById(String(lineItemId), [
         'last_ticketed_date',
         'last_billing_period',
         'billing_last_billed_date',
         'billing_next_date',
+        'pagos_restantes',
+        // TANDA C: varios call sites (phase2/phase3) llaman sin `lineItemProps`,
+        // y sin el total no se puede derivar pagos_restantes. Va en el GET que
+        // ya se hacía: cero llamadas extra.
+        'hs_recurring_billing_number_of_payments',
       ]);
       currentProps = liResp?.properties || {};
     } catch (err) {
@@ -456,9 +556,35 @@ export async function recalcFromTickets({
   const currentBillingLastBilled = toYmd(currentProps.billing_last_billed_date);
   const currentNext = toYmd(currentProps.billing_next_date);
 
+  // ====== PAGOS RESTANTES — DERIVADO (TANDA C, sólo flag ON) ======
+  // Deja de ser el contador decremental de syncAfterPromotion (que descontaba
+  // en la promoción de Phase 2 — bajo la llave ya no ocurre, bloqueante #3 de
+  // etapaUnicaFlags.js) y pasa a ser total − consumidos. El descuento cae
+  // entonces exactamente en el paso a «Notificado», que es la decisión tomada.
+  // Sólo para plan fijo: en auto-renew no hay total y no se inventa un número.
+  //
+  // El total se toma de `lineItemProps` y, si el call site no las pasó, de la
+  // lectura de arriba. Se mantiene APARTE de `numberOfPayments` a propósito:
+  // esa variable alimenta I3/I4 y cambiarle la fuente movería el
+  // comportamiento con la llave APAGADA.
+  const totalPagosDerivado = (() => {
+    if (numberOfPayments > 0) return numberOfPayments;
+    const parsed = Number.parseInt(String(currentProps.hs_recurring_billing_number_of_payments ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  })();
+
+  let pagosRestantes = null;
+  if (etapaUnica && totalPagosDerivado > 0) {
+    pagosRestantes = Math.max(0, totalPagosDerivado - consumidos);
+  }
+
   // 4) Construir update mínimo (solo propiedades que cambiaron)
   const updates = {};
-  if (lastTicketedDate !== currentLast) {
+  // `last_ticketed_date` SE ELIMINA con la llave prendida: no se escribe ni
+  // para vaciarla. Vaciarla sería un write masivo sobre todo el portal y
+  // rompería la red de seguridad de resolveFloorSourceYmd (phasep.js), que la
+  // usa como último recurso cuando la búsqueda de tickets vuelve vacía.
+  if (!etapaUnica && lastTicketedDate !== currentLast) {
     updates.last_ticketed_date = lastTicketedDate;
   }
   if (lastBillingPeriod !== currentBillingPeriod) {
@@ -468,19 +594,29 @@ export async function recalcFromTickets({
     updates.billing_last_billed_date = billingLastBilledDate;
   }
 
-  // ====== I4: billing_next_date — no vaciar si no hay forecasts visibles ======
-  if (forecastCount > 0 || (numberOfPayments > 0 && promotedCount >= numberOfPayments)) {
-    // Hay forecasts, O el plan está completo (I3 ya puso billingNextDate='')
-    // → usar el valor calculado
+  // ====== I4: billing_next_date — no vaciar si no hay candidatos visibles ======
+  if (forecastCount > 0 || (numberOfPayments > 0 && consumidos >= numberOfPayments)) {
+    // Hay candidatos no notificados, O el plan está completo (I3 ya puso
+    // billingNextDate='') → usar el valor calculado
     if (billingNextDate !== currentNext) {
       updates.billing_next_date = billingNextDate;
     }
   } else if (currentNext && !billingNextDate) {
-    // No hay forecasts y no podemos confirmar plan completo → proteger
+    // No hay candidatos y no podemos confirmar plan completo → proteger
     logger.info({ module: MOD, fn, lineItemKey, dealId, lineItemId, currentNext },
-      'INVARIANT_I4: billing_next_date protegido: no hay forecasts visibles, manteniendo valor actual');
+      'INVARIANT_I4: billing_next_date protegido: no hay candidatos visibles, manteniendo valor actual');
   } else if (billingNextDate !== currentNext) {
     updates.billing_next_date = billingNextDate;
+  }
+
+  // pagos_restantes derivado — sólo si cambió, y sólo con la llave prendida.
+  const currentPagosRestantesRaw = currentProps.pagos_restantes;
+  const currentPagosRestantes = Number.parseInt(String(currentPagosRestantesRaw ?? ''), 10);
+  const pagosRestantesCambio =
+    pagosRestantes !== null &&
+    (!Number.isFinite(currentPagosRestantes) || currentPagosRestantes !== pagosRestantes);
+  if (pagosRestantesCambio) {
+    updates.pagos_restantes = String(pagosRestantes);
   }
 
   const changed = Object.keys(updates).length > 0;
@@ -488,9 +624,26 @@ export async function recalcFromTickets({
   // 5) Aplicar update si corresponde
   if (changed && lineItemId && applyUpdate) {
     try {
-      await hubspotClient.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
+      await client.crm.lineItems.basicApi.update(String(lineItemId), { properties: updates });
       logger.info({ module: MOD, fn, lineItemKey, dealId, lineItemId, updates },
         'Line item actualizado desde tickets');
+
+      // Alerta «pagos completos»: la disparaba syncAfterPromotion al llegar el
+      // decremento a 0. Con el contador derivado ese decremento ya no pasa por
+      // ahí, así que la alerta se emite acá — SÓLO EN LA TRANSICIÓN a 0, igual
+      // que antes (si ya estaba en 0 y se reconfirma, no se avisa: es la misma
+      // lección del re-disparo sin transición que costó el fix del 22-jul).
+      // `alertPagosCompletos` respeta DEAL_ALERTS_ENABLED por su cuenta.
+      if (
+        etapaUnica &&
+        pagosRestantes === 0 &&
+        pagosRestantesCambio &&
+        Number.isFinite(currentPagosRestantes)
+      ) {
+        alertPagosCompletos({ dealId, lineItemId, lineItemName: null })
+          .catch(err => logger.warn({ module: MOD, fn, lineItemId, err: err?.message },
+            'alertPagosCompletos falló (no bloquea)'));
+      }
     } catch (err) {
       logger.error({ module: MOD, fn, lineItemKey, dealId, lineItemId, updates, err },
         'Error actualizando line item desde tickets');
@@ -512,5 +665,7 @@ export async function recalcFromTickets({
     emittedCount,
     forecastCount,
     pastDuePromoted,
+    consumidos,
+    pagosRestantes,
   };
 }

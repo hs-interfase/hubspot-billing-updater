@@ -3,21 +3,31 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import logger from '../../../lib/logger.js';
 import {
-  FORECAST_MANUAL_STAGES,
-  FORECAST_AUTO_STAGES,
   CANCELLED_STAGE_BY_PIPELINE,
+  TICKET_PIPELINE,
   isForecastStage,
 } from '../../config/constants.js';
-
-// Unión de todos los stages forecast (manuales + automáticos)
-const FORECAST_STAGES = new Set([...FORECAST_MANUAL_STAGES, ...FORECAST_AUTO_STAGES]);
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import { isTicketEngineManaged } from '../../utils/ticketFrontera.js';
+import { getTodayYMD, diffDays } from '../../utils/dateUtils.js';
+import { notifyTicketKeptAlive } from '../../services/notifications/ticketKeptAliveAlert.js';
 
 function isForecastTicket(ticket) {
   const stage = String(ticket?.properties?.hs_pipeline_stage || '');
   return isForecastStage(stage);
 }
 
-async function findTicketsByLineItemKey(lineItemKey) {
+// "No notificado" = todo lo que está del lado futuro de la frontera (ver
+// PLAN_proximos_cambios_tickets_2026-07-29.md §2.0): forecast (manual hasta
+// 75% + auto completo) y, bajo ETAPA_UNICA_ENABLED, «Próximos a facturar».
+// Los tickets ya en Notificado/Emitido/etc. no entran acá: son intocables.
+//
+// El predicado es el MISMO que usa Phase P (utils/ticketFrontera.js) — TANDA B
+// lo centralizó ahí para que no haya dos definiciones de la frontera. Con la
+// flag apagada devuelve exactamente los forecast, igual que isForecastTicket.
+const isNotNotifiedTicket = isTicketEngineManaged;
+
+async function findTicketsByLineItemKey(lineItemKey, client) {
   if (!lineItemKey) return [];
 
   const body = {
@@ -28,26 +38,125 @@ async function findTicketsByLineItemKey(lineItemKey) {
         ],
       },
     ],
-    properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'of_line_item_key'],
+    properties: [
+      'hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'of_line_item_key',
+      'fecha_resolucion_esperada', 'hubspot_owner_id',
+    ],
     limit: 100,
   };
 
-  const resp = await hubspotClient.crm.tickets.searchApi.doSearch(body);
+  const resp = await client.crm.tickets.searchApi.doSearch(body);
   return resp?.results || [];
 }
 
 /**
- * Cancela todos los tickets en stage FORECAST para los line items del deal.
+ * El ticket MANUAL (pipeline === TICKET_PIPELINE) con fecha_resolucion_esperada
+ * más cercana a hoy (por valor absoluto de la diferencia en días). Empate →
+ * la fecha más próxima al futuro, y si sigue empatado, el id más bajo
+ * (determinístico, mismo criterio que associateOnClosedWon.js).
+ */
+function pickClosestManualTicket(tickets, todayYMD) {
+  let best = null;
+  let bestAbsDiff = Infinity;
+  let bestDiff = Infinity;
+
+  for (const t of tickets) {
+    const pipeline = String(t?.properties?.hs_pipeline || '');
+    if (pipeline !== TICKET_PIPELINE) continue;
+
+    const fecha = String(t?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+    if (!fecha) continue;
+
+    const diff = diffDays(todayYMD, fecha);
+    if (diff === null) continue;
+    const absDiff = Math.abs(diff);
+
+    const mejor =
+      absDiff < bestAbsDiff ||
+      (absDiff === bestAbsDiff && diff > bestDiff) ||
+      (absDiff === bestAbsDiff && diff === bestDiff && Number(t.id) < Number(best?.id ?? Infinity));
+
+    if (mejor) {
+      best = t;
+      bestAbsDiff = absDiff;
+      bestDiff = diff;
+    }
+  }
+
+  return best;
+}
+
+async function cancelTicket(ticket, motivo, client) {
+  const ticketId = ticket.id;
+  const pipeline = String(ticket?.properties?.hs_pipeline || '');
+  const cancelledStage = CANCELLED_STAGE_BY_PIPELINE[pipeline];
+
+  if (!cancelledStage) {
+    logger.warn(
+      { module: 'cancelForecastTickets', ticketId, pipeline },
+      'Pipeline desconocido, no se puede determinar stage de cancelación'
+    );
+    return { cancelled: false, error: true };
+  }
+
+  try {
+    await client.crm.tickets.basicApi.update(String(ticketId), {
+      properties: {
+        hs_pipeline_stage: cancelledStage,
+        motivo_cancelacion_del_ticket: motivo,
+      },
+    });
+
+    logger.info(
+      { module: 'cancelForecastTickets', ticketId, pipeline, cancelledStage, motivo },
+      'Ticket forecast cancelado'
+    );
+    return { cancelled: true, error: false };
+  } catch (err) {
+    logger.error(
+      { module: 'cancelForecastTickets', ticketId, pipeline, err },
+      'Error cancelando ticket forecast'
+    );
+    return { cancelled: false, error: true };
+  }
+}
+
+/**
+ * Cancela tickets del deal cuando se pierde/suspende.
+ *
+ * Flag ETAPA_UNICA_ENABLED apagada (default): comportamiento IDÉNTICO al de
+ * siempre — cancela todos los tickets en stage FORECAST de los line items.
+ *
+ * Flag prendida: cancela TODOS los tickets no notificados del negocio (forecast
+ * + «Próximos a facturar» manual, de todos los line items) MENOS el ticket
+ * MANUAL con fecha_resolucion_esperada más cercana a hoy, que queda vivo para
+ * que se evalúe a mano si se cancela o se cobra. Avisa al vendedor (owner del
+ * deal) y al responsable (owner de ese ticket) explicando por qué quedó vivo.
  *
  * @param {Object} params
  * @param {Array}  params.lineItems         - Line items del deal
  * @param {string} params.closedLostReason  - Motivo de cancelación (puede ser vacío)
+ * @param {string|number|null} [params.dealId]
+ * @param {Object|null} [params.dealProps]  - deal.properties (dealname, hubspot_owner_id)
+ * @param {Object} [deps] - inyectables sólo para tests (defaults = producción)
+ * @param {Object} [deps.client] - default hubspotClient
+ * @param {Function} [deps.notifyTicketKeptAliveFn] - default notifyTicketKeptAlive
  */
-export async function cancelForecastTickets({ lineItems, closedLostReason }) {
+export async function cancelForecastTickets({ lineItems, closedLostReason, dealId = null, dealProps = null }, deps = {}) {
   const motivo = closedLostReason?.trim() || 'Negocio perdido';
+  const etapaUnica = etapaUnicaEnabled();
+  const {
+    client = hubspotClient,
+    notifyTicketKeptAliveFn = notifyTicketKeptAlive,
+  } = deps;
 
   let totalCancelled = 0;
   let totalErrors = 0;
+
+  // Sólo bajo la flag: se juntan los tickets no-notificados de TODOS los line
+  // items antes de cancelar, porque el ticket que queda vivo se elige a nivel
+  // NEGOCIO, no por line item.
+  const notNotifiedCandidates = [];
 
   for (const li of lineItems || []) {
     const p = li?.properties || {};
@@ -63,7 +172,7 @@ export async function cancelForecastTickets({ lineItems, closedLostReason }) {
 
     let tickets;
     try {
-      tickets = await findTicketsByLineItemKey(lineItemKey);
+      tickets = await findTicketsByLineItemKey(lineItemKey, client);
     } catch (err) {
       logger.error(
         { module: 'cancelForecastTickets', lineItemId: li.id, lineItemKey, err },
@@ -88,55 +197,72 @@ export async function cancelForecastTickets({ lineItems, closedLostReason }) {
       'Tickets encontrados por line_item_key'
     );
 
-    const forecastTickets = tickets.filter(isForecastTicket);
+    const candidateTickets = etapaUnica
+      ? tickets.filter(isNotNotifiedTicket)
+      : tickets.filter(isForecastTicket);
 
-    if (!forecastTickets.length) {
+    if (!candidateTickets.length) {
       logger.debug(
         { module: 'cancelForecastTickets', lineItemId: li.id, lineItemKey, totalFound: tickets.length },
-        'Sin tickets forecast para cancelar'
+        'Sin tickets para cancelar'
       );
       continue;
     }
 
+    if (etapaUnica) {
+      notNotifiedCandidates.push(...candidateTickets);
+      continue;
+    }
+
+    // Comportamiento original: cancela ya mismo, un line item a la vez.
     logger.info(
-      { module: 'cancelForecastTickets', lineItemId: li.id, lineItemKey, count: forecastTickets.length },
+      { module: 'cancelForecastTickets', lineItemId: li.id, lineItemKey, count: candidateTickets.length },
       'Cancelando tickets forecast'
     );
 
-    for (const ticket of forecastTickets) {
-      const ticketId = ticket.id;
-      const pipeline = String(ticket?.properties?.hs_pipeline || '');
-      const cancelledStage = CANCELLED_STAGE_BY_PIPELINE[pipeline];
+    for (const ticket of candidateTickets) {
+      const r = await cancelTicket(ticket, motivo, client);
+      if (r.cancelled) totalCancelled++;
+      if (r.error) totalErrors++;
+    }
+  }
 
-      if (!cancelledStage) {
-        logger.warn(
-          { module: 'cancelForecastTickets', ticketId, pipeline },
-          'Pipeline desconocido, no se puede determinar stage de cancelación'
-        );
-        totalErrors++;
-        continue;
-      }
+  if (etapaUnica && notNotifiedCandidates.length) {
+    const keeper = pickClosestManualTicket(notNotifiedCandidates, getTodayYMD());
 
+    logger.info(
+      {
+        module: 'cancelForecastTickets',
+        dealId,
+        totalCandidates: notNotifiedCandidates.length,
+        keeperTicketId: keeper?.id ?? null,
+      },
+      'Etapa única: cancelando todos los tickets no notificados menos el manual más cercano a hoy'
+    );
+
+    for (const ticket of notNotifiedCandidates) {
+      if (keeper && String(ticket.id) === String(keeper.id)) continue;
+      const r = await cancelTicket(ticket, motivo, client);
+      if (r.cancelled) totalCancelled++;
+      if (r.error) totalErrors++;
+    }
+
+    if (keeper) {
       try {
-        await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-          properties: {
-            hs_pipeline_stage: cancelledStage,
-            motivo_cancelacion_del_ticket: motivo,
-          },
+        await notifyTicketKeptAliveFn({
+          dealId,
+          dealName: dealProps?.dealname || null,
+          dealOwnerId: dealProps?.hubspot_owner_id || null,
+          ticketId: keeper.id,
+          ticketOwnerId: keeper?.properties?.hubspot_owner_id || null,
+          fechaResolucionEsperada: String(keeper?.properties?.fecha_resolucion_esperada || '').slice(0, 10) || null,
+          motivo,
         });
-
-        totalCancelled++;
-
-        logger.info(
-          { module: 'cancelForecastTickets', ticketId, pipeline, cancelledStage, motivo },
-          'Ticket forecast cancelado'
-        );
       } catch (err) {
-        logger.error(
-          { module: 'cancelForecastTickets', ticketId, pipeline, err },
-          'Error cancelando ticket forecast'
+        logger.warn(
+          { module: 'cancelForecastTickets', dealId, ticketId: keeper.id, err },
+          'Aviso de ticket conservado falló (no bloquea)'
         );
-        totalErrors++;
       }
     }
   }

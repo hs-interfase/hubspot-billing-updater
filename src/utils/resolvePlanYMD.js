@@ -1,5 +1,6 @@
 // src/utils/resolvePlanYMD.js
 import { toYMDInBillingTZ } from './dateUtils.js';
+import { fechaNotificadaDelLineItem } from './ticketFrontera.js';
 import logger from '../../lib/logger.js';
 
 function normalizeToYMD(raw) {
@@ -29,9 +30,14 @@ export function resolvePlanYMD({ lineItemProps = {}, ticketProps = {}, context =
   const fromNextYMD = normalizeToYMD(lineItemProps?.billing_next_date);
   const fromStartYMD = normalizeToYMD(lineItemProps?.hs_recurring_billing_start_date);
 
+  // TANDA C: `last_ticketed_date` se elimina → se lee la fecha NOTIFICADO.
+  // Sólo aplica al flujo PHASE3, que es el pipeline AUTOMÁTICO: ahí las dos
+  // fechas coinciden hoy (PROMOTED y DERIVED sólo difieren en «Próximos a
+  // facturar», que es una etapa manual), así que el cambio no mueve nada del
+  // automático y deja el manual bien si alguna vez cae por acá.
   const fromLastTicketedYMD =
     context?.flow === 'PHASE3'
-      ? normalizeToYMD(lineItemProps?.last_ticketed_date)
+      ? normalizeToYMD(fechaNotificadaDelLineItem(lineItemProps || {}) || null)
       : null;
 
   const resolvedNext =

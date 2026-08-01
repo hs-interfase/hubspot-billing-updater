@@ -70,6 +70,8 @@
  */
 
 
+import { etapaUnicaEnabled } from './etapaUnicaFlags.js';
+
 export const IVA_UY_TAX_GROUP_ID = (process.env.IVA_UY_TAX_GROUP_ID || '').trim();
 export const IVA_PY_TAX_GROUP_ID = (process.env.IVA_PY_TAX_GROUP_ID || '').trim();
 export const EXENTO_TAX_GROUP_ID = (process.env.IVA_EXENTO_TAX_GROUP_ID || '').trim();
@@ -134,6 +136,16 @@ export const FORECAST_MANUAL_STAGES = new Set([
   BILLING_TICKET_FORECAST_75,
   BILLING_TICKET_FORECAST_85,
   BILLING_TICKET_FORECAST_95,
+]);
+
+// Subconjunto hasta el 75% — bajo ETAPA_UNICA_ENABLED, el 85%/95% manual se
+// retira del uso (esos tickets nacen directo en «Próximos a facturar»), así
+// que el escaneo de vencidos por ETAPA sólo tiene sentido hasta acá.
+// Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2 / TANDA A punto 1.
+export const FORECAST_MANUAL_STAGES_UP_TO_75 = new Set([
+  BILLING_TICKET_FORECAST,
+  BILLING_TICKET_FORECAST_50,
+  BILLING_TICKET_FORECAST_75,
 ]);
 
 // ===============================
@@ -384,6 +396,85 @@ export const DERIVED_STAGES = new Set([
   BILLING_AUTOMATED_PAID,
 ]);
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LA FRONTERA ES LA NOTIFICACIÓN (ETAPA_UNICA_ENABLED — TANDA B, 30-jul)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Criterio del cliente (confirmado por escrito, 29-jul; ver
+// definitivos/PLAN_proximos_cambios_tickets_2026-07-29.md §2.0):
+//
+//   Todo lo que TODAVÍA NO fue notificado es futuro: el motor arma el
+//   cronograma y puede rearmarlo. Desde «Notificado» en adelante es pasado:
+//   no se toca.
+//
+// De ahí salen las dos particiones que usa Phase P (y los listeners):
+//
+//   · ENGINE-MANAGED ("no notificado")  → el motor manda sobre la ESTRUCTURA
+//     (qué tickets existen y en qué fecha). Whitelist explícita:
+//        - flag OFF: exactamente los stages FORECAST (manual + auto) = hoy.
+//        - flag ON : + «Próximos a facturar» manual (TICKET_STAGES.NEW), que
+//          pasa a ser la etapa única del tramo cierre-ganado → Notificado.
+//     ⚠️ Los ids de 85%/95% manual (en PROD «Backlog cierre ganado» 1329838706
+//        y «Backlog avanzado» 1296492871) SIGUEN en la whitelist aunque se
+//        retiren del uso: hay tickets viejos parados ahí y el motor tiene que
+//        poder rearmarlos/reubicarlos. Por eso las 3 props NO se pisan con el
+//        mismo id — lo que se unifica es el DESTINO (ver resolveForecastStage
+//        en phasep.js: bajo la flag, buckets 85/95/100 manuales apuntan todos
+//        a «Próximos a facturar»).
+//
+//   · CRUZÓ LA FRONTERA ("pasado")      → intocable. Es el COMPLEMENTO de la
+//     whitelist, menos los cancelados por el motor. Definirlo por complemento
+//     y no por whitelist es deliberado: una etapa nueva o un env sin mapear
+//     (p.ej. «Cobrado» manual 1311451812 en sandbox) cae del lado seguro.
+//
+// El caso CANCELADO se parte en dos y esa distinción es la que evita perder
+// plata (ver isTicketPeriodoCerrado en utils/ticketFrontera.js):
+//   · cancelado CON factura (of_invoice_id) = período cerrado por cancelación
+//     definitiva → cruzó la frontera: protege su fecha y cuenta como consumido.
+//   · cancelado SIN factura (lo canceló el motor, o se perdió el negocio) →
+//     ni protege ni consume: esa fecha se puede volver a armar (§2.4).
+
+/** Stages CANCELADO de ambos pipelines. */
+export const CANCELLED_TICKET_STAGES = new Set(
+  [TICKET_STAGES.CANCELLED, BILLING_AUTOMATED_CANCELLED].filter(Boolean)
+);
+
+/** ¿El ticket está en la etapa CANCELADO de su pipeline? */
+export function isCancelledTicketStage(stageId) {
+  if (!stageId) return false;
+  return CANCELLED_TICKET_STAGES.has(String(stageId));
+}
+
+/**
+ * ¿El motor manda sobre la estructura de un ticket en este stage?
+ * Flag OFF ⇒ idéntico a isForecastStage (comportamiento de hoy).
+ * Flag ON  ⇒ además «Próximos a facturar» manual (la etapa única).
+ */
+export function isEngineManagedStage(stageId) {
+  if (!stageId) return false;
+  const id = String(stageId);
+  if (isForecastStage(id)) return true;
+  return (
+    etapaUnicaEnabled() &&
+    Boolean(PROXIMOS_A_FACTURAR_STAGE) &&
+    id === String(PROXIMOS_A_FACTURAR_STAGE)
+  );
+}
+
+/**
+ * ¿Este stage ya cruzó la frontera de la notificación? (= «Notificado» /
+ * «Listo para facturar» automático en adelante).
+ * Complemento de isEngineManagedStage, sin los CANCELADO — el caso cancelado
+ * lo desempata isTicketPeriodoCerrado, que necesita el ticket entero.
+ */
+export function isPastFrontierStage(stageId) {
+  if (!stageId) return false;
+  const id = String(stageId);
+  if (isEngineManagedStage(id)) return false;
+  if (isCancelledTicketStage(id)) return false;
+  return true;
+}
 
 /**
  * Devuelve true si el stage corresponde a un ticket ya facturado
