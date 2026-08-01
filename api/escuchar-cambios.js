@@ -6,6 +6,8 @@ import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
 import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
+import { isTransferableDealProp } from '../src/services/deal/syncDealPropToTicket.js';
+import { dealPropSyncEnabled } from '../src/config/transferPropsFlags.js';
 import {
   esEventoTicketValor,
   esTicketEditableParaValor,
@@ -144,6 +146,33 @@ export default async function handler(req, res) {
         rawPayload: payload,
       });
       return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'deal_cancel' });
+    }
+
+    // ====== RUTA 0b: SYNC QUIRÚRGICO NEGOCIO→TICKET (vendedor / moneda) ======
+    // TANDA E (§5.bis): las dos props del ticket que NO salen del line item sino del
+    // NEGOCIO — `of_propietario_secundario` (vendedor = owner del negocio) y `of_moneda`
+    // (moneda del negocio). El ticket nace bien; lo que faltaba es que SIGA al negocio
+    // cuando lo reasignan o le cambian la moneda. Las dos suscripciones ya existen en
+    // PROD (doc de webhooks, 14-jul); hasta ahora caían en "Property not supported".
+    // Detrás de flag; con DEAL_PROP_SYNC_ENABLED apagada vuelven a caer ahí (neutral).
+    if (
+      objectType === 'deal' &&
+      dealPropSyncEnabled() &&
+      isTransferableDealProp(propertyName)
+    ) {
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType: 'deal',
+        objectId,
+        propertyName,
+        propertyValue,
+        dealId: String(objectId),
+        actionType: 'deal_prop_sync',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, propertyName, action: 'deal_prop_sync' });
     }
 
     // ====== RUTA 1: FACTURACIÓN URGENTE ======
