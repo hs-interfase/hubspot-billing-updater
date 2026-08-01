@@ -62,8 +62,9 @@ ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, co
 > ⇒ vuelven a caer en el fallback, sin cambio de comportamiento).
 >
 > ⚠️ El job resuelve **las dos** props desde el estado actual del negocio, no sólo la que
-> disparó: la cola colapsa los pending por `deal_id` + `action_type`, así que un job por prop
-> haría desaparecer el otro cambio en silencio.
+> disparó: `deal_prop_sync` está clasificado como derivado del estado, así que la cola le
+> colapsa los pending por `deal_id` + `action_type` (`src/utils/webhookQueueRules.js`) y un
+> job por prop haría desaparecer el otro cambio en silencio.
 >
 > 🔁 **NO suscribir** props que escribe el motor en el ticket (`of_propietario_secundario`,
 > `of_moneda` ya están suscritas del lado TICKET, pero el motor no rutea nada desde ahí —
