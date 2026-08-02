@@ -11,7 +11,7 @@ import { processCancelTicketRequest } from './services/tickets/cancelTicketReque
 import { processRevertTicketRequest } from './services/tickets/revertTicketInvoiceRequest.js';
 import { cancelRevertFlowEnabled } from './config/cancelRevertFlags.js';
 import { parseBool } from './utils/parsers.js';
-import { isDealCancelledStage } from './config/constants.js';
+import { isDealCancelledStage, isDealGanadoStage } from './config/constants.js';
 import { reportIfActionable } from './utils/errorReporting.js';
 import { reassignLineItemProduct } from './services/billing/nombreProductoSelect.js';
 import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemPropToTicket.js';
@@ -417,9 +417,9 @@ async function executeJob(job) {
         );
       }
 
-      // Verificar facturación activa
+      // Verificar facturación activa / frontera ganado
       const deal = await hubspotClient.crm.deals.basicApi.getById(String(resolvedDealId), [
-        'facturacion_activa', 'dealname', 'hubspot_owner_id',
+        'facturacion_activa', 'dealname', 'hubspot_owner_id', 'dealstage',
       ]);
       const dealProps = deal?.properties || {};
 
@@ -431,12 +431,30 @@ async function executeJob(job) {
         );
       }
 
+      // ── FRONTERA GANADO / NO GANADO (decisión usuaria 2-ago-2026) ──────────
+      // ANTES este guard exigía `facturacion_activa` para correr las fases. Como
+      // Phase 1 es la que deriva el costo/margen (costoUsdService.js), el área
+      // (syncLineItemAreaByCountry) y la emisora (syncLineItemEntidadFacturadora),
+      // un negocio TODAVÍA NO GANADO no recalculaba NADA: el job moría acá y
+      // Phase 1 no llegaba a ejecutarse nunca.
+      //
+      // El guard viene de `73c6430` (1-ene-2026), de cuando «correr las fases» ERA
+      // facturar. Ya entonces era redundante: `phase2.js` y `phase3.js` traen su
+      // PROPIO guard de facturacion_activa y se saltean solas — así que no es esto
+      // lo que impide emitir.
+      //
+      // AHORA: mientras el negocio no esté ganado, las fases corren siempre (el motor
+      // manda sobre el cronograma y sobre las derivadas). Desde «Cierre ganado» en
+      // adelante se conserva el criterio de hoy, que es lo que este guard sí protege:
+      // un negocio ganado con la facturación apagada (suspendido) no debe que se le
+      // rearmen los tickets — ahí los ajustes son puntuales, vía el sync quirúrgico.
+      const ganado = isDealGanadoStage(dealProps.dealstage);
       const active = parseBool(dealProps.facturacion_activa);
 
-      if (!active) {
+      if (ganado && !active) {
         logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId },
-          'Deal con facturación inactiva, skip'
+          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId, dealstage: dealProps.dealstage },
+          'Deal ganado con facturación inactiva, skip'
         );
         return { skipped: true, reason: 'facturacion_inactiva' };
       }
@@ -573,18 +591,22 @@ async function executeJob(job) {
         await pool.query(`UPDATE webhook_queue SET deal_id = $2 WHERE id = $1`, [job.id, resolvedDealId]);
       }
 
-      // Verificar facturación activa (mismo criterio que recalc)
+      // Frontera ganado / no ganado (mismo criterio que recalc — ver el comentario
+      // largo en el case 'recalc'). Sin esto, la RUTA 3 incumplía su propia promesa:
+      // "el motor reasocia el hs_product_id y re-corre phases (de ahí el producto del
+      // ticket, ÁREA, EMISORA y factura se recalculan solos)" — el mismo commit
+      // `cb0c731` escribió esa línea y el guard que la anulaba.
       const deal = await hubspotClient.crm.deals.basicApi.getById(String(resolvedDealId), [
-        'facturacion_activa', 'dealname', 'hubspot_owner_id',
+        'facturacion_activa', 'dealname', 'hubspot_owner_id', 'dealstage',
       ]);
       const dProps = deal?.properties || {};
       if (dProps.hubspot_owner_id) {
         await pool.query(`UPDATE webhook_queue SET owner_id = $2 WHERE id = $1`, [job.id, dProps.hubspot_owner_id]);
       }
-      if (!parseBool(dProps.facturacion_activa)) {
+      if (isDealGanadoStage(dProps.dealstage) && !parseBool(dProps.facturacion_activa)) {
         logger.info(
-          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId },
-          'product_reassign: deal con facturación inactiva, producto reasignado sin recalcular'
+          { module: MODULE, fn: 'executeJob', jobId: job.id, dealId: resolvedDealId, dealstage: dProps.dealstage },
+          'product_reassign: deal ganado con facturación inactiva, producto reasignado sin recalcular'
         );
         return { reassigned: true, recalculated: false, reason: 'facturacion_inactiva', ...swap };
       }

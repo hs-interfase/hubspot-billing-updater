@@ -335,6 +335,24 @@ export function isDealCancelledStage(stage) {
   return CANCELLED_DEAL_STAGES.has(String(stage || ''));
 }
 
+// Stages del lado GANADO — las TRES que confirmó la usuaria (2-ago-2026):
+// «Cierre ganado», «En Ejecución» y «Finalizado» (buckets 85/95/100 de
+// resolveBucketFromDealStage). Es la FRONTERA de la que depende quién manda:
+// antes de ganar el motor rearma libremente; desde acá los ajustes son puntuales.
+//
+// .filter(Boolean) por el mismo motivo que CANCELLED_DEAL_STAGES: EN_EJECUCION y
+// FINALIZADO defaultean a '' si no están en el .env, y un '' en el Set haría match
+// espurio con un deal sin stage. (Por eso no se reusa BILLING_ACTIVE_DEAL_STAGES,
+// que arma el mismo trío SIN filtrar.)
+export const WON_DEAL_STAGES = new Set(
+  [DEAL_STAGE_WON, DEAL_STAGE_EN_EJECUCION, DEAL_STAGE_FINALIZADO].filter(Boolean)
+);
+
+// Fuente única de verdad para "¿este negocio ya está ganado?".
+export function isDealGanadoStage(stage) {
+  return WON_DEAL_STAGES.has(String(stage || ''));
+}
+
 // Al final del archivo, antes del cierre
 export const INVOICED_TICKET_STAGES = new Set([
   process.env.BILLING_TICKET_STAGE_ID_BILLED,
