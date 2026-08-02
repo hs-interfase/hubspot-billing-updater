@@ -65,6 +65,16 @@ export function clasificarJobRescatado(job, jobResult) {
 // 🔴 LISTA BLANCA, no lista negra: un `action_type` que nadie clasificó NO
 // colapsa. Procesar de más cuesta throughput; colapsar de más pierde trabajo sin
 // dejar rastro.
+//
+// ⚠️ CUÁNDO DISPARA EL COLAPSO — no es "dos ediciones seguidas". `processNext`
+// toma el job MÁS VIEJO (`ORDER BY priority DESC, created_at ASC`) y descarta los
+// de `id` MENOR: en orden FIFO normal el de id menor ya se procesó, así que no
+// queda nada pending que descartar. Hace falta que el orden por `created_at`
+// diverja del orden por `id`, y eso lo producen los dos reencolados, que
+// reescriben `created_at = NOW()`: `deal_locked` y el reaper. Por eso
+// `product_reassign` está más expuesto que `li_prop_sync` — corre bajo el candado
+// del deal (que tiene el cron) y se reencola seguido, mientras que `li_prop_sync`
+// no toma candado y sólo lo reencola el reaper.
 
 /** No colapsar: cada job se procesa. */
 export const COLLAPSE_NONE = 'none';
