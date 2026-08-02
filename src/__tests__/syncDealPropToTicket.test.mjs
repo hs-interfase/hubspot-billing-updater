@@ -196,8 +196,9 @@ test('flag ON: baja vendedor y moneda al forecast manual, saltea el resto, y só
 });
 
 test('🔴 el job sincroniza LAS DOS props aunque lo dispare una sola (la cola colapsa por deal+action_type)', async () => {
-  // Si cada job escribiera sólo su prop, el colapso de webhookQueue.js:163-173 haría
-  // desaparecer el otro cambio EN SILENCIO. Disparado por la moneda, el vendedor también baja.
+  // `deal_prop_sync` está clasificado como derivado del estado (COLLAPSE_POLICY_BY_ACTION en
+  // utils/webhookQueueRules.js) ⇒ colapsa por negocio. Si cada job escribiera sólo su prop, el
+  // colapso haría desaparecer el otro cambio EN SILENCIO. Disparado por la moneda, el vendedor también baja.
   await conLlaves({ dealSync: 'true' }, async () => {
     const ctx = makeCtx({ tickets: [tk('T1', FORECAST, MANUAL, { of_propietario_secundario: '11', of_moneda: 'USD' })] });
     const r = await syncDealPropToTickets({ dealId: 'D1', propertyName: 'deal_currency_code', ...ctx });

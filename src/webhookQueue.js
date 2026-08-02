@@ -18,7 +18,11 @@ import { syncLineItemPropToTickets } from './services/lineItems/syncLineItemProp
 import { syncDealPropToTickets } from './services/deal/syncDealPropToTicket.js';
 import { recalcValorTotal } from './services/deal/recalcValorTotal.js';
 import { syncTicketCompanyLabels } from './services/tickets/syncTicketCompanyLabels.js';
-import { decideReapAction, clasificarJobRescatado } from './utils/webhookQueueRules.js';
+import {
+  decideReapAction,
+  clasificarJobRescatado,
+  buildCollapseQuery,
+} from './utils/webhookQueueRules.js';
 
 const MODULE = 'webhookQueue';
 
@@ -158,24 +162,23 @@ async function processNext() {
 
     const job = pickRes.rows[0];
 
-    // 2) Deduplicar: si tiene deal_id, marcar como superseded los pending más viejos
-    //    del mismo deal + action_type
-    if (job.deal_id) {
-      const collapsed = await pool.query(
-        `UPDATE webhook_queue
-            SET status = 'superseded', finished_at = NOW()
-          WHERE status = 'pending'
-            AND deal_id = $1
-            AND action_type = $2
-            AND id < $3
-          RETURNING id`,
-        [job.deal_id, job.action_type, job.id]
-      );
+    // 2) Deduplicar: marcar como superseded los pending más viejos que este job.
+    //    La CLAVE depende del action_type (ver decideCollapse en webhookQueueRules):
+    //    los derivados del estado colapsan por negocio; los específicos del evento
+    //    (li_prop_sync, product_reassign) sólo contra el MISMO objeto y la MISMA
+    //    propiedad — si no, se descartaba en silencio la edición de otra prop o de
+    //    otro line item del mismo negocio.
+    const collapse = buildCollapseQuery(job);
+    if (collapse) {
+      const collapsed = await pool.query(collapse.text, collapse.params);
 
       if (collapsed.rowCount > 0) {
         const collapsedIds = collapsed.rows.map(r => r.id);
         logger.info(
-          { module: MODULE, fn: 'processNext', jobId: job.id, dealId: job.deal_id, collapsedIds },
+          {
+            module: MODULE, fn: 'processNext', jobId: job.id, dealId: job.deal_id,
+            actionType: job.action_type, scope: collapse.scope, collapsedIds,
+          },
           `Colapsados ${collapsed.rowCount} eventos duplicados → superseded`
         );
       }

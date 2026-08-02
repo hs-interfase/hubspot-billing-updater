@@ -31,8 +31,9 @@
 // podría sobreescribirse, pero POR AHORA NO"* → si el ticket tiene otra moneda, este
 // sync la pisa con la del negocio. Lo mismo para el vendedor.
 //
-// 🔴 POR QUÉ SINCRONIZA LAS DOS PROPS Y NO SÓLO LA QUE DISPARÓ. La cola colapsa los
-// pending del mismo `deal_id` + `action_type` (`webhookQueue.js:163-173`): si el vendedor
+// 🔴 POR QUÉ SINCRONIZA LAS DOS PROPS Y NO SÓLO LA QUE DISPARÓ. `deal_prop_sync` está
+// clasificado como derivado del estado, así que la cola le colapsa los pending del mismo
+// `deal_id` + `action_type` (`utils/webhookQueueRules.js`, COLLAPSE_POLICY_BY_ACTION): si el vendedor
 // y la moneda cambian seguidos, los dos eventos son `deal_prop_sync` del mismo negocio y
 // el segundo marca al primero como `superseded`. Si cada job escribiera SÓLO su prop, ese
 // cambio se perdería EN SILENCIO. Resolviendo las dos desde el estado actual del negocio,
