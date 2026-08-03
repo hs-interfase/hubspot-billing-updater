@@ -47,6 +47,16 @@ export function ticketLabelSyncEnabled() {
 }
 
 /**
+ * ¿Se actualizan también las dos props de TEXTO del ticket? (REGLAS §4.18)
+ * Env ausente/vacía ⇒ APAGADO. Llave propia porque esto ESCRIBE en el ticket, y el
+ * re-sync de etiquetas ya está prendido en producción: sin llave, mergear cambiaría
+ * el comportamiento de PROD en el mismo movimiento.
+ */
+export function ticketCompanyPropsSyncEnabled() {
+  return parseBool(process.env.TICKET_COMPANY_PROPS_SYNC_ENABLED);
+}
+
+/**
  * Mapa companyId → Map(typeId → category) de las asociaciones actuales del ticket.
  * Se guarda la CATEGORÍA además del typeId porque hace falta para no destruir nada
  * al escribir (ver `specsPreservando`).
@@ -167,6 +177,7 @@ export async function syncTicketCompanyLabels({
   labelEmpresaFactura = ASSOC_TICKET_LABEL_EMPRESA_FACTURA,
   labelPartner = ASSOC_TICKET_LABEL_PARTNER,
   enabled = null,
+  propsEnabled = null,
 } = {}) {
   const stats = {
     applies: false,
@@ -174,6 +185,7 @@ export async function syncTicketCompanyLabels({
     companiesAsociadas: 0,
     labelsAgregados: 0,
     labelsQuitados: 0,
+    propsActualizadas: 0,
     errors: 0,
   };
 
@@ -213,6 +225,32 @@ export async function syncTicketCompanyLabels({
 
   stats.applies = true;
   const deseado = etiquetasDeseadas(info, labelEF, labelPA);
+
+  // Las dos props de TEXTO del ticket — «Cliente que factura» (`empresa_que_factura`)
+  // y «Cliente partner» (`cliente_partner`). REGLAS §4.18: el ticket es el documento
+  // definitivo de la factura, así que estos datos viven EN el ticket y NO dependen de
+  // que las empresas estén asociadas. `buildTicketFullProps` los escribe al CREAR;
+  // acá se ACTUALIZAN cuando cambian las empresas o las etiquetas del negocio (el
+  // único camino que existía —el re-snapshot de Phase P— está omitido bajo la etapa
+  // única, así que sin esto el ticket se queda con el valor del día que nació).
+  // Los nombres se leen UNA vez por negocio, no por ticket.
+  const escribirProps = propsEnabled !== null ? propsEnabled : ticketCompanyPropsSyncEnabled();
+  const propsDeseadas = { empresa_que_factura: '', cliente_partner: '' };
+  if (escribirProps) {
+    const nombres = new Map();
+    for (const cid of [...new Set([info.facturaId, info.partnerId].filter(Boolean).map(String))]) {
+      try {
+        nombres.set(cid, (await client.crm.companies.basicApi.getById(cid, ['name']))?.properties?.name || '');
+      } catch (err) {
+        // Empresa borrada o sin permiso: se deja vacío y se sigue. Vaciar es
+        // deliberado — si la empresa ya no está, el dato viejo del ticket miente.
+        logger.warn({ module: MODULE, dealId, companyId: cid, err }, 'No se pudo leer el nombre de la empresa etiquetada');
+        nombres.set(cid, '');
+      }
+    }
+    propsDeseadas.empresa_que_factura = info.facturaId ? (nombres.get(String(info.facturaId)) || '') : '';
+    propsDeseadas.cliente_partner = info.partnerId ? (nombres.get(String(info.partnerId)) || '') : '';
+  }
 
   for (const ticketId of ids) {
     try {
@@ -272,6 +310,35 @@ export async function syncTicketCompanyLabels({
           { module: MODULE, dealId, ticketId, companyId: cid, sobrantes, dryRun },
           'Etiqueta de empresa retirada del ticket (ya no corresponde en el negocio)'
         );
+      }
+
+      // 4) Las dos props de TEXTO del ticket (REGLAS §4.18). Patch mínimo: sólo se
+      //    escribe lo que difiere, así el re-sync sigue siendo idempotente y no
+      //    ensucia `hs_lastmodifieddate` de tickets que ya estaban bien.
+      if (escribirProps) {
+        let actualesProps = {};
+        try {
+          actualesProps = (await client.crm.tickets.basicApi.getById(
+            String(ticketId), ['empresa_que_factura', 'cliente_partner']
+          ))?.properties || {};
+        } catch (err) {
+          logger.warn({ module: MODULE, dealId, ticketId, err }, 'No se pudieron leer las props de empresa del ticket');
+          actualesProps = null;
+        }
+        if (actualesProps) {
+          const patch = {};
+          for (const [k, v] of Object.entries(propsDeseadas)) {
+            if (String(actualesProps[k] ?? '') !== String(v ?? '')) patch[k] = v;
+          }
+          if (Object.keys(patch).length) {
+            if (!dryRun) await client.crm.tickets.basicApi.update(String(ticketId), { properties: patch });
+            stats.propsActualizadas++;
+            logger.info(
+              { module: MODULE, dealId, ticketId, patch, dryRun },
+              'Props de empresa del ticket actualizadas desde el negocio'
+            );
+          }
+        }
       }
     } catch (err) {
       stats.errors++;
