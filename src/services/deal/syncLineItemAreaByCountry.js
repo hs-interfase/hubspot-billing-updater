@@ -39,8 +39,87 @@ export async function syncLineItemAreaByCountry(deal, lineItems) {
   if (!lis.length) return;
 
   const pais = String(deal?.properties?.pais_operativo || '').trim().toLowerCase();
-  if (pais !== 'paraguay') return; // Uruguay / Mixto / otro → se deja el área del producto.
 
+  // ── NO-PARAGUAY: el área SALE DEL PRODUCTO, y hay que copiarla ───────────────
+  // 🔴 2-ago-2026. Este módulo decía «Uruguay / Mixto / otro → se deja el área del
+  // producto» y se iba sin hacer nada, asumiendo la herencia nativa de HubSpot. Esa
+  // herencia SÓLO ocurre cuando el line item se crea desde el selector de productos
+  // en la UI: los que crea el MOTOR por API (el espejo UY, entre otros) nacen con el
+  // área VACÍA. Medido en sandbox: con los 13 productos ya cargados con su área, el
+  // line item del espejo seguía sin área hasta que se agregó esta copia.
+  //
+  // Criterio de la usuaria (2-ago): «el área debe ser COHERENTE con el producto
+  // seleccionado — o Paraguay en el caso de Paraguay. Siempre acorde al producto».
+  //
+  // ⚠️ ALINEA SIEMPRE, no sólo rellena vacíos: si el área del line item no coincide con
+  // la de su producto, se corrige. Es DISTINTO de syncLineItemEntidadFacturadora, que sí
+  // respeta lo cargado a mano (decisión 23-jul) — acá el área no es una elección del
+  // vendedor sino una consecuencia del producto, así que cambiar el producto cambia el
+  // área. Único caso en que NO se toca: cuando el PRODUCTO no tiene área cargada; ahí se
+  // deja lo que haya en vez de vaciarlo.
+  if (pais !== 'paraguay') {
+    const pendientes = lis.filter(li => String(li?.properties?.hs_product_id || '').trim());
+    if (!pendientes.length) return;
+
+    const productIds = [...new Set(pendientes.map(li => String(li.properties.hs_product_id).trim()))];
+    let areaPorProducto = {};
+    try {
+      const r = await hubspotClient.crm.products.batchApi.read({
+        properties: ['area'],
+        inputs: productIds.map(id => ({ id })),
+      });
+      areaPorProducto = Object.fromEntries(
+        (r.results || []).map(p => [String(p.id), String(p.properties?.area || '').trim()])
+      );
+    } catch (err) {
+      logger.warn(
+        { module: 'syncLineItemAreaByCountry', dealId: String(deal?.id || ''), productIds, err: err?.message },
+        'No se pudieron leer las áreas de los productos: se deja el área como está'
+      );
+      return;
+    }
+
+    const desdeProducto = [];
+    const sinAreaEnElProducto = [];
+    const corregidas = [];
+    for (const li of pendientes) {
+      const id = String(li?.id || li?.properties?.hs_object_id || '').trim();
+      const area = areaPorProducto[String(li.properties.hs_product_id).trim()] || '';
+      if (!id) continue;
+      if (!area) { sinAreaEnElProducto.push({ liId: id, productId: li.properties.hs_product_id }); continue; }
+      const actual = String(li?.properties?.area || '').trim();
+      if (actual === area) continue; // ya coincide → idempotente
+      if (actual) corregidas.push({ liId: id, de: actual, a: area });
+      desdeProducto.push({ id, properties: { area } });
+      if (li.properties) li.properties.area = area; // para el syncDealCatalogTags posterior
+    }
+
+    // Las que NO estaban vacías sino DESALINEADAS: se dejan trazadas aparte, porque son
+    // las que un cambio de producto (o una carga a mano equivocada) venía dejando mal.
+    if (corregidas.length) {
+      logger.info(
+        { module: 'syncLineItemAreaByCountry', dealId: String(deal?.id || ''), corregidas },
+        'Área REALINEADA al producto (no estaba vacía: no coincidía)'
+      );
+    }
+
+    if (sinAreaEnElProducto.length) {
+      logger.info(
+        { module: 'syncLineItemAreaByCountry', dealId: String(deal?.id || ''), pais, sinAreaEnElProducto },
+        'Line items cuyo PRODUCTO no tiene área cargada (se dejan vacíos)'
+      );
+    }
+    if (!desdeProducto.length) return;
+
+    await hubspotClient.crm.lineItems.batchApi.update({ inputs: desdeProducto });
+    logger.info(
+      { module: 'syncLineItemAreaByCountry', dealId: String(deal?.id || ''), pais, count: desdeProducto.length },
+      'Área de line items copiada DESDE EL PRODUCTO (país no-Paraguay)'
+    );
+    return;
+  }
+
+  // ── PARAGUAY: se fuerza, sin importar el producto ────────────────────────────
   const inputs = [];
   for (const li of lis) {
     const id = String(li?.id || li?.properties?.hs_object_id || '').trim();
