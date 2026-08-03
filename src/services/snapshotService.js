@@ -2,6 +2,7 @@
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
+import { ofProductoDesdeLineItem } from './billing/nombreProductoSelect.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
@@ -440,8 +441,17 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
-  // Producto del ticket (select of_producto, mismo catálogo que deal.producto)
-  const ofProducto = deriveProductoTicket(dp.producto, lp.name);
+  // Producto del ticket (select of_producto).
+  //
+  // 🔴 CAMBIO 2-ago-2026 (definición usuaria): sale del PRODUCTO ASOCIADO AL LINE ITEM,
+  // no de `deal.producto`. `deal.producto` es la UNIÓN de los productos del negocio
+  // (la sube syncDealCatalogTags), así que con varios line items TODOS los tickets
+  // recibían el mismo producto — medido en sandbox: 4 de 5 tickets con el producto
+  // equivocado, y los 5 con el mismo valor.
+  //
+  // Se conserva `deriveProductoTicket` como FALLBACK para las líneas sin producto
+  // asociado (migrados viejos, LIs cargados a mano): ahí el comportamiento no cambia.
+  const ofProducto = ofProductoDesdeLineItem(lp) || deriveProductoTicket(dp.producto, lp.name);
 
   // Motivo cancelación: primero motivo_de_pausa del line item, luego closed_lost_reason del deal.
   // (24-jul: decía `motivo_pausa`, prop que NO existe en el portal → la rama del LI estaba

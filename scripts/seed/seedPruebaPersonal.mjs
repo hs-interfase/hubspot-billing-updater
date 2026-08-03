@@ -106,19 +106,38 @@ const DEAL = {
   cupo_total: '100000',
 };
 
-// PRODUCTO: se siembra el select `nombre_producto`, NO el `hs_product_id`. El motor
-// reasocia el id solo (RUTA 3 → product_reassign → reassignLineItemProduct), que es
-// justo el camino que queremos ejercitar. Los nombres son opciones reales del select
-// (verificadas contra el flow `Pasar producto de manual select` de los dos portales).
+// PRODUCTO: se siembra `hs_product_id` — la asociación CANÓNICA (decisión usuaria,
+// 2-ago). NO se siembra el select `nombre_producto`: se deja vacío a propósito para
+// que lo rellene el motor (`syncNombreProductoFromProductId`, phase1.js:651, que sólo
+// escribe si el select está vacío). Así el seed no depende del webhook de
+// `nombre_producto`, que SE PIERDE (medido: de 5 line items sembrados llegó 1).
+//
+// 🔴 IDs de SANDBOX, verificados contra el catálogo del portal (los 13 productos
+// activos viven en el rango 41.9M–46M). Los IDs de PRODUCCIÓN dan 404 acá — y es
+// exactamente lo que escribía el motor cuando a Railway `testing` le faltaba
+// `HUBSPOT_ENV=sandbox` (`nombreProductoSelect.js:48` cae a 'prod' si la env no está).
 //
 // ÁREA: NO se siembra a propósito (pedido de la usuaria, 2-ago). Tiene que calcularla
 // el motor — `syncLineItemAreaByCountry` la fuerza a «Paraguay» por el país del
 // negocio; en un negocio UY se heredaría del producto.
+// 📌 Los productos NO tienen `area` cargada — ni en sandbox NI EN PROD (verificado por
+// API el 2-ago en los dos portales: los 13 productos, área vacía en ambos). O sea que
+// la herencia producto→área NO ocurre en ningún entorno; el sandbox NO está atrasado.
+// ⚠️ NO cargarle áreas sólo al sandbox: lo haría divergir de PROD y volvería a la
+// trampa de "el sandbox sub-prueba en silencio". Si el negocio quiere el área cargada,
+// es una definición que se aplica a los DOS portales.
+// 📌 Y el área NO hace falta para la emisora: `resolverEntidadFacturadora` la resuelve
+// por PRODUCTO (`EMPRESA_EMISORA_MAP`, 13 productos mapeados por portal); el área sólo
+// desempata los dos iSCert.
 //
 // COSTO: se siembra `costo_total_usd` (la FUENTE DE VERDAD, total y en USD) y NO
 // `hs_cost_of_goods_sold`, que es la DERIVADA — el motor la calcula como
 // `costo_total_usd × dolar(LI) ÷ quantity` (costoUsdService.js:14). Sembrar sólo la
 // fuente es lo que permite verificar que la derivación corre de verdad.
+//
+// Valor del select ← id (para leer la tabla de un vistazo):
+//   PayRoll 42010367404 · Portal 42010181660 · IJServ 41943895217 ·
+//   i2 42010181658 · iGDoc 42010367402 · Liferay 45055023516
 const LINE_ITEMS = {
   'LI-1': {
     queEs: 'Pago único a 3 MESES',
@@ -127,7 +146,7 @@ const LINE_ITEMS = {
       name: `${PREFIX} LI-1 — pago único a 3 meses`,
       price: '3000', quantity: '1',
       costo_total_usd: '1200',
-      nombre_producto: 'PayRoll',
+      hs_product_id: '42010367404', // PayRoll
       hs_recurring_billing_start_date: F_3_MESES,
       // sin recurringbillingfrequency = PAGO ÚNICO
       facturacion_automatica: 'false',
@@ -140,7 +159,7 @@ const LINE_ITEMS = {
       name: `${PREFIX} LI-2 — pago único a 15 días`,
       price: '1500', quantity: '1',
       costo_total_usd: '600',
-      nombre_producto: 'Portal',
+      hs_product_id: '42010181660', // Portal
       hs_recurring_billing_start_date: F_15_DIAS,
       facturacion_automatica: 'false',
     },
@@ -152,7 +171,7 @@ const LINE_ITEMS = {
       name: `${PREFIX} LI-3 — recurrente auto-renew mensual`,
       price: '2500', quantity: '1',
       costo_total_usd: '1000',
-      nombre_producto: 'IJServ', // ⚠️ el valor real del select es 'IJServ', NO 'iJServ'
+      hs_product_id: '41943895217', // iJServ
       recurringbillingfrequency: 'monthly',
       hs_recurring_billing_start_date: F_1_MES,
       // SIN period ni number_of_payments = AUTO-RENEW
@@ -168,7 +187,7 @@ const LINE_ITEMS = {
       // es el TOTAL dividido la cantidad (4000 ÷ 2 = 2000), no una copia del total.
       price: '4000', quantity: '2',
       costo_total_usd: '4000',
-      nombre_producto: 'i2',
+      hs_product_id: '42010181658', // i2
       recurringbillingfrequency: 'monthly',
       hs_recurring_billing_start_date: F_1_MES,
       hs_recurring_billing_period: 'P12M',
@@ -182,7 +201,7 @@ const LINE_ITEMS = {
       name: `${PREFIX} LI-5 — pago único con cupo y espejo`,
       price: '5000', quantity: '1',
       costo_total_usd: '2000',
-      nombre_producto: 'iGDoc',
+      hs_product_id: '42010367402', // iGDoc
       hs_recurring_billing_start_date: F_2_MESES,
       parte_del_cupo: 'true',
       uy: 'true',
