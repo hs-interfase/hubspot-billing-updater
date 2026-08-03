@@ -45,8 +45,38 @@ test('área iSCert sola (sin producto) → Interfase UY', () => {
   assert.deepEqual(r, { valor: 'Interfase UY', metodo: 'area' });
 });
 
-test('Uruguay sin producto mapeado ni área que defina → no se resuelve', () => {
+// 🔴 CAMBIO DE REGLA (usuaria, 2-ago-2026): la emisora es LÍMITE DURO y sale del ÁREA
+// ASIGNADA. AREA_TO_ENTIDAD pasó de 2 entradas (sólo el desempate iSCert) a las 8 áreas.
+// Este test afirmaba lo contrario —que el área 'Portal' NO definía emisora y el caso
+// quedaba sin resolver— así que se REESCRIBE, no se ajusta: la regla que protegía ya no
+// es la vigente.
+test('el ÁREA resuelve sola, aunque el producto no esté mapeado (regla 2-ago)', () => {
   const r = resolverEntidadFacturadora({ paisOperativo: 'Uruguay', productId: '999', area: 'Portal' });
+  assert.deepEqual(r, { valor: 'ISA UY', metodo: 'area' });
+});
+
+test('las 8 áreas resuelven emisora — ninguna queda sin definir', () => {
+  const esperado = {
+    'iGDoc': 'ISA UY', 'Portal': 'ISA UY', 'NNDD Ops': 'ISA UY', 'Petróleo': 'ISA UY',
+    'iSCert ISA': 'ISA UY', 'iSCert': 'Interfase UY', 'Payroll': 'Interfase UY',
+    'Paraguay': 'ISA PY',
+  };
+  for (const [area, valor] of Object.entries(esperado)) {
+    const r = resolverEntidadFacturadora({ paisOperativo: 'Uruguay', productId: '', area });
+    assert.deepEqual(r, { valor, metodo: 'area' }, `área ${area}`);
+  }
+});
+
+test('Petróleo es área COMPARTIDA (iJServ + Flota) y aun así no es ambigua: las dos son ISA', () => {
+  for (const p of ['iJServ', 'Flota']) {
+    const productId = Object.keys(EMPRESA_EMISORA_MAP).find(k => EMPRESA_EMISORA_MAP[k] === 'ISA');
+    const r = resolverEntidadFacturadora({ paisOperativo: 'Uruguay', productId, area: 'Petróleo' });
+    assert.equal(r.valor, 'ISA UY', `producto ${p}`);
+  }
+});
+
+test('sin área NI producto mapeado → sigue sin resolverse (no se inventa emisora)', () => {
+  const r = resolverEntidadFacturadora({ paisOperativo: 'Uruguay', productId: '999', area: '' });
   assert.deepEqual(r, { valor: '', metodo: 'sin_producto_ni_area' });
 });
 
