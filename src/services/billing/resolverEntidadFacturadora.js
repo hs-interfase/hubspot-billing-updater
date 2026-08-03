@@ -24,11 +24,33 @@ const DISPLAY_TO_SELECT = {
   'ISA PY': 'ISA PY',
 };
 
-// Desempate iSCert por ÁREA (usuaria 23-jul: "el área define cuál es").
-// Claves normalizadas en minúsculas; el resto de las áreas no definen emisora.
+// ÁREA → EMISORA. Claves normalizadas en minúsculas.
+//
+// 🔴 2-ago-2026: la tabla pasa de 2 entradas a las 8 ÁREAS COMPLETAS.
+// Antes cubría sólo los dos iSCert (era un DESEMPATE, usuaria 23-jul: "el área define
+// cuál es") y todo lo demás caía al producto. Decisión de la usuaria: **la emisora es
+// límite duro y sale del ÁREA ASIGNADA**, no del producto. El producto queda como
+// fallback para las líneas sin área.
+//
+// Las 6 filas nuevas NO se inventan: son `área → producto` (_shared/areas.mjs, la fuente
+// única de la migración) compuesto con `producto → emisora` (EMPRESA_EMISORA_MAP). Como
+// desde el 2-ago el área SIEMPRE se alinea al producto (syncLineItemAreaByCountry), las
+// dos rutas dan el mismo resultado — lo que cambia es QUIÉN MANDA cuando difieren.
+//
+// 📌 'Petróleo' es la única área COMPARTIDA (vende iJServ y Flota). No hay ambigüedad:
+//    los dos productos facturan por ISA, así que el área resuelve igual.
+// 📌 'Paraguay' está por completitud: un negocio con país operativo Paraguay ya cortó
+//    antes por país, así que en la práctica no se llega acá con esa área.
 const AREA_TO_ENTIDAD = {
   'iscert isa': 'ISA UY',
   'iscert': 'Interfase UY',
+  'igdoc': 'ISA UY',
+  'portal': 'ISA UY',        // incluye Liferay, que va con área Portal
+  'nndd ops': 'ISA UY',
+  'petroleo': 'ISA UY',      // área compartida iJServ + Flota, las dos ISA
+  'petróleo': 'ISA UY',      // el valor del select lleva tilde
+  'payroll': 'Interfase UY',
+  'paraguay': 'ISA PY',
 };
 
 /**

@@ -5,8 +5,17 @@
 // UY → producto con área de desempate · Mixto/otro → no tocar). Mismo patrón y enganche
 // que syncLineItemAreaByCountry (phase1, antes de syncDealCatalogTags).
 //
-// SOLO RELLENA VACÍOS: si el vendedor ya cargó el select, no se pisa (decisión usuaria
-// 23-jul). La propagación al ticket NO vive acá: el snapshot (snapshotService.js:320) y
+// 🔴 ALINEA SIEMPRE — REVIERTE la decisión del 23-jul (2-ago-2026).
+// Hasta el 2-ago esto SOLO RELLENABA VACÍOS: «si el vendedor ya cargó el select, no se
+// pisa». La usuaria lo cambió: la entidad facturadora es **límite duro**, igual que el
+// área. Las dos son CONSECUENCIA del país y del producto, no una elección del vendedor
+// — si el select no coincide con lo que resuelve la regla, se corrige.
+// El texto viejo («solo rellena vacíos») está superado: no reintroducirlo.
+//
+// Único caso en que NO se toca: cuando la regla no resuelve (`valor` vacío — país
+// Mixto/otro, o UY sin producto ni área). Ahí se deja lo que haya en vez de vaciarlo.
+//
+// La propagación al ticket NO vive acá: el snapshot (snapshotService.js:320) y
 // el sync quirúrgico (syncLineItemPropToTicket.js) ya copian
 // lp.empresa_que_factura → ticket.entidad_facturadora.
 //
@@ -46,7 +55,6 @@ export async function syncLineItemEntidadFacturadora(deal, lineItems) {
     const id = String(li?.id || li?.properties?.hs_object_id || '').trim();
     if (!id) continue;
     const actual = String(li?.properties?.empresa_que_factura || '').trim();
-    if (actual) continue; // ya cargada (a mano o por corrida previa) → no pisar
 
     const { valor, metodo } = resolverEntidadFacturadora({
       paisOperativo,
@@ -61,7 +69,18 @@ export async function syncLineItemEntidadFacturadora(deal, lineItems) {
     if (metodo === 'area_gana_a_producto') {
       logger.warn(
         { module: MODULE, dealId, liId: id, area: li?.properties?.area, productId: li?.properties?.hs_product_id },
-        'Área y producto contradicen la emisora (iSCert): gana el área'
+        'Área y producto contradicen la emisora: gana el área'
+      );
+    }
+    if (actual === valor) continue; // ya coincide → idempotente
+
+    // Corrección de una emisora que existía pero NO coincidía con la regla. Se loguea
+    // aparte del relleno: son las que la política vieja («solo rellena vacíos») dejaba
+    // desalineadas para siempre.
+    if (actual) {
+      logger.info(
+        { module: MODULE, dealId, liId: id, de: actual, a: valor, metodo },
+        'Entidad facturadora REALINEADA (no estaba vacía: no coincidía)'
       );
     }
     inputs.push({ id, properties: { empresa_que_factura: valor } });
