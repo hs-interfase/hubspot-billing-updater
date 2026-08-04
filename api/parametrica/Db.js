@@ -51,6 +51,22 @@ export async function initParametricaTables() {
     CREATE INDEX IF NOT EXISTS idx_parametrica_items_li
       ON parametrica_items (line_item_id)
   `)
+  // Columnas del snapshot ampliado (selección por fila, 4-ago-2026): quedan en
+  // el item para que el CSV del historial muestre lo mismo que la pantalla,
+  // aunque después cambien en HubSpot. ADD COLUMN IF NOT EXISTS = idempotente.
+  for (const col of [
+    'entidad_facturadora TEXT',
+    'cliente_factura     TEXT',
+    'codigo_empresa      TEXT',
+    'numero_contrato     TEXT',
+    'descripcion         TEXT',
+    'rubro               TEXT',
+    'producto            TEXT',
+    'cantidad            NUMERIC(14,4)',
+  ]) {
+    await pool.query(`ALTER TABLE parametrica_items ADD COLUMN IF NOT EXISTS ${col}`)
+  }
+
   logger.info({ module: 'parametrica/Db' }, 'Tablas parametrica_batches / parametrica_items listas.')
 }
 

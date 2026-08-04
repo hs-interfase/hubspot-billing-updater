@@ -5,8 +5,10 @@
 // elegibles. Auth: invoiceEditorAuth (montado en server.js); usuario del
 // header x-app-user (mismo criterio que invoice-editor).
 //
-//   GET  /line-items          → lista elegibles + excluidos (espejos, deals no activos)
-//   POST /preview {porcentaje}→ crea batch 'preview' + snapshot de items
+//   GET  /line-items                        → lista elegibles + excluidos
+//   POST /preview {porcentaje, lineItemIds} → crea batch 'preview' + snapshot de los ELEGIDOS
+//   PUT  /preview/:id/items {lineItemIds}   → rehace la selección del preview (agrega/quita)
+//   POST /preview/:id/cancel                → descarta un preview sin aplicar
 //   POST /apply   {batchId, confirm:true}
 //   POST /revert  {batchId, lineItemId?}   (lote completo o un LI)
 //   GET  /batches             → historial (para reversa y CSV)
@@ -19,6 +21,8 @@
 //   - Concurrencia con el cron: acquireDealLock por deal (label 'parametrica').
 
 import { Router } from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import pool from './Db.js';
 import { acquireDealLock, releaseDealLock } from '../../src/db.js';
 import { sendAlertTo } from '../../lib/alertService.js';
@@ -72,6 +76,17 @@ async function enviarExtracto({ accion, batch, items, usuario }) {
   }
 }
 
+// ── GET /filtros.js ─────────────────────────────────────────
+// El buscador de la pantalla usa EL MISMO módulo que el backend y los tests:
+// se sirve el archivo tal cual (es ESM puro, sin imports) en vez de repetir
+// la lógica de matcheo dentro del HTML.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FILTROS_PATH = path.join(__dirname, '..', '..', 'src', 'services', 'parametrica', 'filtros.js');
+
+router.get('/filtros.js', (_req, res) => {
+  res.type('application/javascript').sendFile(FILTROS_PATH);
+});
+
 // ── GET /line-items ─────────────────────────────────────────
 router.get('/line-items', async (_req, res) => {
   try {
@@ -83,6 +98,75 @@ router.get('/line-items', async (_req, res) => {
   }
 });
 
+// ── Helpers de preview ──────────────────────────────────────
+
+/** Normaliza y deduplica los ids que mandó la pantalla. */
+function parseSeleccion(raw) {
+  if (!Array.isArray(raw)) return null;
+  const ids = [...new Set(raw.map(id => String(id ?? '').trim()).filter(Boolean))];
+  return ids.length ? ids : null;
+}
+
+/** Inserta el snapshot de un line item elegido en el batch. */
+async function insertarItem(batchId, li, pct) {
+  const priceNuevo = calcularPriceNuevo(li.price, pct);
+  const { rows: [item] } = await pool.query(
+    `INSERT INTO parametrica_items
+       (batch_id, line_item_id, deal_id, deal_name, empresa, area, servicio, moneda,
+        price_viejo, price_nuevo,
+        entidad_facturadora, cliente_factura, codigo_empresa, numero_contrato,
+        descripcion, rubro, producto, cantidad)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     ON CONFLICT (batch_id, line_item_id) DO NOTHING
+     RETURNING *`,
+    [batchId, li.lineItemId, li.dealId, li.dealName, li.empresa, li.area, li.servicio, li.moneda,
+     li.price, priceNuevo,
+     li.entidadFacturadora, li.clienteFactura, li.codigoEmpresa, li.numeroContrato,
+     li.descripcion, li.rubro, li.producto, li.quantity]
+  );
+  return item || null;
+}
+
+/** Fila que consume la pantalla, a partir del item guardado. */
+const filaPreview = (it, elegible, protegidos) => ({
+  lineItemId: it.line_item_id,
+  dealId: it.deal_id,
+  dealName: it.deal_name,
+  entidadFacturadora: it.entidad_facturadora || '',
+  clienteFactura: it.cliente_factura || '',
+  codigoEmpresa: it.codigo_empresa || '',
+  codigoContacto: elegible?.codigoContacto || '',
+  numeroContrato: it.numero_contrato || '',
+  empresa: it.empresa,
+  descripcion: it.descripcion || '',
+  area: it.area || '',
+  producto: it.producto || '',
+  rubro: it.rubro || '',
+  servicio: it.servicio,
+  moneda: it.moneda,
+  priceViejo: Number(it.price_viejo),
+  priceNuevo: Number(it.price_nuevo),
+  fechaUltimoAjuste: elegible?.fechaUltimoAjuste || null,
+  pausa: elegible?.pausa || false,
+  ticketsProtegidos: protegidos.get(it.line_item_id) || null,
+});
+
+/** Arma la respuesta completa de un preview leyendo sus items de la DB. */
+async function responderPreview(batch, elegiblesPorId, warning) {
+  const { rows: items } = await pool.query(
+    `SELECT * FROM parametrica_items WHERE batch_id = $1 ORDER BY id`, [batch.id]
+  );
+  const protegidos = await contarTicketsProtegidosFuturos(items.map(i => i.line_item_id));
+  return {
+    batchId: batch.id,
+    porcentaje: Number(batch.porcentaje),
+    dryRun: batch.dry_run,
+    warning: warning || null,
+    totalLis: items.length,
+    rows: items.map(it => filaPreview(it, elegiblesPorId.get(it.line_item_id), protegidos)),
+  };
+}
+
 // ── POST /preview ───────────────────────────────────────────
 router.post('/preview', async (req, res) => {
   try {
@@ -90,53 +174,103 @@ router.post('/preview', async (req, res) => {
     if (!val.ok) return res.status(400).json({ error: val.error });
     const pct = val.pct;
 
+    const seleccion = parseSeleccion(req.body?.lineItemIds);
+    if (!seleccion) {
+      return res.status(400).json({ error: 'Elegí al menos un line item para ajustar' });
+    }
+
     const { elegibles } = await listarLineItemsIjserv();
     if (!elegibles.length) return res.status(400).json({ error: 'No hay line items elegibles para ajustar' });
 
-    const usuario = getUser(req);
-    const dryRun = isDryRun();
+    const elegiblesPorId = new Map(elegibles.map(li => [li.lineItemId, li]));
+    const elegidos = seleccion.map(id => elegiblesPorId.get(id)).filter(Boolean);
+    if (!elegidos.length) {
+      return res.status(400).json({ error: 'Ninguno de los line items elegidos sigue siendo elegible — recargá la lista' });
+    }
+    const descartados = seleccion.length - elegidos.length;
 
     const { rows: [batch] } = await pool.query(
-      `INSERT INTO parametrica_batches (producto_id, porcentaje, usuario, dry_run)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [IJSERV_PRODUCT_ID, pct, usuario, dryRun]
+      `INSERT INTO parametrica_batches (producto_id, porcentaje, usuario, dry_run, scope)
+       VALUES ($1, $2, $3, $4, 'seleccion') RETURNING *`,
+      [IJSERV_PRODUCT_ID, pct, getUser(req), isDryRun()]
     );
 
-    const items = [];
-    for (const li of elegibles) {
-      const priceNuevo = calcularPriceNuevo(li.price, pct);
-      const { rows: [item] } = await pool.query(
-        `INSERT INTO parametrica_items
-           (batch_id, line_item_id, deal_id, deal_name, empresa, area, servicio, moneda, price_viejo, price_nuevo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [batch.id, li.lineItemId, li.dealId, li.dealName, li.empresa, li.area, li.servicio, li.moneda, li.price, priceNuevo]
-      );
-      items.push({ ...item, pausa: li.pausa });
-    }
+    for (const li of elegidos) await insertarItem(batch.id, li, pct);
 
-    const protegidos = await contarTicketsProtegidosFuturos(elegibles.map(li => li.lineItemId));
+    const avisos = [
+      val.warning,
+      descartados ? `${descartados} line item(s) elegidos ya no son elegibles y quedaron fuera` : null,
+    ].filter(Boolean).join(' · ');
 
-    res.json({
-      batchId: batch.id,
-      porcentaje: pct,
-      dryRun,
-      warning: val.warning || null,
-      totalLis: items.length,
-      rows: items.map(it => ({
-        lineItemId: it.line_item_id,
-        dealName: it.deal_name,
-        empresa: it.empresa,
-        servicio: it.servicio,
-        moneda: it.moneda,
-        priceViejo: Number(it.price_viejo),
-        priceNuevo: Number(it.price_nuevo),
-        pausa: it.pausa || false,
-        ticketsProtegidos: protegidos.get(it.line_item_id) || null,
-      })),
-    });
+    res.json(await responderPreview(batch, elegiblesPorId, avisos));
   } catch (err) {
     logger.error({ module: MOD, fn: 'preview', err: err?.message }, 'Error en preview');
     res.status(500).json({ error: err?.message || 'Error generando preview' });
+  }
+});
+
+// ── PUT /preview/:id/items ──────────────────────────────────
+// Rehace la selección de un preview ya generado: agrega los que faltan y saca
+// los que sacaste. Sólo mientras el batch está en 'preview' — una vez aplicado
+// no se toca (para eso está la reversa).
+router.put('/preview/:id/items', async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: 'id inválido' });
+  const batchId = Number(req.params.id);
+  try {
+    const seleccion = parseSeleccion(req.body?.lineItemIds);
+    if (!seleccion) {
+      return res.status(400).json({ error: 'La previsualización no puede quedar vacía — dejá al menos un line item' });
+    }
+
+    const { rows: [batch] } = await pool.query(
+      `SELECT * FROM parametrica_batches WHERE id = $1`, [batchId]
+    );
+    if (!batch) return res.status(404).json({ error: 'Batch no encontrado' });
+    if (batch.estado !== 'preview') {
+      return res.status(409).json({ error: `El batch está en estado '${batch.estado}' — ya no se puede editar` });
+    }
+
+    const { elegibles } = await listarLineItemsIjserv();
+    const elegiblesPorId = new Map(elegibles.map(li => [li.lineItemId, li]));
+    const elegidos = seleccion.filter(id => elegiblesPorId.has(id));
+    if (!elegidos.length) {
+      return res.status(400).json({ error: 'Ninguno de los line items elegidos sigue siendo elegible — recargá la lista' });
+    }
+
+    // Fuera los que sacaste (sólo 'pending': en un preview no hay otro estado).
+    await pool.query(
+      `DELETE FROM parametrica_items
+       WHERE batch_id = $1 AND estado = 'pending' AND NOT (line_item_id = ANY($2::text[]))`,
+      [batchId, elegidos]
+    );
+    // Y adentro los que agregaste (ON CONFLICT ignora los que ya estaban).
+    for (const id of elegidos) {
+      await insertarItem(batchId, elegiblesPorId.get(id), Number(batch.porcentaje));
+    }
+
+    const descartados = seleccion.length - elegidos.length;
+    res.json(await responderPreview(batch, elegiblesPorId,
+      descartados ? `${descartados} line item(s) elegidos ya no son elegibles y quedaron fuera` : null));
+  } catch (err) {
+    logger.error({ module: MOD, fn: 'preview-items', batchId, err: err?.message }, 'Error editando preview');
+    res.status(500).json({ error: err?.message || 'Error editando la previsualización' });
+  }
+});
+
+// ── POST /preview/:id/cancel ────────────────────────────────
+// Descarta un preview sin aplicarlo, para que no quede colgado en el historial.
+router.post('/preview/:id/cancel', async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const { rows: [batch] } = await pool.query(
+      `UPDATE parametrica_batches SET estado = 'cancelled'
+       WHERE id = $1 AND estado = 'preview' RETURNING *`,
+      [req.params.id]
+    );
+    if (!batch) return res.status(409).json({ error: 'El batch ya fue procesado (o no existe)' });
+    res.json({ estado: batch.estado });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Error cancelando la previsualización' });
   }
 });
 
@@ -239,7 +373,11 @@ router.post('/apply', async (req, res) => {
       aplicados,
       fallidos,
       items: finalItems.map(i => ({
-        lineItemId: i.line_item_id, dealName: i.deal_name, empresa: i.empresa,
+        lineItemId: i.line_item_id, dealId: i.deal_id, dealName: i.deal_name, empresa: i.empresa,
+        entidadFacturadora: i.entidad_facturadora || '', clienteFactura: i.cliente_factura || '',
+        codigoEmpresa: i.codigo_empresa || '', numeroContrato: i.numero_contrato || '',
+        descripcion: i.descripcion || '', area: i.area || '',
+        producto: i.producto || '', rubro: i.rubro || '',
         servicio: i.servicio, moneda: i.moneda,
         priceViejo: Number(i.price_viejo), priceNuevo: Number(i.price_nuevo),
         estado: i.estado, error: i.error,

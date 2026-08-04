@@ -7,16 +7,17 @@
 // Exclusiones del ajuste (se listan aparte en la pantalla, no se tocan):
 //   - Espejos UY (of_line_item_py_origen_id presente): el cron de mirroring
 //     deriva su price del costo del LI PY y pisaría el cambio.
-//   - LIs de deals fuera de BILLING_ACTIVE_DEAL_STAGES (cerrados/perdidos/etc.).
+//   - LIs de deals que todavía no están en cierre ganado (o ya se cancelaron).
 
 import { hubspotClient } from '../../hubspotClient.js';
 import {
-  BILLING_ACTIVE_DEAL_STAGES,
+  isDealGanadoStage,
   PROXIMOS_A_FACTURAR_STAGE,
   TICKET_STAGE_LISTO_MANUAL,
   BILLING_AUTOMATED_READY,
   isDryRun,
 } from '../../config/constants.js';
+import { resolveEmpresasPorDeal } from './empresaLookup.js';
 import logger from '../../../lib/logger.js';
 
 const MOD = 'parametricaService';
@@ -31,14 +32,24 @@ export const IJSERV_PRODUCT_ID = (process.env.IJSERV_PRODUCT_ID || '').trim();
 
 const LI_PROPS = [
   'hs_object_id', 'hs_lastmodifieddate',
-  'name', 'price', 'quantity', 'amount', 'hs_product_id',
-  'area', 'servicio', 'unidad_de_negocio', 'nombre_empresa',
+  'name', 'description', 'price', 'quantity', 'amount', 'hs_product_id',
+  'area', 'servicio', 'unidad_de_negocio', 'nombre_empresa', 'nombre_producto',
+  'empresa_que_factura',          // entidad del grupo que emite (en el LI, no en el ticket)
   'of_moneda', 'deal_currency_code',
   'uy', 'pais_operativo', 'of_line_item_py_origen_id', 'pausa',
   'monto_unitario_original', 'monto_unitario_actual',
   'ajuste_factura_aparte', 'tipo_de_parametrica',
   'fecha_ultimo_ajuste', 'porcentaje_ultimo_ajuste',
 ];
+
+// Número de contrato: propiedad NUEVA del line item (bloque 2), todavía sin
+// crear en los portales. Se pide sólo si está configurada, porque pedir una
+// prop inexistente en el search hace fallar el request entero.
+export const NUMERO_CONTRATO_PROP = (process.env.PARAMETRICA_PROP_NUMERO_CONTRATO || '').trim();
+
+function propsAPedir() {
+  return NUMERO_CONTRATO_PROP ? [...LI_PROPS, NUMERO_CONTRATO_PROP] : LI_PROPS;
+}
 
 // ────────────────────────────────────────────────────────────
 // Lectura
@@ -62,7 +73,7 @@ export async function searchIjservLineItems() {
           { propertyName: 'hs_product_id', operator: 'EQ', value: IJSERV_PRODUCT_ID },
         ],
       }],
-      properties: LI_PROPS,
+      properties: propsAPedir(),
       sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
       limit: 100,
     };
@@ -125,10 +136,17 @@ export async function resolveDealsForLineItems(lineItems) {
 
 /**
  * Arma la vista completa: elegibles para el ajuste + excluidos con motivo.
+ *
+ * Elegible = line item iJServ, no espejo, con precio, cuyo negocio está de
+ * CIERRE GANADO EN ADELANTE (ganado / en ejecución / finalizado). Antes de
+ * ganar, el motor rearma el negocio libremente y no tiene sentido ajustarlo.
  */
 export async function listarLineItemsIjserv() {
   const lis = await searchIjservLineItems();
   const dealsByLi = await resolveDealsForLineItems(lis);
+  const empresasPorDeal = await resolveEmpresasPorDeal(
+    [...dealsByLi.values()].map(d => d.dealId).filter(Boolean)
+  );
 
   const elegibles = [];
   const excluidos = [];
@@ -136,15 +154,24 @@ export async function listarLineItemsIjserv() {
   for (const li of lis) {
     const p = li.properties || {};
     const deal = dealsByLi.get(String(li.id)) || {};
+    const empresaDatos = (deal.dealId && empresasPorDeal.get(String(deal.dealId))) || {};
     const row = {
       lineItemId: String(li.id),
       dealId: deal.dealId || null,
       dealName: deal.dealName || '',
       dealStage: deal.dealStage || '',
+      entidadFacturadora: p.empresa_que_factura || '',
+      clienteFactura: empresaDatos.clienteFactura || p.nombre_empresa || '',
+      codigoEmpresa: empresaDatos.codigoEmpresa || '',
+      codigoContacto: empresaDatos.codigoContacto || '',
+      numeroContrato: (NUMERO_CONTRATO_PROP ? p[NUMERO_CONTRATO_PROP] : '') || '',
       empresa: p.nombre_empresa || '',
+      descripcion: p.description || '',
       area: p.area || '',
-      producto: 'iJServ',
+      producto: p.nombre_producto || 'iJServ',
+      rubro: p.servicio || '',
       servicio: p.name || '',
+      quantity: p.quantity != null && p.quantity !== '' ? Number(p.quantity) : null,
       price: p.price != null && p.price !== '' ? Number(p.price) : null,
       moneda: p.of_moneda || p.deal_currency_code || '',
       fechaUltimoAjuste: p.fecha_ultimo_ajuste || null,
@@ -157,8 +184,8 @@ export async function listarLineItemsIjserv() {
       excluidos.push({ ...row, motivo: 'espejo_intercompany' });
     } else if (!deal.dealId) {
       excluidos.push({ ...row, motivo: 'sin_deal' });
-    } else if (!BILLING_ACTIVE_DEAL_STAGES.has(String(deal.dealStage))) {
-      excluidos.push({ ...row, motivo: 'deal_no_activo' });
+    } else if (!isDealGanadoStage(deal.dealStage)) {
+      excluidos.push({ ...row, motivo: 'deal_no_ganado' });
     } else if (row.price == null || Number.isNaN(row.price)) {
       excluidos.push({ ...row, motivo: 'sin_precio' });
     } else {
