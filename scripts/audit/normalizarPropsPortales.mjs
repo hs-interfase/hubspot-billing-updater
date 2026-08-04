@@ -67,9 +67,8 @@ const PLAN = [
     payload: { label: 'Porcentaje último ajuste', type: 'number', fieldType: 'number' },
     porque: 'paramétricas (ítem 106) — props PROD' },
 
-  { portal: 'PROD', obj: 'line_items', accion: 'crear', name: 'costo_total_en_dolares',
-    payload: { label: 'Costo Total en dolares', type: 'number', fieldType: 'number' },
-    porque: 'paridad con sandbox' },
+  // costo_total_en_dolares: ARCHIVADA en los dos portales el 2-ago-2026 (0 line items con valor,
+  // duplicaba a costo_total_usd, que es la que lee el motor). No recrearla.
 
   { portal: 'PROD', obj: 'line_items', accion: 'crear', name: 'mig_monto_moneda_orig',
     payload: { label: 'mig_monto_moneda_orig', type: 'string', fieldType: 'text' }, porque: 'prop de migración' },
