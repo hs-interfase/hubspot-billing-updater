@@ -63,9 +63,22 @@ export async function initParametricaTables() {
     'rubro               TEXT',
     'producto            TEXT',
     'cantidad            NUMERIC(14,4)',
+    // Ajuste retroactivo de pago único (4-ago-2026): qué se calculó por fila y
+    // qué line item se creó, para poder deshacerlo en la reversa.
+    'periodos_retro      INTEGER',
+    'importe_retro       NUMERIC(14,2)',
+    'precio_retro        NUMERIC(14,2)',
+    'fecha_retro         TEXT',
+    'li_retro_id         TEXT',
+    'retro_estado        TEXT',
+    'retro_error         TEXT',
   ]) {
     await pool.query(`ALTER TABLE parametrica_items ADD COLUMN IF NOT EXISTS ${col}`)
   }
+
+  // Mes del ajuste (YYYY-MM). Vacío = el ajuste rige desde hoy y no hay
+  // retroactivo, que es el comportamiento histórico.
+  await pool.query(`ALTER TABLE parametrica_batches ADD COLUMN IF NOT EXISTS mes_ajuste TEXT`)
 
   logger.info({ module: 'parametrica/Db' }, 'Tablas parametrica_batches / parametrica_items listas.')
 }

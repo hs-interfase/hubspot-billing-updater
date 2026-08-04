@@ -30,11 +30,24 @@ import { calcularPriceNuevo, validarPorcentaje } from '../../src/services/parame
 import {
   listarLineItemsIjserv,
   contarTicketsProtegidosFuturos,
+  contarPeriodosFacturados,
   leerPriceActual,
   aplicarAjusteLineItem,
   revertirLineItem,
+  crearLineItemRetroactivo,
+  archivarLineItemRetroactivo,
+  hoyMvd,
   IJSERV_PRODUCT_ID,
 } from '../../src/services/parametrica/parametricaService.js';
+import {
+  parseMesAjuste,
+  etiquetaMes,
+  calcularRetroactivo,
+  evaluarRetroactivo,
+  descripcionRetro,
+  MOTIVOS_RETRO,
+  NOMBRE_LI_RETRO,
+} from '../../src/services/parametrica/retroactivo.js';
 import { isDryRun } from '../../src/config/constants.js';
 import logger from '../../lib/logger.js';
 
@@ -42,6 +55,8 @@ const MOD = 'parametrica/router';
 const router = Router();
 
 const MAX_PCT = Number(process.env.PARAMETRICA_MAX_PCT || 30);
+// Tope de antigüedad del mes del ajuste — freno a un dedazo en el año.
+const MAX_MESES_RETRO = Number(process.env.PARAMETRICA_MAX_MESES_RETRO || 24);
 const ALERT_TO = (process.env.PARAMETRICA_ALERT_TO || process.env.ALERT_TO_EMAIL || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -49,11 +64,19 @@ const getUser = (req) => (req.headers['x-app-user'] || 'admin').toString().slice
 
 // ── Extracto por email ──────────────────────────────────────
 async function enviarExtracto({ accion, batch, items, usuario }) {
-  const filas = items.map(it =>
-    `${it.empresa || '—'} | ${it.deal_name || '—'} (${it.deal_id || '—'}) | LI ${it.line_item_id} "${it.servicio || ''}" | ` +
-    `${it.moneda || ''} ${it.price_viejo} → ${it.price_nuevo} | ${it.estado}${it.error ? ` (${it.error})` : ''}`
-  );
+  const filas = items.map(it => {
+    const retro = it.retro_estado === 'creado'
+      ? ` | retroactivo ${it.periodos_retro} período(s) = ${it.moneda || ''} ${it.importe_retro} (LI ${it.li_retro_id})`
+      : it.retro_estado === 'archivado' ? ' | retroactivo archivado'
+      : it.retro_estado === 'error' ? ` | retroactivo NO creado (${it.retro_error || 'error'})`
+      : '';
+    return `${it.cliente_factura || it.empresa || '—'} | ${it.deal_name || '—'} (${it.deal_id || '—'}) | ` +
+      `LI ${it.line_item_id} "${it.servicio || ''}" | ` +
+      `${it.moneda || ''} ${it.price_viejo} → ${it.price_nuevo} | ${it.estado}` +
+      `${it.error ? ` (${it.error})` : ''}${retro}`;
+  });
   const ok = items.filter(i => i.estado === 'applied' || i.estado === 'reverted').length;
+  const retroCreados = items.filter(i => i.retro_estado === 'creado');
   try {
     await sendAlertTo({
       to: ALERT_TO,
@@ -63,11 +86,16 @@ async function enviarExtracto({ accion, batch, items, usuario }) {
         accion,
         batch: batch.id,
         porcentaje: `${batch.porcentaje}%`,
+        vigencia: batch.mes_ajuste ? `desde ${etiquetaMes(batch.mes_ajuste)}` : 'desde hoy',
         usuario,
         dry_run: batch.dry_run ? 'SÍ' : 'no',
         total_line_items: items.length,
         exitosos: ok,
         fallidos: items.length - ok,
+        ...(batch.mes_ajuste ? {
+          ajustes_retroactivos: `${retroCreados.length} line item(s) «${NOMBRE_LI_RETRO}» por ` +
+            `${retroCreados.reduce((a, i) => a + Number(i.importe_retro || 0), 0).toFixed(2)} en total`,
+        } : {}),
         detalle: filas.join('\n'),
       },
     });
@@ -107,24 +135,129 @@ function parseSeleccion(raw) {
   return ids.length ? ids : null;
 }
 
+/**
+ * Calcula el ajuste retroactivo de una fila. Devuelve siempre un objeto: si no
+ * corresponde, con `estado` explicando por qué (se muestra en el preview).
+ */
+function calcularRetroDeFila(li, pct, mes, conteos) {
+  if (!mes) return { periodos: null, precio: null, importe: null, fecha: null, estado: null };
+
+  const conteo = conteos.get(li.lineItemId) || { facturados: 0, pendientes: 0 };
+  const priceNuevo = calcularPriceNuevo(li.price, pct);
+  const { deltaUnitario, precio, importe } = calcularRetroactivo({
+    priceViejo: li.price, priceNuevo, cantidad: li.cantidad, periodos: conteo.facturados,
+  });
+  const { aplica, motivo } = evaluarRetroactivo({
+    periodos: conteo.facturados, proximaFecha: li.proximaFecha, deltaUnitario,
+  });
+
+  return {
+    periodos: conteo.facturados,
+    pendientes: conteo.pendientes,
+    deltaUnitario,
+    precio: aplica ? precio : null,
+    importe: aplica ? importe : null,
+    fecha: aplica ? li.proximaFecha : null,
+    estado: aplica ? 'pendiente' : motivo,
+    descripcion: aplica
+      ? descripcionRetro({
+          servicio: li.descripcion || li.servicio, mesLabel: mes.label,
+          periodos: conteo.facturados, deltaUnitario, moneda: li.moneda,
+        })
+      : null,
+  };
+}
+
 /** Inserta el snapshot de un line item elegido en el batch. */
-async function insertarItem(batchId, li, pct) {
+async function insertarItem(batchId, li, pct, retro = {}) {
   const priceNuevo = calcularPriceNuevo(li.price, pct);
   const { rows: [item] } = await pool.query(
     `INSERT INTO parametrica_items
        (batch_id, line_item_id, deal_id, deal_name, empresa, area, servicio, moneda,
         price_viejo, price_nuevo,
         entidad_facturadora, cliente_factura, codigo_empresa, numero_contrato,
-        descripcion, rubro, producto, cantidad)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        descripcion, rubro, producto, cantidad,
+        periodos_retro, precio_retro, importe_retro, fecha_retro, retro_estado)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
      ON CONFLICT (batch_id, line_item_id) DO NOTHING
      RETURNING *`,
     [batchId, li.lineItemId, li.dealId, li.dealName, li.empresa, li.area, li.servicio, li.moneda,
      li.price, priceNuevo,
      li.entidadFacturadora, li.clienteFactura, li.codigoEmpresa, li.numeroContrato,
-     li.descripcion, li.rubro, li.producto, li.quantity]
+     li.descripcion, li.rubro, li.producto, li.quantity,
+     retro.periodos ?? null, retro.precio ?? null, retro.importe ?? null,
+     retro.fecha ?? null, retro.estado ?? null]
   );
   return item || null;
+}
+
+/**
+ * Inserta un conjunto de filas resolviendo antes, de una sola vez, cuántas
+ * facturas ya salieron por line item (una búsqueda de tickets por LI).
+ */
+async function insertarItems(batchId, filas, pct, mes) {
+  const conteos = mes
+    ? await contarPeriodosFacturados(filas.map(f => f.lineItemId), mes.desde)
+    : new Map();
+  for (const li of filas) {
+    await insertarItem(batchId, li, pct, calcularRetroDeFila(li, pct, mes, conteos));
+  }
+  return conteos;
+}
+
+/** Reconstruye el `mes` parseado a partir de lo guardado en el batch. */
+const mesDelBatch = (batch) => batch.mes_ajuste
+  ? { ym: batch.mes_ajuste, desde: `${batch.mes_ajuste}-01`, label: etiquetaMes(batch.mes_ajuste) }
+  : null;
+
+const setRetro = (id, estado, campos = {}) => pool.query(
+  `UPDATE parametrica_items
+      SET retro_estado = $2, li_retro_id = COALESCE($3, li_retro_id), retro_error = $4
+    WHERE id = $1`,
+  [id, estado, campos.liRetroId ?? null, campos.error ?? null]
+);
+
+/**
+ * Crea el «Ajuste retroactivo de pago único» de una fila ya ajustada.
+ * No tira: un fallo del puntual queda registrado en la fila y sale en el
+ * extracto, pero no revierte el ajuste de precio que ya se aplicó bien.
+ */
+async function crearRetroDeItem(item, actual, batch) {
+  if (item.retro_estado !== 'pendiente') return;
+
+  const mes = mesDelBatch(batch);
+  // La próxima fecha se relee del line item: entre el preview y el apply el
+  // cron pudo recalcularla, y el puntual tiene que acompañar a la de verdad.
+  const fecha = actual.proximaFecha || item.fecha_retro;
+  if (!fecha) {
+    await setRetro(item.id, 'sin_proxima_fecha');
+    return;
+  }
+
+  try {
+    const { id, dryRun } = await crearLineItemRetroactivo({
+      origen: { properties: actual.props },
+      dealId: item.deal_id,
+      precio: Number(item.precio_retro),
+      cantidad: Number(item.cantidad ?? actual.cantidad ?? 1),
+      fecha,
+      descripcion: descripcionRetro({
+        servicio: item.descripcion || item.servicio,
+        mesLabel: mes?.label || '',
+        periodos: Number(item.periodos_retro),
+        deltaUnitario: Number(item.price_nuevo) - Number(item.price_viejo),
+        moneda: item.moneda,
+      }),
+    });
+    await pool.query(
+      `UPDATE parametrica_items SET retro_estado = $2, li_retro_id = $3, fecha_retro = $4 WHERE id = $1`,
+      [item.id, dryRun ? 'dry_run' : 'creado', id, fecha]
+    );
+  } catch (err) {
+    await setRetro(item.id, 'error', { error: (err?.message || 'error').slice(0, 300) });
+    logger.error({ module: MOD, fn: 'crearRetroDeItem', lineItemId: item.line_item_id, err: err?.message },
+      'No se pudo crear el line item de ajuste retroactivo');
+  }
 }
 
 /** Fila que consume la pantalla, a partir del item guardado. */
@@ -149,6 +282,15 @@ const filaPreview = (it, elegible, protegidos) => ({
   fechaUltimoAjuste: elegible?.fechaUltimoAjuste || null,
   pausa: elegible?.pausa || false,
   ticketsProtegidos: protegidos.get(it.line_item_id) || null,
+  // Ajuste retroactivo
+  periodosRetro: it.periodos_retro,
+  precioRetro: it.precio_retro != null ? Number(it.precio_retro) : null,
+  importeRetro: it.importe_retro != null ? Number(it.importe_retro) : null,
+  fechaRetro: it.fecha_retro || null,
+  retroEstado: it.retro_estado || null,
+  retroMotivo: MOTIVOS_RETRO[it.retro_estado] || null,
+  liRetroId: it.li_retro_id || null,
+  retroError: it.retro_error || null,
 });
 
 /** Arma la respuesta completa de un preview leyendo sus items de la DB. */
@@ -157,12 +299,20 @@ async function responderPreview(batch, elegiblesPorId, warning) {
     `SELECT * FROM parametrica_items WHERE batch_id = $1 ORDER BY id`, [batch.id]
   );
   const protegidos = await contarTicketsProtegidosFuturos(items.map(i => i.line_item_id));
+  const conRetro = items.filter(i => i.retro_estado === 'pendiente');
   return {
     batchId: batch.id,
     porcentaje: Number(batch.porcentaje),
     dryRun: batch.dry_run,
     warning: warning || null,
     totalLis: items.length,
+    mesAjuste: batch.mes_ajuste || null,
+    mesAjusteLabel: batch.mes_ajuste ? etiquetaMes(batch.mes_ajuste) : null,
+    retro: {
+      lineItems: conRetro.length,
+      importeTotal: conRetro.reduce((acc, i) => acc + Number(i.importe_retro || 0), 0),
+      nombre: NOMBRE_LI_RETRO,
+    },
     rows: items.map(it => filaPreview(it, elegiblesPorId.get(it.line_item_id), protegidos)),
   };
 }
@@ -179,6 +329,15 @@ router.post('/preview', async (req, res) => {
       return res.status(400).json({ error: 'Elegí al menos un line item para ajustar' });
     }
 
+    // Fecha del ajuste: OPCIONAL. Vacía = rige desde hoy y no hay retroactivo.
+    // Con mes y año, lo ya facturado a precio viejo se cobra en un puntual.
+    let mes = null;
+    if (String(req.body?.mesAjuste ?? '').trim()) {
+      const val = parseMesAjuste(req.body.mesAjuste, hoyMvd(), MAX_MESES_RETRO);
+      if (!val.ok) return res.status(400).json({ error: val.error });
+      mes = val;
+    }
+
     const { elegibles } = await listarLineItemsIjserv();
     if (!elegibles.length) return res.status(400).json({ error: 'No hay line items elegibles para ajustar' });
 
@@ -190,12 +349,12 @@ router.post('/preview', async (req, res) => {
     const descartados = seleccion.length - elegidos.length;
 
     const { rows: [batch] } = await pool.query(
-      `INSERT INTO parametrica_batches (producto_id, porcentaje, usuario, dry_run, scope)
-       VALUES ($1, $2, $3, $4, 'seleccion') RETURNING *`,
-      [IJSERV_PRODUCT_ID, pct, getUser(req), isDryRun()]
+      `INSERT INTO parametrica_batches (producto_id, porcentaje, usuario, dry_run, scope, mes_ajuste)
+       VALUES ($1, $2, $3, $4, 'seleccion', $5) RETURNING *`,
+      [IJSERV_PRODUCT_ID, pct, getUser(req), isDryRun(), mes?.ym || null]
     );
 
-    for (const li of elegidos) await insertarItem(batch.id, li, pct);
+    await insertarItems(batch.id, elegidos, pct, mes);
 
     const avisos = [
       val.warning,
@@ -243,10 +402,14 @@ router.put('/preview/:id/items', async (req, res) => {
        WHERE batch_id = $1 AND estado = 'pending' AND NOT (line_item_id = ANY($2::text[]))`,
       [batchId, elegidos]
     );
-    // Y adentro los que agregaste (ON CONFLICT ignora los que ya estaban).
-    for (const id of elegidos) {
-      await insertarItem(batchId, elegiblesPorId.get(id), Number(batch.porcentaje));
-    }
+    // Y adentro los que agregaste (ON CONFLICT ignora los que ya estaban, así
+    // que sólo los nuevos pagan el conteo de facturas del retroactivo).
+    const { rows: yaEstan } = await pool.query(
+      `SELECT line_item_id FROM parametrica_items WHERE batch_id = $1`, [batchId]
+    );
+    const conocidos = new Set(yaEstan.map(r => r.line_item_id));
+    const nuevos = elegidos.filter(id => !conocidos.has(id)).map(id => elegiblesPorId.get(id));
+    await insertarItems(batchId, nuevos, Number(batch.porcentaje), mesDelBatch(batch));
 
     const descartados = seleccion.length - elegidos.length;
     res.json(await responderPreview(batch, elegiblesPorId,
@@ -341,6 +504,10 @@ router.post('/apply', async (req, res) => {
               montoUnitarioOriginal: actual.montoUnitarioOriginal,
             });
             await setItem(it.id, 'applied');
+            // El retroactivo va DESPUÉS del ajuste y sólo si el ajuste salió
+            // bien: si falla el puntual, el precio nuevo igual queda aplicado
+            // y la fila lo dice, en vez de dejar el lote a medias.
+            await crearRetroDeItem(it, actual, batch);
           } catch (err) {
             await setItem(it.id, 'failed', (err?.message || 'error').slice(0, 300));
             logger.error({ module: MOD, fn: 'apply', lineItemId: it.line_item_id, err: err?.message }, 'Fallo aplicando LI');
@@ -372,6 +539,8 @@ router.post('/apply', async (req, res) => {
       estado: estadoFinal,
       aplicados,
       fallidos,
+      mesAjuste: batch.mes_ajuste || null,
+      mesAjusteLabel: batch.mes_ajuste ? etiquetaMes(batch.mes_ajuste) : null,
       items: finalItems.map(i => ({
         lineItemId: i.line_item_id, dealId: i.deal_id, dealName: i.deal_name, empresa: i.empresa,
         entidadFacturadora: i.entidad_facturadora || '', clienteFactura: i.cliente_factura || '',
@@ -381,6 +550,13 @@ router.post('/apply', async (req, res) => {
         servicio: i.servicio, moneda: i.moneda,
         priceViejo: Number(i.price_viejo), priceNuevo: Number(i.price_nuevo),
         estado: i.estado, error: i.error,
+        periodosRetro: i.periodos_retro,
+        importeRetro: i.importe_retro != null ? Number(i.importe_retro) : null,
+        fechaRetro: i.fecha_retro || null,
+        retroEstado: i.retro_estado || null,
+        retroMotivo: MOTIVOS_RETRO[i.retro_estado] || null,
+        liRetroId: i.li_retro_id || null,
+        retroError: i.retro_error || null,
       })),
     });
   } catch (err) {
@@ -450,6 +626,19 @@ router.post('/revert', async (req, res) => {
             }
             await revertirLineItem({ lineItemId: it.line_item_id, priceViejo: Number(it.price_viejo) });
             await setItem(it.id, 'reverted');
+            // Si el ajuste generó un retroactivo, ese cobro tampoco corresponde.
+            if (it.li_retro_id && it.retro_estado === 'creado') {
+              try {
+                await archivarLineItemRetroactivo(it.li_retro_id);
+                await setRetro(it.id, 'archivado');
+              } catch (err) {
+                await setRetro(it.id, 'creado', {
+                  error: `no se pudo archivar el retroactivo: ${(err?.message || 'error').slice(0, 200)}`,
+                });
+                logger.error({ module: MOD, fn: 'revert', liRetroId: it.li_retro_id, err: err?.message },
+                  'Reversa: quedó vivo el line item de ajuste retroactivo');
+              }
+            }
           } catch (err) {
             await setItem(it.id, 'revert_failed', (err?.message || 'error').slice(0, 300));
           }

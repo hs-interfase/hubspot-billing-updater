@@ -74,6 +74,7 @@
       font-size: 13px; width: 190px; transition: border-color .2s;
     }
     .filter-group input.chico { width: 140px; }
+    .filter-group .hint { font-size: 11px; color: var(--muted); max-width: 220px; line-height: 1.4; }
     .filter-group input:focus { outline: none; border-color: var(--accent); }
     .check-group { display: flex; align-items: center; gap: 8px; padding-bottom: 9px; color: var(--muted); font-size: 13px; }
     .check-group input { accent-color: var(--accent); cursor: pointer; }
@@ -200,6 +201,11 @@
       <label>Porcentaje de ajuste</label>
       <input type="text" id="f-pct" class="chico" placeholder="ej. 4,26 o -2,5" />
     </div>
+    <div class="filter-group">
+      <label>Vigente desde <span style="text-transform:none;font-weight:400">(opcional)</span></label>
+      <input type="month" id="f-mes" class="chico" />
+      <span class="hint">Vacío: rige desde hoy. Con un mes, lo ya facturado se cobra aparte.</span>
+    </div>
     <button class="btn btn-primary" id="btn-preview">Previsualizar</button>
     <button class="btn btn-primary" id="btn-actualizar" style="display:none">Actualizar previsualización</button>
     <button class="btn btn-ghost" id="btn-volver-seleccion" style="display:none">← Volver a la selección</button>
@@ -324,13 +330,18 @@
   function renderCabecera() {
     const chk = seleccionable() ? '<th class="chk"><input type="checkbox" id="chk-cabecera" /></th>' : ''
     const cols = COLS_BASE.map(c => `<th>${c}</th>`).join('')
+    // La columna de retroactivo sólo aparece si el ajuste tiene mes de vigencia.
+    const conRetro = (modo === 'preview' && preview.mesAjuste) ||
+      (modo === 'resultado' && resultado.mesAjuste)
     let extra
     if (modo === 'lista') {
       extra = '<th class="num">Importe s/IVA</th><th>Últ. ajuste</th>'
     } else if (modo === 'preview') {
-      extra = '<th class="num">Importe s/IVA</th><th class="num">Importe nuevo</th><th>Últ. ajuste</th><th>Avisos</th>'
+      extra = '<th class="num">Importe s/IVA</th><th class="num">Importe nuevo</th>' +
+        (conRetro ? '<th>Ajuste retroactivo</th>' : '') + '<th>Últ. ajuste</th><th>Avisos</th>'
     } else {
-      extra = '<th class="num">Importe viejo</th><th class="num">Importe nuevo</th><th>Estado</th>'
+      extra = '<th class="num">Importe viejo</th><th class="num">Importe nuevo</th>' +
+        (conRetro ? '<th>Ajuste retroactivo</th>' : '') + '<th>Estado</th>'
     }
     $('thead').innerHTML = `<tr>${chk}${cols}${extra}</tr>`
     const cab = $('chk-cabecera')
@@ -338,8 +349,24 @@
     sincronizarCabecera()
   }
 
+  /** Celda del ajuste retroactivo: qué se va a cobrar aparte, o por qué no. */
+  function celdaRetro(f) {
+    if (f.retroEstado === 'creado' || f.retroEstado === 'dry_run') {
+      return `<td><span class="badge b-ok">${f.periodosRetro} período(s) · ${fmt(f.importeRetro)}</span>` +
+        `<br><span class="li-id">${f.retroEstado === 'dry_run' ? 'dry-run' : `LI ${esc(f.liRetroId)}`} · ${esc(f.fechaRetro || '')}</span></td>`
+    }
+    if (f.retroEstado === 'archivado') return '<td><span class="badge">archivado en la reversa</span></td>'
+    if (f.retroEstado === 'error') return `<td><span class="badge b-err">no se pudo crear</span><br><span class="li-id">${esc(f.retroError || '')}</span></td>`
+    if (f.retroEstado === 'pendiente') {
+      return `<td><span class="badge b-warn">${f.periodosRetro} período(s) · ${fmt(f.importeRetro)}</span>` +
+        `<br><span class="li-id">se factura el ${esc(f.fechaRetro || '')}</span></td>`
+    }
+    if (f.retroEstado) return `<td><span class="val-empty">${esc(f.retroMotivo || f.retroEstado)}</span></td>`
+    return '<td><span class="val-empty">—</span></td>'
+  }
+
   function renderCuerpo(filas) {
-    const colspan = COLS_BASE.length + 5
+    const colspan = COLS_BASE.length + 6
     if (!filas.length) {
       const msg = hayFiltro()
         ? 'Ningún line item coincide con el buscador.'
@@ -367,12 +394,14 @@
         extra = `
           <td class="num"><span class="val-before">${fmt(f.priceViejo)}</span></td>
           <td class="num"><span class="val-after">${fmt(f.priceNuevo)}</span></td>
+          ${preview.mesAjuste ? celdaRetro(f) : ''}
           <td>${f.fechaUltimoAjuste ? esc(f.fechaUltimoAjuste) : '<span class="val-empty">nunca</span>'}</td>
           <td>${avisos}</td>`
       } else {
         extra = `
           <td class="num">${fmt(f.priceViejo)}</td>
           <td class="num">${fmt(f.priceNuevo)}</td>
+          ${resultado.mesAjuste ? celdaRetro(f) : ''}
           <td><span class="badge ${f.estado === 'applied' ? 'b-ok' : 'b-err'}">${esc(f.estado)}</span>${f.error ? `<br><span class="li-id">${esc(f.error)}</span>` : ''}</td>`
       }
       return `<tr class="${marcado && seleccionable() ? 'sel' : ''}">${chk}${celdasBase(f)}${extra}</tr>`
@@ -512,6 +541,13 @@
     if (conTickets.length) avisos.push(`⚠ ${conTickets.length} line item(s) tienen tickets ya promovidos con fecha futura que <strong>conservarán el precio viejo</strong> (marcados en la tabla). Revisalos a mano si corresponde.`)
     const pausados = json.rows.filter(r => r.pausa)
     if (pausados.length) avisos.push(`⚠ ${pausados.length} line item(s) están pausados — el ajuste igual se aplicará.`)
+    if (json.mesAjuste) {
+      const sinRetro = json.rows.filter(r => r.retroEstado && r.retroEstado !== 'pendiente').length
+      avisos.push(`📅 El ajuste rige desde <strong>${esc(json.mesAjusteLabel)}</strong>. Al confirmar se crean ` +
+        `<strong>${json.retro.lineItems}</strong> line item(s) «${esc(json.retro.nombre)}» por un total de ` +
+        `<strong>${fmt(json.retro.importeTotal)}</strong>, cada uno con la próxima fecha de facturación de su line item.` +
+        (sinRetro ? ` ${sinRetro} fila(s) no llevan retroactivo — el motivo está en la columna.` : ''))
+    }
     setAlert(avisos.join('<br>'), 'alert-warn')
   }
 
@@ -533,7 +569,7 @@
     try {
       const res = await fetch(`${API}/preview`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ porcentaje: pct, lineItemIds: [...seleccion] }),
+        body: JSON.stringify({ porcentaje: pct, mesAjuste: $('f-mes').value.trim(), lineItemIds: [...seleccion] }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -582,6 +618,7 @@
     modo = 'lista'
     setAlert('')
     $('f-pct').value = ''
+    $('f-mes').value = ''
     await cargarLista()
     cargarBatches()
   }
@@ -589,8 +626,12 @@
   // ── Apply ──────────────────────────────────────────────────
   async function aplicar() {
     if (!preview || !$('chk-revisado').checked) return
-    if (!window.confirm(`¿Aplicar ${preview.porcentaje}% a ${preview.rows.length} line items iJServ? Esta acción escribe en HubSpot.`)) return
+    const extra = preview.mesAjuste
+      ? `\n\nAdemás se van a CREAR ${preview.retro.lineItems} line item(s) «${preview.retro.nombre}» por ${fmt(preview.retro.importeTotal)} en total.`
+      : ''
+    if (!window.confirm(`¿Aplicar ${preview.porcentaje}% a ${preview.rows.length} line items iJServ?${extra}\n\nEsta acción escribe en HubSpot.`)) return
     const batchId = preview.batchId
+    const mesAjuste = preview.mesAjuste
     $('btn-apply').disabled = true
     setAlert('Aplicando ajuste… no cierres la pestaña.', 'alert-warn')
     try {
@@ -601,16 +642,24 @@
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
 
-      resultado = { ...json, batchId }
+      resultado = { ...json, batchId, mesAjuste: json.mesAjuste ?? mesAjuste }
       modo = 'resultado'
       preview = null
       seleccion = new Set()
       $('f-pct').value = ''
+      $('f-mes').value = ''
 
-      setAlert(json.fallidos === 0
-        ? `✔ Ajuste aplicado a ${json.aplicados} line items. Se envió el extracto por email.`
-        : `Ajuste terminado con fallos: ${json.aplicados} aplicados, ${json.fallidos} fallidos. Se envió el extracto por email.`,
-        json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
+      const retroCreados = json.items.filter(i => i.retroEstado === 'creado' || i.retroEstado === 'dry_run')
+      const retroFallidos = json.items.filter(i => i.retroEstado === 'error')
+      const msjRetro = resultado.mesAjuste
+        ? ` Se crearon ${retroCreados.length} ajuste(s) retroactivo(s)` +
+          (retroFallidos.length ? ` y ${retroFallidos.length} fallaron (ver la columna).` : '.')
+        : ''
+      setAlert((json.fallidos === 0
+        ? `✔ Ajuste aplicado a ${json.aplicados} line items.`
+        : `Ajuste terminado con fallos: ${json.aplicados} aplicados, ${json.fallidos} fallidos.`) +
+        msjRetro + ' Se envió el extracto por email.',
+        json.fallidos === 0 && !retroFallidos.length ? 'alert-ok' : 'alert-warn')
 
       render()
       cargarBatches()
@@ -633,6 +682,10 @@
     URL.revokeObjectURL(a.href)
   }
 
+  const COLS_RETRO = ['retro_periodos', 'retro_importe', 'retro_fecha_facturacion', 'retro_estado', 'retro_line_item_id']
+  const celdasRetro = (f) => [f.periodosRetro, f.importeRetro, f.fechaRetro,
+    f.retroMotivo || f.retroEstado, f.liRetroId]
+
   /** CSV de lo que estás viendo: respeta el buscador y el modo. */
   function descargarCsvVista() {
     const filas = filasVisibles()
@@ -648,13 +701,16 @@
           seleccion.has(f.lineItemId) ? 'sí' : 'no']))
     } else if (modo === 'preview') {
       bajarCsv(`parametrica_ijserv_previsualizacion_${preview.batchId}.csv`,
-        [...base, 'importe_viejo', 'importe_nuevo', 'porcentaje', 'fecha_ultimo_ajuste', 'marcado'],
+        [...base, 'importe_viejo', 'importe_nuevo', 'porcentaje', 'vigente_desde',
+          ...COLS_RETRO, 'fecha_ultimo_ajuste', 'marcado'],
         filas.map(f => [...comunes(f), f.priceViejo, f.priceNuevo, preview.porcentaje,
+          preview.mesAjusteLabel || '', ...celdasRetro(f),
           f.fechaUltimoAjuste, seleccion.has(f.lineItemId) ? 'sí' : 'no']))
     } else {
       bajarCsv(`parametrica_ijserv_resultado_${resultado.batchId}.csv`,
-        [...base, 'importe_viejo', 'importe_nuevo', 'estado', 'error'],
-        filas.map(f => [...comunes(f), f.priceViejo, f.priceNuevo, f.estado, f.error]))
+        [...base, 'importe_viejo', 'importe_nuevo', 'vigente_desde', ...COLS_RETRO, 'estado', 'error'],
+        filas.map(f => [...comunes(f), f.priceViejo, f.priceNuevo,
+          resultado.mesAjusteLabel || '', ...celdasRetro(f), f.estado, f.error]))
     }
   }
 
@@ -667,11 +723,13 @@
       bajarCsv(`parametrica_ijserv_lote_${batchId}.csv`,
         ['entidad_facturadora', 'cliente_factura', 'codigo_empresa', 'numero_contrato',
           'negocio', 'deal_id', 'line_item_id', 'descripcion_producto', 'area', 'producto', 'rubro',
-          'moneda', 'importe_viejo', 'importe_nuevo', 'porcentaje', 'usuario', 'fecha', 'estado', 'error'],
+          'moneda', 'importe_viejo', 'importe_nuevo', 'porcentaje', 'vigente_desde',
+          ...COLS_RETRO, 'usuario', 'fecha', 'estado', 'error'],
         json.items.map(i => [i.entidad_facturadora, i.cliente_factura, i.codigo_empresa, i.numero_contrato,
           i.deal_name, i.deal_id, i.line_item_id, i.descripcion || i.servicio, i.area, i.producto, i.rubro,
-          i.moneda, i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.usuario,
-          json.batch.applied_at || json.batch.created_at, i.estado, i.error]))
+          i.moneda, i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.mes_ajuste || '',
+          i.periodos_retro, i.importe_retro, i.fecha_retro, i.retro_estado, i.li_retro_id,
+          json.batch.usuario, json.batch.applied_at || json.batch.created_at, i.estado, i.error]))
     } catch (err) {
       setAlert(esc(err.message), 'alert-err')
     }
@@ -695,7 +753,7 @@
         <tr>
           <td>${b.id}</td>
           <td>${esc(new Date(b.created_at).toLocaleString('es-UY'))}</td>
-          <td class="num">${esc(b.porcentaje)}%</td>
+          <td class="num">${esc(b.porcentaje)}%${b.mes_ajuste ? `<br><span class="li-id">desde ${esc(b.mes_ajuste)}</span>` : ''}</td>
           <td>${esc(b.usuario)}</td>
           <td><span class="badge ${ESTADOS_BATCH[b.estado] || ''}">${esc(b.estado)}${b.dry_run ? ' · dry-run' : ''}</span></td>
           <td class="num">${b.total_items}</td>
@@ -724,7 +782,8 @@
           <table>
             <thead><tr>
               <th>Cliente factura</th><th>N° contrato</th><th>Negocio</th><th>Descripción del producto</th>
-              <th class="num">Importe viejo</th><th class="num">Importe nuevo</th><th>Estado</th><th></th>
+              <th class="num">Importe viejo</th><th class="num">Importe nuevo</th>
+              ${json.batch.mes_ajuste ? '<th>Ajuste retroactivo</th>' : ''}<th>Estado</th><th></th>
             </tr></thead>
             <tbody>${json.items.map(i => `
               <tr>
@@ -734,6 +793,11 @@
                 <td>${txt(i.descripcion || i.servicio)}<br><span class="li-id">LI ${esc(i.line_item_id)}</span></td>
                 <td class="num">${fmt(i.price_viejo)}</td>
                 <td class="num">${fmt(i.price_nuevo)}</td>
+                ${json.batch.mes_ajuste ? celdaRetro({
+                  retroEstado: i.retro_estado, periodosRetro: i.periodos_retro,
+                  importeRetro: i.importe_retro, fechaRetro: i.fecha_retro,
+                  liRetroId: i.li_retro_id, retroError: i.retro_error,
+                }) : ''}
                 <td><span class="badge ${i.estado === 'applied' ? 'b-ok' : i.estado === 'reverted' ? 'b-err' : i.estado.includes('failed') ? 'b-err' : ''}">${esc(i.estado)}</span>${i.error ? `<br><span class="li-id">${esc(i.error)}</span>` : ''}</td>
                 <td>${puedeRevertirItem && i.estado === 'applied' ? `<button class="btn btn-danger btn-sm" onclick="revertirItem(${batchId}, '${esc(i.line_item_id)}')">Revertir este LI</button>` : ''}</td>
               </tr>`).join('')}</tbody>
