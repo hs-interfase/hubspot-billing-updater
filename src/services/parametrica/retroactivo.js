@@ -22,7 +22,7 @@
 // ticket ES la factura, así que el momento de facturación ya está contemplado.
 
 /** Nombre del line item que se crea. Es el que ve el cliente en la factura. */
-export const NOMBRE_LI_RETRO = 'Ajuste retroactivo de pago único';
+export const NOMBRE_LI_RETRO = 'Ajuste retroactivo';
 
 const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
@@ -113,38 +113,43 @@ export function mesesEntre(a, b) {
 const redondear2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /**
- * Precio unitario e importe del line item retroactivo.
+ * Monto del line item retroactivo. Es UN MONTO ÚNICO, no una recurrencia:
+ * si el ajuste era de 100 por mes y son 3 meses, el line item vale 300.
  *
- * El puntual espeja al line item original: conserva su CANTIDAD y acumula la
- * diferencia unitaria de todos los períodos en el precio. Así la línea de la
- * factura se lee al lado de la original y el total cierra:
- *   precio = (precio nuevo − precio viejo) × períodos
- *   importe = precio × cantidad
+ *   ajustePorPago = (precio nuevo − precio viejo) × cantidad del original
+ *   importe       = ajustePorPago × pagos          ← el precio del line item
  *
- * @returns {{precio:number, importe:number, deltaUnitario:number}}
+ * Va con cantidad 1 y en la moneda original del negocio, SIN impuestos: el
+ * IVA lo aplica HubSpot con el tax group que se hereda del line item original.
+ *
+ * @returns {{deltaUnitario:number, ajustePorPago:number, importe:number}}
  */
 export function calcularRetroactivo({ priceViejo, priceNuevo, cantidad = 1, periodos = 0 }) {
   const deltaUnitario = redondear2(Number(priceNuevo) - Number(priceViejo));
   const qty = Number(cantidad) > 0 ? Number(cantidad) : 1;
   const n = Number.isFinite(Number(periodos)) ? Math.max(0, Math.trunc(Number(periodos))) : 0;
-  const precio = redondear2(deltaUnitario * n);
-  return { deltaUnitario, precio, importe: redondear2(precio * qty) };
+  const ajustePorPago = redondear2(deltaUnitario * qty);
+  return { deltaUnitario, ajustePorPago, importe: redondear2(ajustePorPago * n) };
 }
+
+const fmtMonto = (n) => Number(n).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * Descripción del line item retroactivo — tiene que explicarse sola en la
- * factura y en el ticket, sin que nadie tenga que abrir la pantalla.
+ * factura y en el ticket, sin que nadie tenga que abrir la pantalla: de qué
+ * line item viene (nombre e ID), cuántos pagos cubre y desde qué mes.
  */
-export function descripcionRetro({ servicio, mesLabel, periodos, deltaUnitario, moneda }) {
-  const plural = periodos === 1 ? 'período' : 'períodos';
-  const signo = deltaUnitario < 0 ? '−' : '+';
-  const monto = Math.abs(deltaUnitario).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export function descripcionRetro({
+  servicio, lineItemId, mesLabel, periodos, ajustePorPago, importe, moneda,
+}) {
+  const pagos = periodos === 1 ? '1 pago' : `${periodos} pagos`;
+  const m = moneda ? `${moneda} ` : '';
   return [
-    `Ajuste por paramétrica con vigencia desde ${mesLabel}.`,
-    `Corresponde a ${periodos} ${plural} ya facturado(s) al precio anterior`,
-    servicio ? `de "${servicio}"` : null,
-    `— ${signo}${moneda ? `${moneda} ` : ''}${monto} por unidad y por período.`,
-  ].filter(Boolean).join(' ');
+    `Ajuste retroactivo por ${pagos} contando a partir de ${mesLabel}.`,
+    `Line item original: "${servicio || 's/nombre'}"${lineItemId ? ` (ID ${lineItemId})` : ''}.`,
+    `Monto único de ${m}${fmtMonto(importe)} en moneda original, sin impuestos`,
+    `(${m}${fmtMonto(ajustePorPago)} por pago × ${periodos}).`,
+  ].join(' ');
 }
 
 /**

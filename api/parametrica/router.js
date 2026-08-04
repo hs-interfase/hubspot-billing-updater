@@ -144,7 +144,7 @@ function calcularRetroDeFila(li, pct, mes, conteos) {
 
   const conteo = conteos.get(li.lineItemId) || { facturados: 0, pendientes: 0 };
   const priceNuevo = calcularPriceNuevo(li.price, pct);
-  const { deltaUnitario, precio, importe } = calcularRetroactivo({
+  const { deltaUnitario, ajustePorPago, importe } = calcularRetroactivo({
     priceViejo: li.price, priceNuevo, cantidad: li.cantidad, periodos: conteo.facturados,
   });
   const { aplica, motivo } = evaluarRetroactivo({
@@ -155,18 +155,23 @@ function calcularRetroDeFila(li, pct, mes, conteos) {
     periodos: conteo.facturados,
     pendientes: conteo.pendientes,
     deltaUnitario,
-    precio: aplica ? precio : null,
-    importe: aplica ? importe : null,
+    precio: aplica ? ajustePorPago : null,   // lo que se ajusta por pago
+    importe: aplica ? importe : null,        // el monto único del line item
     fecha: aplica ? li.proximaFecha : null,
     estado: aplica ? 'pendiente' : motivo,
-    descripcion: aplica
-      ? descripcionRetro({
-          servicio: li.descripcion || li.servicio, mesLabel: mes.label,
-          periodos: conteo.facturados, deltaUnitario, moneda: li.moneda,
-        })
-      : null,
   };
 }
+
+/** Descripción del puntual: de qué line item viene, cuántos pagos y desde cuándo. */
+const descripcionDeItem = (item, mes) => descripcionRetro({
+  servicio: item.servicio,
+  lineItemId: item.line_item_id,
+  mesLabel: mes?.label || '',
+  periodos: Number(item.periodos_retro),
+  ajustePorPago: Number(item.precio_retro),
+  importe: Number(item.importe_retro),
+  moneda: item.moneda,
+});
 
 /** Inserta el snapshot de un line item elegido en el batch. */
 async function insertarItem(batchId, li, pct, retro = {}) {
@@ -238,16 +243,9 @@ async function crearRetroDeItem(item, actual, batch) {
     const { id, dryRun } = await crearLineItemRetroactivo({
       origen: { properties: actual.props },
       dealId: item.deal_id,
-      precio: Number(item.precio_retro),
-      cantidad: Number(item.cantidad ?? actual.cantidad ?? 1),
+      importe: Number(item.importe_retro),
       fecha,
-      descripcion: descripcionRetro({
-        servicio: item.descripcion || item.servicio,
-        mesLabel: mes?.label || '',
-        periodos: Number(item.periodos_retro),
-        deltaUnitario: Number(item.price_nuevo) - Number(item.price_viejo),
-        moneda: item.moneda,
-      }),
+      descripcion: descripcionDeItem(item, mes),
     });
     await pool.query(
       `UPDATE parametrica_items SET retro_estado = $2, li_retro_id = $3, fecha_retro = $4 WHERE id = $1`,
@@ -261,7 +259,7 @@ async function crearRetroDeItem(item, actual, batch) {
 }
 
 /** Fila que consume la pantalla, a partir del item guardado. */
-const filaPreview = (it, elegible, protegidos) => ({
+const filaPreview = (it, elegible, protegidos, mes) => ({
   lineItemId: it.line_item_id,
   dealId: it.deal_id,
   dealName: it.deal_name,
@@ -291,6 +289,9 @@ const filaPreview = (it, elegible, protegidos) => ({
   retroMotivo: MOTIVOS_RETRO[it.retro_estado] || null,
   liRetroId: it.li_retro_id || null,
   retroError: it.retro_error || null,
+  // La descripción exacta que va a llevar el line item, para poder leerla en
+  // el preview antes de confirmar.
+  retroDescripcion: it.retro_estado === 'pendiente' ? descripcionDeItem(it, mes) : null,
 });
 
 /** Arma la respuesta completa de un preview leyendo sus items de la DB. */
@@ -313,7 +314,7 @@ async function responderPreview(batch, elegiblesPorId, warning) {
       importeTotal: conRetro.reduce((acc, i) => acc + Number(i.importe_retro || 0), 0),
       nombre: NOMBRE_LI_RETRO,
     },
-    rows: items.map(it => filaPreview(it, elegiblesPorId.get(it.line_item_id), protegidos)),
+    rows: items.map(it => filaPreview(it, elegiblesPorId.get(it.line_item_id), protegidos, mesDelBatch(batch))),
   };
 }
 

@@ -352,14 +352,16 @@
   /** Celda del ajuste retroactivo: qué se va a cobrar aparte, o por qué no. */
   function celdaRetro(f) {
     if (f.retroEstado === 'creado' || f.retroEstado === 'dry_run') {
-      return `<td><span class="badge b-ok">${f.periodosRetro} período(s) · ${fmt(f.importeRetro)}</span>` +
-        `<br><span class="li-id">${f.retroEstado === 'dry_run' ? 'dry-run' : `LI ${esc(f.liRetroId)}`} · ${esc(f.fechaRetro || '')}</span></td>`
+      return `<td><span class="badge b-ok">${fmt(f.importeRetro)} ${esc(f.moneda || '')}</span>` +
+        `<br><span class="li-id">${f.periodosRetro} pago(s) · ${f.retroEstado === 'dry_run' ? 'dry-run' : `LI ${esc(f.liRetroId)}`} · ${esc(f.fechaRetro || '')}</span></td>`
     }
     if (f.retroEstado === 'archivado') return '<td><span class="badge">archivado en la reversa</span></td>'
     if (f.retroEstado === 'error') return `<td><span class="badge b-err">no se pudo crear</span><br><span class="li-id">${esc(f.retroError || '')}</span></td>`
     if (f.retroEstado === 'pendiente') {
-      return `<td><span class="badge b-warn">${f.periodosRetro} período(s) · ${fmt(f.importeRetro)}</span>` +
-        `<br><span class="li-id">se factura el ${esc(f.fechaRetro || '')}</span></td>`
+      // El title muestra la descripción exacta que va a llevar el line item.
+      return `<td title="${esc(f.retroDescripcion || '')}">` +
+        `<span class="badge b-warn">${fmt(f.importeRetro)} ${esc(f.moneda || '')}</span>` +
+        `<br><span class="li-id">${f.periodosRetro} pago(s) × ${fmt(f.precioRetro)} · se factura el ${esc(f.fechaRetro || '')}</span></td>`
     }
     if (f.retroEstado) return `<td><span class="val-empty">${esc(f.retroMotivo || f.retroEstado)}</span></td>`
     return '<td><span class="val-empty">—</span></td>'
@@ -682,8 +684,9 @@
     URL.revokeObjectURL(a.href)
   }
 
-  const COLS_RETRO = ['retro_periodos', 'retro_importe', 'retro_fecha_facturacion', 'retro_estado', 'retro_line_item_id']
-  const celdasRetro = (f) => [f.periodosRetro, f.importeRetro, f.fechaRetro,
+  const COLS_RETRO = ['retro_pagos', 'retro_monto_por_pago', 'retro_monto_unico',
+    'retro_fecha_facturacion', 'retro_estado', 'retro_line_item_id']
+  const celdasRetro = (f) => [f.periodosRetro, f.precioRetro, f.importeRetro, f.fechaRetro,
     f.retroMotivo || f.retroEstado, f.liRetroId]
 
   /** CSV de lo que estás viendo: respeta el buscador y el modo. */
@@ -728,7 +731,7 @@
         json.items.map(i => [i.entidad_facturadora, i.cliente_factura, i.codigo_empresa, i.numero_contrato,
           i.deal_name, i.deal_id, i.line_item_id, i.descripcion || i.servicio, i.area, i.producto, i.rubro,
           i.moneda, i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.mes_ajuste || '',
-          i.periodos_retro, i.importe_retro, i.fecha_retro, i.retro_estado, i.li_retro_id,
+          i.periodos_retro, i.precio_retro, i.importe_retro, i.fecha_retro, i.retro_estado, i.li_retro_id,
           json.batch.usuario, json.batch.applied_at || json.batch.created_at, i.estado, i.error]))
     } catch (err) {
       setAlert(esc(err.message), 'alert-err')

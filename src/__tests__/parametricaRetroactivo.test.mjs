@@ -66,17 +66,23 @@ test('mesesEntre cruza el fin de año', () => {
 
 // ── Importe ──────────────────────────────────────────────────
 
-test('el puntual conserva la cantidad y acumula la diferencia en el precio', () => {
-  // 5000 → 5021,32 (+0,4264%, el ejemplo real de Petróleo), 3 unidades, 2 períodos
-  const r = calcularRetroactivo({ priceViejo: 5000, priceNuevo: 5021.32, cantidad: 3, periodos: 2 });
-  assert.equal(r.deltaUnitario, 21.32);
-  assert.equal(r.precio, 42.64);      // 21,32 × 2 períodos
-  assert.equal(r.importe, 127.92);    // × 3 unidades
+test('EJEMPLO de la usuaria: 100 por mes y 3 meses = 300, monto único', () => {
+  const r = calcularRetroactivo({ priceViejo: 1000, priceNuevo: 1100, cantidad: 1, periodos: 3 });
+  assert.equal(r.ajustePorPago, 100);
+  assert.equal(r.importe, 300);
 });
 
-test('sin períodos no hay importe', () => {
+test('el monto único multiplica por la cantidad del line item original', () => {
+  // 5000 → 5021,32 (+0,4264%, el ejemplo real de Petróleo), 3 unidades, 2 pagos
+  const r = calcularRetroactivo({ priceViejo: 5000, priceNuevo: 5021.32, cantidad: 3, periodos: 2 });
+  assert.equal(r.deltaUnitario, 21.32);
+  assert.equal(r.ajustePorPago, 63.96);   // 21,32 × 3 unidades = lo de un pago
+  assert.equal(r.importe, 127.92);        // × 2 pagos = el monto único
+});
+
+test('sin pagos no hay importe', () => {
   const r = calcularRetroactivo({ priceViejo: 100, priceNuevo: 110, cantidad: 2, periodos: 0 });
-  assert.equal(r.precio, 0);
+  assert.equal(r.ajustePorPago, 20);
   assert.equal(r.importe, 0);
 });
 
@@ -89,7 +95,7 @@ test('un ajuste negativo devuelve plata (importe negativo)', () => {
 test('redondea a 2 decimales y no arrastra el error', () => {
   const r = calcularRetroactivo({ priceViejo: 33.33, priceNuevo: 35.92, cantidad: 7, periodos: 3 });
   assert.equal(r.deltaUnitario, 2.59);
-  assert.equal(r.precio, 7.77);
+  assert.equal(r.ajustePorPago, 18.13);
   assert.equal(r.importe, 54.39);
 });
 
@@ -127,23 +133,30 @@ test('no corresponde si el ajuste no mueve el precio', () => {
 
 // ── Descripción ──────────────────────────────────────────────
 
-test('la descripción se explica sola en la factura', () => {
+test('la descripción trae el line item original con nombre e ID, los pagos y el mes', () => {
   const d = descripcionRetro({
-    servicio: 'Capacidad', mesLabel: 'julio 2026', periodos: 2,
-    deltaUnitario: 21.32, moneda: 'UYU',
+    servicio: 'Capacidad', lineItemId: '12345678', mesLabel: 'julio 2026',
+    periodos: 3, ajustePorPago: 100, importe: 300, moneda: 'UYU',
   });
-  assert.match(d, /desde julio 2026/);
-  assert.match(d, /2 períodos/);
-  assert.match(d, /Capacidad/);
-  assert.match(d, /\+UYU 21,32/);
+  assert.match(d, /3 pagos contando a partir de julio 2026/);
+  assert.match(d, /Line item original: "Capacidad" \(ID 12345678\)/);
+  assert.match(d, /Monto único de UYU 300,00 en moneda original, sin impuestos/);
+  assert.match(d, /UYU 100,00 por pago × 3/);
 });
 
-test('un período va en singular y el signo negativo se ve', () => {
-  const d = descripcionRetro({ servicio: 'Capacidad', mesLabel: 'julio 2026', periodos: 1, deltaUnitario: -5, moneda: '' });
-  assert.match(d, /1 período /);
-  assert.match(d, /−5,00/);
+test('un solo pago va en singular', () => {
+  const d = descripcionRetro({
+    servicio: 'Capacidad', lineItemId: '1', mesLabel: 'julio 2026',
+    periodos: 1, ajustePorPago: 100, importe: 100, moneda: '',
+  });
+  assert.match(d, /por 1 pago contando/);
+});
+
+test('sin nombre ni ID la descripción no queda rota', () => {
+  const d = descripcionRetro({ mesLabel: 'julio 2026', periodos: 2, ajustePorPago: 5, importe: 10 });
+  assert.match(d, /Line item original: "s\/nombre"\./);
 });
 
 test('el nombre del line item es el que pidió la usuaria', () => {
-  assert.equal(NOMBRE_LI_RETRO, 'Ajuste retroactivo de pago único');
+  assert.equal(NOMBRE_LI_RETRO, 'Ajuste retroactivo');
 });

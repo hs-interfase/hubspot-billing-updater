@@ -324,28 +324,35 @@ const LINE_ITEM_TO_DEAL_ASSOC_ID = 20;
 // tickets lo traten igual (área, rubro, entidad que factura, responsable…).
 // NO se heredan las de recurrencia: el retroactivo es de PAGO ÚNICO, y en este
 // motor pago único = sin frecuencia + fecha de inicio (billingEngine.js:518).
+// Los IMPUESTOS salen de acá: `hs_tax_rate_group_id` es lo que define el IVA
+// del line item (phase1.js:209) y `exonera_irae` va aparte. El precio que se
+// escribe es NETO, igual que en todo el motor: el impuesto lo aplica HubSpot.
 const PROPS_HEREDADAS_RETRO = [
   'area', 'servicio', 'subrubro', 'unidad_de_negocio', 'nombre_empresa',
   'nombre_producto', 'hs_product_id', 'empresa_que_factura', 'of_moneda',
   'pais_operativo', 'uy', 'responsable_asignado', 'hubspot_owner_id',
   'momento_de_facturacion', 'facturacion_automatica', 'dolar',
+  'hs_tax_rate_group_id', 'exonera_irae',
 ];
 
 /**
- * Crea el line item «Ajuste retroactivo de pago único» en el mismo negocio,
- * enganchado a la próxima fecha de facturación del line item ajustado.
+ * Crea el line item «Ajuste retroactivo» en el mismo negocio, enganchado a la
+ * próxima fecha de facturación del line item ajustado.
+ *
+ * Es un MONTO ÚNICO: cantidad 1 y precio = la diferencia acumulada de todos
+ * los pagos, en moneda original y sin impuestos.
  *
  * @returns {Promise<{id:string|null, dryRun:boolean}>}
  */
 export async function crearLineItemRetroactivo({
-  origen, dealId, precio, cantidad, fecha, descripcion,
+  origen, dealId, importe, fecha, descripcion,
 }) {
   const p = origen.properties || origen || {};
   const properties = {
     name: NOMBRE_LI_RETRO,
     description: descripcion,
-    price: String(precio),
-    quantity: String(cantidad),
+    price: String(importe),
+    quantity: '1',
     // Pago único: SIN frecuencia, con fecha de inicio. El motor lo factura una
     // vez y después deja billing_next_date vacío (billingEngine.js, "2) Pago
     // único (con startDate)"). La frecuencia NO se manda: se deja ausente en
