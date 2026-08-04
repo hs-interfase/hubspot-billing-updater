@@ -238,14 +238,44 @@ function buildLineItemBaseRows(li) {
   const anclaLabel  = (fechaAncla && fechaAncla !== fechaInicioFact) ? fechaAncla : null;
 
   // ── Pagos ──
+  //
+  // El PROGRESO DE PAGOS tiene que salir siempre, en los tres tipos de aviso
+  // (alta, baja y edición) — pedido de la usuaria del 4-ago-2026. Como los tres
+  // bloques comparten estas filas, alcanza con armarlo bien acá.
+  //
+  // Antes se calculaba sólo con tres combinaciones y se caía a null en el resto
+  // (p.ej. con pagos_restantes pero sin total, o en una renovación automática sin
+  // ningún pago emitido todavía), y la fila desaparecía del mensaje.
   const totalPagos     = val(lp.hs_recurring_billing_number_of_payments);
   const pagosEmitidos  = val(lp.pagos_emitidos);
   const pagosRestantes = val(lp.pagos_restantes);
   const cantidadPagos  = totalPagos || (esRenovacion ? 'Renovación automática' : null);
-  let progresoPagos = null;
-  if (pagosEmitidos && totalPagos)      progresoPagos = `${pagosEmitidos} de ${totalPagos} emitidos`;
-  else if (pagosRestantes && totalPagos) progresoPagos = `Quedan ${pagosRestantes} de ${totalPagos}`;
-  else if (pagosEmitidos)               progresoPagos = `${pagosEmitidos} emitidos`;
+
+  const nTotal = parseFloat(totalPagos);
+  const nEmit  = parseFloat(pagosEmitidos);
+  const nRest  = parseFloat(pagosRestantes);
+  const hayTotal = Number.isFinite(nTotal);
+  const hayEmit  = Number.isFinite(nEmit);
+  const hayRest  = Number.isFinite(nRest);
+
+  let progresoPagos;
+  if (hayEmit && hayTotal && hayRest) {
+    progresoPagos = `${nEmit} de ${nTotal} emitidos — quedan ${nRest}`;
+  } else if (hayEmit && hayTotal) {
+    progresoPagos = `${nEmit} de ${nTotal} emitidos`;
+  } else if (hayRest && hayTotal) {
+    progresoPagos = `Quedan ${nRest} de ${nTotal}`;
+  } else if (hayEmit && hayRest) {
+    progresoPagos = `${nEmit} emitidos — quedan ${nRest}`;
+  } else if (hayEmit) {
+    progresoPagos = `${nEmit} emitidos`;
+  } else if (hayRest) {
+    progresoPagos = `Quedan ${nRest}`;
+  } else if (esRenovacion) {
+    progresoPagos = 'Renovación automática — sin tope de pagos';
+  } else {
+    progresoPagos = null; // buildRowAlways lo muestra como "(sin datos)"
+  }
 
   return [
     buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),
@@ -273,7 +303,7 @@ function buildLineItemBaseRows(li) {
     buildRow('Cantidad de pagos',         cantidadPagos),
     buildRow('Pagos emitidos',            pagosEmitidos),
     buildRow('Pagos restantes',           pagosRestantes),
-    buildRow('Progreso de pagos',         progresoPagos),
+    buildRowAlways('Progreso de pagos',   progresoPagos),
     buildRow('Observaciones',             val(lp.observaciones)),
   ].filter(r => r !== '');
 }
