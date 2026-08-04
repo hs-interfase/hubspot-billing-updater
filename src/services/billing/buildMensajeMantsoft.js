@@ -20,9 +20,8 @@ import { parseBool } from '../../utils/parsers.js';
 import { buildDealUrl } from '../../utils/hubspotPortal.js';
 import { EMPRESA_EMISORA_MAP } from './empresaEmisora.js'; // dedupe con buildMensajeFacturacion
 
-// Flag de debug temporal: si SHOW_NULLS=true, las filas sin dato se muestran
-// igual con su título y "(sin datos)", para verificar que las propiedades llegan.
-const SHOW_NULLS = String(process.env.SHOW_NULLS || '').toLowerCase() === 'true';
+// SHOW_NULLS quedó sin uso el 4-ago-2026: las filas sin dato ahora se muestran
+// SIEMPRE (ver buildRow), así que el flag de debug ya no hace falta.
 import {
   parseMansoftSnapshot,
   buildMansoftSnapshot,
@@ -145,26 +144,21 @@ const STYLES = {
 // Builders de bloques
 // ────────────────────────────────────────────────────────────
 
-function buildRow(label, value) {
-  if (value === null || value === undefined || value === '') {
-    if (!SHOW_NULLS) return '';
-    return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> <span style="${STYLES.nullVal}">(sin datos)</span></div>`;
-  }
-  return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${value}</div>`;
-}
-
 /**
- * Igual que buildRow pero la fila SIEMPRE se renderiza, aunque no haya dato.
+ * Una fila del mensaje. LA ETIQUETA SIEMPRE SE MUESTRA.
  *
- * Pedido de la usuaria (4-ago-2026): a Victoria le tienen que llegar SIEMPRE la
- * ENTIDAD FACTURADORA (quién emite) y la EMPRESA QUE FACTURA (el cliente que paga).
+ * Decisión de la usuaria (4-ago-2026), que revierte el criterio anterior de
+ * esconder las filas sin dato: hay que ver que el campo existe y que vino vacío.
+ * O sea «Rubro:» a secas, no la ausencia de la fila ni un "(sin datos)".
  */
-function buildRowAlways(label, value) {
-  const v = (value === null || value === undefined || value === '')
-    ? `<span style="${STYLES.nullVal}">(sin datos)</span>`
-    : value;
+function buildRow(label, value) {
+  const v = (value === null || value === undefined || value === '') ? '' : value;
   return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${v}</div>`;
 }
+
+// Alias histórico: antes distinguía "esta fila va sí o sí" de las demás. Ahora
+// todas van siempre, así que es lo mismo. Se mantiene para no tocar call sites.
+const buildRowAlways = buildRow;
 
 /**
  * Construye el encabezado del mensaje completo (único por deal/día).
