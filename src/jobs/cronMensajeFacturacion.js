@@ -1,18 +1,22 @@
 // src/jobs/cronMensajeFacturacion.js
 //
-// Cron que construye el mensaje de facturación agrupando todos los tickets
-// READY de cada deal y escribiendo `mensaje_de_facturacion` de una sola vez.
+// Construye el mensaje de facturación agrupando los tickets READY de cada deal
+// y escribiendo `mensaje_de_facturacion` de una sola vez.
 //
-// Horarios en Railway: 08:10, 11:10, 14:10, 17:10 (America/Montevideo)
+// 🔴 4-ago-2026: DEJÓ DE SER UN CRON. Ya no corre en tandas — el aviso se dispara
+//    en el momento en que se pide «Facturar ahora» desde el ticket, vía
+//    `refreshMensajeFacturacionParaDeal()` (usada por urgentBillingService.js).
+//    Los servicios de Railway de 08:10/11:10/14:10/17:10 se eliminan y el bloque
+//    de arranque directo (al final del archivo) quedó comentado.
+//    El cooldown de 10 minutos también se eliminó: ver isDealHot().
 //
-// Lógica:
+// Lógica de `runCronMensajeFacturacion` (se mantiene, para correrla a mano):
 //   1. Buscar tickets en stage READY (manual) donde
 //      ticket_emitio_aviso_a_admin ≠ true
 //   2. Agrupar por dealId (of_deal_id)
-//   3. Para cada deal: si algún ticket fue modificado hace < 10 min → skip
-//   4. Construir HTML con buildMensajeFacturacion(tickets, dealName)
-//   5. Escribir mensaje_de_facturacion en el deal
-//   6. Marcar cada ticket con ticket_emitio_aviso_a_admin = true
+//   3. Construir HTML con buildMensajeFacturacion(tickets, dealName)
+//   4. Escribir mensaje_de_facturacion en el deal
+//   5. Marcar cada ticket con ticket_emitio_aviso_a_admin = true
 //
 // Ejecución manual:
 //   node src/jobs/cronMensajeFacturacion.js
@@ -39,7 +43,7 @@ import { getPortalId } from '../utils/hubspotPortal.js';
 // Config
 // ────────────────────────────────────────────────────────────
 
-const COOLDOWN_MINUTES = 10;
+// COOLDOWN_MINUTES eliminado el 4-ago-2026 — ver isDealHot().
 const DEAL_PROPERTY = 'mensaje_de_facturacion';
 
 // Propiedades que necesitamos del ticket para construir el mensaje
@@ -152,17 +156,16 @@ function groupByDeal(tickets) {
 }
 
 /**
- * Verifica si algún ticket del grupo fue modificado hace menos de COOLDOWN_MINUTES.
- * Retorna true si el deal está "caliente" (hay que esperar).
+ * 🔴 COOLDOWN ELIMINADO (4-ago-2026, decisión de la usuaria).
+ *
+ * Tenía sentido con el envío en tandas: el cron corría cuatro veces por día y el
+ * cooldown evitaba mandar el aviso a mitad de una edición. Con el disparo en el
+ * momento de «Facturar ahora» el aviso es la CONSECUENCIA de una acción explícita,
+ * así que posponerlo 10 minutos sólo lograba que no saliera.
+ *
+ * Se deja la función devolviendo siempre false para no tocar los llamadores.
  */
-function isDealHot(tickets) {
-  const cutoff = nowMs() - (COOLDOWN_MINUTES * 60 * 1000);
-  for (const t of tickets) {
-    const lastMod = t?.properties?.hs_lastmodifieddate;
-    if (!lastMod) continue;
-    const ms = new Date(lastMod).getTime();
-    if (ms > cutoff) return true;
-  }
+function isDealHot(_tickets) {
   return false;
 }
 
@@ -345,11 +348,11 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
 
   for (const [dealId, tickets] of dealGroups) {
     try {
-      // Cooldown check (skip si --deal forzado)
+      // Cooldown ELIMINADO (4-ago-2026): isDealHot() siempre devuelve false.
       if (!onlyDealId && isDealHot(tickets)) {
         logger.info(
           { module: 'cronMensajeFacturacion', dealId, ticketCount: tickets.length },
-          `⏳ Deal caliente (ticket modificado < ${COOLDOWN_MINUTES} min), pospuesto`
+          '⏳ Deal caliente, pospuesto'
         );
         skippedHot++;
         continue;
@@ -453,18 +456,39 @@ const isDirectRun =
   argv1.length > 0 &&
   import.meta.url === pathToFileURL(argv1).href;
 
-if (isDirectRun) {
-  const { deal, dry } = parseArgs(process.argv.slice(2));
-  try {
-    const result = await runCronMensajeFacturacion({ onlyDealId: deal, dry });
-    console.log('\nResultado:', JSON.stringify(result, null, 2));
-    // Heartbeat solo en la corrida programada completa (no en dry ni con --deal targeteado)
-    if (!dry && !deal) await pingHeartbeat('msjFacturacion');
-  } catch (e) {
-    logger.error(
-      { module: 'cronMensajeFacturacion', error: e?.message || String(e), stack: e?.stack },
-      'cron_mensaje_failed'
-    );
-    process.exitCode = 1;
-  }
-}
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║ 🔴 CRON DESACTIVADO — 4-ago-2026 (decisión de la usuaria)                ║
+// ║                                                                          ║
+// ║ El aviso de facturación ya NO sale en tandas: se dispara en el momento    ║
+// ║ en que se pide «Facturar ahora» desde el ticket, vía                      ║
+// ║ `refreshMensajeFacturacionParaDeal()` (más arriba en este mismo archivo,  ║
+// ║ llamada desde urgentBillingService.js).                                   ║
+// ║                                                                          ║
+// ║ Los servicios de Railway que corrían esto a las 08:10/11:10/14:10/17:10   ║
+// ║ se eliminan; este bloque queda comentado para que, si alguno sobrevive,   ║
+// ║ ejecutarlo no haga nada.                                                  ║
+// ║                                                                          ║
+// ║ ⚠️ NO comentar el resto del archivo: `refreshMensajeFacturacionParaDeal`  ║
+// ║ es justamente el camino nuevo y lo importa urgentBillingService.js.       ║
+// ║ `runCronMensajeFacturacion` se deja exportada para poder correrla a mano. ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// if (isDirectRun) {
+//   const { deal, dry } = parseArgs(process.argv.slice(2));
+//   try {
+//     const result = await runCronMensajeFacturacion({ onlyDealId: deal, dry });
+//     console.log('\nResultado:', JSON.stringify(result, null, 2));
+//     // Heartbeat solo en la corrida programada completa (no en dry ni con --deal targeteado)
+//     if (!dry && !deal) await pingHeartbeat('msjFacturacion');
+//   } catch (e) {
+//     logger.error(
+//       { module: 'cronMensajeFacturacion', error: e?.message || String(e), stack: e?.stack },
+//       'cron_mensaje_failed'
+//     );
+//     process.exitCode = 1;
+//   }
+// }
+
+void isDirectRun;
+void parseArgs;
+void pingHeartbeat;
