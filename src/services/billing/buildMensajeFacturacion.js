@@ -153,6 +153,20 @@ function buildRow(label, value) {
 }
 
 /**
+ * Igual que buildRow pero la fila SIEMPRE se renderiza, aunque no haya dato.
+ *
+ * Pedido de la usuaria (4-ago-2026): a Victoria le tienen que llegar SIEMPRE la
+ * ENTIDAD FACTURADORA (quién emite) y la EMPRESA QUE FACTURA (el cliente que paga),
+ * incluso vacías — que falten es justamente el dato que ella necesita ver.
+ */
+function buildRowAlways(label, value) {
+  const v = (value === null || value === undefined || value === '')
+    ? `<span style="${STYLES.nullVal}">(sin datos)</span>`
+    : value;
+  return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${v}</div>`;
+}
+
+/**
  * Construye el encabezado del mensaje.
  *
  * - Empresa emisora: resuelta por product_id del primer ticket
@@ -165,7 +179,10 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
   const tp = firstTicket?.properties || {};
   const hoy = todayYMD();
 
-  const empresaEmisora = resolverEmpresaEmisora(firstTicket);
+  // ENTIDAD FACTURADORA (quién emite la factura). La fuente de verdad es la prop
+  // `entidad_facturadora` del ticket (valores del select: 'Interfase UY | ISA UY |
+  // ISA PY | Interfase PY'); si todavía no llegó, se cae al mapa por producto.
+  const entidadFacturadora = val(tp.entidad_facturadora) || resolverEmpresaEmisora(firstTicket);
 
   // Cliente final (beneficiario): viene snapshotteado en el ticket
   const clienteFinalNombre = val(tp.nombre_empresa);
@@ -192,12 +209,12 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRow('Empresa',                    empresaEmisora),
-    buildRow('Nombre del Negocio',         dealName || '-'),
-    buildRow('Cliente',                    clienteFinalLabel),
-    buildRow('Cliente al que se factura',  clienteFacturaLabel),
+    buildRowAlways('Entidad facturadora',   entidadFacturadora),
+    buildRow('Nombre del Negocio',          dealName || '-'),
+    buildRow('Cliente',                     clienteFinalLabel),
+    buildRowAlways('Empresa que factura',   clienteFacturaLabel),
     buildRow('Fecha solicitud facturación', fechaSolicitud),
-    buildRow('Moneda',                     moneda),
+    buildRow('Moneda',                      moneda),
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
@@ -245,6 +262,11 @@ function buildLineItemDiv(ticket, portalId = null) {
     buildRow('TRADING',                   fmtBoolSiNo(tp.opera_trading)),
     buildRow('Frecuencia de Facturación', frecuencia),
     buildRow('Momento de facturación',    val(tp.momento_de_facturacion)),
+    // Las tres fechas de la lista de Victoria (#5, #6, #7 del correo del 1-jul).
+    // En el ticket viven snapshotteadas desde el line item (snapshotService.js:323/333/334).
+    buildRow('Fecha inicio de Facturación', val(tp.fecha_inicio_de_facturacion)?.slice(0, 10)),
+    buildRow('Fecha inicio del Contrato',   val(tp.of_inicio_del_contrato)?.slice(0, 10)),
+    buildRow('Fecha fin del Contrato',      val(tp.of_fin_del_contrato)?.slice(0, 10)),
     buildRow('Observaciones',             val(tp.observaciones)),
     buildRow('Ticket',                    ticketLink),
     `</div>`,

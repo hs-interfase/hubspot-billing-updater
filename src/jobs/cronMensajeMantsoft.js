@@ -59,6 +59,8 @@ const LI_PROPS = [
   'hs_product_id', 'pagos_emitidos', 'billing_anchor_date',
   'nombre_empresa', 'empresa_que_factura', 'persona_que_factura',
   'observaciones', 'nota',
+  // Lista de Victoria (correo 1-jul): momento de facturación (#8) y TRADING (#20).
+  'momento_de_facturacion', 'opera_trading',
   'mansoft_pendiente', 'facturacion_automatica',
   // Nuevas props para el sistema alta/edición
     'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo', 'pausa',

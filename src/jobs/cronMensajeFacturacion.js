@@ -55,6 +55,9 @@ const TICKET_PROPS = [
   'fecha_resolucion_esperada', 'subject',
   'opera_trading', 'momento_de_facturacion',
   'ticket_emitio_aviso_a_admin',
+  // Lista de Victoria (correo 1-jul): entidad facturadora + las tres fechas de contrato.
+  'entidad_facturadora',
+  'fecha_inicio_de_facturacion', 'of_inicio_del_contrato', 'of_fin_del_contrato',
 ];
 
 // ────────────────────────────────────────────────────────────
