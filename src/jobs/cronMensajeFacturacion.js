@@ -441,10 +441,11 @@ export async function runCronMensajeFacturacion({ onlyDealId = null, dry = false
 // ────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const args = { deal: null, dry: false };
+  const args = { deal: null, dry: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry') args.dry = true;
+    else if (a === '--force') args.force = true;
     else if (a === '--deal') { args.deal = argv[i + 1] || null; i++; }
   }
   return args;
@@ -457,38 +458,50 @@ const isDirectRun =
   import.meta.url === pathToFileURL(argv1).href;
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
-// ║ 🔴 CRON DESACTIVADO — 4-ago-2026 (decisión de la usuaria)                ║
+// ║ 🔴 LA CORRIDA AUTOMÁTICA ESTÁ DESACTIVADA — 4-ago-2026                   ║
 // ║                                                                          ║
-// ║ El aviso de facturación ya NO sale en tandas: se dispara en el momento    ║
-// ║ en que se pide «Facturar ahora» desde el ticket, vía                      ║
-// ║ `refreshMensajeFacturacionParaDeal()` (más arriba en este mismo archivo,  ║
-// ║ llamada desde urgentBillingService.js).                                   ║
+// ║ El aviso ya no sale en tandas: lo dispara `facturar_ahora = true` en el   ║
+// ║ ticket, vía `refreshMensajeFacturacionParaDeal()` (arriba en este mismo   ║
+// ║ archivo, llamada desde urgentBillingService.processUrgentTicket).         ║
 // ║                                                                          ║
-// ║ Los servicios de Railway que corrían esto a las 08:10/11:10/14:10/17:10   ║
-// ║ se eliminan; este bloque queda comentado para que, si alguno sobrevive,   ║
-// ║ ejecutarlo no haga nada.                                                  ║
+// ║ Los servicios de Railway invocaban esto SIN argumentos, así que una       ║
+// ║ invocación pelada no hace nada: si alguno sobrevive a su borrado, o si    ║
+// ║ alguien lo redeploya, no manda ningún aviso.                             ║
+// ║                                                                          ║
+// ║ 🛟 PERO SIGUE SIENDO CORRIBLE A MANO — es la salida de emergencia para    ║
+// ║    un ticket que llegó a «Listo para facturar» sin pasar por             ║
+// ║    `facturar_ahora` (p. ej. si alguien movió la etapa a mano):            ║
+// ║                                                                          ║
+// ║      node src/jobs/cronMensajeFacturacion.js --deal 63433773463          ║
+// ║      node src/jobs/cronMensajeFacturacion.js --deal 63433773463 --dry    ║
+// ║      node src/jobs/cronMensajeFacturacion.js --force        (barrido)    ║
 // ║                                                                          ║
 // ║ ⚠️ NO comentar el resto del archivo: `refreshMensajeFacturacionParaDeal`  ║
-// ║ es justamente el camino nuevo y lo importa urgentBillingService.js.       ║
-// ║ `runCronMensajeFacturacion` se deja exportada para poder correrla a mano. ║
+// ║ es el camino nuevo y lo importa urgentBillingService.js.                  ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
-//
-// if (isDirectRun) {
-//   const { deal, dry } = parseArgs(process.argv.slice(2));
-//   try {
-//     const result = await runCronMensajeFacturacion({ onlyDealId: deal, dry });
-//     console.log('\nResultado:', JSON.stringify(result, null, 2));
-//     // Heartbeat solo en la corrida programada completa (no en dry ni con --deal targeteado)
-//     if (!dry && !deal) await pingHeartbeat('msjFacturacion');
-//   } catch (e) {
-//     logger.error(
-//       { module: 'cronMensajeFacturacion', error: e?.message || String(e), stack: e?.stack },
-//       'cron_mensaje_failed'
-//     );
-//     process.exitCode = 1;
-//   }
-// }
 
-void isDirectRun;
-void parseArgs;
-void pingHeartbeat;
+if (isDirectRun) {
+  const { deal, dry, force } = parseArgs(process.argv.slice(2));
+
+  if (!deal && !force) {
+    // Invocación pelada = la del cron viejo. No hacer nada.
+    logger.info(
+      { module: 'cronMensajeFacturacion' },
+      'Corrida automática desactivada (4-ago-2026). El aviso lo dispara facturar_ahora del ticket. ' +
+      'Para correrlo a mano: --deal <id> (un negocio) o --force (barrido completo).'
+    );
+  } else {
+    try {
+      const result = await runCronMensajeFacturacion({ onlyDealId: deal, dry });
+      console.log('\nResultado:', JSON.stringify(result, null, 2));
+      // Heartbeat solo en el barrido completo (no en dry ni con --deal targeteado)
+      if (!dry && !deal) await pingHeartbeat('msjFacturacion');
+    } catch (e) {
+      logger.error(
+        { module: 'cronMensajeFacturacion', error: e?.message || String(e), stack: e?.stack },
+        'cron_mensaje_failed'
+      );
+      process.exitCode = 1;
+    }
+  }
+}
