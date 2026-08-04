@@ -96,6 +96,26 @@ function fmtValDiff(v) {
   return String(v);
 }
 
+/** Booleano 'true'/'false' → 'Sí'/'No' (null si no hay dato). Mismo criterio que buildMensajeFacturacion. */
+function fmtBoolSiNo(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const t = s.toLowerCase();
+  if (t === 'true' || t === 'sí' || t === 'si') return 'Sí';
+  if (t === 'false' || t === 'no') return 'No';
+  return s;
+}
+
+/** exonera_irae: true → 'Exento', false → 'Aplica' (null si no hay dato). */
+function fmtIrae(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const t = s.toLowerCase();
+  if (t === 'true' || t === 'sí' || t === 'si') return 'Exento';
+  if (t === 'false' || t === 'no') return 'Aplica';
+  return s;
+}
+
 // ────────────────────────────────────────────────────────────
 // Estilos inline
 // ────────────────────────────────────────────────────────────
@@ -134,15 +154,34 @@ function buildRow(label, value) {
 }
 
 /**
+ * Igual que buildRow pero la fila SIEMPRE se renderiza, aunque no haya dato.
+ *
+ * Pedido de la usuaria (4-ago-2026): a Victoria le tienen que llegar SIEMPRE la
+ * ENTIDAD FACTURADORA (quién emite) y la EMPRESA QUE FACTURA (el cliente que paga).
+ */
+function buildRowAlways(label, value) {
+  const v = (value === null || value === undefined || value === '')
+    ? `<span style="${STYLES.nullVal}">(sin datos)</span>`
+    : value;
+  return `<div style="${STYLES.row}"><span style="${STYLES.label}">${label}:</span> ${v}</div>`;
+}
+
+/**
  * Construye el encabezado del mensaje completo (único por deal/día).
  */
 function buildHeader(firstLi, dealName, dealMeta = {}) {
   const lp = firstLi?.properties || {};
   const hoy = todayYMD();
 
-  const empresaEmisora   = resolverEmpresaEmisora(lp);
+  // ⚠️ `empresa_que_factura` significa cosas distintas en cada objeto:
+  //   - en el LINE ITEM es la ENTIDAD FACTURADORA (quién emite) — es la que el motor
+  //     copia al ticket como `entidad_facturadora` (syncLineItemPropToTicket.js:68);
+  //   - en el dealMeta (company typeId=9 del negocio) es el CLIENTE QUE PAGA.
+  // Los dos van al mensaje, con el nombre que usa Victoria para cada uno.
+  const entidadFacturadora = val(lp.empresa_que_factura) || resolverEmpresaEmisora(lp);
   const clienteFinal     = val(dealMeta.empresa_que_factura);
   const personaFactura   = val(dealMeta.persona_que_factura);
+  const empresaPrincipal = val(lp.nombre_empresa);
 
   const dealUrl = buildDealUrl(dealMeta.portalId, dealMeta.dealId);
   const dealLink = dealUrl
@@ -154,9 +193,10 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
     `<div style="${STYLES.header}">📋 Aviso Mantsoft — ${hoy}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRow('Empresa emisora',      empresaEmisora),
+    buildRowAlways('Entidad facturadora', entidadFacturadora),
     buildRow('Nombre del negocio',   dealName || '-'),
-    buildRow('Empresa que factura',  clienteFinal),
+    buildRow('Cliente',              empresaPrincipal),
+    buildRowAlways('Empresa que factura', clienteFinal),
     buildRow('Persona que factura',  personaFactura),
     buildRow('Fecha del aviso',      hoy),
     buildRow('Negocio',              dealLink),
@@ -174,6 +214,15 @@ function buildLineItemBaseRows(li) {
   const lp = li?.properties || {};
 
   const total = fmtNum(lp.amount);
+
+  // Subtotal (#16 de la lista de Victoria). El line item no tiene una propiedad de
+  // subtotal: es precio unitario × cantidad, ANTES del descuento. `amount` ya viene
+  // con el descuento aplicado, por eso son dos filas distintas.
+  const precioNum = parseFloat(lp.price);
+  const cantNum   = parseFloat(lp.quantity);
+  const subtotal  = (Number.isFinite(precioNum) && Number.isFinite(cantNum))
+    ? (precioNum * cantNum).toFixed(2)
+    : null;
 
   const freqRaw    = val(lp.recurringbillingfrequency) || val(lp.hs_recurring_billing_frequency);
   const frecuencia = freqRaw || null;
@@ -207,10 +256,14 @@ function buildLineItemBaseRows(li) {
     buildRow('Precio unitario',           fmtNum(lp.price)),
     buildRow('Cantidad',                  fmtNum(lp.quantity)),
     buildRow('Descuento (%)',             fmtNum(lp.hs_discount_percentage)),
+    buildRow('Subtotal',                  subtotal),
     buildRow('Total',                     total),
     buildRow('Impuestos',                 resolveTaxLabel(lp.hs_tax_rate_group_id)),
+    buildRow('IRAE',                      fmtIrae(lp.exonera_irae)),
+    buildRow('TRADING',                   fmtBoolSiNo(lp.opera_trading)),
     buildRow('Moneda',                    val(lp.of_moneda)),
     buildRow('Frecuencia',                frecuencia),
+    buildRow('Momento de facturación',    val(lp.momento_de_facturacion)),
     buildRow('Inicio de contrato',        inicioContrato),
     buildRow('Vigencia de contrato',      vigenciaContrato),
     buildRow('Inicio de facturación',     fechaInicioFact),
