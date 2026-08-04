@@ -230,13 +230,59 @@ async function writeMensaje(dealId, html) {
 }
 
 /**
+ * Lee un ticket POR ID (sin Search API) y lo devuelve sólo si está en el stage
+ * READY del pipeline manual. Devuelve null ante cualquier problema.
+ *
+ * 🔴 Por qué existe: el Search API de HubSpot tiene LATENCIA DE INDEXADO. Cuando
+ * processUrgentTicket mueve el ticket a READY y a los ~170 ms llama acá, la
+ * búsqueda todavía no ve el cambio de etapa y devuelve 0 resultados ⇒ no se
+ * escribía `mensaje_de_facturacion` y el workflow que se inscribe por esa
+ * propiedad nunca salía. (Diagnosticado el 4-ago-2026 sobre el deal 63433773463;
+ * es la misma latencia que ya nos mordió en Phase 2 con los forecast.)
+ *
+ * La lectura por ID es inmediatamente consistente, así que el ticket que
+ * disparó la acción SIEMPRE entra, aunque el índice esté atrasado.
+ */
+async function readTicketReadyById(ticketId, getTicketById) {
+  try {
+    const t = await getTicketById(String(ticketId), TICKET_PROPS);
+    const tp = t?.properties || {};
+    const enPipeline = String(tp.hs_pipeline) === String(TICKET_PIPELINE);
+    const enStage    = String(tp.hs_pipeline_stage) === String(TICKET_STAGES.READY);
+    if (!enPipeline || !enStage) return null;
+    return t;
+  } catch (err) {
+    logger.warn(
+      { module: 'cronMensajeFacturacion', fn: 'readTicketReadyById', ticketId, err },
+      'No se pudo leer el ticket por ID — se sigue sólo con la búsqueda'
+    );
+    return null;
+  }
+}
+
+/**
  * Construye y escribe el mensaje de facturación para un deal específico,
  * acumulando todos sus tickets READY que aún no emitieron aviso.
- * Sin cooldown. NO marca ticket_emitio_aviso_a_admin — eso lo hace el cron.
+ * Sin cooldown. NO marca ticket_emitio_aviso_a_admin — eso lo hace el barrido.
+ *
+ * @param {string|number} dealId
+ * @param {object}  [opts]
+ * @param {string|number} [opts.ticketIdHint] - ticket que acaba de moverse a READY.
+ *        Se lee POR ID y se suma al resultado de la búsqueda, para no depender
+ *        del índice (ver readTicketReadyById).
+ * @param {object} [opts.deps] - inyección para tests (mismo patrón que mirrorAlert.js).
  */
-export async function refreshMensajeFacturacionParaDeal(dealId) {
+export async function refreshMensajeFacturacionParaDeal(dealId, { ticketIdHint = null, deps = {} } = {}) {
+  const {
+    doSearch      = (body)      => hubspotClient.crm.tickets.searchApi.doSearch(body),
+    getTicketById = (id, props) => hubspotClient.crm.tickets.basicApi.getById(id, props),
+    fetchDealInfo = getDealInfo,
+    fetchPortalId = getPortalId,
+    write         = writeMensaje,
+  } = deps;
+
   try {
-    const res = await hubspotClient.crm.tickets.searchApi.doSearch({
+    const res = await doSearch({
       filterGroups: [{
         filters: [
           { propertyName: 'hs_pipeline',       operator: 'EQ', value: String(TICKET_PIPELINE) },
@@ -248,7 +294,21 @@ export async function refreshMensajeFacturacionParaDeal(dealId) {
       limit: 50,
     });
 
-    const pendientes = filterPendientes(res?.results || []);
+    // Unión búsqueda + ticket leído por ID, deduplicando por id. El hint va
+    // PRIMERO para que, si la búsqueda no lo trajo, igual encabece el mensaje.
+    const encontrados = [...(res?.results || [])];
+    if (ticketIdHint && !encontrados.some(t => String(t.id) === String(ticketIdHint))) {
+      const directo = await readTicketReadyById(ticketIdHint, getTicketById);
+      if (directo) {
+        encontrados.unshift(directo);
+        logger.info(
+          { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketId: ticketIdHint },
+          'Ticket recuperado por ID — la búsqueda todavía no lo indexaba'
+        );
+      }
+    }
+
+    const pendientes = filterPendientes(encontrados);
 
     if (pendientes.length === 0) {
       logger.info(
@@ -258,12 +318,12 @@ export async function refreshMensajeFacturacionParaDeal(dealId) {
       return;
     }
 
-    const { dealName, empresa_que_factura, persona_que_factura } = await getDealInfo(String(dealId));
-    const portalId = await getPortalId();
+    const { dealName, empresa_que_factura, persona_que_factura } = await fetchDealInfo(String(dealId));
+    const portalId = await fetchPortalId();
     const html = buildMensajeFacturacion(pendientes, dealName, { empresa_que_factura, persona_que_factura, portalId });
     if (!html) return;
 
-    await writeMensaje(String(dealId), html);
+    await write(String(dealId), html);
 
     logger.info(
       { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketCount: pendientes.length },

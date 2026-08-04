@@ -1250,7 +1250,10 @@ try {
     'refreshMensajeFacturacionParaDeal — intentando'
   );
   if (dealIdForMsg) {
-    await refreshMensajeFacturacionParaDeal(dealIdForMsg);
+    // Se le pasa el ticketId: acabamos de moverlo a READY y el Search API todavía
+    // no lo indexó, así que la búsqueda sola devuelve 0 y el mensaje no se escribe.
+    // Con el hint se lee por ID, que es inmediatamente consistente.
+    await refreshMensajeFacturacionParaDeal(dealIdForMsg, { ticketIdHint: ticketId });
   } else {
     logger.warn(
       { module: 'urgentBillingService', fn: 'processUrgentTicket', ticketId },
