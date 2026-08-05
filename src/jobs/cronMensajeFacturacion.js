@@ -281,6 +281,7 @@ export async function refreshMensajeFacturacionParaDeal(dealId, { ticketIdHint =
     fetchDealInfo = getDealInfo,
     fetchPortalId = getPortalId,
     write         = writeMensaje,
+    markNotified  = markTicketNotified,
   } = deps;
 
   try {
@@ -327,9 +328,31 @@ export async function refreshMensajeFacturacionParaDeal(dealId, { ticketIdHint =
 
     await write(String(dealId), html);
 
+    // Marcar los tickets como ya avisados.
+    //
+    // 🔴 Antes esto lo hacía SÓLO el barrido, así que al apagar la corrida
+    // automática `ticket_emitio_aviso_a_admin` dejó de escribirse nunca. Dos
+    // consecuencias: (1) correr el barrido a mano reescribía el mensaje de
+    // tickets ya avisados, y (2) no quedaba forma de distinguir "ya se avisó"
+    // de "no se avisó" — que es justamente la condición que necesita el
+    // workflow que prende `facturar_ahora` cuando alguien arrastra la etapa
+    // en vez de seguir el procedimiento (decisión del 5-ago-2026).
+    //
+    // No bloquea: si falla el marcado, el mensaje ya quedó escrito.
+    for (const t of pendientes) {
+      try {
+        await markNotified(t.id);
+      } catch (err) {
+        logger.warn(
+          { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketId: t.id, err },
+          'No se pudo marcar ticket_emitio_aviso_a_admin — el mensaje ya se escribió'
+        );
+      }
+    }
+
     logger.info(
       { module: 'cronMensajeFacturacion', fn: 'refreshMensajeFacturacionParaDeal', dealId, ticketCount: pendientes.length },
-      '✅ mensaje_de_facturacion actualizado (acumulado)'
+      '✅ mensaje_de_facturacion actualizado (acumulado) y tickets marcados'
     );
   } catch (err) {
     logger.warn(

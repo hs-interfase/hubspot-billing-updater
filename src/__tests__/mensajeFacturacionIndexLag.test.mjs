@@ -39,11 +39,17 @@ function ticketReady(id = TICKET, extra = {}) {
 }
 
 /** deps con la búsqueda VACÍA (el índice atrasado) salvo que se diga lo contrario. */
-function makeDeps({ searchResults = [], ticketPorId = null } = {}) {
+function makeDeps({ searchResults = [], ticketPorId = null, markFalla = false } = {}) {
   const escrito = [];
+  const marcados = [];
   return {
     escrito,
+    marcados,
     deps: {
+      markNotified: async (id) => {
+        if (markFalla) throw new Error('403 forbidden');
+        marcados.push(String(id));
+      },
       doSearch: async () => ({ results: searchResults }),
       getTicketById: async (id) => {
         if (!ticketPorId) throw new Error('404 not found');
@@ -122,4 +128,43 @@ test('si la lectura por ID falla, no rompe: sigue con lo que trajo la búsqueda'
 
   assert.equal(escrito.length, 1, 'el 404 del hint no bloquea el resto');
   assert.match(escrito[0].html, /Ver ticket #99999999/);
+});
+
+// ── ticket_emitio_aviso_a_admin ──────────────────────────────────────────────
+// Es la condición que usa el workflow de HubSpot para detectar que alguien
+// arrastró la etapa sin seguir el procedimiento (5-ago-2026). Si el camino
+// puntual no la marca, el flag queda vacío siempre y el workflow no distingue.
+
+test('el camino puntual MARCA los tickets como ya avisados', async () => {
+  const { escrito, marcados, deps } = makeDeps({ searchResults: [], ticketPorId: ticketReady() });
+  await refreshMensajeFacturacionParaDeal(DEAL, { ticketIdHint: TICKET, deps });
+
+  assert.equal(escrito.length, 1);
+  assert.deepEqual(marcados, [TICKET], 'se marcó ticket_emitio_aviso_a_admin');
+});
+
+test('marca TODOS los tickets que entraron en el mensaje, no sólo el del hint', async () => {
+  const otro = ticketReady('99999999');
+  const { marcados, deps } = makeDeps({ searchResults: [otro], ticketPorId: ticketReady() });
+  await refreshMensajeFacturacionParaDeal(DEAL, { ticketIdHint: TICKET, deps });
+
+  assert.deepEqual(marcados.sort(), [TICKET, '99999999'].sort());
+});
+
+test('si no se escribió mensaje, no marca nada', async () => {
+  const { escrito, marcados, deps } = makeDeps({ searchResults: [], ticketPorId: null });
+  await refreshMensajeFacturacionParaDeal(DEAL, { ticketIdHint: TICKET, deps });
+
+  assert.equal(escrito.length, 0);
+  assert.deepEqual(marcados, [], 'sin mensaje no hay nada que marcar');
+});
+
+test('si el marcado falla, el mensaje igual queda escrito', async () => {
+  const { escrito, marcados, deps } = makeDeps({
+    searchResults: [], ticketPorId: ticketReady(), markFalla: true,
+  });
+  await refreshMensajeFacturacionParaDeal(DEAL, { ticketIdHint: TICKET, deps });
+
+  assert.equal(escrito.length, 1, 'el fallo al marcar no revierte el mensaje');
+  assert.deepEqual(marcados, []);
 });
