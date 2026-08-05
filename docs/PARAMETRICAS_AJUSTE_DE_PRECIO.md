@@ -360,7 +360,8 @@ line item **original** ("cuando me ajusten, cobrame la diferencia aparte"), no u
       items** fuera de los espejos. Verificar: que se cree con el IVA correcto, que genere **un**
       ticket, y que después deje de facturar.
 - [ ] Mergear la rama `feat/parametrica-retroactivo`.
-- [ ] `IJSERV_PRODUCT_ID` en las variables de Railway.
+- [ ] Verificar `IJSERV_PRODUCT_ID` en Railway **testing** (en **prod ya está**, junto con
+      `PARAMETRICA_MAX_PCT` — cerrado en la agenda del 20-jul).
 
 ### Definiciones pendientes de la usuaria
 
