@@ -62,6 +62,8 @@ const TICKET_PROPS = [
   // Lista de Victoria (correo 1-jul): entidad facturadora + las tres fechas de contrato.
   'entidad_facturadora',
   'fecha_inicio_de_facturacion', 'of_inicio_del_contrato', 'of_fin_del_contrato',
+  // Correcciones del 4-ago: catálogo (producto/área/rubro+nota) y las dos descripciones.
+  'of_producto', 'area', 'nota', 'content',
 ];
 
 // ────────────────────────────────────────────────────────────

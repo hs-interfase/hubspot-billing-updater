@@ -80,6 +80,23 @@ function fmtNum(v) {
   return isNaN(n) ? null : n.toFixed(2);
 }
 
+/**
+ * Fecha en DÍA/MES/AÑO (pedido de la usuaria, 4-ago-2026).
+ * Entra `2026-08-04` (o un ISO con hora) y sale `04/08/2026`.
+ * Si no matchea el formato esperado, devuelve el valor tal cual.
+ */
+function fmtFecha(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const m = s.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
+
+/** ¿El rubro es "Otro"? Entonces el detalle viene en `nota`. */
+function rubroEsOtro(v) {
+  return String(val(v) || '').toLowerCase().startsWith('otro');
+}
+
 /** Booleano 'true'/'false' → 'Sí'/'No' (null si no hay dato) */
 function fmtBoolSiNo(v) {
   const s = val(v);
@@ -160,6 +177,16 @@ function buildRow(label, value) {
 const buildRowAlways = buildRow;
 
 /**
+ * Fila que SÓLO aparece si tiene contenido — la excepción a la regla de arriba.
+ * Se usa para los campos que la usuaria no quiere ver salvo en el caso raro en
+ * que traigan algo (4-ago-2026).
+ */
+function buildRowSiTiene(label, value) {
+  if (value === null || value === undefined || value === '') return '';
+  return buildRow(label, value);
+}
+
+/**
  * Construye el encabezado del mensaje.
  *
  * - Empresa emisora: resuelta por product_id del primer ticket
@@ -195,11 +222,11 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
   const moneda = val(tp.of_moneda);
 
   // Fecha solicitud de facturación = fecha de resolución esperada del ticket
-  const fechaSolicitud = val(tp.fecha_resolucion_esperada)?.slice(0, 10) || null;
+  const fechaSolicitud = fmtFecha(tp.fecha_resolucion_esperada);
 
   const rows = [
     `<div style="${STYLES.container}">`,
-    `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${hoy}</div>`,
+    `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${fmtFecha(hoy)}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
     buildRowAlways('Entidad facturadora',   entidadFacturadora),
@@ -243,23 +270,31 @@ function buildLineItemDiv(ticket, portalId = null) {
     }${
       urgente ? ` — <span style="${STYLES.urgentBadge}">⚡ FACTURACIÓN URGENTE</span>` : ''
     }</div>`,
-    buildRow('Descripción de la factura', val(tp.of_descripcion_producto)),
-    buildRow('Rubro',                     val(tp.of_rubro)),
+    // Catálogo: producto → área → unidad de negocio → rubro (4-ago-2026).
+    buildRow('Producto',                  val(tp.of_producto) || val(tp.of_producto_nombres)),
+    buildRow('Área',                      val(tp.area)),
     buildRow('Unidad de Negocio',         val(tp.unidad_de_negocio)),
-    buildRow('Cantidad',                  fmtNum(tp.cantidad_real)),
+    buildRow('Rubro',                     val(tp.of_rubro)),
+    // La nota sólo tiene sentido cuando el rubro es "Otro": ahí va el detalle.
+    rubroEsOtro(tp.of_rubro) ? buildRow('Nota', val(tp.nota)) : '',
+
+    buildRow('Descripción del producto',  val(tp.of_descripcion_producto)),
+    buildRow('Descripción del ticket',    val(tp.content)),
+
+    // Precio ANTES que cantidad (4-ago-2026).
     buildRow('Precio unitario (sin IVA)', fmtNum(tp.monto_unitario_real)),
-    buildRow('Subtotal',                  fmtNum(tp.subtotal_real)),
+    buildRow('Cantidad',                  fmtNum(tp.cantidad_real)),
+    // Ex-"Subtotal" — renombrado por pedido de la usuaria.
+    buildRow('Monto total en moneda original', fmtNum(tp.subtotal_real)),
     buildRow('IVA',                       fmtBoolSiNo(tp.of_iva)),
     buildRow('Monto Total a facturar',    fmtNum(tp.total_real_a_facturar)),
     buildRow('IRAE',                      fmtIrae(tp.exonera_irae)),
     buildRow('TRADING',                   fmtBoolSiNo(tp.opera_trading)),
-    buildRow('Frecuencia de Facturación', frecuencia),
-    buildRow('Momento de facturación',    val(tp.momento_de_facturacion)),
-    // Las tres fechas de la lista de Victoria (#5, #6, #7 del correo del 1-jul).
-    // En el ticket viven snapshotteadas desde el line item (snapshotService.js:323/333/334).
-    buildRow('Fecha inicio de Facturación', val(tp.fecha_inicio_de_facturacion)?.slice(0, 10)),
-    buildRow('Fecha inicio del Contrato',   val(tp.of_inicio_del_contrato)?.slice(0, 10)),
-    buildRow('Fecha fin del Contrato',      val(tp.of_fin_del_contrato)?.slice(0, 10)),
+
+    // En la facturación MANUAL queda UNA sola fecha (4-ago-2026). Frecuencia,
+    // momento de facturación e inicio/fin de contrato viven en el aviso de
+    // facturación AUTOMÁTICA (buildMensajeMantsoft), donde sí hacen falta.
+    buildRow('Fecha de facturación',      fmtFecha(tp.fecha_inicio_de_facturacion)),
     buildRow('Observaciones',             val(tp.observaciones)),
     buildRow('Ticket',                    ticketLink),
     `</div>`,
@@ -272,7 +307,7 @@ function buildFooter(ticketIds) {
   const hoy = todayYMD();
   return [
     `<div style="${STYLES.footer}">`,
-    `Generado automáticamente — ${hoy} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,
+    `Generado automáticamente — ${fmtFecha(hoy)} ${horaActual()} — ${ticketIds.length} elemento(s) de pedido`,
     `</div>`,
     `</div>`,
   ].join('\n');

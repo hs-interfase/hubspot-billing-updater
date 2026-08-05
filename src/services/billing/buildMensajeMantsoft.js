@@ -105,6 +105,22 @@ function fmtBoolSiNo(v) {
   return s;
 }
 
+/**
+ * Fecha en DÍA/MES/AÑO (pedido de la usuaria, 4-ago-2026).
+ * Entra `2026-08-04` (o un ISO con hora) y sale `04/08/2026`.
+ */
+function fmtFecha(v) {
+  const s = val(v);
+  if (s === null) return null;
+  const m = s.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
+
+/** ¿El rubro es "Otro"? Entonces el detalle viene en `nota`. */
+function rubroEsOtro(v) {
+  return String(val(v) || '').toLowerCase().startsWith('otro');
+}
+
 /** exonera_irae: true → 'Exento', false → 'Aplica' (null si no hay dato). */
 function fmtIrae(v) {
   const s = val(v);
@@ -161,6 +177,16 @@ function buildRow(label, value) {
 const buildRowAlways = buildRow;
 
 /**
+ * Fila que SÓLO aparece si tiene contenido. En el aviso de facturación
+ * AUTOMÁTICA la usuaria no quiere ver Observaciones ni Descripción del ticket
+ * (4-ago-2026) — salvo el caso raro en que traigan algo, que entonces importa.
+ */
+function buildRowSiTiene(label, value) {
+  if (value === null || value === undefined || value === '') return '';
+  return buildRow(label, value);
+}
+
+/**
  * Construye el encabezado del mensaje completo (único por deal/día).
  */
 function buildHeader(firstLi, dealName, dealMeta = {}) {
@@ -177,14 +203,9 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
   const personaFactura   = val(dealMeta.persona_que_factura);
   const empresaPrincipal = val(lp.nombre_empresa);
 
-  const dealUrl = buildDealUrl(dealMeta.portalId, dealMeta.dealId);
-  const dealLink = dealUrl
-    ? `<a href="${dealUrl}" style="${STYLES.link}">Ver negocio #${dealMeta.dealId}</a>`
-    : null;
-
   const rows = [
     `<div style="${STYLES.container}">`,
-    `<div style="${STYLES.header}">📋 Aviso Mantsoft — ${hoy}</div>`,
+    `<div style="${STYLES.header}">📋 Aviso Mantsoft — ${fmtFecha(hoy)}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
     buildRowAlways('Entidad facturadora', entidadFacturadora),
@@ -192,8 +213,9 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
     buildRow('Cliente',              empresaPrincipal),
     buildRowAlways('Empresa que factura', clienteFinal),
     buildRow('Persona que factura',  personaFactura),
-    buildRow('Fecha del aviso',      hoy),
-    buildRow('Negocio',              dealLink),
+    buildRow('Fecha del aviso',      fmtFecha(hoy)),
+    // El link al negocio se movió AL FINAL del mensaje (4-ago-2026): va después
+    // del progreso de pagos. Ver buildFooter.
   ];
 
   return rows.filter(r => r !== '').join('\n');
@@ -271,34 +293,57 @@ function buildLineItemBaseRows(li) {
     progresoPagos = null; // buildRowAlways lo muestra como "(sin datos)"
   }
 
+  // 🔴 El RUBRO del line item vive en `servicio` (snapshotService.js:289 lo copia
+  // al ticket como `of_rubro`). Antes se leía `of_rubro || rubro`, y NINGUNA de
+  // las dos existe en el line item ⇒ el rubro nunca salía en este mensaje.
+  const rubro = val(lp.servicio);
+
   return [
     buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),
-    buildRow('Descripción',               val(lp.description)),
-    buildRow('Rubro',                     val(lp.of_rubro) || val(lp.rubro)),
-    buildRow('Nota',                      val(lp.nota)),
+
+    // Catálogo: producto → área → unidad de negocio → rubro (4-ago-2026).
+    buildRow('Producto',                  val(lp.name)),
+    buildRow('Área',                      val(lp.area)),
     buildRow('Unidad de negocio',         val(lp.unidad_de_negocio)),
+    buildRow('Rubro',                     rubro),
+    // La nota sólo tiene sentido cuando el rubro es "Otro": ahí va el detalle.
+    rubroEsOtro(rubro) ? buildRow('Nota', val(lp.nota)) : '',
+
+    buildRow('Descripción del producto',  val(lp.description)),
+
+    // Precio ANTES que cantidad (4-ago-2026).
     buildRow('Precio unitario',           fmtNum(lp.price)),
     buildRow('Cantidad',                  fmtNum(lp.quantity)),
     buildRow('Descuento (%)',             fmtNum(lp.hs_discount_percentage)),
-    buildRow('Subtotal',                  subtotal),
+    // Ex-"Subtotal" — renombrado por pedido de la usuaria.
+    buildRow('Monto total en moneda original', subtotal),
     buildRow('Total',                     total),
     buildRow('Impuestos',                 resolveTaxLabel(lp.hs_tax_rate_group_id)),
     buildRow('IRAE',                      fmtIrae(lp.exonera_irae)),
     buildRow('TRADING',                   fmtBoolSiNo(lp.opera_trading)),
     buildRow('Moneda',                    val(lp.of_moneda)),
+
+    // El cronograma queda SÓLO acá, en las automáticas: la facturación manual
+    // se quedó con una única fecha (4-ago-2026).
     buildRow('Frecuencia',                frecuencia),
     buildRow('Momento de facturación',    val(lp.momento_de_facturacion)),
-    buildRow('Inicio de contrato',        inicioContrato),
-    buildRow('Vigencia de contrato',      vigenciaContrato),
-    buildRow('Inicio de facturación',     fechaInicioFact),
-    buildRow('Fecha ancla',               anclaLabel),
-    buildRow('Próxima facturación',       val(lp.billing_next_date)?.slice(0, 10)),
+    buildRow('Inicio de contrato',        fmtFecha(inicioContrato)),
+    buildRow('Vigencia de contrato',      fmtFecha(vigenciaContrato)),
+    buildRow('Inicio de facturación',     fmtFecha(fechaInicioFact)),
+    buildRow('Fecha ancla',               fmtFecha(anclaLabel)),
+    buildRow('Próxima facturación',       fmtFecha(lp.billing_next_date)),
     buildRow('Tipo',                      tipoLabel),
     buildRow('Cantidad de pagos',         cantidadPagos),
     buildRow('Pagos emitidos',            pagosEmitidos),
     buildRow('Pagos restantes',           pagosRestantes),
+
+    // En las automáticas estos dos NO van, salvo que excepcionalmente traigan
+    // contenido — ahí sí importan (4-ago-2026).
+    buildRowSiTiene('Descripción del ticket', val(lp.content)),
+    buildRowSiTiene('Observaciones',          val(lp.observaciones)),
+
+    // El progreso de pagos cierra el bloque (4-ago-2026).
     buildRowAlways('Progreso de pagos',   progresoPagos),
-    buildRow('Observaciones',             val(lp.observaciones)),
   ].filter(r => r !== '');
 }
 
@@ -357,14 +402,23 @@ function buildLineItemBajaDiv(li) {
   return rows.filter(r => r !== '').join('\n');
 }
 
-function buildFooter(count) {
+function buildFooter(count, dealMeta = {}) {
   const hoy = todayYMD();
+
+  // El link al negocio va ACÁ ABAJO, después del progreso de pagos del último
+  // bloque (4-ago-2026). Antes vivía en el encabezado.
+  const dealUrl = buildDealUrl(dealMeta.portalId, dealMeta.dealId);
+  const dealLink = dealUrl
+    ? `<a href="${dealUrl}" style="${STYLES.link}">Ver negocio #${dealMeta.dealId}</a>`
+    : null;
+
   return [
+    dealLink ? buildRow('Negocio', dealLink) : '',
     `<div style="${STYLES.footer}">`,
-    `Generado automáticamente — ${hoy} ${horaActual()} — ${count} elemento(s) notificado(s)`,
+    `Generado automáticamente — ${fmtFecha(hoy)} ${horaActual()} — ${count} elemento(s) notificado(s)`,
     `</div>`,
     `</div>`,
-  ].join('\n');
+  ].filter(r => r !== '').join('\n');
 }
 
 // ────────────────────────────────────────────────────────────
@@ -486,7 +540,7 @@ for (const li of lineItems) {
     }
   }
 
-  parts.push(buildFooter(totalNotificados));
+  parts.push(buildFooter(totalNotificados, dealMeta));
 
   return parts.join('\n');
 }
