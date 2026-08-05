@@ -61,6 +61,9 @@ const LI_PROPS = [
   'observaciones', 'nota',
   // Lista de Victoria (correo 1-jul): momento de facturación (#8) y TRADING (#20).
   'momento_de_facturacion', 'opera_trading',
+  // Correcciones del 4-ago: área y el RUBRO, que en el line item vive en `servicio`
+  // (of_rubro/rubro no existen acá — por eso el rubro nunca salía en este mensaje).
+  'area', 'servicio',
   'mansoft_pendiente', 'facturacion_automatica',
   // Nuevas props para el sistema alta/edición
     'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo', 'pausa',
