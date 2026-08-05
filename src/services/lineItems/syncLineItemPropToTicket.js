@@ -31,6 +31,7 @@ import { avisarResponsableTicketPorSyncLI } from '../notifications/liSyncTicketA
 import { emailAvisoMirror } from '../notifications/mirrorAlert.js';
 import { mirrorPuntualEnabled } from '../../config/mirrorPuntualFlags.js';
 import { propagarCambioLiAlEspejo } from '../mirror/mirrorLiPuntualSync.js';
+import { esPropSensible } from '../mirror/mirrorLiPropMap.js';
 import { parseTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import logger from '../../../lib/logger.js';
 
@@ -208,7 +209,14 @@ export async function syncLineItemPropToTickets({
   const snapshot = extractFn(lineItem, deal);
   const affected = pickAffectedTicketProps(snapshot, propertyName);
   const affectedKeys = Object.keys(affected);
-  if (!affectedKeys.length) return { ...stats, reason: 'sin_claves_afectadas' };
+  // 🔴 Salir acá cortaba el aviso al espejo. Hay props que NO tienen equivalente
+  // en el ticket pero sí tienen que avisarle a UY — `uy` es el caso: María pidió
+  // saber cuándo un line item entra o sale del espejo (correo del 6-jul), y eso
+  // no se escribe en ningún ticket. Si la prop es sensible para el espejo se
+  // sigue de largo, aunque no haya nada que sincronizar.
+  if (!affectedKeys.length && !esPropSensible(propertyName)) {
+    return { ...stats, reason: 'sin_claves_afectadas' };
+  }
   stats.applies = true;
   stats.keys = affectedKeys;
 

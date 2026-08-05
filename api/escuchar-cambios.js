@@ -5,7 +5,8 @@ import { enqueue } from '../src/webhookQueue.js';
 import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
-import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
+import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js'
+import { esPropSensible } from '../src/services/mirror/mirrorLiPropMap.js';
 import { isTransferableDealProp } from '../src/services/deal/syncDealPropToTicket.js';
 import { dealPropSyncEnabled } from '../src/config/transferPropsFlags.js';
 import {
@@ -276,10 +277,14 @@ export default async function handler(req, res) {
     // ticket entero → no pisa lo que editó el responsable). Detrás de flag; con flag OFF
     // estas props caen al "skipped" de abajo (comportamiento actual). Excluye Frecuencia /
     // Término / Nº Pagos / Momento (isTransferableLiProp) y las props ya ruteadas arriba.
+    // `esPropSensible` suma las props que NO se transfieren al ticket pero sí
+    // tienen que avisarle al espejo — `uy` (entra/sale del mirror), que María
+    // pidió por escrito el 6-jul. Sin esto el evento no se encola y el aviso
+    // nunca sale.
     if (
       objectType === 'line_item' &&
       parseBool(process.env.LI_PROP_SYNC_ENABLED) &&
-      isTransferableLiProp(propertyName)
+      (isTransferableLiProp(propertyName) || esPropSensible(propertyName))
     ) {
       const dealId = await getDealIdForLineItem(objectId);
       const queueId = await enqueue({

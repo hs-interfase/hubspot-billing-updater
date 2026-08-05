@@ -86,11 +86,30 @@ export const MIRROR_PRICE_SOURCE_PROPS = new Set([
  * 1-ago). costo · precio · cantidad. El costo son dos props (ver cabecera).
  */
 export const MIRROR_SENSITIVE_LI_PROPS = new Set([
+  // Monto y costo de PY — las tres confirmadas el 1-ago.
   'price',
   'quantity',
   'hs_cost_of_goods_sold',
   'costo_total_usd',
+
+  // ── Agregadas el 5-ago-2026 para cubrir lo que María pidió por escrito ──
+  // (correo del 6-jul, "Notificaciones PY + Lógica edición de ticket"). Ella
+  // pidió aviso ante «monto y costo de PY», «fecha de facturación esperada» y
+  // «campo UY (si un line item pasa a formar parte de UY o si deja de serlo)».
+  // Las dos primeras ya estaban; faltaban estas.
+  //
+  // La fecha va con sus DOS nombres porque el motor las trata como sinónimos
+  // (syncLineItemPropToTicket.js:87-88).
+  'hs_recurring_billing_start_date',
+  'fecha_inicio_de_facturacion',
+  // El campo UY sólo AVISA: no se copia al espejo (no tendría sentido, el
+  // espejo ES el lado UY). Al estar acá, isMirrorableLiProp lo deja pasar.
+  'uy',
 ]);
+
+// 📌 A propósito NO se incluye `billing_next_date`: la recalcula el motor en
+// cada ciclo, así que avisar por ella sería ruido constante y no una edición
+// de nadie. La fecha que una persona EDITA es la de inicio de facturación.
 
 /** Etiqueta legible de la prop, para el texto del aviso ("pasó de X a Y"). */
 export const MIRROR_PROP_LABELS = {
@@ -98,6 +117,9 @@ export const MIRROR_PROP_LABELS = {
   quantity: 'cantidad',
   hs_cost_of_goods_sold: 'costo',
   costo_total_usd: 'costo (USD)',
+  hs_recurring_billing_start_date: 'fecha de facturación esperada',
+  fecha_inicio_de_facturacion: 'fecha de facturación esperada',
+  uy: 'campo UY',
   dolar: 'tipo de cambio',
   name: 'nombre',
   description: 'descripción',

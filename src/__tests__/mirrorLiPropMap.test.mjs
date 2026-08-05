@@ -22,17 +22,32 @@ const {
   labelDeProp,
 } = await import('../services/mirror/mirrorLiPropMap.js');
 
-// ── Las sensibles son exactamente las tres confirmadas ───────────────────────
+// ── Las sensibles ───────────────────────────────────────────────────────────
+//
+// 5-ago-2026: la lista pasó de 4 props a 7. Al cerrar la TANDA D eran sólo
+// costo · precio · cantidad, pero el correo de María del 6-jul pedía además
+// «fecha de facturación esperada» y «campo UY». El detalle de cada una y por
+// qué queda afuera `billing_next_date` está en mirrorAvisosMaria.test.mjs.
 
-test('sensibles = costo · precio · cantidad, y nada más', () => {
+test('sensibles = costo · precio · cantidad + fecha de facturación + campo UY', () => {
   assert.deepEqual(
     [...MIRROR_SENSITIVE_LI_PROPS].sort(),
-    ['costo_total_usd', 'hs_cost_of_goods_sold', 'price', 'quantity'].sort()
+    [
+      'costo_total_usd',
+      'fecha_inicio_de_facturacion',
+      'hs_cost_of_goods_sold',
+      'hs_recurring_billing_start_date',
+      'price',
+      'quantity',
+      'uy',
+    ].sort()
   );
   assert.equal(esPropSensible('price'), true);
   assert.equal(esPropSensible('quantity'), true);
   assert.equal(esPropSensible('costo_total_usd'), true);
   assert.equal(esPropSensible('hs_cost_of_goods_sold'), true);
+  assert.equal(esPropSensible('hs_recurring_billing_start_date'), true);
+  assert.equal(esPropSensible('uy'), true);
   // La descripción se copia, pero NO avisa antes.
   assert.equal(esPropSensible('description'), false);
   assert.equal(esPropSensible('dolar'), false);
