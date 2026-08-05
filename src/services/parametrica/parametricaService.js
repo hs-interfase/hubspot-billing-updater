@@ -16,6 +16,7 @@ import {
   TICKET_STAGE_LISTO_MANUAL,
   BILLING_AUTOMATED_READY,
   INVOICED_STAGES,
+  isCancelledTicketStage,
   isDryRun,
 } from '../../config/constants.js';
 import { resolveEmpresasPorDeal } from './empresaLookup.js';
@@ -47,7 +48,22 @@ const LI_PROPS = [
   'billing_next_date', 'momento_de_facturacion', 'recurringbillingfrequency',
   'facturacion_activa', 'facturacion_automatica', 'responsable_asignado',
   'hubspot_owner_id', 'nota',
+  // Elegibilidad: el contrato tiene que estar vigente y no ser una NC.
+  'fin_del_contrato', 'inicio_del_contrato', 'nc',
+  // Impuestos que hereda el puntual.
+  'hs_tax_rate_group_id', 'exonera_irae',
 ];
+
+/** Meses enteros entre una fecha YYYY-MM-DD y hoy. null si no hay fecha. */
+export function mesesDesde(ymd, hoy = hoyMvd()) {
+  const f = String(ymd || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return null;
+  const [ay, am, ad] = f.split('-').map(Number);
+  const [by, bm, bd] = String(hoy).slice(0, 10).split('-').map(Number);
+  let meses = (by - ay) * 12 + (bm - am);
+  if (bd < ad) meses -= 1;          // todavía no se cumplió el mes
+  return meses;
+}
 
 // Marca del line item creado por el ajuste retroactivo. NO se usa
 // `ajuste_factura_aparte` para esto: esa prop es una preferencia del line item
@@ -168,6 +184,7 @@ export async function listarLineItemsIjserv() {
 
   const elegibles = [];
   const excluidos = [];
+  const hoy = hoyMvd();
 
   for (const li of lis) {
     const p = li.properties || {};
@@ -198,6 +215,9 @@ export async function listarLineItemsIjserv() {
       pausa: p.pausa === 'true',
       cantidad: p.quantity != null && p.quantity !== '' ? Number(p.quantity) : 1,
       proximaFecha: (p.billing_next_date || '').toString().slice(0, 10) || null,
+      finDelContrato: (p.fin_del_contrato || '').toString().slice(0, 10) || null,
+      mesesDesdeUltimoAjuste: mesesDesde(p.fecha_ultimo_ajuste, hoy),
+      esNc: p.nc === 'true',
     };
 
     if (p.of_line_item_py_origen_id) {
@@ -205,10 +225,18 @@ export async function listarLineItemsIjserv() {
     } else if (esLineItemDeAjusteRetro(p)) {
       // Un ajuste retroactivo no se vuelve a ajustar: es un pago único ya cerrado.
       excluidos.push({ ...row, motivo: 'li_de_ajuste_retroactivo' });
+    } else if (row.esNc) {
+      // Una nota de crédito no se ajusta: su importe corrige una factura ya
+      // emitida, con el precio que tenía en ese momento.
+      excluidos.push({ ...row, motivo: 'nota_de_credito' });
     } else if (!deal.dealId) {
       excluidos.push({ ...row, motivo: 'sin_deal' });
     } else if (!isDealGanadoStage(deal.dealStage)) {
       excluidos.push({ ...row, motivo: 'deal_no_ganado' });
+    } else if (row.finDelContrato && row.finDelContrato < hoy) {
+      // El contrato tiene que estar VIGENTE al día de hoy: ajustar el precio de
+      // algo que ya terminó no cambia nada y ensucia la lista.
+      excluidos.push({ ...row, motivo: 'contrato_vencido' });
     } else if (row.price == null || Number.isNaN(row.price)) {
       excluidos.push({ ...row, motivo: 'sin_precio' });
     } else {
@@ -261,27 +289,36 @@ export async function contarTicketsProtegidosFuturos(lineItemIds) {
 }
 
 /**
- * Cuenta, por line item, cuántas FACTURAS ya salieron entre el mes del ajuste
- * y hoy — o sea, cuántos períodos se cobraron al precio viejo.
+ * Cuenta, por line item, cuántos PAGOS del período quedaron al precio viejo:
+ * los tickets cuya fecha de facturación está entre el mes del ajuste y hoy.
  *
- * Se cuentan tickets, no un recálculo del calendario: el ticket ES la factura,
- * así que el momento de facturación (adelantado / vencido / fin de mes) ya
- * está contemplado en su fecha. Sólo cuentan los que llegaron a facturarse
- * (INVOICED_STAGES) — los cancelados no, y los que todavía no salieron tampoco,
- * porque el motor los va a re-snapshotear con el precio nuevo.
+ * La regla es POR FECHA, no por estado (definición de la usuaria, 4-ago-2026):
+ * el ticket ES la factura, y su fecha ya contempla el momento de facturación.
+ * Por eso el mes en curso cuenta o no según qué día factura ese line item:
  *
- * Aparte se informan los `pendientes`: tickets del período que todavía NO
- * facturaron. Normalmente se auto-curan, pero si están promovidos conservan el
- * precio viejo — por eso se avisan en el preview en vez de contarlos a ciegas.
+ *   · adelantado / mes vencido → caen el 1°, así que el mes en curso SIEMPRE
+ *     cuenta como retroactivo, aunque hoy sea el 1°.
+ *   · fin de mes → es el único caso relativo: cuenta sólo si el día que factura
+ *     este mes ya pasó. A mitad de mes, el de este mes todavía no salió y va a
+ *     salir ya ajustado, así que no cuenta.
+ *
+ * Comparar la fecha del ticket con hoy resuelve los dos casos sin recalcular
+ * ningún calendario. Los CANCELADOS no cuentan (no hubo factura) y las notas
+ * de crédito tampoco.
+ *
+ * Aparte se informan los `sinFacturar`: tickets del período que todavía no
+ * llegaron a una etapa de facturado. Cuentan igual —su precio ya está fijado—
+ * pero se avisan en el preview por si hay que mirarlos.
  *
  * @param {string[]} lineItemIds
  * @param {string} desde  YYYY-MM-DD (primer día del mes del ajuste)
  * @param {string} [hasta] YYYY-MM-DD (default: hoy)
- * @param {Set<string>} [stagesFacturados] inyectable para los tests
- * @returns {Promise<Map<string, {facturados:number, pendientes:number}>>}
+ * @param {object} [deps] inyectable para los tests
+ * @returns {Promise<Map<string, {pagos:number, sinFacturar:number, error?:string}>>}
  */
-export async function contarPeriodosFacturados(
-  lineItemIds, desde, hasta = hoyMvd(), stagesFacturados = INVOICED_STAGES
+export async function contarPagosDelPeriodo(
+  lineItemIds, desde, hasta = hoyMvd(),
+  { stagesFacturados = INVOICED_STAGES, esCancelado = isCancelledTicketStage } = {}
 ) {
   const out = new Map();
   const facturados = new Set([...stagesFacturados].filter(Boolean));
@@ -299,15 +336,58 @@ export async function contarPeriodosFacturados(
         properties: ['hs_pipeline_stage', 'fecha_resolucion_esperada', 'nc'],
         limit: 100,
       });
-      const tickets = (resp?.results || []).filter(t => t.properties?.nc !== 'true');
+      const tickets = (resp?.results || []).filter(t =>
+        t.properties?.nc !== 'true' && !esCancelado(t.properties?.hs_pipeline_stage)
+      );
       out.set(String(liId), {
-        facturados: tickets.filter(t => facturados.has(t.properties?.hs_pipeline_stage)).length,
-        pendientes: tickets.filter(t => !facturados.has(t.properties?.hs_pipeline_stage)).length,
+        pagos: tickets.length,
+        sinFacturar: tickets.filter(t => !facturados.has(t.properties?.hs_pipeline_stage)).length,
       });
     } catch (err) {
-      logger.warn({ module: MOD, fn: 'contarPeriodosFacturados', liId, err: err?.message },
-        'No se pudieron contar las facturas del período — el LI queda sin retroactivo');
-      out.set(String(liId), { facturados: 0, pendientes: 0, error: err?.message || 'error' });
+      logger.warn({ module: MOD, fn: 'contarPagosDelPeriodo', liId, err: err?.message },
+        'No se pudieron contar los pagos del período — el LI queda sin retroactivo');
+      out.set(String(liId), { pagos: 0, sinFacturar: 0, error: err?.message || 'error' });
+    }
+  }
+  return out;
+}
+
+/**
+ * Cuenta, por line item, las facturas que YA SALIERON con el precio ajustado.
+ * Se usa al revertir: revertir el precio no deshace una factura emitida, eso
+ * se corrige con nota de crédito. Sirve para el listado de reversas que
+ * quedaron con facturas emitidas.
+ *
+ * @param {string[]} lineItemIds
+ * @param {string} desde  YYYY-MM-DD — la fecha en que se aplicó el ajuste
+ * @returns {Promise<Map<string, number>>}
+ */
+export async function contarFacturasEmitidasDesde(lineItemIds, desde, hasta = hoyMvd()) {
+  const out = new Map();
+  const facturados = new Set([...INVOICED_STAGES].filter(Boolean));
+  if (!desde) return out;
+
+  for (const liId of lineItemIds) {
+    try {
+      const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
+        filterGroups: facturados.size
+          ? [...facturados].map(stage => ({
+              filters: [
+                { propertyName: 'of_line_item_ids', operator: 'CONTAINS_TOKEN', value: String(liId) },
+                { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stage },
+                { propertyName: 'fecha_resolucion_esperada', operator: 'GTE', value: desde },
+                { propertyName: 'fecha_resolucion_esperada', operator: 'LTE', value: hasta },
+              ],
+            }))
+          : [],
+        properties: ['hs_pipeline_stage', 'fecha_resolucion_esperada'],
+        limit: 100,
+      });
+      const n = (resp?.results || []).length;
+      if (n) out.set(String(liId), n);
+    } catch (err) {
+      logger.warn({ module: MOD, fn: 'contarFacturasEmitidasDesde', liId, err: err?.message },
+        'No se pudieron contar las facturas emitidas — la reversa no queda marcada');
     }
   }
   return out;

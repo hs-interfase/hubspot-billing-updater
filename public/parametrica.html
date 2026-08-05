@@ -74,6 +74,11 @@
       font-size: 13px; width: 190px; transition: border-color .2s;
     }
     .filter-group input.chico { width: 140px; }
+    .filter-group select {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; padding: 8px 12px; font-size: 13px; width: 260px;
+    }
+    .filter-group select:focus { outline: none; border-color: var(--accent); }
     .filter-group .hint { font-size: 11px; color: var(--muted); max-width: 220px; line-height: 1.4; }
     .filter-group input:focus { outline: none; border-color: var(--accent); }
     .check-group { display: flex; align-items: center; gap: 8px; padding-bottom: 9px; color: var(--muted); font-size: 13px; }
@@ -166,6 +171,7 @@
   <a href="/invoice-editor/audit">Auditoría</a>
   <a href="/audit-log">Registro HubSpot</a>
   <a href="/parametrica" class="active">Paramétricas</a>
+  <a href="/historial-parametricas">Historial paramétricas</a>
   <a href="/nodum">Nodum</a>
   <a href="/guia" target="_blank" class="ext">📖 Guía ↗</a>
 </nav>
@@ -194,6 +200,22 @@
     <button class="btn btn-ghost" id="btn-limpiar">Limpiar</button>
   </div>
 
+  <!-- Selecciones guardadas: el prearmado no se pierde al recargar -->
+  <div class="panel">
+    <div class="panel-title">📌 Selecciones guardadas</div>
+    <div class="filter-group">
+      <label>Cargar una guardada</label>
+      <select id="f-seleccion"><option value="">—</option></select>
+    </div>
+    <button class="btn btn-ghost" id="btn-cargar-sel" disabled>Cargar</button>
+    <button class="btn btn-ghost" id="btn-borrar-sel" disabled>Borrar</button>
+    <div class="filter-group">
+      <label>Guardar la selección actual como</label>
+      <input type="text" id="f-nombre-sel" placeholder="ej. Petróleo semestre 2" />
+    </div>
+    <button class="btn btn-ghost" id="btn-guardar-sel">Guardar</button>
+  </div>
+
   <!-- Porcentaje + acciones -->
   <div class="panel">
     <div class="panel-title">Ajuste</div>
@@ -205,6 +227,22 @@
       <label>Vigente desde <span style="text-transform:none;font-weight:400">(opcional)</span></label>
       <input type="month" id="f-mes" class="chico" />
       <span class="hint">Vacío: rige desde hoy. Con un mes, lo ya facturado se cobra aparte.</span>
+    </div>
+    <div class="filter-group">
+      <label>Índice <span style="text-transform:none;font-weight:400">(respaldo)</span></label>
+      <input type="text" id="f-fuente" class="chico" placeholder="ej. IPC + dólar" />
+    </div>
+    <div class="filter-group">
+      <label>Valores usados</label>
+      <input type="text" id="f-valores" placeholder="ej. IPC 1,0312 · dólar 41,25" />
+    </div>
+    <div class="filter-group">
+      <label>Período del índice</label>
+      <input type="text" id="f-periodo" class="chico" placeholder="ej. ene–jun 2026" />
+    </div>
+    <div class="filter-group">
+      <label>Nota</label>
+      <input type="text" id="f-nota" placeholder="de dónde salió el porcentaje" />
     </div>
     <button class="btn btn-primary" id="btn-preview">Previsualizar</button>
     <button class="btn btn-primary" id="btn-actualizar" style="display:none">Actualizar previsualización</button>
@@ -231,6 +269,7 @@
   <!-- Excluidos -->
   <details class="section" id="sec-excluidos" style="display:none">
     <summary id="sum-excluidos"></summary>
+    <div class="stats"><span class="derecha"><button class="btn btn-ghost btn-sm" id="btn-csv-excluidos">⬇ CSV de excluidos</button></span></div>
     <div class="table-wrap">
       <table>
         <thead>
@@ -335,7 +374,7 @@
       (modo === 'resultado' && resultado.mesAjuste)
     let extra
     if (modo === 'lista') {
-      extra = '<th class="num">Importe s/IVA</th><th>Últ. ajuste</th>'
+      extra = '<th class="num">Importe s/IVA</th><th>Últ. ajuste</th><th class="num">Meses s/ajustar</th>'
     } else if (modo === 'preview') {
       extra = '<th class="num">Importe s/IVA</th><th class="num">Importe nuevo</th>' +
         (conRetro ? '<th>Ajuste retroactivo</th>' : '') + '<th>Últ. ajuste</th><th>Avisos</th>'
@@ -367,6 +406,14 @@
     return '<td><span class="val-empty">—</span></td>'
   }
 
+  /** Meses sin ajustar: es el dato con el que se decide a quién ajustar. */
+  function celdaMeses(f) {
+    if (f.mesesDesdeUltimoAjuste == null) return '<td class="num"><span class="val-empty">nunca</span></td>'
+    // La fórmula de Petróleo es semestral: de 6 meses en adelante ya venció.
+    const clase = f.mesesDesdeUltimoAjuste >= 6 ? 'b-warn' : ''
+    return `<td class="num"><span class="badge ${clase}">${f.mesesDesdeUltimoAjuste}</span></td>`
+  }
+
   function renderCuerpo(filas) {
     const colspan = COLS_BASE.length + 6
     if (!filas.length) {
@@ -387,7 +434,8 @@
       if (modo === 'lista') {
         extra = `
           <td class="num">${fmt(f.price)}</td>
-          <td>${f.fechaUltimoAjuste ? `${esc(f.fechaUltimoAjuste)}${f.porcentajeUltimoAjuste ? ` (${esc(f.porcentajeUltimoAjuste)}%)` : ''}` : '<span class="val-empty">nunca</span>'}${f.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>`
+          <td>${f.fechaUltimoAjuste ? `${esc(f.fechaUltimoAjuste)}${f.porcentajeUltimoAjuste ? ` (${esc(f.porcentajeUltimoAjuste)}%)` : ''}` : '<span class="val-empty">nunca</span>'}${f.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>
+          ${celdaMeses(f)}`
       } else if (modo === 'preview') {
         const avisos = [
           f.ticketsProtegidos ? `<span class="badge b-warn">${f.ticketsProtegidos.count} ticket(s) promovidos futuros</span>` : '',
@@ -414,6 +462,7 @@
         if (input.checked) seleccion.add(input.dataset.id)
         else seleccion.delete(input.dataset.id)
         input.closest('tr').classList.toggle('sel', input.checked)
+        guardarBorrador()
         renderStats(filasVisibles())
         renderBotones()
         sincronizarCabecera()
@@ -461,6 +510,7 @@
       if (marcar) seleccion.add(f.lineItemId)
       else seleccion.delete(f.lineItemId)
     }
+    guardarBorrador()
     render()
   }
 
@@ -492,7 +542,7 @@
   }
 
   // ── Carga ──────────────────────────────────────────────────
-  async function cargarLista({ conservarSeleccion = false } = {}) {
+  async function cargarLista({ conservarSeleccion = false, restaurarBorrador = false } = {}) {
     try {
       const res = await fetch(`${API}/line-items`)
       const json = await res.json().catch(() => ({}))
@@ -500,13 +550,21 @@
 
       elegibles = json.elegibles
       excluidos = json.excluidos
-      if (!conservarSeleccion) {
-        seleccion = new Set()
-      } else {
+      const vivos = new Set(elegibles.map(f => f.lineItemId))
+      if (conservarSeleccion) {
         // Un LI que dejó de ser elegible no puede quedar marcado.
-        const vivos = new Set(elegibles.map(f => f.lineItemId))
         seleccion = new Set([...seleccion].filter(id => vivos.has(id)))
+      } else if (restaurarBorrador) {
+        // Al entrar, se recupera lo que estaba marcado la última vez.
+        seleccion = new Set([...leerBorrador()].filter(id => vivos.has(id)))
+        if (seleccion.size) {
+          setAlert(`Se recuperaron <strong>${seleccion.size}</strong> line item(s) que tenías marcados. ` +
+            'Podés desmarcarlos con «Desmarcar todo».', 'alert-warn')
+        }
+      } else {
+        seleccion = new Set()
       }
+      guardarBorrador()
       renderExcluidos()
       render()
     } catch (err) {
@@ -514,24 +572,43 @@
     }
   }
 
+  const MOTIVOS_EXCLUSION = {
+    espejo_intercompany: 'Espejo intercompany (el mirroring pisaría el cambio)',
+    li_de_ajuste_retroactivo: 'Es un ajuste retroactivo ya creado',
+    nota_de_credito: 'Es una nota de crédito',
+    deal_no_ganado: 'El negocio todavía no está en cierre ganado',
+    contrato_vencido: 'El contrato ya terminó (no está vigente hoy)',
+    sin_deal: 'Sin negocio asociado',
+    sin_precio: 'Sin precio',
+  }
+
   function renderExcluidos() {
     if (!excluidos.length) { $('sec-excluidos').style.display = 'none'; return }
-    const motivos = {
-      espejo_intercompany: 'Espejo intercompany (el mirroring pisaría el cambio)',
-      deal_no_ganado: 'El negocio todavía no está en cierre ganado',
-      sin_deal: 'Sin negocio asociado',
-      sin_precio: 'Sin precio',
-    }
     $('sec-excluidos').style.display = ''
-    $('sum-excluidos').textContent = `Excluidos del ajuste (${excluidos.length}) — espejos / negocios sin ganar`
+    $('sum-excluidos').textContent =
+      `Excluidos del ajuste (${excluidos.length}) — espejos, negocios sin ganar, contratos vencidos y notas de crédito`
     $('tbody-excluidos').innerHTML = excluidos.map(f => `
       <tr>
         <td>${txt(f.dealName)}<span class="li-id"> ${esc(f.dealId ?? '')}</span></td>
         <td>${txt(f.clienteFactura)}</td>
         <td>${txt(f.descripcion || f.servicio)}<br><span class="li-id">LI ${esc(f.lineItemId)}</span></td>
         <td class="num">${fmt(f.price)}</td>
-        <td><span class="badge b-warn">${esc(motivos[f.motivo] || f.motivo)}</span></td>
+        <td><span class="badge b-warn">${esc(MOTIVOS_EXCLUSION[f.motivo] || f.motivo)}</span></td>
       </tr>`).join('')
+    $('btn-csv-excluidos').addEventListener('click', descargarCsvExcluidos)
+  }
+
+  /** CSV de los excluidos: para auditar POR QUÉ algo quedó afuera del ajuste. */
+  function descargarCsvExcluidos() {
+    bajarCsv('parametrica_ijserv_excluidos.csv',
+      ['motivo', 'entidad_facturadora', 'cliente_factura', 'codigo_empresa', 'numero_contrato',
+        'negocio', 'deal_id', 'etapa_negocio', 'line_item_id', 'descripcion_producto',
+        'area', 'producto', 'rubro', 'moneda', 'importe_sin_iva',
+        'fin_del_contrato', 'fecha_ultimo_ajuste'],
+      excluidos.map(f => [MOTIVOS_EXCLUSION[f.motivo] || f.motivo, f.entidadFacturadora, f.clienteFactura,
+        f.codigoEmpresa, f.numeroContrato, f.dealName, f.dealId, f.dealStage, f.lineItemId,
+        f.descripcion || f.servicio, f.area, f.producto, f.rubro, f.moneda, f.price,
+        f.finDelContrato, f.fechaUltimoAjuste]))
   }
 
   // ── Previsualización ───────────────────────────────────────
@@ -571,7 +648,15 @@
     try {
       const res = await fetch(`${API}/preview`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ porcentaje: pct, mesAjuste: $('f-mes').value.trim(), lineItemIds: [...seleccion] }),
+        body: JSON.stringify({
+          porcentaje: pct,
+          mesAjuste: $('f-mes').value.trim(),
+          fuenteIndice: $('f-fuente').value.trim(),
+          valoresIndice: $('f-valores').value.trim(),
+          periodoIndice: $('f-periodo').value.trim(),
+          nota: $('f-nota').value.trim(),
+          lineItemIds: [...seleccion],
+        }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -621,6 +706,7 @@
     setAlert('')
     $('f-pct').value = ''
     $('f-mes').value = ''
+    for (const id of ['f-fuente', 'f-valores', 'f-periodo', 'f-nota']) $(id).value = ''
     await cargarLista()
     cargarBatches()
   }
@@ -650,6 +736,7 @@
       seleccion = new Set()
       $('f-pct').value = ''
       $('f-mes').value = ''
+    for (const id of ['f-fuente', 'f-valores', 'f-periodo', 'f-nota']) $(id).value = ''
 
       const retroCreados = json.items.filter(i => i.retroEstado === 'creado' || i.retroEstado === 'dry_run')
       const retroFallidos = json.items.filter(i => i.retroEstado === 'error')
@@ -821,8 +908,13 @@
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      setAlert(`Reversa: ${json.revertidos} revertidos, ${json.fallidos} fallidos. Se envió el extracto por email.`,
-        json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
+      const avisoNc = json.conFacturasEmitidas
+        ? ` ⚠ <strong>${json.conFacturasEmitidas}</strong> line item(s) ya tenían <strong>${json.facturasAEmitirNc}</strong> factura(s) emitida(s) con el precio ajustado: ` +
+          'revertir el precio NO las corrige, hay que emitir <strong>nota de crédito</strong>. ' +
+          'Quedan listadas en <a href="/historial-parametricas" style="color:inherit;text-decoration:underline">Historial paramétricas</a>.'
+        : ''
+      setAlert(`Reversa: ${json.revertidos} revertidos, ${json.fallidos} fallidos. Se envió el extracto por email.${avisoNc}`,
+        json.fallidos === 0 && !json.conFacturasEmitidas ? 'alert-ok' : 'alert-warn')
       cargarBatches()
       if (body.batchId) window.verDetalle(body.batchId)
       if (modo === 'lista') cargarLista({ conservarSeleccion: true })
@@ -835,6 +927,78 @@
     ejecutarReversa({ batchId }, `¿Revertir TODO el lote ${batchId}? Cada line item vuelve a su precio anterior exacto.`)
   window.revertirItem = (batchId, lineItemId) =>
     ejecutarReversa({ batchId, lineItemId }, `¿Revertir el line item ${lineItemId} a su precio anterior?`)
+
+  // ── Selecciones guardadas ──────────────────────────────────
+  // Dos capas: el borrador se guarda solo en este navegador (para que una
+  // recarga o una sesión caída no te haga rearmar 40 contratos a mano), y
+  // aparte podés guardar la lista con nombre, que queda para todos.
+  const BORRADOR = 'parametrica.seleccion'
+
+  const guardarBorrador = () => {
+    try { localStorage.setItem(BORRADOR, JSON.stringify([...seleccion])) } catch { /* modo privado */ }
+  }
+  const leerBorrador = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(BORRADOR) || '[]')) } catch { return new Set() }
+  }
+
+  async function cargarSelecciones() {
+    try {
+      const res = await fetch(`${API}/selecciones`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) return
+      $('f-seleccion').innerHTML = '<option value="">—</option>' + json.selecciones.map(s =>
+        `<option value="${esc(s.id)}" data-ids="${esc(JSON.stringify(s.line_item_ids))}">${esc(s.nombre)} (${s.total})</option>`
+      ).join('')
+    } catch { /* la pantalla funciona igual sin selecciones guardadas */ }
+  }
+
+  function cargarSeleccionElegida() {
+    const opt = $('f-seleccion').selectedOptions[0]
+    if (!opt?.dataset.ids) return
+    const ids = JSON.parse(opt.dataset.ids)
+    const vivos = new Set(elegibles.map(f => f.lineItemId))
+    const presentes = ids.filter(id => vivos.has(id))
+    seleccion = new Set(presentes)
+    guardarBorrador()
+    const perdidos = ids.length - presentes.length
+    setAlert(`Cargados ${presentes.length} line item(s) de «${esc(opt.textContent)}».` +
+      (perdidos ? ` ${perdidos} ya no están en la lista de elegibles y se omitieron.` : ''),
+      perdidos ? 'alert-warn' : 'alert-ok')
+    render()
+  }
+
+  async function guardarSeleccion() {
+    const nombre = $('f-nombre-sel').value.trim()
+    if (!nombre) { setAlert('Ponele un nombre a la selección.', 'alert-warn'); return }
+    if (!seleccion.size) { setAlert('No hay nada marcado para guardar.', 'alert-warn'); return }
+    try {
+      const res = await fetch(`${API}/selecciones`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre, lineItemIds: [...seleccion] }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      $('f-nombre-sel').value = ''
+      await cargarSelecciones()
+      setAlert(`Selección «${esc(nombre)}» guardada con ${seleccion.size} line item(s).`, 'alert-ok')
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    }
+  }
+
+  async function borrarSeleccion() {
+    const id = $('f-seleccion').value
+    const nombre = $('f-seleccion').selectedOptions[0]?.textContent || ''
+    if (!id || !window.confirm(`¿Borrar la selección «${nombre}»? No toca ningún line item.`)) return
+    try {
+      const res = await fetch(`${API}/selecciones/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await cargarSelecciones()
+      setAlert('Selección borrada.', 'alert-ok')
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+    }
+  }
 
   // ── Wiring ─────────────────────────────────────────────────
   $('btn-preview').addEventListener('click', previsualizar)
@@ -853,8 +1017,18 @@
     render()
   })
 
-  cargarLista()
+  $('f-seleccion').addEventListener('change', () => {
+    const hay = Boolean($('f-seleccion').value)
+    $('btn-cargar-sel').disabled = !hay
+    $('btn-borrar-sel').disabled = !hay
+  })
+  $('btn-cargar-sel').addEventListener('click', cargarSeleccionElegida)
+  $('btn-borrar-sel').addEventListener('click', borrarSeleccion)
+  $('btn-guardar-sel').addEventListener('click', guardarSeleccion)
+
+  cargarLista({ restaurarBorrador: true })
   cargarBatches()
+  cargarSelecciones()
 </script>
 </body>
 </html>

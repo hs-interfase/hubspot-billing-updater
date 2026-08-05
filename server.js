@@ -91,6 +91,10 @@ app.use('/parametrica/api', invoiceEditorAuth, parametricaRouter)
 app.get('/parametrica', invoiceEditorAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'parametrica.html'))
 })
+// Historial de ajustes por line item: en HubSpot sólo queda el último.
+app.get('/historial-parametricas', invoiceEditorAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'historial-parametricas.html'))
+})
 
 // ── Export Reporte ──
 app.use('/api/export', invoiceEditorAuth, exportRouter)

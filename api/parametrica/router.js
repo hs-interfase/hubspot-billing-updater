@@ -11,8 +11,11 @@
 //   POST /preview/:id/cancel                → descarta un preview sin aplicar
 //   POST /apply   {batchId, confirm:true}
 //   POST /revert  {batchId, lineItemId?}   (lote completo o un LI)
-//   GET  /batches             → historial (para reversa y CSV)
+//   GET  /batches             → lotes (para reversa y CSV)
 //   GET  /batches/:id         → detalle con items
+//   GET  /historial           → ajustes por LINE ITEM, con filtros (/historial-parametricas)
+//   GET  /pendientes-nc       → reversas que dejaron facturas emitidas
+//   GET|POST|DELETE /selecciones → el "prearmado" de line items, guardado con nombre
 //
 // Guards:
 //   - Doble click / re-aplicación: transición atómica preview→applying en DB
@@ -30,7 +33,8 @@ import { calcularPriceNuevo, validarPorcentaje } from '../../src/services/parame
 import {
   listarLineItemsIjserv,
   contarTicketsProtegidosFuturos,
-  contarPeriodosFacturados,
+  contarPagosDelPeriodo,
+  contarFacturasEmitidasDesde,
   leerPriceActual,
   aplicarAjusteLineItem,
   revertirLineItem,
@@ -61,6 +65,12 @@ const ALERT_TO = (process.env.PARAMETRICA_ALERT_TO || process.env.ALERT_TO_EMAIL
   .split(',').map(s => s.trim()).filter(Boolean);
 
 const getUser = (req) => (req.headers['x-app-user'] || 'admin').toString().slice(0, 80);
+
+/** Texto libre acotado; '' → null, para no guardar vacíos en la DB. */
+const recorte = (v, max) => {
+  const s = String(v ?? '').trim().slice(0, max);
+  return s || null;
+};
 
 // ── Extracto por email ──────────────────────────────────────
 async function enviarExtracto({ accion, batch, items, usuario }) {
@@ -142,18 +152,18 @@ function parseSeleccion(raw) {
 function calcularRetroDeFila(li, pct, mes, conteos) {
   if (!mes) return { periodos: null, precio: null, importe: null, fecha: null, estado: null };
 
-  const conteo = conteos.get(li.lineItemId) || { facturados: 0, pendientes: 0 };
+  const conteo = conteos.get(li.lineItemId) || { pagos: 0, sinFacturar: 0 };
   const priceNuevo = calcularPriceNuevo(li.price, pct);
   const { deltaUnitario, ajustePorPago, importe } = calcularRetroactivo({
-    priceViejo: li.price, priceNuevo, cantidad: li.cantidad, periodos: conteo.facturados,
+    priceViejo: li.price, priceNuevo, cantidad: li.cantidad, periodos: conteo.pagos,
   });
   const { aplica, motivo } = evaluarRetroactivo({
-    periodos: conteo.facturados, proximaFecha: li.proximaFecha, deltaUnitario,
+    periodos: conteo.pagos, proximaFecha: li.proximaFecha, deltaUnitario,
   });
 
   return {
-    periodos: conteo.facturados,
-    pendientes: conteo.pendientes,
+    periodos: conteo.pagos,
+    sinFacturar: conteo.sinFacturar,
     deltaUnitario,
     precio: aplica ? ajustePorPago : null,   // lo que se ajusta por pago
     importe: aplica ? importe : null,        // el monto único del line item
@@ -202,7 +212,7 @@ async function insertarItem(batchId, li, pct, retro = {}) {
  */
 async function insertarItems(batchId, filas, pct, mes) {
   const conteos = mes
-    ? await contarPeriodosFacturados(filas.map(f => f.lineItemId), mes.desde)
+    ? await contarPagosDelPeriodo(filas.map(f => f.lineItemId), mes.desde)
     : new Map();
   for (const li of filas) {
     await insertarItem(batchId, li, pct, calcularRetroDeFila(li, pct, mes, conteos));
@@ -278,6 +288,8 @@ const filaPreview = (it, elegible, protegidos, mes) => ({
   priceViejo: Number(it.price_viejo),
   priceNuevo: Number(it.price_nuevo),
   fechaUltimoAjuste: elegible?.fechaUltimoAjuste || null,
+  mesesDesdeUltimoAjuste: elegible?.mesesDesdeUltimoAjuste ?? null,
+  finDelContrato: elegible?.finDelContrato || null,
   pausa: elegible?.pausa || false,
   ticketsProtegidos: protegidos.get(it.line_item_id) || null,
   // Ajuste retroactivo
@@ -309,6 +321,12 @@ async function responderPreview(batch, elegiblesPorId, warning) {
     totalLis: items.length,
     mesAjuste: batch.mes_ajuste || null,
     mesAjusteLabel: batch.mes_ajuste ? etiquetaMes(batch.mes_ajuste) : null,
+    respaldo: {
+      fuenteIndice: batch.fuente_indice || '',
+      valoresIndice: batch.valores_indice || '',
+      periodoIndice: batch.periodo_indice || '',
+      nota: batch.nota || '',
+    },
     retro: {
       lineItems: conRetro.length,
       importeTotal: conRetro.reduce((acc, i) => acc + Number(i.importe_retro || 0), 0),
@@ -349,10 +367,22 @@ router.post('/preview', async (req, res) => {
     }
     const descartados = seleccion.length - elegidos.length;
 
+    // Respaldo del cálculo: el motor no resuelve la fórmula, se le ingresa el
+    // % ya calculado. Guardar de dónde salió es el papel de trabajo del ajuste.
+    const respaldo = {
+      fuente: recorte(req.body?.fuenteIndice, 200),
+      valores: recorte(req.body?.valoresIndice, 300),
+      periodo: recorte(req.body?.periodoIndice, 100),
+      nota: recorte(req.body?.nota, 1000),
+    };
+
     const { rows: [batch] } = await pool.query(
-      `INSERT INTO parametrica_batches (producto_id, porcentaje, usuario, dry_run, scope, mes_ajuste)
-       VALUES ($1, $2, $3, $4, 'seleccion', $5) RETURNING *`,
-      [IJSERV_PRODUCT_ID, pct, getUser(req), isDryRun(), mes?.ym || null]
+      `INSERT INTO parametrica_batches
+         (producto_id, porcentaje, usuario, dry_run, scope, mes_ajuste,
+          fuente_indice, valores_indice, periodo_indice, nota)
+       VALUES ($1, $2, $3, $4, 'seleccion', $5, $6, $7, $8, $9) RETURNING *`,
+      [IJSERV_PRODUCT_ID, pct, getUser(req), isDryRun(), mes?.ym || null,
+       respaldo.fuente, respaldo.valores, respaldo.periodo, respaldo.nota]
     );
 
     await insertarItems(batch.id, elegidos, pct, mes);
@@ -649,6 +679,18 @@ router.post('/revert', async (req, res) => {
       }
     }
 
+    // Revertir el precio NO deshace una factura que ya salió con el precio
+    // nuevo: eso se corrige con nota de crédito. Se cuenta cuántas salieron
+    // desde que se aplicó el lote, para que queden listadas en el historial.
+    const desdeAplicado = batch.applied_at
+      ? new Date(batch.applied_at).toISOString().slice(0, 10)
+      : null;
+    const emitidas = await contarFacturasEmitidasDesde(items.map(i => i.line_item_id), desdeAplicado);
+    for (const it of items) {
+      const n = emitidas.get(it.line_item_id) || 0;
+      await pool.query(`UPDATE parametrica_items SET facturas_post_ajuste = $2 WHERE id = $1`, [it.id, n]);
+    }
+
     const { rows: finalItems } = await pool.query(
       `SELECT * FROM parametrica_items WHERE batch_id = $1 ORDER BY id`, [batchId]
     );
@@ -670,10 +712,15 @@ router.post('/revert', async (req, res) => {
       batch: { ...batch, estado: estadoFinal }, items: revertidosAhora, usuario: getUser(req),
     });
 
+    const conFacturas = revertidosAhora.filter(i => Number(i.facturas_post_ajuste) > 0);
+
     res.json({
       estado: estadoFinal,
       revertidos: revertidosAhora.filter(i => i.estado === 'reverted').length,
       fallidos: revertidosAhora.filter(i => i.estado === 'revert_failed').length,
+      // La reversa restaura el precio, pero lo ya facturado necesita NC.
+      conFacturasEmitidas: conFacturas.length,
+      facturasAEmitirNc: conFacturas.reduce((a, i) => a + Number(i.facturas_post_ajuste || 0), 0),
       items: revertidosAhora.map(i => ({
         lineItemId: i.line_item_id, estado: i.estado, error: i.error,
         priceViejo: Number(i.price_viejo), priceNuevo: Number(i.price_nuevo),
@@ -718,6 +765,129 @@ router.get('/batches/:id', async (req, res) => {
     res.json({ batch, items });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'Error leyendo batch' });
+  }
+});
+
+// ── GET /historial ──────────────────────────────────────────
+// El historial POR LINE ITEM, que es la pregunta real de administración:
+// "¿qué ajustes tuvo ESTE contrato?". En HubSpot sólo queda el último
+// (fecha_ultimo_ajuste / porcentaje_ultimo_ajuste se pisan en cada corrida),
+// así que la historia completa vive acá. Filtros opcionales por texto y fechas.
+router.get('/historial', async (req, res) => {
+  try {
+    const { q, desde, hasta, soloAplicados } = req.query;
+    const where = ['1 = 1'];
+    const params = [];
+
+    if (String(q ?? '').trim()) {
+      params.push(`%${String(q).trim()}%`);
+      const i = params.length;
+      where.push(`(i.cliente_factura ILIKE $${i} OR i.empresa ILIKE $${i} OR i.deal_name ILIKE $${i}
+                   OR i.servicio ILIKE $${i} OR i.numero_contrato ILIKE $${i}
+                   OR i.line_item_id = TRIM(BOTH '%' FROM $${i}) OR i.deal_id = TRIM(BOTH '%' FROM $${i}))`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(desde ?? ''))) {
+      params.push(desde); where.push(`b.created_at >= $${params.length}::date`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(hasta ?? ''))) {
+      params.push(hasta); where.push(`b.created_at < ($${params.length}::date + 1)`);
+    }
+    if (soloAplicados === 'true') {
+      where.push(`i.estado IN ('applied', 'reverted')`);
+    }
+
+    const { rows } = await pool.query(`
+      SELECT i.*, b.porcentaje, b.usuario, b.created_at, b.applied_at, b.reverted_at,
+             b.dry_run, b.mes_ajuste, b.estado AS batch_estado,
+             b.fuente_indice, b.valores_indice, b.periodo_indice, b.nota
+        FROM parametrica_items i
+        JOIN parametrica_batches b ON b.id = i.batch_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY b.created_at DESC, i.id DESC
+       LIMIT 2000
+    `, params);
+
+    res.json({ total: rows.length, items: rows });
+  } catch (err) {
+    logger.error({ module: MOD, fn: 'historial', err: err?.message }, 'Error leyendo el historial');
+    res.status(500).json({ error: err?.message || 'Error leyendo el historial' });
+  }
+});
+
+// ── GET /pendientes-nc ──────────────────────────────────────
+// Reversas que dejaron facturas ya emitidas con el precio ajustado. Revertir
+// devolvió el precio, pero esas facturas salieron mal y se corrigen con nota
+// de crédito — que es una decisión y una acción de administración, no del motor.
+router.get('/pendientes-nc', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT i.*, b.porcentaje, b.usuario, b.applied_at, b.reverted_at, b.mes_ajuste
+        FROM parametrica_items i
+        JOIN parametrica_batches b ON b.id = i.batch_id
+       WHERE i.estado = 'reverted' AND COALESCE(i.facturas_post_ajuste, 0) > 0
+       ORDER BY b.reverted_at DESC NULLS LAST, i.id DESC
+       LIMIT 500
+    `);
+    res.json({
+      total: rows.length,
+      facturas: rows.reduce((a, r) => a + Number(r.facturas_post_ajuste || 0), 0),
+      items: rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Error leyendo pendientes de NC' });
+  }
+});
+
+// ── Selecciones guardadas ───────────────────────────────────
+// El "prearmado": una lista de line items con nombre, para no rehacer a mano
+// una selección de 40 contratos si se recarga la pantalla o se retoma otro día.
+
+router.get('/selecciones', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, nombre, usuario, line_item_ids, created_at, updated_at,
+              COALESCE(array_length(line_item_ids, 1), 0) AS total
+         FROM parametrica_selecciones ORDER BY updated_at DESC LIMIT 100`
+    );
+    res.json({ selecciones: rows });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Error listando selecciones' });
+  }
+});
+
+router.post('/selecciones', async (req, res) => {
+  try {
+    const nombre = recorte(req.body?.nombre, 120);
+    if (!nombre) return res.status(400).json({ error: 'Ponele un nombre a la selección' });
+    const ids = parseSeleccion(req.body?.lineItemIds);
+    if (!ids) return res.status(400).json({ error: 'La selección está vacía' });
+
+    // Mismo nombre = se pisa, que es lo que espera quien va actualizando su lista.
+    const { rows: [sel] } = await pool.query(
+      `INSERT INTO parametrica_selecciones (nombre, usuario, line_item_ids)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (nombre) DO UPDATE
+         SET line_item_ids = EXCLUDED.line_item_ids,
+             usuario = EXCLUDED.usuario,
+             updated_at = NOW()
+       RETURNING *`,
+      [nombre, getUser(req), ids]
+    );
+    res.json({ seleccion: sel });
+  } catch (err) {
+    logger.error({ module: MOD, fn: 'selecciones', err: err?.message }, 'Error guardando la selección');
+    res.status(500).json({ error: err?.message || 'Error guardando la selección' });
+  }
+});
+
+router.delete('/selecciones/:id', async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const { rowCount } = await pool.query(`DELETE FROM parametrica_selecciones WHERE id = $1`, [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: 'Selección no encontrada' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Error borrando la selección' });
   }
 });
 

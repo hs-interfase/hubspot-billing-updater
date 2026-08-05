@@ -72,13 +72,42 @@ export async function initParametricaTables() {
     'li_retro_id         TEXT',
     'retro_estado        TEXT',
     'retro_error         TEXT',
+    // Facturas que ya salieron con el precio ajustado, contadas AL REVERTIR:
+    // revertir el precio no deshace una factura emitida, eso va por nota de
+    // crédito. Alimenta el listado de reversas con facturas emitidas.
+    'facturas_post_ajuste INTEGER',
   ]) {
     await pool.query(`ALTER TABLE parametrica_items ADD COLUMN IF NOT EXISTS ${col}`)
   }
 
-  // Mes del ajuste (YYYY-MM). Vacío = el ajuste rige desde hoy y no hay
-  // retroactivo, que es el comportamiento histórico.
-  await pool.query(`ALTER TABLE parametrica_batches ADD COLUMN IF NOT EXISTS mes_ajuste TEXT`)
+  for (const col of [
+    // Mes del ajuste (YYYY-MM). Vacío = rige desde hoy y no hay retroactivo,
+    // que es el comportamiento histórico.
+    'mes_ajuste     TEXT',
+    // Respaldo del cálculo: de dónde salió el porcentaje. El motor no calcula
+    // la fórmula (Pn = Po(0,86×IPC + 0,14×dólar)); se ingresa el % ya resuelto,
+    // así que esto es el papel de trabajo ante el cliente o una auditoría.
+    'fuente_indice  TEXT',
+    'valores_indice TEXT',
+    'periodo_indice TEXT',
+    'nota           TEXT',
+  ]) {
+    await pool.query(`ALTER TABLE parametrica_batches ADD COLUMN IF NOT EXISTS ${col}`)
+  }
+
+  // Selecciones guardadas: el "prearmado" de line items, para no perder una
+  // lista de 40 contratos si se recarga la pantalla o se retoma otro día.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS parametrica_selecciones (
+      id            SERIAL PRIMARY KEY,
+      nombre        TEXT NOT NULL,
+      usuario       TEXT NOT NULL DEFAULT 'admin',
+      line_item_ids TEXT[] NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (nombre)
+    )
+  `)
 
   logger.info({ module: 'parametrica/Db' }, 'Tablas parametrica_batches / parametrica_items listas.')
 }

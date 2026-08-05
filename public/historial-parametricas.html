@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Historial de ajustes por paramétrica</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0f1117; --surface:#1a1d27; --surface2:#22263a; --border:#2e3248;
+      --accent:#ff7a59; --accent-d:#cc5e40; --text:#e2e4ef; --muted:#7b7f9e;
+      --green:#3ecf8e; --red:#ff8f8f; --yellow:#ffd166; --radius:8px;
+    }
+    body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; font-size:14px; min-height:100vh; }
+
+    .topnav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 24px;
+      display:flex; align-items:center; position:sticky; top:0; z-index:100; height:48px; }
+    .topnav .brand { font-size:14px; font-weight:700; color:var(--accent); margin-right:24px;
+      text-decoration:none; display:flex; align-items:center; gap:8px; }
+    .topnav .brand .dot { width:8px; height:8px; border-radius:50%; background:var(--green); flex-shrink:0; }
+    .topnav a { color:var(--muted); text-decoration:none; font-size:13px; font-weight:600;
+      padding:14px; border-bottom:2px solid transparent; transition:color .2s, border-color .2s; }
+    .topnav a:hover { color:var(--text); }
+    .topnav a.active { color:var(--text); border-bottom-color:var(--accent); }
+    .topnav a.ext { margin-left:auto; opacity:.7; }
+
+    .content { padding:28px 24px; max-width:1600px; margin:0 auto; }
+    h2 { font-size:17px; margin-bottom:4px; }
+    .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+
+    .panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+      padding:16px 20px; display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px; }
+    .panel .panel-title { flex-basis:100%; font-size:11px; font-weight:700; text-transform:uppercase;
+      letter-spacing:.07em; color:var(--muted); margin-bottom:-4px; }
+    .filter-group { display:flex; flex-direction:column; gap:6px; }
+    .filter-group label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+    .filter-group input { background:var(--bg); border:1px solid var(--border); color:var(--text);
+      border-radius:6px; padding:8px 12px; font-size:13px; width:240px; }
+    .filter-group input.chico { width:150px; }
+    .filter-group input:focus { outline:none; border-color:var(--accent); }
+    .check-group { display:flex; align-items:center; gap:8px; padding-bottom:9px; color:var(--muted); font-size:13px; }
+    .check-group input { accent-color:var(--accent); cursor:pointer; }
+    .btn { padding:8px 18px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;
+      border:none; transition:background .2s, opacity .2s; }
+    .btn-primary { background:var(--accent); color:#fff; }
+    .btn-primary:hover:not(:disabled) { background:var(--accent-d); }
+    .btn-ghost { background:transparent; color:var(--muted); border:1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { color:var(--text); border-color:var(--muted); }
+    .btn-sm { padding:4px 12px; font-size:12px; }
+
+    .alert { border-radius:var(--radius); padding:12px 16px; margin-bottom:14px; font-size:13px; border:1px solid; }
+    .alert-warn { background:rgba(255,209,102,.08); border-color:rgba(255,209,102,.4); color:var(--yellow); }
+    .alert-err { background:rgba(255,143,143,.08); border-color:rgba(255,143,143,.4); color:var(--red); }
+
+    .stats { display:flex; align-items:center; gap:12px; margin-bottom:14px; color:var(--muted); font-size:13px; flex-wrap:wrap; }
+    .stats strong { color:var(--text); }
+    .stats .derecha { margin-left:auto; }
+
+    .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+      overflow-x:auto; margin-bottom:24px; }
+    table { width:100%; border-collapse:collapse; }
+    thead th { background:var(--surface2); padding:12px 14px; text-align:left; font-size:11px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.07em; color:var(--muted); border-bottom:1px solid var(--border); white-space:nowrap; }
+    tbody tr { border-bottom:1px solid var(--border); }
+    tbody tr:last-child { border-bottom:none; }
+    tbody tr:hover { background:var(--surface2); }
+    tbody td { padding:9px 14px; vertical-align:top; font-size:13px; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .val-empty { color:var(--muted); font-style:italic; }
+    .badge { display:inline-block; background:var(--surface2); border:1px solid var(--border);
+      padding:2px 9px; border-radius:20px; font-size:11px; font-weight:600; white-space:nowrap; }
+    .b-ok { color:var(--green); } .b-err { color:var(--red); } .b-warn { color:var(--yellow); }
+    .li-id { font-family:monospace; font-size:11px; color:var(--muted); }
+    .empty-state { text-align:center; padding:48px 24px; color:var(--muted); }
+    .loading { text-align:center; padding:40px; color:var(--muted); }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .spinner { display:inline-block; width:20px; height:20px; border:2px solid var(--border);
+      border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; margin-bottom:10px; }
+    @media (max-width:600px){ .topnav{ overflow-x:auto; } }
+  </style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/admin" class="brand"><span class="dot"></span> Interfase</a>
+  <a href="/admin">Panel</a>
+  <a href="/invoice-editor">Editor</a>
+  <a href="/audit-log">Registro HubSpot</a>
+  <a href="/parametrica">Paramétricas</a>
+  <a href="/historial-parametricas" class="active">Historial paramétricas</a>
+  <a href="/nodum">Nodum</a>
+  <a href="/guia" target="_blank" class="ext">📖 Guía ↗</a>
+</nav>
+
+<div class="content">
+  <h2>Historial de ajustes por paramétrica</h2>
+  <p class="sub">Todos los ajustes, línea por línea. En HubSpot cada line item guarda solamente el <strong>último</strong> ajuste; acá está la historia completa, con el respaldo del cálculo de cada lote.</p>
+
+  <div id="alerts"></div>
+
+  <!-- Pendientes de nota de crédito -->
+  <div id="nc-wrap"></div>
+
+  <div class="panel">
+    <div class="panel-title">🔍 Buscar</div>
+    <div class="filter-group">
+      <label>Cliente, negocio, contrato o ID</label>
+      <input type="text" id="f-q" placeholder="ej. ANTEL, C-1042, 57417530802" />
+    </div>
+    <div class="filter-group">
+      <label>Desde</label>
+      <input type="date" id="f-desde" class="chico" />
+    </div>
+    <div class="filter-group">
+      <label>Hasta</label>
+      <input type="date" id="f-hasta" class="chico" />
+    </div>
+    <div class="check-group">
+      <input type="checkbox" id="f-aplicados" checked />
+      <label for="f-aplicados" style="text-transform:none;letter-spacing:0;font-size:13px;">Sólo los que se aplicaron</label>
+    </div>
+    <button class="btn btn-primary" id="btn-buscar">Buscar</button>
+    <button class="btn btn-ghost" id="btn-limpiar">Limpiar</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Fecha</th><th>Lote</th><th>Cliente factura</th><th>N° contrato</th>
+          <th>Negocio</th><th>Descripción del producto</th><th>Moneda</th>
+          <th class="num">Antes</th><th class="num">Después</th><th class="num">%</th>
+          <th>Vigencia</th><th>Retroactivo</th><th>Estado</th><th>Respaldo</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="14"><div class="loading"><div class="spinner"></div><br>Cargando historial…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const API = '/parametrica/api'
+  let filas = []
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+  const fmt = (n) => n == null || n === '' ? '—' : Number(n).toLocaleString('es-UY', { minimumFractionDigits:2, maximumFractionDigits:2 })
+  const $ = (id) => document.getElementById(id)
+  const txt = (s) => esc(s) || '<span class="val-empty">—</span>'
+  const fecha = (d) => d ? new Date(d).toLocaleDateString('es-UY') : '—'
+
+  const setAlert = (html, cls) => { $('alerts').innerHTML = html ? `<div class="alert ${cls}">${html}</div>` : '' }
+
+  /** Reversas que dejaron facturas emitidas: eso se corrige con nota de crédito. */
+  async function cargarPendientesNc() {
+    try {
+      const res = await fetch(`${API}/pendientes-nc`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.total) { $('nc-wrap').innerHTML = ''; return }
+
+      $('nc-wrap').innerHTML = `
+        <div class="alert alert-warn">
+          ⚠ <strong>${json.total}</strong> line item(s) se revirtieron después de que ya habían salido
+          <strong>${json.facturas}</strong> factura(s) con el precio ajustado. Revertir devolvió el precio,
+          pero esas facturas salieron con el importe viejo del ajuste: se corrigen con <strong>nota de crédito</strong>.
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Revertido</th><th>Lote</th><th>Cliente factura</th><th>Negocio</th>
+              <th>Descripción del producto</th><th class="num">Precio ajustado</th>
+              <th class="num">Volvió a</th><th class="num">Facturas a corregir</th>
+            </tr></thead>
+            <tbody>${json.items.map(i => `
+              <tr>
+                <td>${fecha(i.reverted_at)}</td>
+                <td>${i.batch_id}</td>
+                <td>${txt(i.cliente_factura || i.empresa)}</td>
+                <td>${txt(i.deal_name)}<span class="li-id"> ${esc(i.deal_id ?? '')}</span></td>
+                <td>${txt(i.descripcion || i.servicio)}<br><span class="li-id">LI ${esc(i.line_item_id)}</span></td>
+                <td class="num">${fmt(i.price_nuevo)}</td>
+                <td class="num">${fmt(i.price_viejo)}</td>
+                <td class="num"><span class="badge b-err">${i.facturas_post_ajuste}</span></td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>`
+    } catch { $('nc-wrap').innerHTML = '' }
+  }
+
+  function celdaRespaldo(f) {
+    const partes = [
+      f.fuente_indice ? `<strong>${esc(f.fuente_indice)}</strong>` : '',
+      f.valores_indice ? esc(f.valores_indice) : '',
+      f.periodo_indice ? `período ${esc(f.periodo_indice)}` : '',
+      f.nota ? `<span class="li-id">${esc(f.nota)}</span>` : '',
+    ].filter(Boolean)
+    return partes.length ? partes.join('<br>') : '<span class="val-empty">sin respaldo</span>'
+  }
+
+  function celdaRetro(f) {
+    if (!f.mes_ajuste) return '<span class="val-empty">—</span>'
+    if (f.retro_estado === 'creado') {
+      return `<span class="badge b-ok">${fmt(f.importe_retro)}</span>` +
+        `<br><span class="li-id">${f.periodos_retro} pago(s) · LI ${esc(f.li_retro_id ?? '')}</span>`
+    }
+    if (f.retro_estado === 'archivado') return '<span class="badge">archivado</span>'
+    if (f.retro_estado === 'error') return `<span class="badge b-err">falló</span><br><span class="li-id">${esc(f.retro_error ?? '')}</span>`
+    if (f.retro_estado === 'dry_run') return '<span class="badge">dry-run</span>'
+    return `<span class="val-empty">${esc(f.retro_estado ?? 'no corresponde')}</span>`
+  }
+
+  async function buscar() {
+    $('tbody').innerHTML = `<tr><td colspan="14"><div class="loading"><div class="spinner"></div><br>Buscando…</div></td></tr>`
+    const p = new URLSearchParams()
+    if ($('f-q').value.trim()) p.set('q', $('f-q').value.trim())
+    if ($('f-desde').value) p.set('desde', $('f-desde').value)
+    if ($('f-hasta').value) p.set('hasta', $('f-hasta').value)
+    if ($('f-aplicados').checked) p.set('soloAplicados', 'true')
+
+    try {
+      const res = await fetch(`${API}/historial?${p}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      filas = json.items
+      render()
+    } catch (err) {
+      $('tbody').innerHTML = `<tr><td colspan="14"><div class="empty-state">${esc(err.message)}</div></td></tr>`
+    }
+  }
+
+  function render() {
+    $('stats').innerHTML = `<span><strong>${filas.length}</strong> ajuste(s)</span>` +
+      (filas.length >= 2000 ? '<span>· mostrando los 2000 más recientes</span>' : '') +
+      `<span class="derecha"><button class="btn btn-ghost btn-sm" id="btn-csv">⬇ CSV</button></span>`
+    $('btn-csv').addEventListener('click', descargarCsv)
+
+    if (!filas.length) {
+      $('tbody').innerHTML = `<tr><td colspan="14"><div class="empty-state">Ningún ajuste coincide con la búsqueda.</div></td></tr>`
+      return
+    }
+
+    $('tbody').innerHTML = filas.map(f => `
+      <tr>
+        <td>${fecha(f.applied_at || f.created_at)}</td>
+        <td>${f.batch_id}${f.dry_run ? '<br><span class="badge">dry-run</span>' : ''}</td>
+        <td>${txt(f.cliente_factura || f.empresa)}${f.codigo_empresa ? `<br><span class="li-id">${esc(f.codigo_empresa)}</span>` : ''}</td>
+        <td>${txt(f.numero_contrato)}</td>
+        <td>${txt(f.deal_name)}<span class="li-id"> ${esc(f.deal_id ?? '')}</span></td>
+        <td>${txt(f.descripcion || f.servicio)}<br><span class="li-id">LI ${esc(f.line_item_id)}</span></td>
+        <td>${txt(f.moneda)}</td>
+        <td class="num">${fmt(f.price_viejo)}</td>
+        <td class="num">${fmt(f.price_nuevo)}</td>
+        <td class="num">${esc(f.porcentaje)}%</td>
+        <td>${f.mes_ajuste ? esc(f.mes_ajuste) : '<span class="val-empty">desde el día del ajuste</span>'}</td>
+        <td>${celdaRetro(f)}</td>
+        <td><span class="badge ${f.estado === 'applied' ? 'b-ok' : f.estado === 'reverted' ? 'b-err' : String(f.estado).includes('failed') ? 'b-err' : ''}">${esc(f.estado)}</span>${f.error ? `<br><span class="li-id">${esc(f.error)}</span>` : ''}</td>
+        <td>${celdaRespaldo(f)}</td>
+      </tr>`).join('')
+  }
+
+  function descargarCsv() {
+    const escCsv = (s) => { s = String(s ?? ''); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s }
+    const cab = ['fecha', 'lote', 'usuario', 'entidad_facturadora', 'cliente_factura', 'codigo_empresa',
+      'numero_contrato', 'negocio', 'deal_id', 'line_item_id', 'descripcion_producto', 'area', 'producto',
+      'rubro', 'moneda', 'importe_viejo', 'importe_nuevo', 'porcentaje', 'vigente_desde',
+      'retro_pagos', 'retro_monto_unico', 'retro_line_item_id', 'retro_estado',
+      'facturas_post_ajuste', 'estado', 'error',
+      'respaldo_fuente', 'respaldo_valores', 'respaldo_periodo', 'respaldo_nota']
+    const lineas = [cab.join(';'), ...filas.map(f => [
+      f.applied_at || f.created_at, f.batch_id, f.usuario, f.entidad_facturadora, f.cliente_factura,
+      f.codigo_empresa, f.numero_contrato, f.deal_name, f.deal_id, f.line_item_id,
+      f.descripcion || f.servicio, f.area, f.producto, f.rubro, f.moneda,
+      f.price_viejo, f.price_nuevo, f.porcentaje, f.mes_ajuste,
+      f.periodos_retro, f.importe_retro, f.li_retro_id, f.retro_estado,
+      f.facturas_post_ajuste, f.estado, f.error,
+      f.fuente_indice, f.valores_indice, f.periodo_indice, f.nota,
+    ].map(escCsv).join(';'))]
+    const blob = new Blob(['﻿' + lineas.join('\r\n')], { type:'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'historial_parametricas.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  $('btn-buscar').addEventListener('click', buscar)
+  $('btn-limpiar').addEventListener('click', () => {
+    $('f-q').value = ''; $('f-desde').value = ''; $('f-hasta').value = ''
+    $('f-aplicados').checked = true
+    buscar()
+  })
+  $('f-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') buscar() })
+
+  cargarPendientesNc()
+  buscar()
+</script>
+</body>
+</html>
