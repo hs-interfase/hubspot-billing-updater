@@ -17,9 +17,26 @@
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { sendAlertTo } from '../../../lib/alertService.js';
+import { toYMDInBillingTZ, getTodayYMD } from '../../utils/dateUtils.js';
 import logger from '../../../lib/logger.js';
 
 const MOD = 'dealAlerts';
+
+// ── Acumulación por día de of_billing_error (5-ago-2026) ─────────────────────
+// ANTES: cada productor PISABA la propiedad. Como varios escriben sobre el mismo
+// ticket con segundos de diferencia (el aviso del espejo y, ~5 s después, el
+// aviso al responsable que dispara la copia al LI espejo), el primero se perdía
+// siempre — justo en el caso en que más hacía falta.
+//
+// AHORA: los avisos del MISMO DÍA se acumulan, el más nuevo arriba. Al primer
+// aviso de un día nuevo el bloque arranca limpio, así la propiedad no crece sin
+// techo y lo que se lee es "lo que pasó hoy con este ticket".
+//
+// El día se corta en BILLING_TZ (America/Montevideo), igual que el resto del
+// motor, aunque el timestamp de cada línea se siga escribiendo en UTC — que es
+// lo que ts() viene haciendo y lo que ya hay escrito en producción.
+const MAX_ENTRADAS_BILLING_ERROR = 20;
+
 
 // ── Llave global de estas alertas (usuaria 23-jul) ───────────────────────────
 // DEAL_ALERTS_ENABLED=false apaga la EMISIÓN de las tres alertas (props billing_error
@@ -130,17 +147,94 @@ async function writeDealBillingError(dealId, message) {
   }
 }
 
+// Una entrada arranca con el timestamp de ts(): "YYYY-MM-DD HH:MM:SS — ".
+const RE_ENTRADA = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) — /;
+
 /**
- * Escribe un mensaje en of_billing_error del ticket (con timestamp).
+ * Parte el valor acumulado en entradas. Una entrada puede ocupar varias líneas
+ * (los mensajes de hoy son de una sola, pero no hay por qué asumirlo): cada
+ * línea que arranca con timestamp abre una entrada nueva y el resto se le pega.
+ * Texto suelto anterior al primer timestamp se conserva como una entrada sin
+ * fecha — no se tira nada que hubiera escrito una persona a mano.
+ *
+ * @returns {Array<{ymd:string, texto:string}>} ymd en BILLING_TZ, '' si no parsea.
  */
-export async function writeTicketBillingError(ticketId, message) {
+export function parseEntradasBillingError(valor) {
+  const lineas = String(valor ?? '').split('\n');
+  const entradas = [];
+
+  for (const linea of lineas) {
+    const m = RE_ENTRADA.exec(linea);
+    if (m) {
+      // ts() escribe UTC sin sufijo; sin la 'Z' el motor de JS lo leería como
+      // hora local y el corte de día se movería.
+      entradas.push({ ymd: toYMDInBillingTZ(new Date(`${m[1]}T${m[2]}Z`)), texto: linea });
+    } else if (entradas.length) {
+      entradas[entradas.length - 1].texto += `\n${linea}`;
+    } else if (linea.trim()) {
+      entradas.push({ ymd: '', texto: linea });
+    }
+  }
+
+  return entradas;
+}
+
+/**
+ * Arma el nuevo valor de of_billing_error: la entrada nueva arriba, debajo las
+ * que ya eran de hoy. Las de días anteriores se descartan.
+ *
+ * Pura y testeable — es el corazón del cambio.
+ *
+ * @param {string} valorActual  lo que hay hoy en la propiedad
+ * @param {string} entradaNueva línea ya formateada ("ts — mensaje")
+ * @param {string} hoyYMD       día actual en BILLING_TZ
+ */
+export function acumularBillingError(valorActual, entradaNueva, hoyYMD, max = MAX_ENTRADAS_BILLING_ERROR) {
+  const deHoy = parseEntradasBillingError(valorActual)
+    .filter((e) => e.ymd === hoyYMD)
+    .map((e) => e.texto);
+
+  return [entradaNueva, ...deHoy].slice(0, max).join('\n');
+}
+
+/**
+ * Escribe un mensaje en of_billing_error del ticket (con timestamp),
+ * ACUMULÁNDOLO con los del mismo día en vez de pisarlos. Ver el bloque de
+ * arriba para el porqué.
+ *
+ * El valor siempre cambia (el timestamp es nuevo), así que el workflow de
+ * HubSpot que crea la tarea al responsable sigue disparando igual que antes.
+ *
+ * Si la lectura del valor previo falla, se escribe igual: perder el historial
+ * del día es mucho menos grave que perder el aviso.
+ */
+export async function writeTicketBillingError(ticketId, message, deps = {}) {
+  const {
+    getTicketFn = (id) => hubspotClient.crm.tickets.basicApi.getById(String(id), ['of_billing_error']),
+    updateTicketFn = (id, props) => hubspotClient.crm.tickets.basicApi.update(String(id), { properties: props }),
+    hoyYMD = getTodayYMD(),
+  } = deps;
+
+  const entradaNueva = `${ts()} — ${message}`;
+
+  let valorActual = '';
   try {
-    await hubspotClient.crm.tickets.basicApi.update(String(ticketId), {
-      properties: {
-        of_billing_error: `${ts()} — ${message}`,
-      },
-    });
-    logger.info({ module: MOD, fn: 'writeTicketBillingError', ticketId }, 'of_billing_error escrito en ticket');
+    const ticket = await getTicketFn(ticketId);
+    valorActual = ticket?.properties?.of_billing_error || '';
+  } catch (err) {
+    logger.warn(
+      { module: MOD, fn: 'writeTicketBillingError', ticketId, err: err?.message },
+      'No se pudo leer of_billing_error previo — se escribe solo el aviso nuevo'
+    );
+  }
+
+  try {
+    const acumulado = acumularBillingError(valorActual, entradaNueva, hoyYMD);
+    await updateTicketFn(ticketId, { of_billing_error: acumulado });
+    logger.info(
+      { module: MOD, fn: 'writeTicketBillingError', ticketId, entradas: acumulado.split('\n').length },
+      'of_billing_error escrito en ticket (acumulado del día)'
+    );
   } catch (err) {
     logger.error({ module: MOD, fn: 'writeTicketBillingError', ticketId, err: err?.message }, 'Error escribiendo of_billing_error en ticket');
   }
