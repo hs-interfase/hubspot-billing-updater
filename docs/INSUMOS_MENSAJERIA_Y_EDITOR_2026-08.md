@@ -38,8 +38,9 @@ commits de mensajería que estaban sólo en `main` (`9179829`, `dea241e`). ⇒ l
 
 ### Lo que queda abierto
 
-1. **`DEAL_ALERTS_ENABLED` en Railway production.** Si está en `false`, el correo del espejo no sale
-   igual. Sólo se confirma en el panel. **Es el último bloqueante del bloque 4.**
+1. ~~`DEAL_ALERTS_ENABLED` en Railway production~~ ✅ **confirmado en `true` el 6-ago.** Con esto y el
+   fix del §4.3, **el bloque 4 quedó desbloqueado**: el aviso al espejo sobrevive en la propiedad y
+   el correo sale.
 2. **Crear `condicion_de_pago`** (`scripts/tools/crearCondicionDePago.mjs`) y **suscribir**
    `line_item.propertyChange / condicion_de_pago`.
 3. **Los 4 horarios se mudaron de mensaje** — ver §1.1.
@@ -334,10 +335,11 @@ espejo, no una lista de vigilancia.) Es una **funcionalidad nueva**, no una lín
 
 ### 4.3 🔴 Los dos bloqueantes del correo a María
 
-1. 🔴 **SIGUE ABIERTO — el correo del espejo NO sale.** `DEAL_ALERTS_ENABLED` apaga también el mail
-   del mirror (`src/services/notifications/mirrorAlert.js`), dejando el `billing_error` intacto. El
-   destino es `MIRROR_ALERT_TO_EMAIL`, con fallback al `ALERT_TO_EMAIL` general de
-   `lib/alertService.js`. **Sólo se confirma en el panel de Railway, no se puede leer del repo.**
+1. ✅ **RESUELTO el 6-ago — `DEAL_ALERTS_ENABLED` está en `true` en production** (confirmado en el
+   panel; no se puede leer del repo). Esa llave apagaba también el mail del mirror
+   (`src/services/notifications/mirrorAlert.js`). El destino es `MIRROR_ALERT_TO_EMAIL`, con fallback
+   al `ALERT_TO_EMAIL` general de `lib/alertService.js` — **conviene verificar a quién apunta**, si no
+   los avisos del espejo caen en el buzón operativo general en vez de en el de María.
 2. ✅ **RESUELTO el 6-ago (`45b4719`, `pruebas`) — el aviso ya no dura 5 segundos.**
    `writeTicketBillingError` **acumula** los avisos del mismo día en vez de pisarlos: el más nuevo
    arriba, y al primer aviso de un día nuevo el bloque arranca limpio (tope 20 entradas). El arreglo
@@ -353,8 +355,9 @@ espejo, no una lista de vigilancia.) Es una **funcionalidad nueva**, no una lín
    - El valor **siempre** cambia (timestamp nuevo) ⇒ el workflow de HubSpot que crea la tarea sigue
      disparando igual. Hay un test que lo fija.
 
-⇒ Ya no es cierto que "del aviso no queda nada": la propiedad ahora sobrevive. **Falta sólo el
-punto 1** para que a María le llegue el correo.
+⇒ Ya no es cierto que "del aviso no queda nada". Con los dos puntos cerrados, **el aviso al espejo
+sobrevive en la propiedad y el correo sale**. Lo que queda es verificar en la práctica que a María le
+llegue, y a qué dirección.
 
 3. Bug menor ya diagnosticado: `buildTextoAvisoEspejo` (`src/services/notifications/mirrorTicketAlert.js:134`)
    tiene la rama «ya notificado, no se tocó» pero `mirrorLiPuntualSync` nunca le pasa `cruzoFrontera`
@@ -484,15 +487,17 @@ Lo tachado ya está hecho.
 2. ~~Arreglar el pisado del `of_billing_error`~~ ✅ acumula por día (`45b4719`).
 3. ~~Sumar los huecos de Victoria al builder~~ ✅ superado por las dos listas del 5-ago (`c6fc843`).
 4. ~~Mover el disparo al momento de la emisión~~ ✅ en `main`; cooldown eliminado.
+5. ~~`DEAL_ALERTS_ENABLED=true` en production~~ ✅ 6-ago. **El bloque 4 quedó desbloqueado.**
 
 **Lo que sigue, en orden:**
 
-1. **Confirmar `DEAL_ALERTS_ENABLED=true` en Railway production.** Último bloqueante del bloque 4:
-   sin eso el correo del espejo no sale aunque la propiedad ahora sobreviva.
-2. **Crear `condicion_de_pago`** con el script y suscribir el webhook del LI.
-3. **Replicar los servicios de cron de mansoft** para los 4 horarios (§1.1).
-4. **Merge `pruebas` → `main`.** La diferencia es unidireccional (§0). ⚠️ Las llaves
+1. **Crear `condicion_de_pago`** con el script y **suscribir** `line_item.propertyChange /
+   condicion_de_pago`. *(lo hace la usuaria)*
+2. **Replicar los servicios de cron de mansoft** para los 4 horarios (§1.1). *(lo hace la usuaria)*
+3. **Merge `pruebas` → `main`.** La diferencia es unidireccional (§0). ⚠️ Las llaves
    `MIRROR_PUNTUAL_ENABLED` y `DEAL_PROP_SYNC_ENABLED` siguen en **OFF**: el merge no las prende.
+4. **Probar de punta a punta que a María le llega el correo del espejo**, ahora que la llave está
+   prendida — y a qué dirección cae (§4.3).
 5. **Lado TICKET del pedido de María** (§4.2) — funcionalidad nueva, decidir si se construye.
 6. **Editor**: correcciones + reescribir `INTEGRACION.md` con el mapa real de §5.2.
 
