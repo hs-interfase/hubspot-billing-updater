@@ -210,8 +210,9 @@ function buildHeader(firstLi, dealName, dealMeta = {}) {
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
     buildRowAlways('Entidad facturadora', entidadFacturadora),
     buildRow('Nombre del negocio',   dealName || '-'),
-    buildRow('Cliente',              empresaPrincipal),
-    buildRowAlways('Empresa que factura', clienteFinal),
+    buildRow('Empresa Principal',    empresaPrincipal),
+    buildRowAlways('Cliente Factura', clienteFinal),
+    // Fuera de la lista, se dejan porque ya se venían mandando.
     buildRow('Persona que factura',  personaFactura),
     buildRow('Fecha del aviso',      fmtFecha(hoy)),
     // El link al negocio se movió AL FINAL del mensaje (4-ago-2026): va después
@@ -299,37 +300,47 @@ function buildLineItemBaseRows(li) {
   const rubro = val(lp.servicio);
 
   return [
-    buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),
-
-    // Catálogo: producto → área → unidad de negocio → rubro (4-ago-2026).
-    buildRow('Producto',                  val(lp.name)),
-    buildRow('Área',                      val(lp.area)),
-    buildRow('Unidad de negocio',         val(lp.unidad_de_negocio)),
+    // ── El ORDEN de acá abajo es el de la lista del 5-ago-2026 ───────────────
+    // (campos 5 a 21: los 4 primeros son del negocio y salen en el encabezado).
+    // ⚠️ Igual que en el mensaje manual, la lista pone CANTIDAD antes que
+    // PRECIO UNITARIO — al revés de lo pedido el 4-ago. Manda la lista nueva.
+    buildRow('Fecha de inicio de facturación', fmtFecha(fechaInicioFact)),
+    buildRow('Fecha de inicio de contrato',    fmtFecha(inicioContrato)),
+    buildRow('Fecha de fin de contrato',       fmtFecha(vigenciaContrato)),
+    buildRow('Momento de facturación',    val(lp.momento_de_facturacion)),
+    // Ahora sale SIEMPRE: la lista lo pide como dato necesario del alta.
+    buildRowAlways('Descripción del ticket', val(lp.content)),
     buildRow('Rubro',                     rubro),
     // La nota sólo tiene sentido cuando el rubro es "Otro": ahí va el detalle.
+    // No está en la lista, pero se queda pegada al rubro, que es donde sirve.
     rubroEsOtro(rubro) ? buildRow('Nota', val(lp.nota)) : '',
-
-    buildRow('Descripción del producto',  val(lp.description)),
-
-    // Precio ANTES que cantidad (4-ago-2026).
-    buildRow('Precio unitario',           fmtNum(lp.price)),
-    buildRow('Cantidad',                  fmtNum(lp.quantity)),
-    buildRow('Descuento (%)',             fmtNum(lp.hs_discount_percentage)),
-    // Ex-"Subtotal" — renombrado por pedido de la usuaria.
-    buildRow('Monto total en moneda original', subtotal),
-    buildRow('Total',                     total),
-    buildRow('Impuestos',                 resolveTaxLabel(lp.hs_tax_rate_group_id)),
-    buildRow('IRAE',                      fmtIrae(lp.exonera_irae)),
-    buildRow('TRADING',                   fmtBoolSiNo(lp.opera_trading)),
+    buildRow('Área',                      val(lp.area)),
     buildRow('Moneda',                    val(lp.of_moneda)),
+    buildRow('Cantidad',                  fmtNum(lp.quantity)),
+    buildRow('Precio unitario',           fmtNum(lp.price)),
+    // `amount` es el neto (precio×cantidad MENOS descuento) y hs_post_tax_amount
+    // es el mismo importe con impuestos — nativa de HubSpot, así no hay que
+    // inventar la tasa de cada país.
+    buildRow('Monto total',               total),
+    buildRow('IVA',                       resolveTaxLabel(lp.hs_tax_rate_group_id)),
+    buildRow('Monto total con impuestos', fmtNum(lp.hs_post_tax_amount)),
+    buildRow('IRAE',                      fmtIrae(lp.exonera_irae)),
+    buildRow('Opera Trading',             fmtBoolSiNo(lp.opera_trading)),
+    buildRow('Condición de Pago',         val(lp.condicion_de_pago)),
+
+    // ── Fuera de la lista: se dejan porque ya se venían mandando ─────────────
+    buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),
+    buildRow('Producto',                  val(lp.name)),
+    buildRow('Unidad de negocio',         val(lp.unidad_de_negocio)),
+    buildRow('Descripción del producto',  val(lp.description)),
+    // Precio×cantidad ANTES del descuento: por eso no es el «Monto total».
+    buildRow('Monto sin descuento',       subtotal),
+
+    buildRow('Descuento (%)',             fmtNum(lp.hs_discount_percentage)),
 
     // El cronograma queda SÓLO acá, en las automáticas: la facturación manual
     // se quedó con una única fecha (4-ago-2026).
     buildRow('Frecuencia',                frecuencia),
-    buildRow('Momento de facturación',    val(lp.momento_de_facturacion)),
-    buildRow('Inicio de contrato',        fmtFecha(inicioContrato)),
-    buildRow('Vigencia de contrato',      fmtFecha(vigenciaContrato)),
-    buildRow('Inicio de facturación',     fmtFecha(fechaInicioFact)),
     buildRow('Fecha ancla',               fmtFecha(anclaLabel)),
     buildRow('Próxima facturación',       fmtFecha(lp.billing_next_date)),
     buildRow('Tipo',                      tipoLabel),
@@ -337,10 +348,7 @@ function buildLineItemBaseRows(li) {
     buildRow('Pagos emitidos',            pagosEmitidos),
     buildRow('Pagos restantes',           pagosRestantes),
 
-    // En las automáticas estos dos NO van, salvo que excepcionalmente traigan
-    // contenido — ahí sí importan (4-ago-2026).
-    buildRowSiTiene('Descripción del ticket', val(lp.content)),
-    buildRowSiTiene('Observaciones',          val(lp.observaciones)),
+    buildRowSiTiene('Observaciones',      val(lp.observaciones)),
 
     // El progreso de pagos cierra el bloque (4-ago-2026).
     buildRowAlways('Progreso de pagos',   progresoPagos),

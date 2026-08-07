@@ -64,6 +64,8 @@ const TICKET_PROPS = [
   'fecha_inicio_de_facturacion', 'of_inicio_del_contrato', 'of_fin_del_contrato',
   // Correcciones del 4-ago: catálogo (producto/área/rubro+nota) y las dos descripciones.
   'of_producto', 'area', 'nota', 'content',
+  // Lista del 5-ago: condición de pago (#17).
+  'condicion_de_pago',
 ];
 
 // ────────────────────────────────────────────────────────────

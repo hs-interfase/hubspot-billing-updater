@@ -84,6 +84,7 @@ export const LI_PROP_TO_TICKET_KEYS = {
   opera_trading: ['opera_trading'],
   nc: ['nc'],
   facturacion_automatica: ['facturacion_automatica'],
+  condicion_de_pago: ['condicion_de_pago'],
   // Fechas
   hs_recurring_billing_start_date: ['fecha_inicio_de_facturacion'],
   fecha_inicio_de_facturacion: ['fecha_inicio_de_facturacion'],
@@ -100,6 +101,7 @@ const LI_PROPS_TO_FETCH = [
   'name', 'description', 'servicio', 'subrubro', 'area', 'of_codigo_rubro',
   'momento_de_facturacion', 'nota', 'pais_operativo',
   'parte_del_cupo', 'reventa', 'opera_trading', 'nc', 'empresa_que_factura',
+  'condicion_de_pago',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion', 'facturacion_automatica',
   'hs_recurring_billing_number_of_payments',
 ];

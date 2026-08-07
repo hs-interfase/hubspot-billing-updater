@@ -218,23 +218,19 @@ function buildHeader(firstTicket, dealName, dealMeta = {}) {
     ? `${clienteFacturaNombre}${clienteFacturaId ? ` (ID: ${clienteFacturaId})` : ''}`
     : null;
 
-  // Moneda del deal (tomada del primer ticket, todos deben ser iguales)
-  const moneda = val(tp.of_moneda);
-
-  // Fecha solicitud de facturación = fecha de resolución esperada del ticket
-  const fechaSolicitud = fmtFecha(tp.fecha_resolucion_esperada);
-
+  // ── Encabezado = los 4 campos de NEGOCIO de la lista (5-ago-2026) ──────────
+  // La moneda y la fecha esperada se fueron al bloque del ítem: son de cada
+  // ticket, no del negocio. Tomarlas del primero mentía cuando un negocio tenía
+  // varios tickets con distinta fecha.
   const rows = [
     `<div style="${STYLES.container}">`,
     `<div style="${STYLES.header}">📋 Solicitud de Facturación — ${fmtFecha(hoy)}</div>`,
 
     `<div style="${STYLES.sectionTitle}">🔹 Datos del negocio</div>`,
-    buildRowAlways('Entidad facturadora',   entidadFacturadora),
-    buildRow('Nombre del Negocio',          dealName || '-'),
-    buildRow('Cliente',                     clienteFinalLabel),
-    buildRowAlways('Empresa que factura',   clienteFacturaLabel),
-    buildRow('Fecha solicitud facturación', fechaSolicitud),
-    buildRow('Moneda',                      moneda),
+    buildRowAlways('Entidad facturadora', entidadFacturadora),
+    buildRow('Nombre del negocio',        dealName || '-'),
+    buildRow('Empresa Principal',         clienteFinalLabel),
+    buildRowAlways('Cliente Factura',     clienteFacturaLabel),
 
     `<hr style="${STYLES.separator}">`,
     `<div style="${STYLES.sectionTitle}">🔹 Detalle de productos</div>`,
@@ -270,32 +266,35 @@ function buildLineItemDiv(ticket, portalId = null) {
     }${
       urgente ? ` — <span style="${STYLES.urgentBadge}">⚡ FACTURACIÓN URGENTE</span>` : ''
     }</div>`,
-    // Catálogo: producto → área → unidad de negocio → rubro (4-ago-2026).
-    buildRow('Producto',                  val(tp.of_producto) || val(tp.of_producto_nombres)),
-    buildRow('Área',                      val(tp.area)),
-    buildRow('Unidad de Negocio',         val(tp.unidad_de_negocio)),
+    // ── El ORDEN de acá abajo es el de la lista del 5-ago-2026 ───────────────
+    // (campos 5 a 18: los 4 primeros son del negocio y salen en el encabezado).
+    // ⚠️ Ese orden pone CANTIDAD antes que PRECIO UNITARIO, o sea al revés de
+    // lo que se había pedido el 4-ago. Manda la lista nueva.
+    buildRow('Fecha de facturación esperada', fmtFecha(tp.fecha_resolucion_esperada)),
+    buildRow('Descripción del ticket',    val(tp.content)),
     buildRow('Rubro',                     val(tp.of_rubro)),
     // La nota sólo tiene sentido cuando el rubro es "Otro": ahí va el detalle.
+    // No está en la lista, pero se queda pegada al rubro, que es donde sirve.
     rubroEsOtro(tp.of_rubro) ? buildRow('Nota', val(tp.nota)) : '',
-
-    buildRow('Descripción del producto',  val(tp.of_descripcion_producto)),
-    buildRow('Descripción del ticket',    val(tp.content)),
-
-    // Precio ANTES que cantidad (4-ago-2026).
-    buildRow('Precio unitario (sin IVA)', fmtNum(tp.monto_unitario_real)),
+    buildRow('Área',                      val(tp.area)),
+    buildRow('Moneda',                    val(tp.of_moneda)),
     buildRow('Cantidad',                  fmtNum(tp.cantidad_real)),
-    // Ex-"Subtotal" — renombrado por pedido de la usuaria.
-    buildRow('Monto total en moneda original', fmtNum(tp.subtotal_real)),
+    buildRow('Precio unitario',           fmtNum(tp.monto_unitario_real)),
+    // subtotal_real NO lleva IVA; total_real_a_facturar SÍ (calculada en HubSpot).
+    buildRow('Monto total',               fmtNum(tp.subtotal_real)),
     buildRow('IVA',                       fmtBoolSiNo(tp.of_iva)),
-    buildRow('Monto Total a facturar',    fmtNum(tp.total_real_a_facturar)),
+    buildRow('Monto total con impuestos', fmtNum(tp.total_real_a_facturar)),
     buildRow('IRAE',                      fmtIrae(tp.exonera_irae)),
-    buildRow('TRADING',                   fmtBoolSiNo(tp.opera_trading)),
-
-    // En la facturación MANUAL queda UNA sola fecha (4-ago-2026). Frecuencia,
-    // momento de facturación e inicio/fin de contrato viven en el aviso de
-    // facturación AUTOMÁTICA (buildMensajeMantsoft), donde sí hacen falta.
-    buildRow('Fecha de facturación',      fmtFecha(tp.fecha_inicio_de_facturacion)),
+    buildRow('Opera Trading',             fmtBoolSiNo(tp.opera_trading)),
+    buildRow('Condición de Pago',         val(tp.condicion_de_pago)),
     buildRow('Observaciones',             val(tp.observaciones)),
+
+    // ── Fuera de la lista: se dejan porque ya se venían mandando ─────────────
+    buildRow('Producto',                  val(tp.of_producto) || val(tp.of_producto_nombres)),
+    buildRow('Unidad de Negocio',         val(tp.unidad_de_negocio)),
+    buildRow('Descripción del producto',  val(tp.of_descripcion_producto)),
+    // Distinta de la esperada de arriba: ésta es el inicio de facturación del LI.
+    buildRow('Fecha de inicio de facturación', fmtFecha(tp.fecha_inicio_de_facturacion)),
     buildRow('Ticket',                    ticketLink),
     `</div>`,
   ];

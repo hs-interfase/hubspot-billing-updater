@@ -314,6 +314,9 @@ const repetitivo = !!rawFreq && ![
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
     opera_trading: parseBool(lp.opera_trading),
+    // Condición de pago: select del line item → select homónimo del ticket
+    // (mismas opciones). Pedido del 5-ago: va en los DOS mensajes.
+    condicion_de_pago: safeString(lp.condicion_de_pago),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     nc: parseBool(lp.nc), // NC: se setea a mano en el LI y se propaga al ticket (solo registro)
     repetitivo,
