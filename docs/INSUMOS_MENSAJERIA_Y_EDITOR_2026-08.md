@@ -1,7 +1,7 @@
 # Insumos para el bloque de Mensajería + Editor de facturas
 
-**Armado el 3/4-ago-2026.** Recopila los pedidos de Victoria y María (correos), el estado real
-del código y los huecos, para las cuatro cosas que se van a atacar:
+**Armado el 3/4-ago-2026. Actualizado el 6-ago-2026.** Recopila los pedidos de Victoria y María
+(correos), el estado real del código y los huecos, para las cuatro cosas que se van a atacar:
 
 1. Mensajes de facturación y mensajes de Mantsoft — formato que quiere Victoria.
 2. Sacar los crons de mensajes y disparar el aviso al emitir «Facturar ahora» desde el ticket.
@@ -13,14 +13,57 @@ del código y los huecos, para las cuatro cosas que se van a atacar:
 
 ---
 
+## 0. ESTADO AL 6-AGO-2026 — leer esto primero
+
+Las secciones 2 y 3 quedaron **superadas** por la lista nueva del 5-ago (ver §2.bis). El resto del
+documento sigue vigente salvo donde diga lo contrario.
+
+### Dónde vive cada cosa
+
+`pruebas` es **superconjunto de `main`**: el 6-ago se cherry-pickearon a `pruebas` los dos únicos
+commits de mensajería que estaban sólo en `main` (`9179829`, `dea241e`). ⇒ la diferencia es
+**unidireccional** y el merge a `main` va en un solo sentido. **No cherry-pickear de `main` a
+`pruebas` nunca más sin volver a chequear esto.**
+
+| Tema | Estado |
+|---|---|
+| Cron de facturación apagado + cooldown eliminado | ✅ **en `main`** (PROD) |
+| Disparo puntual desde «Facturar ahora» | ✅ **en `main`** — `urgentBillingService.js:1256` |
+| Latencia del índice de HubSpot | ✅ **en `main`** |
+| Las 3 fechas de contrato en `TICKET_PROPS` | ✅ **en `main`** |
+| Empresa Principal ≠ Empresa Factura | ✅ **en `main`** — el builder ya las distingue |
+| Avisos del espejo, lado LINE ITEM (7 props) | ✅ sólo en `pruebas` (`b96f9ec`) |
+| `of_billing_error` acumula por día | ✅ sólo en `pruebas` (`45b4719`) — ver §4.3 |
+| Las dos listas del 5-ago en los mensajes | ✅ sólo en `pruebas` (`c6fc843`) — ver §2.bis |
+
+### Lo que queda abierto
+
+1. **`DEAL_ALERTS_ENABLED` en Railway production.** Si está en `false`, el correo del espejo no sale
+   igual. Sólo se confirma en el panel. **Es el último bloqueante del bloque 4.**
+2. **Crear `condicion_de_pago`** (`scripts/tools/crearCondicionDePago.mjs`) y **suscribir**
+   `line_item.propertyChange / condicion_de_pago`.
+3. **Los 4 horarios se mudaron de mensaje** — ver §1.1.
+4. **«Ajusta Precio»** (#21 de la lista mansoft): no existe la prop y **no está en el PDF**. Lo más
+   cercano es `tipo_de_parametrica`, sin confirmar.
+5. **Lado TICKET del pedido de María**: sigue sin existir (§4.2).
+6. **`INTEGRACION.md` del editor**: sigue con fecha 28-feb (§5.3).
+
+---
+
 ## 1. Cómo funciona HOY la mensajería (verificado en código)
 
 ### 1.1 Los dos crons
 
+> 🔴 **6-ago: LOS HORARIOS SE MUDARON DE MENSAJE.** Es lo más fácil de pasar por alto de todo esto.
+> Los cuatro horarios eran del mensaje **manual** y se los sacamos el 4-ago al pasarlo a «Facturar
+> ahora». La lista del 5-ago pide **7:00 / 11:00 / 14:00 / 16:30 para los AUTOMÁTICOS**, que hoy
+> corren **una sola vez a las 07:10**. ⇒ hay que **replicar los servicios de Railway del cron de
+> mansoft** para que haya uno por horario. El manual ya quedó como lo piden: disparo al click.
+
 | Cron | Archivo | Horario (America/Montevideo) | Qué hace |
 |---|---|---|---|
-| Mensaje de facturación | `src/jobs/cronMensajeFacturacion.js` | **08:10, 11:10, 14:10, 17:10** | Tickets en stage READY del pipeline manual con `ticket_emitio_aviso_a_admin ≠ true` → agrupa por `of_deal_id` → escribe `mensaje_de_facturacion` en el **negocio** → marca cada ticket con `ticket_emitio_aviso_a_admin = true` |
-| Mensaje Mantsoft | `src/jobs/cronMensajeMantsoft.js` | **07:10** (una hora antes, a propósito) | Line items con `mansoft_pendiente = true` **y** `facturacion_automatica = true` → agrupa por deal → escribe `mensaje_mansoft` en el negocio → guarda `mansoft_ultimo_snapshot`, resetea `mansoft_pendiente=false` y `mansoft_tipo_aviso=''` |
+| Mensaje de facturación | `src/jobs/cronMensajeFacturacion.js` | ~~08:10, 11:10, 14:10, 17:10~~ → **YA NO ES CRON** (4-ago): se dispara al pedir «Facturar ahora» | Tickets en stage READY del pipeline manual con `ticket_emitio_aviso_a_admin ≠ true` → agrupa por `of_deal_id` → escribe `mensaje_de_facturacion` en el **negocio** → marca cada ticket con `ticket_emitio_aviso_a_admin = true` |
+| Mensaje Mantsoft | `src/jobs/cronMensajeMantsoft.js` | hoy **07:10** · **pedido: 7:00 / 11:00 / 14:00 / 16:30** ⇒ faltan 3 servicios | Line items con `mansoft_pendiente = true` **y** `facturacion_automatica = true` → agrupa por deal → escribe `mensaje_mansoft` en el negocio → guarda `mansoft_ultimo_snapshot`, resetea `mansoft_pendiente=false` y `mansoft_tipo_aviso=''` |
 
 Constructores del HTML:
 - `src/services/billing/buildMensajeFacturacion.js`
@@ -60,7 +103,61 @@ es principalmente:
 
 ---
 
-## 2. Lo que pidió VICTORIA — las 22 propiedades del correo
+## 2.bis 🆕 LA LISTA VIGENTE (5-ago-2026) — reemplaza a las 22 de §2
+
+Llegaron **dos listas separadas**, una por mensaje. Confirmado: los dos mensajes muestran cosas
+distintas a propósito. Implementado en `c6fc843` (`pruebas`).
+
+**Regla que se aplicó:** se respeta el orden de la lista; lo que no está pero ya se mandaba **se deja**,
+agrupado al final del bloque del ítem. Los campos 1-4 son del negocio (encabezado) y del 5 en adelante
+son del ítem — la estructura que ya existía calzaba con el orden pedido.
+
+### Automáticos / Mansoft — 21 campos, aviso de ALTA (más baja y modificación de contrato)
+
+Entidad Facturadora · Nombre del negocio · Empresa Principal · Cliente Factura · Fecha inicio de
+facturación · Fecha inicio de contrato · Fecha fin de contrato · Momento de Facturación ·
+Descripción del ticket · Rubro · Área · Moneda · Cantidad · Precio unitario · Monto total · IVA ·
+Monto total con impuestos · IRAE · Opera Trading · Condición de Pago · **Ajusta Precio** ❌
+
+### Manual — 18 campos, se dispara al click en «Facturar Ahora»
+
+Entidad facturadora · Nombre del negocio · Empresa Principal · Cliente Factura · **Fecha de
+facturación esperada** · Descripción del ticket · Rubro · Área · Moneda · Cantidad · Precio
+unitario · Monto total · IVA · Monto total con impuestos · IRAE · Opera Trading · Condición de
+Pago · Observaciones
+
+### Definiciones que costó cerrar
+
+| Campo | De dónde sale |
+|---|---|
+| «Fecha de facturación esperada» (manual) | `fecha_resolucion_esperada` **del ticket** — NO `fecha_inicio_de_facturacion` |
+| «Monto total» | sin impuestos. Ticket: `subtotal_real`. LI: `amount` (ya con descuento) |
+| «Monto total con impuestos» | Ticket: `total_real_a_facturar` (calculada en HubSpot, **SÍ lleva IVA**). LI: **`hs_post_tax_amount`**, nativa de HubSpot ⇒ no hay que inventar la tasa de cada país |
+| Las etiquetas | **no tienen que ser textuales**, alcanza con que se parezcan |
+
+🔴 **La lista pone CANTIDAD antes que PRECIO UNITARIO**, o sea al revés de lo pedido el 4-ago. Se
+respetó la lista nueva en los dos mensajes. Si fue un descuido de ella, se da vuelta en dos líneas.
+
+### `condicion_de_pago` — select NUEVO, hay que crearlo
+
+Las 6 opciones salen del PDF **«Definición Vistas v2»** (`~/Downloads`), sección *Condiciones de
+facturación*:
+
+> **Contado · 8 días de fecha factura · 30 días de fecha factura · 45 días de fecha factura ·
+> 60 días de fecha factura · 90 días de fecha factura**
+
+Vive en **line item y ticket** (aparece en las dos secciones del PDF) y viaja del LI al ticket por el
+snapshot, igual que `opera_trading`. Script: **`scripts/tools/crearCondicionDePago.mjs`** (idempotente,
+tiene `--dry`). Después hay que **suscribir `line_item.propertyChange / condicion_de_pago`**, si no
+editarla en el LI no la baja al ticket.
+
+> 💡 El PDF no se deja leer con `pdftoppm` (no está instalado) ni extrayendo los streams a mano — usa
+> fuentes subset con CMap. Lo que sí funciona: **`pdftotext -layout -enc UTF-8`**, que está en
+> `/mingw64/bin`.
+
+---
+
+## 2. ~~Lo que pidió VICTORIA — las 22 propiedades del correo~~ (superada por §2.bis)
 
 **Fuente:** correo *"Listado de propiedades por mail"*, Victoria Caimi → Michelle, **1-jul-2026 15:54 UTC**.
 Encabezado textual: *"PARA MANTSOFT — Listado mas completo que abarca facturación directa y repetitiva.
@@ -237,15 +334,27 @@ espejo, no una lista de vigilancia.) Es una **funcionalidad nueva**, no una lín
 
 ### 4.3 🔴 Los dos bloqueantes del correo a María
 
-1. **El correo del espejo NO sale.** `DEAL_ALERTS_ENABLED` apaga también el mail del mirror
-   (`src/services/notifications/mirrorAlert.js`), dejando el `billing_error` intacto. El destino es
-   `MIRROR_ALERT_TO_EMAIL`, con fallback al `ALERT_TO_EMAIL` general de `lib/alertService.js`.
-2. **El aviso en la propiedad dura ~5 segundos.** `writeTicketBillingError` **reemplaza**
-   `of_billing_error`; la copia al LI espejo dispara un webhook por el LI espejo cuyo `li_prop_sync`
-   escribe ahí el aviso al responsable y lo tapa.
+1. 🔴 **SIGUE ABIERTO — el correo del espejo NO sale.** `DEAL_ALERTS_ENABLED` apaga también el mail
+   del mirror (`src/services/notifications/mirrorAlert.js`), dejando el `billing_error` intacto. El
+   destino es `MIRROR_ALERT_TO_EMAIL`, con fallback al `ALERT_TO_EMAIL` general de
+   `lib/alertService.js`. **Sólo se confirma en el panel de Railway, no se puede leer del repo.**
+2. ✅ **RESUELTO el 6-ago (`45b4719`, `pruebas`) — el aviso ya no dura 5 segundos.**
+   `writeTicketBillingError` **acumula** los avisos del mismo día en vez de pisarlos: el más nuevo
+   arriba, y al primer aviso de un día nuevo el bloque arranca limpio (tope 20 entradas). El arreglo
+   va en esa función porque es el punto único por donde pasan **todos** los productores: aviso del
+   espejo, aviso al responsable por sync de LI, cancelar y revertir.
 
-Juntos: **del aviso al espejo no queda nada** — ni prop ni correo. Esto es lo primero a resolver del
-punto 4, y es prerrequisito para que María reciba algo.
+   Detalles que importan si se toca:
+   - El día se corta en **BILLING_TZ**, no en UTC. Cada línea sigue con timestamp UTC (que es lo que
+     `ts()` ya escribe y lo que hay en PROD), así que un aviso de las 22:00 de Montevideo se guarda
+     como `01:00` del día siguiente: cortar por UTC arrancaría bloque nuevo todas las tardes.
+   - 🔴 **`ts()` escribe UTC SIN sufijo.** Al re-parsear hay que reponer la `Z` o JS lo lee como hora
+     local y el corte de día se corre 3 horas.
+   - El valor **siempre** cambia (timestamp nuevo) ⇒ el workflow de HubSpot que crea la tarea sigue
+     disparando igual. Hay un test que lo fija.
+
+⇒ Ya no es cierto que "del aviso no queda nada": la propiedad ahora sobrevive. **Falta sólo el
+punto 1** para que a María le llegue el correo.
 
 3. Bug menor ya diagnosticado: `buildTextoAvisoEspejo` (`src/services/notifications/mirrorTicketAlert.js:134`)
    tiene la rama «ya notificado, no se tocó» pero `mirrorLiPuntualSync` nunca le pasa `cruzoFrontera`
@@ -367,21 +476,32 @@ otra. Cualquier corrección sobre ese campo tiene que respetar esa semántica.
 
 ---
 
-## 7. Orden de ataque sugerido
+## 7. Orden de ataque — actualizado 6-ago
 
-1. **Desbloquear el correo del mirror** (4.3): sin eso, nada de lo del punto 4 se ve. Decidir
-   `DEAL_ALERTS_ENABLED` y arreglar el pisado del `of_billing_error`.
-2. **Cerrar la lista de props sensibles del mirror** contra lo que María pidió (4.2): son 4 huecos.
-3. **Sumar los 3 huecos de Victoria** al builder (2): `Condición de Pago` + las tres fechas de contrato
-   en el ticket, y confirmar Empresa Principal vs Empresa Factura.
-4. **Mover el disparo al momento de la emisión** (1.3): el hook ya existe; lo que hay que resolver es
-   el cooldown, el título «Ediciones de hoy» y quién manda el mail.
-5. **Editor**: hacer las correcciones y reescribir `INTEGRACION.md` con el mapa real de 5.2.
+Lo tachado ya está hecho.
 
-### Preguntas abiertas que conviene resolver con ellas antes de codear
+1. ~~Cerrar la lista de props sensibles del mirror~~ ✅ lado LINE ITEM completo (`b96f9ec`).
+2. ~~Arreglar el pisado del `of_billing_error`~~ ✅ acumula por día (`45b4719`).
+3. ~~Sumar los huecos de Victoria al builder~~ ✅ superado por las dos listas del 5-ago (`c6fc843`).
+4. ~~Mover el disparo al momento de la emisión~~ ✅ en `main`; cooldown eliminado.
 
-- **Victoria:** ¿de qué campo sale *Condición de Pago*? ¿Y confirma *Empresa Principal* = cliente del
-  negocio, distinto de *Empresa Factura*?
-- **Victoria:** al pasar al aviso en el momento, ¿qué reemplaza a *«Ediciones de hoy (N)»*?
-- **María:** ¿ampliamos los avisos a fecha de facturación esperada, campo UY, fecha de resolución
-  esperada y estado del ticket, o quedan sólo costo/precio/cantidad?
+**Lo que sigue, en orden:**
+
+1. **Confirmar `DEAL_ALERTS_ENABLED=true` en Railway production.** Último bloqueante del bloque 4:
+   sin eso el correo del espejo no sale aunque la propiedad ahora sobreviva.
+2. **Crear `condicion_de_pago`** con el script y suscribir el webhook del LI.
+3. **Replicar los servicios de cron de mansoft** para los 4 horarios (§1.1).
+4. **Merge `pruebas` → `main`.** La diferencia es unidireccional (§0). ⚠️ Las llaves
+   `MIRROR_PUNTUAL_ENABLED` y `DEAL_PROP_SYNC_ENABLED` siguen en **OFF**: el merge no las prende.
+5. **Lado TICKET del pedido de María** (§4.2) — funcionalidad nueva, decidir si se construye.
+6. **Editor**: correcciones + reescribir `INTEGRACION.md` con el mapa real de §5.2.
+
+### Preguntas todavía abiertas
+
+- **Victoria:** al pasar al aviso en el momento, ¿qué reemplaza a *«Ediciones de hoy (N)»*? Sigue
+  tal cual en `buildMensajeMantsoft.js`, y del lado manual ya no hay tanda diaria que lo justifique.
+- **Victoria/María:** ¿qué es **«Ajusta Precio»**? No existe la prop ni está en el PDF; lo más
+  cercano es `tipo_de_parametrica`.
+- **María:** ¿ampliamos los avisos al lado TICKET (fecha de resolución esperada y estado), o queda
+  el recorte y se le explica?
+- **Quién manda el mail** de facturación: hoy sigue siendo el workflow `1808680730` (§1.2).
