@@ -23,6 +23,7 @@
 import { isAutoRenew } from './mode.js';
 import { buildPagoDisplay } from './syncBillingState.js';
 import { INVOICED_STAGES, DERIVED_STAGES } from '../../config/constants.js';
+import { hasTicketCrossedFrontier, contarConsumidos } from '../../utils/ticketFrontera.js';
 import { alertFechasCompletas, alertDerivacionCompleta } from '../notifications/dealAlerts.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import logger from '../../../lib/logger.js';
@@ -76,24 +77,108 @@ export function computeContadores(props, counts) {
 }
 
 /**
- * Trae todos los tickets del LIK y cuenta INVOICED y DERIVED en UNA búsqueda.
+ * PURE: cuenta las dos BASES sobre el mismo conjunto de tickets.
+ *
+ * ── Por qué hay dos ────────────────────────────────────────────────────────
+ * BASE VIEJA (por ETAPA): `invoiced` = tickets en INVOICED_STAGES. Es la que
+ * se escribe hoy en `facturas_restantes`. Se desincroniza si alguien arrastra
+ * una tarjeta a mano, porque la etapa es editable.
+ *
+ * BASE NUEVA (por DATO): `consumidas` = tickets que cruzaron la frontera de la
+ * notificación (`contarConsumidos`, la definición única de ticketFrontera), y
+ * de esas, `emitidas` = las que tienen ID de factura de Nodum. La diferencia,
+ * `notificadasPendientes`, son las que se avisaron y todavía no se facturaron.
+ * El ID de Nodum es el único dato que no se puede desincronizar a mano, y ya
+ * resuelve solo el caso cancelar/revertir: la cancelación definitiva conserva
+ * `of_invoice_id` (período cerrado) y la reversión lo borra (se re-abre).
+ *
+ * 🔴 Las dos bases NO coinciden y es esperable: una cuota se CONSUME al
+ * notificarse (decisión del 31-jul) pero se cuenta como facturada recién al
+ * emitirse. Por eso `consumidas >= invoiced` casi siempre.
+ *
+ * 🔴 Y por eso la base nueva TODAVÍA NO se escribe: `facturas_restantes === 0`
+ * sella `fechas_completas`, que saca la línea de las fases P/2/3 — y phase2/3
+ * son las que EMITEN. Sellar por la base nueva adelantaría el sello al momento
+ * de la notificación y una última cuota notificada-sin-facturar se quedaría sin
+ * factura. Primero se mide la divergencia sobre datos reales (ver el log
+ * `contadores_divergencia`), después se decide.
+ *
+ * @param {Array} tickets  tickets con forma de HubSpot ({properties:{…}})
+ */
+export function contarBases(tickets = []) {
+  let invoiced = 0;
+  let derived = 0;
+  let emitidas = 0;
+
+  for (const t of tickets) {
+    const stage = String(t?.properties?.hs_pipeline_stage || '');
+    if (INVOICED_STAGES.has(stage)) invoiced++;
+    if (DERIVED_STAGES.has(stage)) derived++;
+
+    // emitidas ⊆ consumidas por construcción: se exige lo mismo que
+    // contarConsumidos (frontera + of_ticket_key) y además el ID de Nodum.
+    if (!hasTicketCrossedFrontier(t)) continue;
+    if (!String(t?.properties?.of_ticket_key || '').trim()) continue;
+    if (String(t?.properties?.of_invoice_id || '').trim()) emitidas++;
+  }
+
+  const consumidas = contarConsumidos(tickets);
+
+  return {
+    total: tickets.length,
+    invoiced,
+    derived,
+    consumidas,
+    emitidas,
+    notificadasPendientes: Math.max(0, consumidas - emitidas),
+  };
+}
+
+/**
+ * PURE: compara lo que se escribe (base por ETAPA) contra lo que daría la base
+ * por DATO. Devuelve null cuando coinciden o cuando la comparación no aplica
+ * (auto-renew y sin-total no tienen plan contra el cual restar).
+ *
+ * `sellariaAntes` es el dato que decide si se puede cambiar el criterio: marca
+ * las líneas donde la base nueva daría 0 y la vieja no — es decir, donde el
+ * sello de `fechas_completas` se adelantaría y la línea saldría de las fases
+ * que emiten. Si en producción esto da 0 casos, el cambio es seguro.
+ *
+ * @param {{mode:string, total?:number, restantes:string}} want
+ * @param {{invoiced:number, consumidas:number, emitidas:number, notificadasPendientes:number}} counts
+ */
+export function medirDivergencia(want, counts) {
+  if (want.mode !== 'PLAN_FIJO') return null;
+  if (!Number.isFinite(counts?.consumidas)) return null;
+
+  const restantesPorEtapa = Number(want.restantes);
+  const restantesPorDato = Math.max(0, want.total - counts.consumidas);
+  if (restantesPorEtapa === restantesPorDato) return null;
+
+  return {
+    total: want.total,
+    restantesPorEtapa,
+    restantesPorDato,
+    emitidas: counts.emitidas,
+    notificadasPendientes: counts.notificadasPendientes,
+    sellariaAntes: restantesPorDato === 0 && restantesPorEtapa > 0,
+  };
+}
+
+/**
+ * Trae todos los tickets del LIK y cuenta las dos bases en UNA búsqueda.
  * Mismo filtro/límite que los writers de producción (limit 100, sin paginar).
+ *
+ * Las props extra (`hs_pipeline`, `of_invoice_id`, `of_ticket_key`) no cuestan
+ * una llamada más: viajan en la misma búsqueda.
  */
 async function countTicketsForLIK({ hubspotClient, lik }) {
   const resp = await hubspotClient.crm.tickets.searchApi.doSearch({
     filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: lik }] }],
-    properties: ['hs_pipeline_stage'],
+    properties: ['hs_pipeline_stage', 'hs_pipeline', 'of_invoice_id', 'of_ticket_key'],
     limit: 100,
   });
-  const tickets = resp?.results ?? [];
-  let invoiced = 0;
-  let derived = 0;
-  for (const t of tickets) {
-    const stage = String(t.properties?.hs_pipeline_stage || '');
-    if (INVOICED_STAGES.has(stage)) invoiced++;
-    if (DERIVED_STAGES.has(stage)) derived++;
-  }
-  return { total: tickets.length, invoiced, derived };
+  return contarBases(resp?.results ?? []);
 }
 
 /**
@@ -150,6 +235,18 @@ export async function recalcContadores({
 
   const counts = await countTicketsFn({ hubspotClient, lik });
   const want = computeContadores(props, counts);
+
+  // ── MEDICIÓN (no escribe nada): base vieja vs base nueva ──
+  // Sirve para dimensionar el desfase sobre datos reales antes de cambiar el
+  // criterio. Sólo se loguea cuando difieren, así no hace ruido.
+  // Grepear por `contadores_divergencia` para contar los casos.
+  const medicion = medirDivergencia(want, counts);
+  if (medicion) {
+    logger.info(
+      { module: MOD, lineItemId: id, lik, dealId, ...medicion },
+      'contadores_divergencia: la base por DATO no coincide con la base por ETAPA'
+    );
+  }
 
   // ── Diff de contadores cosméticos ──
   const update = {};
