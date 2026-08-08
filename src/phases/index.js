@@ -37,7 +37,9 @@ export async function runPhasesForDealLocked({ deal, lineItems }, ownerLabel = '
   const token = await acquireDealLock(dealId, ownerLabel);
   if (!token) return { skipped: true, reason: 'deal_locked' };
   try {
-    return await runPhasesForDeal({ deal, lineItems });
+    // ownerLabel identifica el entry point y decide si la corrida reconcilia
+    // TODO en Phase R (ver FULL_RECONCILE_SOURCES).
+    return await runPhasesForDeal({ deal, lineItems, source: ownerLabel });
   } finally {
     await releaseDealLock(dealId, token);
   }
@@ -156,19 +158,41 @@ function filterActiveLineItems(lineItems) {
  * contadores incluso en líneas excluidas de P/2/3. Un error en una línea se
  * loguea y NO bloquea el resto.
  *
+ * ── EL FRENO (PHASE_R_SKIP_SEALED) ─────────────────────────────────────────
+ * Cada línea cuesta 2 llamadas a HubSpot (getById + búsqueda de tickets por
+ * LIK) en CADA corrida, también las que ya terminaron su ciclo. Con miles de
+ * líneas selladas eso domina el costo de la pasada y no descubre nada nuevo.
+ *
+ * Con la llave prendida, las líneas con `fechas_completas=true` se saltean en
+ * el camino caliente y se reconcilian solo en las corridas FULL. El
+ * des-sellado (una línea sellada que volvió a tener cuotas pendientes) sigue
+ * garantizado por tres vías:
+ *   1. los writers event-driven (recalcFacturasRestantes) — inmediato;
+ *   2. «Actualizar» sobre la línea — a pedido, es corrida FULL;
+ *   3. cronWeekendFull — barrido semanal, es corrida FULL.
+ * Por eso el freno NO puede volver a ser el latch de una sola vía que mataba
+ * líneas: lo que se saltea es la RE-VERIFICACIÓN rutinaria, no la corrección.
+ *
+ * Llave apagada (default) ⇒ comportamiento idéntico al de hoy.
+ *
  * recalcContadores es inyectable para testear la orquestación sin API.
  *
- * @returns {Promise<{processed:number, skipped:number, errors:number}>}
+ * @param {boolean} [fullReconcile] - true ⇒ ignora el freno y revisa TODO.
+ * @returns {Promise<{processed:number, skipped:number, sealedSkipped:number, errors:number}>}
  */
 export async function runPhaseR({
   dealId,
   lineItems,
   hubspotClient: client = hubspotClient,
   recalcContadoresFn = recalcContadores,
+  fullReconcile = false,
 }) {
   let processed = 0;
   let skipped = 0;
+  let sealedSkipped = 0;
   let errors = 0;
+
+  const frenoActivo = parseBool(process.env.PHASE_R_SKIP_SEALED) && !fullReconcile;
 
   for (const li of Array.isArray(lineItems) ? lineItems : []) {
     const lp = li?.properties || {};
@@ -177,6 +201,12 @@ export async function runPhaseR({
 
     if (!liId || !lik) {
       skipped++;
+      continue;
+    }
+
+    // El freno: línea con el ciclo cerrado ⇒ no se re-verifica en caliente.
+    if (frenoActivo && String(lp.fechas_completas || '').trim().toLowerCase() === 'true') {
+      sealedSkipped++;
       continue;
     }
 
@@ -192,10 +222,27 @@ export async function runPhaseR({
     }
   }
 
-  return { processed, skipped, errors };
+  if (sealedSkipped > 0) {
+    logger.debug(
+      { module: 'phases/index', fn: 'runPhaseR', dealId, processed, sealedSkipped },
+      'Phase R: líneas selladas salteadas por el freno (se reconcilian en la corrida FULL)'
+    );
+  }
+
+  return { processed, skipped, sealedSkipped, errors };
 }
 
-export async function runPhasesForDeal({ deal, lineItems }) {
+/**
+ * Entry points cuya corrida reconcilia TODO, freno incluido.
+ *
+ * `cronWeekendFull` es la red de seguridad periódica: garantiza que ninguna
+ * línea sellada quede sin re-verificar más de una semana. `runBilling` y
+ * `actualizar` son a pedido y por deal (costo despreciable), y son la salida
+ * de emergencia cuando un contador se ve mal: dale Actualizar y se recalcula.
+ */
+const FULL_RECONCILE_SOURCES = new Set(['cronWeekendFull', 'runBilling', 'actualizar']);
+
+export async function runPhasesForDeal({ deal, lineItems, source = null }) {
   const dealId = String(deal?.id || deal?.properties?.hs_object_id);
 
   // Buffer de escrituras de line items para todo el deal (batch con flag
@@ -566,7 +613,12 @@ export async function runPhasesForDeal({ deal, lineItems }) {
     // Railway cuando se confirme — sin redeploy ni merge.
     if (parseBool(process.env.PHASE_R_ENABLED)) {
       try {
-        results.phaseR = await runPhaseR({ dealId, lineItems: currentLineItems, hubspotClient });
+        results.phaseR = await runPhaseR({
+          dealId,
+          lineItems: currentLineItems,
+          hubspotClient,
+          fullReconcile: FULL_RECONCILE_SOURCES.has(String(source || '')),
+        });
         logger.info(
           { module: 'phases/index', fn: 'runPhasesForDeal', dealId, ...results.phaseR },
           'Phase R completada (contadores recalculados)'

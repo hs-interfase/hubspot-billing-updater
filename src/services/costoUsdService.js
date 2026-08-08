@@ -26,6 +26,8 @@ import { hubspotClient } from '../hubspotClient.js';
 import { parseBool, parseNumber } from '../utils/parsers.js';
 import { BILLING_ACTIVE_DEAL_STAGES } from '../config/constants.js';
 import { getDolar } from './fxService.js';
+import { TC_USD_PROP, resolveTcUsd } from './fx/tcUsdService.js';
+import { getTodayYMD } from '../utils/dateUtils.js';
 import logger from '../../lib/logger.js';
 
 export function costoUsdEnabled() {
@@ -87,6 +89,30 @@ export async function ensureDealDolar(deal) {
       '[COSTO_USD] sin cotización a pesos — tc_pesos queda como estaba');
   }
 
+  // `tc_usd` (8-ago-2026) — la que se ve en vistas e informes.
+  //
+  // LA REGLA: vale LO MISMO que `dolar`, salvo cuando la moneda del negocio es USD;
+  // ahí `dolar` vale 1 (lo necesitan los cálculos) y `tc_usd` muestra la cotización
+  // real: BCU si el país operativo es Uruguay, BCP si es Paraguay.
+  //
+  // 🔴 NO toca `dolar` ni ninguna de las 6 propiedades calculadas que cuelgan de
+  // ella (Monto en USD, Margen en USD, Monto Total en USD, Facturación (USD),
+  // Monto USD con impuestos). Esta es sólo de presentación.
+  {
+    const dolarParaTc = properties.dolar != null ? Number(properties.dolar) : actual;
+    const tc = await resolveTcUsd({
+      dolar: dolarParaTc,
+      currency: cur,
+      paisOperativo: dp.pais_operativo,
+      ymd: getTodayYMD(),
+    }).catch((err) => {
+      logger.warn({ module: 'costoUsdService', fn: 'ensureDealDolar', dealId: deal?.id, err: err?.message },
+        '[COSTO_USD] no pude resolver tc_usd — queda como estaba');
+      return null;
+    });
+    if (tc?.rate > 0) properties[TC_USD_PROP] = String(tc.rate);
+  }
+
   if (!Object.keys(properties).length) {
     return { dolar: actual > 0 ? actual : null, updated: false };
   }
@@ -112,6 +138,11 @@ export async function syncCostoUsdLineItems({ dealId, deal, lineItems, writeBuff
 
   const { dolar: dealDolar, updated: dolarCambio } = await ensureDealDolar(deal);
 
+  // El line item TOMA el `tc_usd` DE SU NEGOCIO (decisión usuaria 8-ago): no lo
+  // recalcula, lo copia — así el número es idéntico en el negocio, sus líneas y
+  // sus tickets, que es todo el punto de esta propiedad.
+  const dealTcUsd = parseNumber(deal?.properties?.[TC_USD_PROP], 0);
+
   let updated = 0;
   for (const li of lineItems) {
     const lp = li.properties || {};
@@ -123,6 +154,13 @@ export async function syncCostoUsdLineItems({ dealId, deal, lineItems, writeBuff
     if (dealDolar > 0 && (dolarCambio || !(liDolar > 0)) && difiere(liDolar, dealDolar)) {
       updates.dolar = String(dealDolar);
       liDolar = dealDolar;
+    }
+
+    // tc_usd del LI: mismo criterio que `dolar` (completar si falta, re-copiar si
+    // el del deal cambió). Es de presentación: no entra en ningún cálculo.
+    const liTcUsd = parseNumber(lp[TC_USD_PROP], 0);
+    if (dealTcUsd > 0 && (dolarCambio || !(liTcUsd > 0)) && difiere(liTcUsd, dealTcUsd)) {
+      updates[TC_USD_PROP] = String(dealTcUsd);
     }
 
     // Definición 2026-07-07: cogs se deriva para TODOS los LIs, incluidos los espejados

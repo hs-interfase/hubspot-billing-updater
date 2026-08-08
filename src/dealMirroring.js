@@ -12,7 +12,7 @@
 import { hubspotClient, getDealWithLineItems } from './hubspotClient.js';
 import { upsertUyLineItem } from './services/mirrorLineItemsUyUpsert.js';
 import logger from '../lib/logger.js';
-import { PROMOTED_STAGES, ASSOC_LABEL_EMPRESA_FACTURA, ASSOC_LABEL_EMPRESA_PARTNER } from './config/constants.js';
+import { PROMOTED_STAGES, ASSOC_LABEL_EMPRESA_FACTURA, ASSOC_LABEL_EMPRESA_PARTNER, ASSOC_LABEL_DEAL_MIRROR } from './config/constants.js';
 import { reportHubSpotError } from './utils/hubspotErrorCollector.js';
 
 
@@ -874,6 +874,32 @@ const MIRROR_INDEPENDENT_STAGES_CREATE = new Set([
         objectId: sourceDealId,
         message: `Mirror ${targetDealId} creado pero no se guardó deal_uy_mirror_id en el PY (${sourceDealId}). Riesgo de mirror duplicado al re-procesar — asociar el id a mano antes de la próxima pasada.`,
       });
+    }
+  }
+
+  // 3b') Asociar ORIGINAL ←→ ESPEJO con la etiqueta "Negocio Espejo (Mirror)".
+  // Va FUERA del bloque de creación a propósito: así también repara los espejos que
+  // ya existían antes de que la etiqueta se creara (2026-08-06). El PUT es idempotente
+  // y HubSpot crea sola la inversa "Negocio Original" del lado del espejo.
+  // Si falla, NO se aborta: es una etiqueta de visualización, no afecta la facturación.
+  if (ASSOC_LABEL_DEAL_MIRROR && targetDealId) {
+    try {
+      await hubspotClient.crm.associations.v4.basicApi.create(
+        'deals',
+        String(sourceDealId),
+        'deals',
+        String(targetDealId),
+        [{ associationCategory: 'USER_DEFINED', associationTypeId: ASSOC_LABEL_DEAL_MIRROR }]
+      );
+      logger.info(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId, typeId: ASSOC_LABEL_DEAL_MIRROR },
+        'Original asociado al espejo con etiqueta Negocio Espejo (Mirror)'
+      );
+    } catch (err) {
+      logger.warn(
+        { module: 'dealMirroring', fn: 'mirrorDealToUruguay', dealId: sourceDealId, mirrorDealId: targetDealId, err },
+        'No se pudo asociar el original con su espejo (etiqueta de vista, no bloquea)'
+      );
     }
   }
 

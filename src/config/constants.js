@@ -87,6 +87,12 @@ export const ASSOC_LABEL_EMPRESA_PARTNER = parseInt(process.env.ASSOC_LABEL_EMPR
 export const ASSOC_TICKET_LABEL_EMPRESA_FACTURA = parseInt(process.env.ASSOC_TICKET_LABEL_EMPRESA_FACTURA || '0', 10);
 export const ASSOC_TICKET_LABEL_PARTNER = parseInt(process.env.ASSOC_TICKET_LABEL_PARTNER || '0', 10);
 
+// Etiqueta deal→deal "Negocio Espejo (Mirror)" (par USER_DEFINED creado 2026-08-06).
+// Se aplica SIEMPRE desde el negocio ORIGINAL hacia el ESPEJO; HubSpot crea sola la
+// inversa "Negocio Original". typeId por portal: PROD=15 (la inversa es la 16).
+// Default 0 = deshabilitado (el espejo se crea igual, pero sin asociarse al original).
+export const ASSOC_LABEL_DEAL_MIRROR = parseInt(process.env.ASSOC_LABEL_DEAL_MIRROR || '0', 10);
+
 
 export const DEAL_STAGE_LOST = process.env.DEAL_STAGE_LOST || 'closedlost';
 

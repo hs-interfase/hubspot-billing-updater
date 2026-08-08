@@ -466,7 +466,14 @@ async function executeJob(job) {
       }
 
       const dealWithLineItems = await getDealWithLineItems(resolvedDealId);
-      const billingResult = await runPhasesForDealLocked(dealWithLineItems, 'webhook_queue');
+      // «Actualizar» a mano sobre la línea = corrida FULL: ignora el freno de
+      // Phase R y re-verifica también las líneas selladas. Es la salida de
+      // emergencia cuando un contador se ve mal (ver FULL_RECONCILE_SOURCES).
+      const ownerLabel =
+        property_name === 'actualizar' && object_type === 'line_item'
+          ? 'actualizar'
+          : 'webhook_queue';
+      const billingResult = await runPhasesForDealLocked(dealWithLineItems, ownerLabel);
       logger.info(
         {
           module: MODULE, fn: 'executeJob', jobId: job.id,

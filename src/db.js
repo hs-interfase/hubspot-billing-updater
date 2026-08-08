@@ -387,4 +387,104 @@ export async function acquireRateToken() {
   }
 }
 
+// ─── Tabla tickets_auto_renew_archivo ───────────────────────────────────────
+// Archivo anual de los tickets auto-renew (cronPrimeroDeEnero, paso 1).
+//
+// Los line items auto-renew (sin tope de cuotas) no terminan nunca, así que sus
+// tickets crecen para siempre. Cada 1 de enero se baja acá el año Y-2 completo.
+//
+// 🔴 ESTO ES UNA COPIA, NO UN MOVIMIENTO. El cron NO borra en HubSpot (decisión
+//    usuaria 6-ago-2026): guarda el ticket entero en `payload` y la usuaria borra
+//    a mano después de verificar. `payload` es lo que hace reversible ese borrado
+//    — sin él la copia no serviría para restaurar nada.
+
+export async function initTicketsAutoRenewArchivoTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tickets_auto_renew_archivo (
+      ticket_id           TEXT         PRIMARY KEY,
+      anio                INTEGER      NOT NULL,
+      deal_id             TEXT,
+      line_item_key       TEXT,
+      ticket_key          TEXT,
+      subject             TEXT,
+      fecha_resolucion    DATE,
+      pipeline_stage      TEXT,
+      payload             JSONB        NOT NULL,
+      borrado_en_hubspot  BOOLEAN      NOT NULL DEFAULT false,
+      archivado_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+    )
+  `)
+  // El cron consulta siempre "cuántos del año X" y "los de este deal".
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tk_auto_renew_arch_anio
+      ON tickets_auto_renew_archivo (anio)
+  `)
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tk_auto_renew_arch_deal
+      ON tickets_auto_renew_archivo (deal_id)
+  `)
+  logger.info('[DB] Tabla tickets_auto_renew_archivo lista.')
+}
+
+/**
+ * Guarda un ticket auto-renew en el archivo. Idempotente: re-correr el cron sobre
+ * el mismo año re-escribe la fila en vez de fallar por PK duplicada — pero
+ * `borrado_en_hubspot` NO se pisa, para no perder la marca de lo ya borrado.
+ *
+ * @param {{id: string|number, properties?: Object}} ticket  el ticket tal como lo
+ *        devuelve la Search API de HubSpot (se guarda entero en `payload`).
+ * @param {{anio: number}} opts  año que se está archivando (Y-2).
+ */
+export async function archivarTicketAutoRenew(ticket, { anio } = {}) {
+  const p = ticket?.properties || {}
+  const fecha = /^\d{4}-\d{2}-\d{2}/.test(String(p.fecha_resolucion_esperada || ''))
+    ? String(p.fecha_resolucion_esperada).slice(0, 10)
+    : null
+
+  await pool.query(
+    `INSERT INTO tickets_auto_renew_archivo
+       (ticket_id, anio, deal_id, line_item_key, ticket_key, subject,
+        fecha_resolucion, pipeline_stage, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (ticket_id) DO UPDATE
+       SET anio             = EXCLUDED.anio,
+           deal_id          = EXCLUDED.deal_id,
+           line_item_key    = EXCLUDED.line_item_key,
+           ticket_key       = EXCLUDED.ticket_key,
+           subject          = EXCLUDED.subject,
+           fecha_resolucion = EXCLUDED.fecha_resolucion,
+           pipeline_stage   = EXCLUDED.pipeline_stage,
+           payload          = EXCLUDED.payload,
+           archivado_at     = now()`,
+    [
+      String(ticket.id),
+      Number(anio),
+      p.of_deal_id ? String(p.of_deal_id) : null,
+      p.of_line_item_key ? String(p.of_line_item_key) : null,
+      p.of_ticket_key ? String(p.of_ticket_key) : null,
+      p.subject ? String(p.subject) : null,
+      fecha,
+      p.hs_pipeline_stage ? String(p.hs_pipeline_stage) : null,
+      JSON.stringify(ticket),
+    ]
+  )
+}
+
+/**
+ * Cuántos tickets hay archivados de un año. Lo usa el cron para el resumen — que
+ * es lo que la usuaria mira antes de borrar en HubSpot.
+ * @returns {Promise<{anio:number, archivados:number, borrados:number}>}
+ */
+export async function contarArchivadosDelAnio(anio) {
+  const res = await pool.query(
+    `SELECT count(*)::int AS archivados,
+            count(*) FILTER (WHERE borrado_en_hubspot)::int AS borrados
+       FROM tickets_auto_renew_archivo
+      WHERE anio = $1`,
+    [Number(anio)]
+  )
+  const row = res.rows[0] || {}
+  return { anio: Number(anio), archivados: row.archivados || 0, borrados: row.borrados || 0 }
+}
+
 export default pool

@@ -259,6 +259,15 @@ export function extractLineItemSnapshots(lineItem, deal) {
   const dealDolar = parseNumber(deal?.properties?.dolar, 0);
   const dolarTicket = liDolar > 0 ? liDolar : (dealDolar > 0 ? dealDolar : null);
 
+  // `tc_usd` del ticket (8-ago-2026): SÓLO PARA MOSTRAR en vistas e informes.
+  // Se sella igual que el dólar (línea → negocio), pero NO alimenta ningún cálculo:
+  // of_costo_usd/of_margen_usd siguen colgando de `dolar`, que es el divisor.
+  // Coincide con `dolar` salvo en negocios cuya moneda es USD, donde `dolar` vale 1
+  // y esta trae la cotización real (BCU/BCP según país operativo).
+  const liTcUsd = parseNumber(lp.tc_usd, 0);
+  const dealTcUsd = parseNumber(deal?.properties?.tc_usd, 0);
+  const tcUsdTicket = liTcUsd > 0 ? liTcUsd : (dealTcUsd > 0 ? dealTcUsd : null);
+
   // Calcular monto total (price × quantity, ya viene calculado en amount)
   const montoTotal = parseNumber(lp.amount, precioUnitario * cantidad);
 
@@ -309,6 +318,7 @@ const repetitivo = !!rawFreq && ![
     // (calc) lo referencia, así una corrección manual del costo reajusta el margen sola.
     of_costo_usd: parseNumber(lp.costo_total_usd, null),
     dolar: dolarTicket, // TC sellado del ticket (LI.dolar → deal.dolar); alimenta la conversión USD de facturación/margen
+    tc_usd: tcUsdTicket, // TC VISIBLE (LI.tc_usd → deal.tc_usd); sólo para vistas/informes, NO entra en cálculos
 
     of_iva: ivaValue,
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',

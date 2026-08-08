@@ -304,6 +304,9 @@ export async function getDealWithLineItems(dealId) {
     // --- costo/margen USD (COSTO_USD_ENABLED) ---
     "dolar",
     "dolar_cierre_asignado",
+    // TC visible (8-ago-2026). Sin traerla acá llegaría siempre undefined y el
+    // motor la re-escribiría en cada corrida creyendo que falta.
+    "tc_usd",
 
   ];
 
@@ -328,6 +331,7 @@ export async function getDealWithLineItems(dealId) {
     "hs_cost_of_goods_sold",
     "costo_total_usd",
     "dolar",
+    "tc_usd",
     "quantity",
     "amount",
     "discount",

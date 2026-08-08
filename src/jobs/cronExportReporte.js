@@ -240,9 +240,11 @@ const DEAL_PROPS = [
   'pais_operativo', 'unidad_de_negocio', 'pipeline',
   'facturacion_activa', 'closedate', 'hs_deal_stage_probability',
   'deal_py_origen_id', 'deal_uy_mirror_id', 'es_mirror_de_py',
-  'dolar', 'tc_pesos', 'tipo_de_venta',
+  'dolar', 'tc_pesos',
   // condiciones_de_pago NO va acá: en el DEAL nunca existió (se pedía y HubSpot la
   // ignoraba en silencio → columna siempre vacía). Vive en el LINE ITEM (creada 23-jul).
+  // tipo_de_venta TAMPOCO desde el 7-ago-2026: se movió al LINE ITEM (decisión usuaria,
+  // doc de vistas de María). La prop del deal quedó archivada.
 ];
 
 const LI_PROPS = [
@@ -258,7 +260,7 @@ const LI_PROPS = [
   'hs_product_id', 'line_item_key', 'of_line_item_key',
   'servicio', 'subrubro', 'reventa', 'porcentaje_margen',
   'uy', 'pais_operativo', 'hubspot_owner_id', 'empresa_que_factura',
-  'momento_de_facturacion', 'area', 'condiciones_de_pago',
+  'momento_de_facturacion', 'area', 'condiciones_de_pago', 'tipo_de_venta',
 ];
 
 const TICKET_PROPS = [
@@ -467,7 +469,9 @@ function buildDealBase(deal, companies, ownerName) {
     'Ejecutivo Asignado': ownerName,
     'País Operativo': safe(dp.pais_operativo),
     'Ciclo de Negocio': '',
-    'Tipo de Venta': safe(dp.tipo_de_venta), // ítem 139: prop creada el 20-jul en ambos portales
+    // 'Tipo de Venta' se llena en las filas: desde el 7-ago-2026 vive en el LINE ITEM,
+    // igual que 'Condiciones de Pago'. Acá sólo el default para las filas sin LI.
+    'Tipo de Venta': '',
     'Probabilidad': pct(dp.hs_deal_stage_probability),
     'Fecha de Cierre': dmy(dp.closedate),
     'Moneda': safe(dp.deal_currency_code),
@@ -548,6 +552,7 @@ function buildLineItemRow(li, dealBase, deal, productName, latestRates) {
     'Descripción Ticket': '',
     'Observaciones': '',
     'Condiciones de Pago': safe(lp.condiciones_de_pago),
+    'Tipo de Venta': safe(lp.tipo_de_venta), // del LI (movida del deal el 7-ago)
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
@@ -647,6 +652,7 @@ function buildTicketRow(ticket, dealBase, lineItemMap, productNameMap, latestRat
     'Descripción Ticket': safe(tp.content || ''),
     'Observaciones': safe(tp.observaciones || ''),
     'Condiciones de Pago': safe(lp?.condiciones_de_pago), // del LI de origen (prop creada 23-jul)
+    'Tipo de Venta': safe(lp?.tipo_de_venta),             // del LI de origen (movida del deal el 7-ago)
     'Incluye UY': incluyeUY ? 'SI' : 'NO',
     'Fecha Fact Estimada': dmy(fechaFact),
     'Mes': mes, 'Año': anio,
