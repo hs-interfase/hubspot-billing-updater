@@ -84,7 +84,12 @@ export const LI_PROP_TO_TICKET_KEYS = {
   opera_trading: ['opera_trading'],
   nc: ['nc'],
   facturacion_automatica: ['facturacion_automatica'],
-  condicion_de_pago: ['condicion_de_pago'],
+  // 🔴 8-ago: PLURAL. La propiedad real en los dos portales es `condiciones_de_pago`;
+  // el singular no existe en ningún objeto y la escritura se caía en silencio.
+  condiciones_de_pago: ['condiciones_de_pago'],
+  // Tipo de venta: se movió del negocio al line item el 7-ago; desde el 8-ago
+  // viaja al ticket como el resto.
+  tipo_de_venta: ['tipo_de_venta'],
   // Fechas
   hs_recurring_billing_start_date: ['fecha_inicio_de_facturacion'],
   fecha_inicio_de_facturacion: ['fecha_inicio_de_facturacion'],
@@ -101,7 +106,7 @@ const LI_PROPS_TO_FETCH = [
   'name', 'description', 'servicio', 'subrubro', 'area', 'of_codigo_rubro',
   'momento_de_facturacion', 'nota', 'pais_operativo',
   'parte_del_cupo', 'reventa', 'opera_trading', 'nc', 'empresa_que_factura',
-  'condicion_de_pago',
+  'condiciones_de_pago', 'tipo_de_venta',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion', 'facturacion_automatica',
   'hs_recurring_billing_number_of_payments',
 ];

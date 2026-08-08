@@ -65,7 +65,9 @@ const TICKET_PROPS = [
   // Correcciones del 4-ago: catálogo (producto/área/rubro+nota) y las dos descripciones.
   'of_producto', 'area', 'nota', 'content',
   // Lista del 5-ago: condición de pago (#17).
-  'condicion_de_pago',
+  // 🔴 PLURAL (corregido 8-ago): la propiedad del ticket es `condiciones_de_pago`.
+  // Con el singular la fila salía siempre vacía — la prop no existe en el portal.
+  'condiciones_de_pago',
 ];
 
 // ────────────────────────────────────────────────────────────

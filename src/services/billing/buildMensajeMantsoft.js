@@ -326,7 +326,7 @@ function buildLineItemBaseRows(li) {
     buildRow('Monto total con impuestos', fmtNum(lp.hs_post_tax_amount)),
     buildRow('IRAE',                      fmtIrae(lp.exonera_irae)),
     buildRow('Opera Trading',             fmtBoolSiNo(lp.opera_trading)),
-    buildRow('Condición de Pago',         val(lp.condicion_de_pago)),
+    buildRow('Condición de Pago',         val(lp.condiciones_de_pago)),
 
     // ── Fuera de la lista: se dejan porque ya se venían mandando ─────────────
     buildRow('ID line item',              val(li?.id) || val(lp.hs_object_id)),

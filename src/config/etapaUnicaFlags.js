@@ -55,3 +55,26 @@ function flagOn(name) {
 export function etapaUnicaEnabled() {
   return flagOn('ETAPA_UNICA_ENABLED');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ETAPA DEPÓSITO DEL PIPELINE AUTOMÁTICO (pedido usuaria 2026-08-07)
+// ─────────────────────────────────────────────────────────────────────────────
+// El automático tenía DOS etapas entre «75% Forecast» y «notificado»
+// (BILLING_AUTOMATED_FORECAST_85 y _95, repartidas por bucket del negocio).
+// Pedido: que haya UNA SOLA — el depósito donde esperan todos los tickets aún
+// no notificados de un negocio ganado o en ejecución, igual que «Próximos a
+// facturar» hace del lado manual.
+//
+// Se REUSA una etapa existente, no se crea ninguna: queda la **85** como
+// depósito y la **95 se retira** (la usuaria dio lo mismo cuál; se elige la 85
+// por ser la primera después del 75). El id de la 95 sigue reconocido como "no
+// notificado" en FORECAST_AUTO_STAGES / PENDING_STAGES, así que los tickets que
+// hayan quedado parados ahí se siguen contando y el motor los reubica solo en
+// la próxima pasada de Phase P.
+//
+// Default OFF: apagada, los buckets 85/95/100 automáticos van a sus etapas de
+// siempre y el comportamiento es idéntico al actual.
+/** ¿Está habilitada la etapa depósito única del pipeline automático? Default: NO. */
+export function etapaUnicaAutoEnabled() {
+  return flagOn('ETAPA_UNICA_AUTO_ENABLED');
+}

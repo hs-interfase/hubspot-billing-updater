@@ -351,3 +351,179 @@ test('createTicketAssociations: devuelve true y NO reporta cuando la asociación
   assert.equal(ok, true);
   assert.equal(reported, null);
 });
+
+// ─────────────────────────────────────────────────────────────
+// AJUSTE usuaria 2026-08-07 — EL ESPEJO DE UN AUTOMÁTICO
+//
+// El espejo UY se fuerza a manual (dealMirroring.js), así que sus tickets viven
+// en el pipeline MANUAL y caían en "manual = asociar todo". Con
+// ASSOC_MIRROR_AS_AUTO=true se les aplica la regla del automático (pasado +
+// sólo el próximo por line item). El espejo de un MANUAL no cambia.
+//
+// La marca es `of_origen_facturacion_automatica`, sellada en el LI espejo por
+// dealMirroring y copiada al ticket por snapshotService.
+// ─────────────────────────────────────────────────────────────
+
+/** Ticket del pipeline MANUAL que es espejo de un line item automático. */
+const ticketEspejoAuto = (id, fecha, extra = {}) =>
+  ticket(id, TICKET_PIPELINE, fecha, { of_origen_facturacion_automatica: 'true', ...extra });
+
+/** Corre `fn` con ASSOC_MIRROR_AS_AUTO en `valor` (null = borrada) y restaura. */
+const conFlagMirror = async (valor, fn) => {
+  const prev = process.env.ASSOC_MIRROR_AS_AUTO;
+  if (valor === null) delete process.env.ASSOC_MIRROR_AS_AUTO;
+  else process.env.ASSOC_MIRROR_AS_AUTO = valor;
+  try { return await fn(); }
+  finally {
+    if (prev === undefined) delete process.env.ASSOC_MIRROR_AS_AUTO;
+    else process.env.ASSOC_MIRROR_AS_AUTO = prev;
+  }
+};
+
+test('espejo auto — llave OFF: se comporta como hoy (se asocia TODO el cronograma)', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror(null, async () => {
+    const { client } = makeFakeClient({
+      tickets: [
+        ticketEspejoAuto(1, '2020-01-01', { of_line_item_key: 'LIK_M' }),   // pasado
+        ticketEspejoAuto(2, '2098-01-01', { of_line_item_key: 'LIK_M' }),   // próximo
+        ticketEspejoAuto(3, '2098-06-01', { of_line_item_key: 'LIK_M' }),   // futuro lejano
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.considered, 3, 'apagada, el espejo sigue asociando todo');
+    assert.equal(stats.skippedByPipeline, 0);
+    assert.equal(stats.dealLinked, 3);
+  });
+});
+
+test('espejo auto — llave ON: pasado + sólo el PRÓXIMO por line item', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror('true', async () => {
+    const { client, createCalls } = makeFakeClient({
+      tickets: [
+        ticketEspejoAuto(1, '2020-01-01', { of_line_item_key: 'LIK_M' }),   // pasado → se asocia
+        ticketEspejoAuto(2, '2098-01-01', { of_line_item_key: 'LIK_M' }),   // próximo → se asocia
+        ticketEspejoAuto(3, '2098-06-01', { of_line_item_key: 'LIK_M' }),   // futuro lejano → NO
+        ticketEspejoAuto(4, '2099-12-31', { of_line_item_key: 'LIK_M' }),   // futuro lejano → NO
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.autoPastLinked, 1);
+    assert.equal(stats.autoNextLinked, 1);
+    assert.equal(stats.skippedByPipeline, 2);
+    assert.equal(stats.dealLinked, 2);
+    const asociados = new Set(createCalls.filter(c => c.toType === 'deals').map(c => c.fromId));
+    assert.deepEqual([...asociados].sort(), ['1', '2']);
+  });
+});
+
+test('espejo auto — llave ON: el espejo de un MANUAL sigue asociando todo', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror('true', async () => {
+    const { client } = makeFakeClient({
+      tickets: [
+        // espejo de un manual: la marca viene en 'false'
+        ticket(1, TICKET_PIPELINE, '2098-01-01', { of_origen_facturacion_automatica: 'false' }),
+        ticket(2, TICKET_PIPELINE, '2098-06-01', { of_origen_facturacion_automatica: 'false' }),
+        // line item que no es espejo: la marca viene vacía
+        ticket(3, TICKET_PIPELINE, '2098-09-01'),
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.considered, 3);
+    assert.equal(stats.skippedByPipeline, 0);
+    assert.equal(stats.dealLinked, 3);
+  });
+});
+
+test('espejo auto — llave ON: el próximo es POR LINE ITEM, no uno por negocio', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror('true', async () => {
+    const { client, createCalls } = makeFakeClient({
+      tickets: [
+        ticketEspejoAuto(1, '2098-01-01', { of_line_item_key: 'LIK_A' }),   // próximo de A
+        ticketEspejoAuto(2, '2098-02-01', { of_line_item_key: 'LIK_A' }),
+        ticketEspejoAuto(3, '2098-03-01', { of_line_item_key: 'LIK_B' }),   // próximo de B
+        ticketEspejoAuto(4, '2098-04-01', { of_line_item_key: 'LIK_B' }),
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.autoNextLinked, 2);
+    assert.equal(stats.skippedByPipeline, 2);
+    const asociados = new Set(createCalls.filter(c => c.toType === 'deals').map(c => c.fromId));
+    assert.deepEqual([...asociados].sort(), ['1', '3']);
+  });
+});
+
+test('espejo auto — llave ON: convive con el pipeline automático y el manual puro', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror('true', async () => {
+    const { client } = makeFakeClient({
+      tickets: [
+        ticketEspejoAuto(1, '2098-01-01', { of_line_item_key: 'LIK_ESPEJO' }),        // próximo del espejo
+        ticketEspejoAuto(2, '2098-06-01', { of_line_item_key: 'LIK_ESPEJO' }),        // NO
+        ticketFuturo(3, 'PIPE_AUTO', '2098-02-01', { of_line_item_key: 'LIK_AUTO' }), // próximo del automático
+        ticketFuturo(4, 'PIPE_AUTO', '2098-07-01', { of_line_item_key: 'LIK_AUTO' }), // NO
+        ticket(5, TICKET_PIPELINE, '2098-03-01', { of_line_item_key: 'LIK_MANUAL' }), // manual puro → sí
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.autoNextLinked, 2, 'un próximo por cada line item con regla automática');
+    assert.equal(stats.skippedByPipeline, 2);
+    assert.equal(stats.considered, 3, 'los dos próximos + el manual puro');
+  });
+});
+
+test('espejo auto — llave ON + kill-switch del próximo: ningún futuro del espejo se asocia', { skip: !TICKET_PIPELINE }, async () => {
+  await conFlagMirror('true', async () => {
+    const { client } = makeFakeClient({
+      tickets: [
+        ticketEspejoAuto(1, '2020-01-01', { of_line_item_key: 'LIK_M' }),   // pasado → sí
+        ticketEspejoAuto(2, '2098-01-01', { of_line_item_key: 'LIK_M' }),   // futuro → no
+      ],
+    });
+    const stats = await associateAllTicketsOnClosedWon({
+      dealId: 'D1',
+      dealProps: { facturacion_activa: 'true' },
+      onlyManualPipeline: true,
+      associateNextAuto: false,
+      client,
+      getDealCompaniesFn: async () => [],
+      getDealContactsFn: async () => [],
+    });
+    assert.equal(stats.autoPastLinked, 1);
+    assert.equal(stats.autoNextLinked, 0);
+    assert.equal(stats.skippedByPipeline, 1);
+  });
+});

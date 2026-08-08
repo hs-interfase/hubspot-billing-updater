@@ -411,6 +411,9 @@ export async function getDealWithLineItems(dealId) {
 
     // --- mirror --
     'of_line_item_py_origen_id',
+    // Cómo factura la línea PY de origen. El espejo se fuerza a manual
+    // (dealMirroring.js), así que su `facturacion_automatica` no sirve para saberlo.
+    'of_origen_facturacion_automatica',
 
     // ---Migración  ---
     "of_codigo_rubro",
@@ -428,6 +431,13 @@ export async function getDealWithLineItems(dealId) {
     "unidad_de_negocio",
     "empresa_que_factura", // select: entidad del grupo que emite (Interfase UY / ISA UY / ISA PY / Interfase PY) → espejo al ticket
     "uy",
+
+    // --- comerciales que viajan al ticket (agregadas 8-ago) ---
+    // 🔴 Ninguna de las dos estaba en esta lista: extractLineItemSnapshots las leía
+    // como undefined, así que el ticket nunca las recibió. `condiciones_de_pago` va en
+    // PLURAL — el singular no existe en ningún objeto de ningún portal.
+    "condiciones_de_pago", // select → espejo al ticket; sale en los DOS mensajes
+    "tipo_de_venta",       // select → espejo al ticket; se movió del negocio al LI el 7-ago
   ];
 
   // fechas dinámicas fecha_2 ... fecha_24

@@ -43,7 +43,7 @@ import {
   PROXIMOS_A_FACTURAR_STAGE,
   CANCELLED_STAGE_BY_PIPELINE,
 } from '../config/constants.js';
-import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
+import { etapaUnicaEnabled, etapaUnicaAutoEnabled } from '../config/etapaUnicaFlags.js';
 import {
   isTicketEngineManaged,
   isTicketProtegido,
@@ -337,11 +337,18 @@ export function resolveForecastStage({ dealStage, automated }) {
     return STAGE.MANUAL_FORECAST_25;
   }
 
+  // ETAPA DEPÓSITO AUTOMÁTICA (flag ETAPA_UNICA_AUTO_ENABLED, 7-ago): igual que
+  // del lado manual, del cierre ganado en adelante hay UNA sola etapa entre el
+  // 75% y «notificado». Los buckets 85/95/100 dejan de repartirse en dos etapas
+  // y caen todos en la 85 (la 95 se retira, sin borrarla del portal: su id sigue
+  // reconocido como "no notificado" en constants.js, así que un ticket parado
+  // ahí se sigue contando y esta misma función lo reubica en la próxima pasada).
+  const deposito = etapaUnicaAutoEnabled() && Boolean(STAGE.AUTO_FORECAST_85);
   if (bucket === '50') return STAGE.AUTO_FORECAST_50;
   if (bucket === '75') return STAGE.AUTO_FORECAST_75;
   if (bucket === '85') return STAGE.AUTO_FORECAST_85;
-  if (bucket === '95') return STAGE.AUTO_FORECAST_95;
-  if (bucket === '100') return STAGE.AUTO_FORECAST_95; // 100% usa mismo stage que 95
+  if (bucket === '95') return deposito ? STAGE.AUTO_FORECAST_85 : STAGE.AUTO_FORECAST_95;
+  if (bucket === '100') return deposito ? STAGE.AUTO_FORECAST_85 : STAGE.AUTO_FORECAST_95; // 100% usa mismo stage que 95
   return STAGE.AUTO_FORECAST_25;
 }
 

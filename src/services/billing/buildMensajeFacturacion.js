@@ -286,7 +286,7 @@ function buildLineItemDiv(ticket, portalId = null) {
     buildRow('Monto total con impuestos', fmtNum(tp.total_real_a_facturar)),
     buildRow('IRAE',                      fmtIrae(tp.exonera_irae)),
     buildRow('Opera Trading',             fmtBoolSiNo(tp.opera_trading)),
-    buildRow('Condición de Pago',         val(tp.condicion_de_pago)),
+    buildRow('Condición de Pago',         val(tp.condiciones_de_pago)),
     buildRow('Observaciones',             val(tp.observaciones)),
 
     // ── Fuera de la lista: se dejan porque ya se venían mandando ─────────────
