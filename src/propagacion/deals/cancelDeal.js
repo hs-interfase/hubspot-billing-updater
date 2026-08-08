@@ -62,7 +62,7 @@ export async function propagateDealCancellation({ dealId, dealProps, lineItems }
 
   // 2) Cancelar tickets forecast
   try {
-    const result = await cancelForecastTickets({ lineItems, closedLostReason });
+    const result = await cancelForecastTickets({ lineItems, closedLostReason, dealId, dealProps });
 
     logger.info(
       { module: 'cancelDeal', dealId, ...result },

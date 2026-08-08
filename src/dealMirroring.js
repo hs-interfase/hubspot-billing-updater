@@ -1030,6 +1030,16 @@ const allowedProps = new Set([
     props.of_line_item_py_origen_id = String(li.id).trim();
     props.facturacion_automatica = 'false'; // mirrors UY siempre manuales
 
+    // SELLO DEL ORIGEN (7-ago): el espejo se fuerza a manual arriba, así que su
+    // propio `facturacion_automatica` ya no dice nada del original. Esta marca sí:
+    // guarda cómo factura la línea PY de la que nace. La usa
+    // associateOnClosedWon para tratar al espejo de un AUTOMÁTICO con la regla
+    // del automático (asociar sólo el próximo a facturar) en vez de la manual
+    // (asociar todo). El espejo de un manual queda como está.
+    // Sale de datos que ya tenemos en la mano — cero llamadas extra.
+    props.of_origen_facturacion_automatica =
+      String(srcPropsLi.facturacion_automatica || '').trim().toLowerCase() === 'true' ? 'true' : 'false';
+
     // PY3 (María 7-jul) + definición 2026-07-07: costo_total_usd es la FUENTE DE VERDAD
     // del costo (total de la línea, siempre USD). El price del mirror va SIEMPRE en USD
     // (el mirror se crea con deal_currency_code='USD'), así que sale de ahí:

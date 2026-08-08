@@ -82,8 +82,10 @@ No es un simple generador de facturas. Es un sistema de orquestación que normal
 | `BILLING_AUTOMATED_FORECAST` | Stage forecast automático 25% |
 | `BILLING_AUTOMATED_FORECAST_50` | Stage forecast automático 50% |
 | `BILLING_AUTOMATED_FORECAST_75` | Stage forecast automático 75% |
-| `BILLING_AUTOMATED_FORECAST_85` | Stage forecast automático 85% |
-| `BILLING_AUTOMATED_FORECAST_95` | Stage forecast automático 95% |
+| `BILLING_AUTOMATED_FORECAST_85` | Stage forecast automático 85% — **la etapa DEPÓSITO** con `ETAPA_UNICA_AUTO_ENABLED` |
+| `BILLING_AUTOMATED_FORECAST_95` | Stage forecast automático 95% — **se retira** con `ETAPA_UNICA_AUTO_ENABLED` (su id sigue reconocido como "no notificado") |
+| `ETAPA_UNICA_AUTO_ENABLED` | Etapa depósito única del pipeline automático: los buckets 85/95/100 caen todos en la 85. Default OFF |
+| `ASSOC_MIRROR_AS_AUTO` | Al cierre ganado, el espejo de un line item AUTOMÁTICO asocia sólo el próximo a facturar por línea (en vez de todo el cronograma). Lee `of_origen_facturacion_automatica`. Default OFF |
 | `BILLING_TICKET_STAGE_ID_BILLED` | Stage "Emitido" manual |
 | `BILLING_TICKET_STAGE_ID_CREATED` | Stage "Creado" manual |
 | `BILLING_TICKET_STAGE_ID_LATE` | Stage "Atrasado" manual |

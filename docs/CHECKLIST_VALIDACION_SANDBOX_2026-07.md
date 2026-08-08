@@ -273,7 +273,7 @@ SELECT id, property_name, status, created_at, finished_at
 **Resultado esperado**
 - Paso 2-3: job `valor_recalc` con `deal_id` correcto en `done`; VALOR/MARGEN del deal recalculados (recalcula SOLO el valor: NO crea tickets ni corre phases).
 - Paso 4: ticket forecast → 200 skipped, sin job (el forecast lo cubre el re-snapshot del cron; también deben quedar fuera automático y emitido).
-- Paso 5 (dedup por `(deal_id, action_type)`): si el worker toma un job teniendo otro `pending` más viejo del mismo deal, el viejo queda **`superseded`**. ⚠️ Como el worker atiende FIFO cada ~2s, con dos ediciones rápidas lo NORMAL es ver **ambos jobs en `done`** (el segundo recalc es idempotente y no cambia nada); `superseded` aparece recién cuando un job fue reencolado (deal_locked/reaper) o la cola venía cargada. **Ambos desenlaces son correctos**; lo que NO debe pasar es un `failed` ni un valor final incoherente en el deal.
+- Paso 5 (dedup por `(deal_id, action_type)` — ⚠️ **desde el 1-ago la clave depende del `action_type`**: `valor_recalc` sigue colapsando por negocio, como acá; `li_prop_sync` y `product_reassign` sólo colapsan contra el **mismo objeto y la misma propiedad**, y el resto no colapsa. Ver `src/utils/webhookQueueRules.js`): si el worker toma un job teniendo otro `pending` más viejo del mismo deal, el viejo queda **`superseded`**. ⚠️ Como el worker atiende FIFO cada ~2s, con dos ediciones rápidas lo NORMAL es ver **ambos jobs en `done`** (el segundo recalc es idempotente y no cambia nada); `superseded` aparece recién cuando un job fue reencolado (deal_locked/reaper) o la cola venía cargada. **Ambos desenlaces son correctos**; lo que NO debe pasar es un `failed` ni un valor final incoherente en el deal.
 
 **Evidencia a registrar**
 - [x] `TICKET_ID`, `TICKET_FC_ID`, `DEAL_ID`, ids de jobs.
@@ -407,7 +407,7 @@ el del espejo salió igual con la flag del responsable apagada.
   objeto que inscribe), y además la propiedad no aparece en la definición de ninguno. La búsqueda
   cubre también el custom code de Operations Hub, que viaja dentro de la definición del flow.
   ⚠️ Lo que **no** cubre: escrituras desde integraciones externas o desde otra app privada.
-- [ ] 🆕 **30-jul — lo que SÍ apareció al revisar por API: 3 workflows de PROD escriben `cancelar_ticket=true`.**
+- [x] 🆕 **30-jul — RESUELTO: de los 3 workflows de PROD que escribían `cancelar_ticket=true`, los 2 eco quedaron APAGADOS** (verificado por API: `1780939532` ⚪ · `1782918733` ⚪ · `1767305350` 🔴 activo, que es el legítimo). ⚠️ En **sandbox siguen prendidos** los dos equivalentes (`1782915938`, `1782918796`): los entornos quedaron distintos, y ahí el `of_billing_error` de un ticket automático cancelado se va a seguir pisando.
   - `1767305350` **Propagacion de cierre** (16 acciones, 2 ponen la casilla) — **uso legítimo**: cancela los tickets cuando se cae el negocio. **Dejar como está.**
   - `1780939532` *«Órdenes de Facturación», estado del ticket «Cancelado»* → **una sola acción**: `cancelar_ticket=true`.
   - `1782918733` *«Órdenes de facturación Automáticas», estado «Cancelada»* → **una sola acción**: idem.

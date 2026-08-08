@@ -378,6 +378,40 @@ export async function runPhasesForDeal({ deal, lineItems }) {
       results.phaseP.error = err?.message || 'Error desconocido';
     }
 
+    // ========== PHASE P DEL ESPEJO UY ==========
+    // 🔴 2-ago-2026: el negocio ESPEJO también necesita su cronograma.
+    // Phase P corría SÓLO para el negocio que disparó el job, así que el espejo se
+    // quedaba con line items y CERO tickets (medido en sandbox: 0 por asociación y 0
+    // por of_line_item_key — las dos vías, o sea que de verdad no existían). El ticket
+    // espejo es la pieza sobre la que la tanda D deja los avisos, así que sin él ese
+    // camino entero queda sin probar.
+    //
+    // Se corre SOLO Phase P, no las fases completas: Phase 1 del espejo ya la hace
+    // runPhase1 (procesa el espejo en su propio bloque) y volver a entrar por
+    // runPhasesForDeal abriría una recursión — el espejo es un deal como cualquier otro.
+    // Phase 2/3 del espejo dependen de SU facturacion_activa y no se tocan acá.
+    try {
+      const mirrorDealId = currentDeal?.properties?.deal_uy_mirror_id;
+      if (mirrorDealId) {
+        const mirrorFull = await getDealWithLineItems(String(mirrorDealId));
+        const mirrorLis = filterActiveLineItems(mirrorFull?.lineItems || []);
+        if (mirrorLis.length) {
+          const rMirror = await runPhaseP({ deal: mirrorFull.deal || mirrorFull, lineItems: mirrorLis });
+          results.phasePMirror = rMirror;
+          logger.info(
+            { module: 'phases/index', fn: 'runPhasesForDeal', dealId, mirrorDealId,
+              created: rMirror?.created || 0, updated: rMirror?.updated || 0, deleted: rMirror?.deleted || 0 },
+            'Phase P del espejo UY completada'
+          );
+        }
+      }
+    } catch (err) {
+      logger.error(
+        { module: 'phases/index', fn: 'runPhasesForDeal', dealId, err },
+        'Error en Phase P del espejo UY (no bloquea el original)'
+      );
+    }
+
     // ========== ASIGNACIÓN DE OWNER EN TICKETS ==========
     try {
       const ownerResult = await assignTicketOwners({

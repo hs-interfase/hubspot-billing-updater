@@ -23,6 +23,17 @@
 //   - pipeline AUTOMÁTICO FUTURO → se asocia SOLO el PRÓXIMO A FACTURAR (el de
 //                                  fecha más cercana, por line item). El resto del
 //                                  cronograma queda suelto hasta que le toque.
+//
+// AJUSTE usuaria 2026-08-07 — EL ESPEJO DE UN AUTOMÁTICO:
+//   El espejo UY se fuerza a manual (dealMirroring.js), de modo que sus tickets
+//   nacen en el pipeline manual y caían en "manual = asociar todo": al negocio
+//   espejo se le colgaba el cronograma entero mientras su original mostraba sólo
+//   el próximo. Con ASSOC_MIRROR_AS_AUTO=true, un ticket cuyo line item espejo
+//   viene de un original AUTOMÁTICO (marca `of_origen_facturacion_automatica`)
+//   sigue la regla del automático. El espejo de un MANUAL no cambia.
+//   ⚠️ Sólo cambia QUÉ SE ASOCIA: el ticket NO se mueve de etapa — sigue en
+//   «Próximos a facturar», que es donde administración lo quiere ver
+//   (mirrorUtils.js:232-238 lo pone ahí a propósito).
 // El corte pasado/futuro es por `fecha_resolucion_esperada` contra HOY.
 // El flag ASSOC_CLOSEDWON_ONLY_MANUAL sigue gobernando el trato especial del
 // automático; con el flag en false se asocia todo, como antes.
@@ -87,6 +98,40 @@ function esTicketFuturo(t, hoy) {
 }
 
 /**
+ * ¿El ticket es de un line item ESPEJO cuyo ORIGEN factura automático?
+ *
+ * El espejo UY se fuerza siempre a manual (dealMirroring.js: `facturacion_automatica
+ * = 'false'`), así que sus tickets nacen en el pipeline manual y hasta hoy caían en
+ * la rama "manual = asociar todo". Resultado: al negocio espejo de un automático se
+ * le colgaba el cronograma entero, mientras que a su original sólo el próximo.
+ *
+ * `of_origen_facturacion_automatica` sella cómo factura la línea PY de origen y viaja
+ * LI PY → LI espejo → ticket (snapshotService). Vacía en todo lo que no es espejo.
+ *
+ * El espejo de un line item MANUAL no entra acá: ese comportamiento ya es el correcto.
+ */
+function esEspejoDeAutomatico(t) {
+  return String(t?.properties?.of_origen_facturacion_automatica || '')
+    .trim().toLowerCase() === 'true';
+}
+
+/**
+ * ¿A este ticket le toca la regla del AUTOMÁTICO (pasado + sólo el próximo por line
+ * item), en vez de la del manual (asociar todo)?
+ *
+ * Dos caminos: estar en el pipeline automático, o ser el espejo de un automático
+ * (que vive en el manual por la fuerza, no por naturaleza).
+ *
+ * El segundo camino está detrás de ASSOC_MIRROR_AS_AUTO (default OFF): apagada, el
+ * comportamiento es exactamente el de siempre.
+ */
+function usaReglaAutomatica(t, mirrorComoAuto) {
+  const pipeline = String(t?.properties?.hs_pipeline || '');
+  if (pipeline !== TICKET_PIPELINE) return true;
+  return mirrorComoAuto && esEspejoDeAutomatico(t);
+}
+
+/**
  * Busca por Search todos los tickets con of_deal_id === dealId.
  * Keyset pagination por hs_object_id (mismo patrón que fixTicketAssociations.mjs).
  */
@@ -102,7 +147,7 @@ async function fetchTicketsForDealBySearch(client, dealId) {
           { propertyName: 'hs_object_id', operator: 'GT', value: lastId },
         ],
       }],
-      properties: ['of_deal_id', 'of_ticket_key', 'of_line_item_key', 'hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada'],
+      properties: ['of_deal_id', 'of_ticket_key', 'of_line_item_key', 'hs_pipeline', 'hs_pipeline_stage', 'fecha_resolucion_esperada', 'of_origen_facturacion_automatica'],
       sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
       limit: 100,
     };
@@ -241,13 +286,21 @@ export async function associateAllTicketsOnClosedWon({
     ? associateNextAuto
     : (rawNextAuto === '' ? true : parseBool(rawNextAuto));
 
+  // ESPEJO DE UN AUTOMÁTICO (7-ago): el espejo UY se fuerza a manual, así que sus
+  // tickets viven en el pipeline manual y hasta hoy se asociaban TODOS, al revés de
+  // lo que hace su original. Con la llave prendida se les aplica la regla del
+  // automático: pasado + sólo el próximo a facturar por line item. No se los mueve
+  // de etapa — siguen en «Próximos a facturar», que es donde administración los
+  // quiere ver. El espejo de un MANUAL no cambia.
+  // Default OFF: apagada, el comportamiento es idéntico al de hoy.
+  const mirrorComoAuto = parseBool(process.env.ASSOC_MIRROR_AS_AUTO);
+
   const nextAutoIds = new Set();
   if (onlyManual && nextAuto && TICKET_PIPELINE) {
     const proximoPorLi = new Map();
     for (const t of tickets) {
-      const pipeline = String(t.properties?.hs_pipeline || '');
-      if (pipeline === TICKET_PIPELINE) continue;      // manual: se asocia siempre
-      if (!esTicketFuturo(t, hoy)) continue;           // pasado: ya se asocia
+      if (!usaReglaAutomatica(t, mirrorComoAuto)) continue;  // manual puro: se asocia siempre
+      if (!esTicketFuturo(t, hoy)) continue;                 // pasado: ya se asocia
       const grupo =
         String(t.properties?.of_line_item_key || '').trim() ||
         String(t.properties?.of_ticket_key || '').replace(/::\d{4}-\d{2}-\d{2}$/, '').trim() ||
@@ -263,12 +316,12 @@ export async function associateAllTicketsOnClosedWon({
 
   for (const t of tickets) {
     const ticketId = String(t.id);
-    const pipeline = String(t.properties?.hs_pipeline || '');
 
-    // Pipeline AUTOMÁTICO: se asocia si su facturación ya ocurrió (pasado) o si es
+    // Regla del AUTOMÁTICO: se asocia si su facturación ya ocurrió (pasado) o si es
     // el próximo a facturar de su line item. El resto del cronograma futuro queda
-    // sin asociar. El manual pasa siempre.
-    if (onlyManual && TICKET_PIPELINE && pipeline !== TICKET_PIPELINE) {
+    // sin asociar. La aplican los tickets del pipeline automático y los del espejo
+    // de un automático (llave ASSOC_MIRROR_AS_AUTO). El manual puro pasa siempre.
+    if (onlyManual && TICKET_PIPELINE && usaReglaAutomatica(t, mirrorComoAuto)) {
       if (esTicketFuturo(t, hoy)) {
         if (!nextAutoIds.has(ticketId)) {
           stats.skippedByPipeline++;
@@ -339,6 +392,19 @@ export async function associateAllTicketsOnClosedWon({
       logger.warn({ module: MODULE, dealId, err }, 'Error en el re-sync de etiquetas de empresa (no bloquea)');
     }
   }
+
+  // ❌ EL RESUMEN DE CRONOGRAMA AL CIERRE GANADO SALIÓ DEL MOTOR (30-jul).
+  // La TANDA A lo había implementado acá (un email con todo el cronograma,
+  // idempotente por `of_resumen_cronograma_enviado`). Decisión de la usuaria:
+  // ese aviso lo arma ella con un WORKFLOW de HubSpot, así que el motor no
+  // manda ninguno — dos fuentes del mismo aviso = dos correos por negocio.
+  // La prop `of_resumen_cronograma_enviado` YA NO VA: no hay que crearla.
+  //
+  // 31-jul: el aviso individual de 1 mes siguió el MISMO camino — también lo
+  // manda un workflow de HubSpot, así que se borró del motor
+  // (`individualBillingReminderAlert.js` + los dos hooks de phase2.js) y la
+  // prop `of_aviso_1mes_enviado` TAMPOCO va. El motor no manda NINGUNO de los
+  // dos avisos al responsable: los dos son de HubSpot.
 
   logger.info({ module: MODULE, dealId, ...stats }, 'Asociación de tickets al closedwon completada');
   return stats;

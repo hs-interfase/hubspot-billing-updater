@@ -48,16 +48,20 @@
     .topnav a.ext { margin-left: auto; opacity: .7; }
     .topnav a.ext:hover { opacity: 1; }
 
-    .content { padding: 28px 24px; max-width: 1280px; margin: 0 auto; }
+    .content { padding: 28px 24px; max-width: 1600px; margin: 0 auto; }
     h2 { font-size: 17px; margin-bottom: 4px; }
     .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
 
-    /* ── Panel de acción ── */
+    /* ── Paneles ── */
     .panel {
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 20px;
+      border-radius: var(--radius); padding: 16px 20px;
       display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end;
-      margin-bottom: 20px;
+      margin-bottom: 14px;
+    }
+    .panel .panel-title {
+      flex-basis: 100%; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); margin-bottom: -4px;
     }
     .filter-group { display: flex; flex-direction: column; gap: 6px; }
     .filter-group label {
@@ -67,8 +71,9 @@
     .filter-group input {
       background: var(--bg); border: 1px solid var(--border);
       color: var(--text); border-radius: 6px; padding: 8px 12px;
-      font-size: 13px; width: 140px; transition: border-color .2s;
+      font-size: 13px; width: 190px; transition: border-color .2s;
     }
+    .filter-group input.chico { width: 140px; }
     .filter-group input:focus { outline: none; border-color: var(--accent); }
     .check-group { display: flex; align-items: center; gap: 8px; padding-bottom: 9px; color: var(--muted); font-size: 13px; }
     .check-group input { accent-color: var(--accent); cursor: pointer; }
@@ -77,7 +82,7 @@
       cursor: pointer; border: none; transition: background .2s, opacity .2s;
     }
     .btn-primary { background: var(--accent); color: #fff; }
-    .btn-primary:hover { background: var(--accent-d); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-d); }
     .btn:disabled { opacity: .4; cursor: default; }
     .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
     .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
@@ -96,7 +101,8 @@
 
     .stats { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
     .stats strong { color: var(--text); }
-    .stats .btn { margin-left: auto; }
+    .stats .sep { opacity: .4; }
+    .stats .derecha { margin-left: auto; display: flex; gap: 8px; }
 
     /* ── Tabla ── */
     .table-wrap {
@@ -113,7 +119,10 @@
     tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--surface2); }
+    tbody tr.sel { background: rgba(255,122,89,.07); }
     tbody td { padding: 9px 14px; vertical-align: top; font-size: 13px; }
+    td.chk, th.chk { width: 36px; padding-right: 0; }
+    td.chk input, th.chk input { accent-color: var(--accent); cursor: pointer; }
     .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .val-empty { color: var(--muted); font-style: italic; }
     .val-before { color: var(--red); }
@@ -126,6 +135,7 @@
     .b-err  { color: var(--red); }
     .b-warn { color: var(--yellow); }
     .li-id { font-family: monospace; font-size: 11px; color: var(--muted); }
+    .cel-larga { max-width: 260px; }
 
     details.section { margin-bottom: 24px; }
     details.section > summary {
@@ -161,32 +171,53 @@
 
 <div class="content">
   <h2>Ajuste de precio por paramétrica — iJServ (Petróleo)</h2>
-  <p class="sub">Aplica un porcentaje al monto unitario de <strong>todos</strong> los line items iJServ elegibles. Espejos intercompany y negocios no activos quedan excluidos automáticamente.</p>
+  <p class="sub">Buscá, marcá los line items que querés ajustar y aplicales un porcentaje. Sólo aparecen los de negocios de <strong>cierre ganado en adelante</strong>; los espejos intercompany quedan excluidos.</p>
 
   <div id="alerts"></div>
 
-  <!-- Panel: % + preview -->
+  <!-- Buscador: acompaña la lista, la previsualización y el resultado -->
   <div class="panel">
+    <div class="panel-title">🔍 Buscador</div>
     <div class="filter-group">
-      <label>Porcentaje de ajuste</label>
-      <input type="text" id="f-pct" placeholder="ej. 4,26 o -2,5" />
+      <label>Código de empresa</label>
+      <input type="text" id="f-codigo" class="chico" placeholder="ej. 0003137" />
     </div>
-    <button class="btn btn-primary" id="btn-preview">Previsualizar</button>
-    <div class="check-group" id="confirm-wrap" style="display:none">
-      <input type="checkbox" id="chk-revisado" />
-      <label for="chk-revisado" style="text-transform:none;letter-spacing:0;font-size:13px;">Revisé el preview y confirmo el ajuste</label>
+    <div class="filter-group">
+      <label>Nombre de empresa</label>
+      <input type="text" id="f-empresa" placeholder="ej. Tel" />
     </div>
-    <button class="btn btn-primary" id="btn-apply" style="display:none" disabled>Confirmar ajuste</button>
-    <button class="btn btn-ghost" id="btn-cancel-preview" style="display:none">Cancelar</button>
+    <div class="filter-group">
+      <label>Número de contrato</label>
+      <input type="text" id="f-contrato" class="chico" placeholder="ej. 1042" />
+    </div>
+    <button class="btn btn-ghost" id="btn-limpiar">Limpiar</button>
   </div>
 
-  <!-- Stats + tabla principal (lista o preview) -->
+  <!-- Porcentaje + acciones -->
+  <div class="panel">
+    <div class="panel-title">Ajuste</div>
+    <div class="filter-group">
+      <label>Porcentaje de ajuste</label>
+      <input type="text" id="f-pct" class="chico" placeholder="ej. 4,26 o -2,5" />
+    </div>
+    <button class="btn btn-primary" id="btn-preview">Previsualizar</button>
+    <button class="btn btn-primary" id="btn-actualizar" style="display:none">Actualizar previsualización</button>
+    <button class="btn btn-ghost" id="btn-volver-seleccion" style="display:none">← Volver a la selección</button>
+    <div class="check-group" id="confirm-wrap" style="display:none">
+      <input type="checkbox" id="chk-revisado" />
+      <label for="chk-revisado" style="text-transform:none;letter-spacing:0;font-size:13px;">Revisé la previsualización y confirmo el ajuste</label>
+    </div>
+    <button class="btn btn-primary" id="btn-apply" style="display:none" disabled>Confirmar ajuste</button>
+    <button class="btn btn-ghost" id="btn-cancel-preview" style="display:none">Descartar</button>
+  </div>
+
+  <!-- Stats + tabla principal (lista / preview / resultado) -->
   <div class="stats" id="stats"></div>
   <div class="table-wrap">
     <table>
       <thead id="thead"></thead>
       <tbody id="tbody">
-        <tr><td colspan="8"><div class="loading"><div class="spinner"></div><br>Cargando line items iJServ…</div></td></tr>
+        <tr><td colspan="14"><div class="loading"><div class="spinner"></div><br>Cargando line items iJServ…</div></td></tr>
       </tbody>
     </table>
   </div>
@@ -197,7 +228,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Negocio</th><th>Empresa</th><th>Servicio</th><th class="num">Importe</th><th>Motivo</th></tr>
+          <tr><th>Negocio</th><th>Cliente factura</th><th>Descripción del producto</th><th class="num">Importe</th><th>Motivo</th></tr>
         </thead>
         <tbody id="tbody-excluidos"></tbody>
       </table>
@@ -223,190 +254,433 @@
   <div id="batch-detalle"></div>
 </div>
 
-<script>
+<script type="module">
+  // El buscador usa EL MISMO módulo que el backend y los tests.
+  import { filtrarFilas } from '/parametrica/api/filtros.js'
+
   const API = '/parametrica/api'
-  let previewActual = null   // {batchId, rows, ...}
-  let modo = 'lista'         // lista | preview | resultado
+
+  // ── Estado ─────────────────────────────────────────────────
+  let modo = 'lista'            // lista | preview | resultado
+  let elegibles = []            // filas de /line-items
+  let excluidos = []
+  let seleccion = new Set()     // lineItemIds tildados (lista y preview)
+  let preview = null            // {batchId, porcentaje, rows, ...}
+  let resultado = null          // respuesta de /apply
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-  const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const fmt = (n) => n == null || n === '' ? '—' : Number(n).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const $ = (id) => document.getElementById(id)
+  const txt = (s) => esc(s) || '<span class="val-empty">—</span>'
 
   function setAlert(html, cls) {
     $('alerts').innerHTML = html ? `<div class="alert ${cls}">${html}</div>` : ''
   }
 
-  // ── Lista inicial ──────────────────────────────────────────
-  async function cargarLista() {
-    modo = 'lista'
-    $('thead').innerHTML = `<tr>
-      <th>Negocio</th><th>Empresa</th><th>Área</th><th>Producto</th><th>Servicio</th>
-      <th class="num">Importe s/IVA</th><th>Moneda</th><th>Últ. ajuste</th></tr>`
-    $('tbody').innerHTML = `<tr><td colspan="8"><div class="loading"><div class="spinner"></div><br>Cargando line items iJServ…</div></td></tr>`
+  const criterios = () => ({
+    codigoEmpresa:  $('f-codigo').value,
+    nombreEmpresa:  $('f-empresa').value,
+    numeroContrato: $('f-contrato').value,
+  })
+  const hayFiltro = () => Object.values(criterios()).some(v => v.trim())
+
+  /** Filas de la tabla principal según el modo, ya pasadas por el buscador. */
+  function filasVisibles() {
+    const base = modo === 'lista' ? elegibles
+      : modo === 'preview' ? preview.rows
+      : resultado.items
+    return filtrarFilas(base, criterios())
+  }
+
+  const seleccionable = () => modo === 'lista' || modo === 'preview'
+
+  // ── Render ─────────────────────────────────────────────────
+
+  // Columnas comunes, en el orden pedido por la usuaria.
+  const COLS_BASE = ['Entidad facturadora', 'Cliente factura', 'N° contrato', 'Negocio',
+    'Descripción del producto', 'Área', 'Producto', 'Rubro', 'Moneda']
+
+  function celdasBase(f) {
+    return `
+      <td>${txt(f.entidadFacturadora)}</td>
+      <td>${txt(f.clienteFactura)}${f.codigoEmpresa ? `<br><span class="li-id">${esc(f.codigoEmpresa)}</span>` : ''}</td>
+      <td>${txt(f.numeroContrato)}</td>
+      <td>${txt(f.dealName)}${f.dealId ? `<br><span class="li-id">${esc(f.dealId)}</span>` : ''}</td>
+      <td class="cel-larga">${txt(f.descripcion || f.servicio)}<br><span class="li-id">LI ${esc(f.lineItemId)}</span></td>
+      <td>${txt(f.area)}</td>
+      <td>${txt(f.producto)}</td>
+      <td>${txt(f.rubro)}</td>
+      <td>${txt(f.moneda)}</td>`
+  }
+
+  function render() {
+    const filas = filasVisibles()
+    renderStats(filas)
+    renderCabecera()
+    renderCuerpo(filas)
+    renderBotones()
+  }
+
+  function renderCabecera() {
+    const chk = seleccionable() ? '<th class="chk"><input type="checkbox" id="chk-cabecera" /></th>' : ''
+    const cols = COLS_BASE.map(c => `<th>${c}</th>`).join('')
+    let extra
+    if (modo === 'lista') {
+      extra = '<th class="num">Importe s/IVA</th><th>Últ. ajuste</th>'
+    } else if (modo === 'preview') {
+      extra = '<th class="num">Importe s/IVA</th><th class="num">Importe nuevo</th><th>Últ. ajuste</th><th>Avisos</th>'
+    } else {
+      extra = '<th class="num">Importe viejo</th><th class="num">Importe nuevo</th><th>Estado</th>'
+    }
+    $('thead').innerHTML = `<tr>${chk}${cols}${extra}</tr>`
+    const cab = $('chk-cabecera')
+    if (cab) cab.addEventListener('change', () => toggleTodo(cab.checked))
+    sincronizarCabecera()
+  }
+
+  function renderCuerpo(filas) {
+    const colspan = COLS_BASE.length + 5
+    if (!filas.length) {
+      const msg = hayFiltro()
+        ? 'Ningún line item coincide con el buscador.'
+        : 'No hay line items iJServ elegibles.'
+      $('tbody').innerHTML = `<tr><td colspan="${colspan}"><div class="empty-state"><div class="icon">📭</div><p>${msg}</p></div></td></tr>`
+      return
+    }
+
+    $('tbody').innerHTML = filas.map(f => {
+      const marcado = seleccion.has(f.lineItemId)
+      const chk = seleccionable()
+        ? `<td class="chk"><input type="checkbox" class="chk-fila" data-id="${esc(f.lineItemId)}"${marcado ? ' checked' : ''} /></td>`
+        : ''
+
+      let extra
+      if (modo === 'lista') {
+        extra = `
+          <td class="num">${fmt(f.price)}</td>
+          <td>${f.fechaUltimoAjuste ? `${esc(f.fechaUltimoAjuste)}${f.porcentajeUltimoAjuste ? ` (${esc(f.porcentajeUltimoAjuste)}%)` : ''}` : '<span class="val-empty">nunca</span>'}${f.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>`
+      } else if (modo === 'preview') {
+        const avisos = [
+          f.ticketsProtegidos ? `<span class="badge b-warn">${f.ticketsProtegidos.count} ticket(s) promovidos futuros</span>` : '',
+          f.pausa ? '<span class="badge b-warn">pausado</span>' : '',
+        ].filter(Boolean).join(' ')
+        extra = `
+          <td class="num"><span class="val-before">${fmt(f.priceViejo)}</span></td>
+          <td class="num"><span class="val-after">${fmt(f.priceNuevo)}</span></td>
+          <td>${f.fechaUltimoAjuste ? esc(f.fechaUltimoAjuste) : '<span class="val-empty">nunca</span>'}</td>
+          <td>${avisos}</td>`
+      } else {
+        extra = `
+          <td class="num">${fmt(f.priceViejo)}</td>
+          <td class="num">${fmt(f.priceNuevo)}</td>
+          <td><span class="badge ${f.estado === 'applied' ? 'b-ok' : 'b-err'}">${esc(f.estado)}</span>${f.error ? `<br><span class="li-id">${esc(f.error)}</span>` : ''}</td>`
+      }
+      return `<tr class="${marcado && seleccionable() ? 'sel' : ''}">${chk}${celdasBase(f)}${extra}</tr>`
+    }).join('')
+
+    for (const input of document.querySelectorAll('.chk-fila')) {
+      input.addEventListener('change', () => {
+        if (input.checked) seleccion.add(input.dataset.id)
+        else seleccion.delete(input.dataset.id)
+        input.closest('tr').classList.toggle('sel', input.checked)
+        renderStats(filasVisibles())
+        renderBotones()
+        sincronizarCabecera()
+      })
+    }
+  }
+
+  function renderStats(filas) {
+    const total = modo === 'lista' ? elegibles.length
+      : modo === 'preview' ? preview.rows.length
+      : resultado.items.length
+    const partes = []
+
+    if (modo === 'preview') partes.push(`<span class="badge">PREVISUALIZACIÓN — lote ${preview.batchId}</span>`)
+    if (modo === 'resultado') partes.push(`<span class="badge">RESULTADO — lote ${resultado.batchId}</span>`)
+
+    if (hayFiltro()) partes.push(`<span><strong>${filas.length}</strong> de <strong>${total}</strong> por el buscador</span>`)
+    else partes.push(`<span><strong>${total}</strong> line items</span>`)
+
+    if (seleccionable()) partes.push(`<span class="sep">·</span><span><strong>${seleccion.size}</strong> marcados</span>`)
+    if (modo === 'preview') partes.push(`<span class="sep">·</span><span>ajuste <strong>${preview.porcentaje}%</strong></span>`)
+    if (modo === 'resultado') partes.push(`<span class="sep">·</span><span><strong>${resultado.aplicados}</strong> aplicados · <strong>${resultado.fallidos}</strong> fallidos</span>`)
+    if (modo === 'lista' && excluidos.length) partes.push(`<span class="sep">·</span><span>${excluidos.length} excluidos</span>`)
+
+    const acciones = []
+    if (seleccionable()) {
+      const todosMarcados = filas.length > 0 && filas.every(f => seleccion.has(f.lineItemId))
+      acciones.push(`<button class="btn btn-ghost btn-sm" id="btn-toggle-todo">${todosMarcados ? 'Desmarcar todo' : 'Seleccionar todo'}</button>`)
+    }
+    acciones.push('<button class="btn btn-ghost btn-sm" id="btn-csv">⬇ CSV</button>')
+
+    $('stats').innerHTML = partes.join(' ') + `<span class="derecha">${acciones.join('')}</span>`
+
+    const btnToggle = $('btn-toggle-todo')
+    if (btnToggle) btnToggle.addEventListener('click', () => {
+      const visibles = filasVisibles()
+      toggleTodo(!(visibles.length > 0 && visibles.every(f => seleccion.has(f.lineItemId))))
+    })
+    $('btn-csv').addEventListener('click', descargarCsvVista)
+  }
+
+  /** Marca o desmarca TODO lo que está a la vista (o sea, lo que dejó el buscador). */
+  function toggleTodo(marcar) {
+    for (const f of filasVisibles()) {
+      if (marcar) seleccion.add(f.lineItemId)
+      else seleccion.delete(f.lineItemId)
+    }
+    render()
+  }
+
+  function sincronizarCabecera() {
+    const cab = $('chk-cabecera')
+    if (!cab) return
+    const visibles = filasVisibles()
+    const marcados = visibles.filter(f => seleccion.has(f.lineItemId)).length
+    cab.checked = visibles.length > 0 && marcados === visibles.length
+    cab.indeterminate = marcados > 0 && marcados < visibles.length
+  }
+
+  function renderBotones() {
+    const enPreview = modo === 'preview'
+    const conLote = Boolean(preview)
+
+    // En la lista: "Previsualizar" si no hay lote abierto; si volviste a la
+    // selección con un lote abierto, el botón pasa a actualizarlo.
+    $('btn-preview').style.display          = (modo === 'lista' && !conLote) ? '' : 'none'
+    $('btn-actualizar').style.display       = ((modo === 'lista' && conLote) || enPreview) ? '' : 'none'
+    $('btn-volver-seleccion').style.display = enPreview ? '' : 'none'
+    $('confirm-wrap').style.display         = enPreview ? '' : 'none'
+    $('btn-apply').style.display            = enPreview ? '' : 'none'
+    $('btn-cancel-preview').style.display   = conLote ? '' : 'none'
+
+    $('btn-preview').disabled    = seleccion.size === 0
+    $('btn-actualizar').disabled = seleccion.size === 0
+    $('btn-apply').disabled      = !$('chk-revisado').checked
+  }
+
+  // ── Carga ──────────────────────────────────────────────────
+  async function cargarLista({ conservarSeleccion = false } = {}) {
     try {
       const res = await fetch(`${API}/line-items`)
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
 
-      $('stats').innerHTML = `<span><strong>${json.elegibles.length}</strong> line items elegibles</span>` +
-        (json.excluidos.length ? `<span>· <strong>${json.excluidos.length}</strong> excluidos</span>` : '')
-
-      if (!json.elegibles.length) {
-        $('tbody').innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">📭</div><p>No hay line items iJServ elegibles.</p></div></td></tr>`
+      elegibles = json.elegibles
+      excluidos = json.excluidos
+      if (!conservarSeleccion) {
+        seleccion = new Set()
       } else {
-        $('tbody').innerHTML = json.elegibles.map(li => `
-          <tr>
-            <td>${esc(li.dealName)}<span class="li-id"> ${esc(li.dealId)}</span></td>
-            <td>${esc(li.empresa) || '<span class="val-empty">—</span>'}</td>
-            <td>${esc(li.area) || '—'}</td>
-            <td>${esc(li.producto)}</td>
-            <td>${esc(li.servicio)}<br><span class="li-id">LI ${esc(li.lineItemId)}</span>${li.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>
-            <td class="num">${fmt(li.price)}</td>
-            <td>${esc(li.moneda) || '—'}</td>
-            <td>${li.fechaUltimoAjuste ? `${esc(li.fechaUltimoAjuste)} (${esc(li.porcentajeUltimoAjuste)}%)` : '<span class="val-empty">nunca</span>'}</td>
-          </tr>`).join('')
+        // Un LI que dejó de ser elegible no puede quedar marcado.
+        const vivos = new Set(elegibles.map(f => f.lineItemId))
+        seleccion = new Set([...seleccion].filter(id => vivos.has(id)))
       }
-
-      if (json.excluidos.length) {
-        $('sec-excluidos').style.display = ''
-        const motivos = { espejo_intercompany: 'Espejo intercompany (el mirroring pisaría el cambio)', deal_no_activo: 'Negocio no activo', sin_deal: 'Sin negocio asociado', sin_precio: 'Sin precio' }
-        $('sum-excluidos').textContent = `Excluidos del ajuste (${json.excluidos.length}) — espejos / negocios no activos`
-        $('tbody-excluidos').innerHTML = json.excluidos.map(li => `
-          <tr>
-            <td>${esc(li.dealName) || '—'}<span class="li-id"> ${esc(li.dealId ?? '')}</span></td>
-            <td>${esc(li.empresa) || '—'}</td>
-            <td>${esc(li.servicio)}<br><span class="li-id">LI ${esc(li.lineItemId)}</span></td>
-            <td class="num">${fmt(li.price)}</td>
-            <td><span class="badge b-warn">${esc(motivos[li.motivo] || li.motivo)}</span></td>
-          </tr>`).join('')
-      } else {
-        $('sec-excluidos').style.display = 'none'
-      }
+      renderExcluidos()
+      render()
     } catch (err) {
-      $('tbody').innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">⚠️</div><p>${esc(err.message)}</p></div></td></tr>`
+      $('tbody').innerHTML = `<tr><td colspan="14"><div class="empty-state"><div class="icon">⚠️</div><p>${esc(err.message)}</p></div></td></tr>`
     }
   }
 
-  // ── Preview ────────────────────────────────────────────────
+  function renderExcluidos() {
+    if (!excluidos.length) { $('sec-excluidos').style.display = 'none'; return }
+    const motivos = {
+      espejo_intercompany: 'Espejo intercompany (el mirroring pisaría el cambio)',
+      deal_no_ganado: 'El negocio todavía no está en cierre ganado',
+      sin_deal: 'Sin negocio asociado',
+      sin_precio: 'Sin precio',
+    }
+    $('sec-excluidos').style.display = ''
+    $('sum-excluidos').textContent = `Excluidos del ajuste (${excluidos.length}) — espejos / negocios sin ganar`
+    $('tbody-excluidos').innerHTML = excluidos.map(f => `
+      <tr>
+        <td>${txt(f.dealName)}<span class="li-id"> ${esc(f.dealId ?? '')}</span></td>
+        <td>${txt(f.clienteFactura)}</td>
+        <td>${txt(f.descripcion || f.servicio)}<br><span class="li-id">LI ${esc(f.lineItemId)}</span></td>
+        <td class="num">${fmt(f.price)}</td>
+        <td><span class="badge b-warn">${esc(motivos[f.motivo] || f.motivo)}</span></td>
+      </tr>`).join('')
+  }
+
+  // ── Previsualización ───────────────────────────────────────
+  function avisosPreview(json) {
+    const avisos = []
+    if (json.dryRun) avisos.push('⚠ El motor está en DRY_RUN: al confirmar NO se escribirá en HubSpot.')
+    if (json.warning) avisos.push('⚠ ' + json.warning)
+    const conTickets = json.rows.filter(r => r.ticketsProtegidos)
+    if (conTickets.length) avisos.push(`⚠ ${conTickets.length} line item(s) tienen tickets ya promovidos con fecha futura que <strong>conservarán el precio viejo</strong> (marcados en la tabla). Revisalos a mano si corresponde.`)
+    const pausados = json.rows.filter(r => r.pausa)
+    if (pausados.length) avisos.push(`⚠ ${pausados.length} line item(s) están pausados — el ajuste igual se aplicará.`)
+    setAlert(avisos.join('<br>'), 'alert-warn')
+  }
+
+  function entrarEnPreview(json) {
+    preview = json
+    modo = 'preview'
+    seleccion = new Set(json.rows.map(r => r.lineItemId))
+    $('chk-revisado').checked = false
+    avisosPreview(json)
+    render()
+  }
+
   async function previsualizar() {
     const pct = $('f-pct').value.trim()
     if (!pct) { setAlert('Ingresá el porcentaje de ajuste.', 'alert-warn'); return }
+    if (!seleccion.size) { setAlert('Marcá al menos un line item.', 'alert-warn'); return }
     setAlert('')
     $('btn-preview').disabled = true
     try {
       const res = await fetch(`${API}/preview`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ porcentaje: pct }),
+        body: JSON.stringify({ porcentaje: pct, lineItemIds: [...seleccion] }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      previewActual = json
-      modo = 'preview'
-
-      const avisos = []
-      if (json.dryRun) avisos.push('⚠ El motor está en DRY_RUN: al confirmar NO se escribirá en HubSpot.')
-      if (json.warning) avisos.push('⚠ ' + json.warning)
-      const conTickets = json.rows.filter(r => r.ticketsProtegidos)
-      if (conTickets.length) avisos.push(`⚠ ${conTickets.length} line item(s) tienen tickets ya promovidos con fecha futura que <strong>conservarán el precio viejo</strong> (marcados en la tabla). Revisalos a mano si corresponde.`)
-      const pausados = json.rows.filter(r => r.pausa)
-      if (pausados.length) avisos.push(`⚠ ${pausados.length} line item(s) están pausados — el ajuste igual se aplicará.`)
-      setAlert(avisos.join('<br>'), 'alert-warn')
-
-      $('stats').innerHTML = `<span class="badge">PREVIEW — batch ${json.batchId}</span>` +
-        `<span>Ajuste <strong>${json.porcentaje}%</strong> sobre <strong>${json.totalLis}</strong> line items</span>`
-
-      $('thead').innerHTML = `<tr>
-        <th>Negocio</th><th>Empresa</th><th>Servicio</th><th>Moneda</th>
-        <th class="num">Precio actual</th><th class="num">Precio nuevo</th><th>Avisos</th></tr>`
-      $('tbody').innerHTML = json.rows.map(r => `
-        <tr>
-          <td>${esc(r.dealName)}</td>
-          <td>${esc(r.empresa) || '—'}</td>
-          <td>${esc(r.servicio)}<br><span class="li-id">LI ${esc(r.lineItemId)}</span></td>
-          <td>${esc(r.moneda) || '—'}</td>
-          <td class="num"><span class="val-before">${fmt(r.priceViejo)}</span></td>
-          <td class="num"><span class="val-after">${fmt(r.priceNuevo)}</span></td>
-          <td>${r.ticketsProtegidos ? `<span class="badge b-warn">${r.ticketsProtegidos.count} ticket(s) promovidos futuros</span>` : ''}${r.pausa ? ' <span class="badge b-warn">pausado</span>' : ''}</td>
-        </tr>`).join('')
-
-      $('confirm-wrap').style.display = ''
-      $('btn-apply').style.display = ''
-      $('btn-cancel-preview').style.display = ''
-      $('chk-revisado').checked = false
-      $('btn-apply').disabled = true
+      entrarEnPreview(json)
     } catch (err) {
       setAlert(esc(err.message), 'alert-err')
-    } finally {
-      $('btn-preview').disabled = false
+      renderBotones()
     }
   }
 
-  function salirPreview() {
-    previewActual = null
-    $('confirm-wrap').style.display = 'none'
-    $('btn-apply').style.display = 'none'
-    $('btn-cancel-preview').style.display = 'none'
+  /** Rehace la selección del lote abierto: lo que agregaste y lo que sacaste. */
+  async function actualizarPreview() {
+    if (!preview) return
+    if (!seleccion.size) { setAlert('La previsualización no puede quedar vacía.', 'alert-warn'); return }
     setAlert('')
-    cargarLista()
+    $('btn-actualizar').disabled = true
+    try {
+      const res = await fetch(`${API}/preview/${preview.batchId}/items`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineItemIds: [...seleccion] }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      entrarEnPreview(json)
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
+      renderBotones()
+    }
+  }
+
+  /** Vuelve a la lista completa SIN perder el lote, para agregar más líneas. */
+  function volverASeleccion() {
+    modo = 'lista'
+    setAlert(`Estás editando la previsualización del lote ${preview.batchId}. ` +
+      'Marcá o desmarcá lo que quieras y dale «Actualizar previsualización».', 'alert-warn')
+    cargarLista({ conservarSeleccion: true })
+  }
+
+  async function descartarPreview() {
+    if (!preview) return
+    if (!window.confirm(`¿Descartar la previsualización del lote ${preview.batchId}? No se escribió nada en HubSpot.`)) return
+    try {
+      await fetch(`${API}/preview/${preview.batchId}/cancel`, { method: 'POST' })
+    } catch { /* si falla el descarte el lote queda en 'preview'; no es grave */ }
+    preview = null
+    modo = 'lista'
+    setAlert('')
+    $('f-pct').value = ''
+    await cargarLista()
+    cargarBatches()
   }
 
   // ── Apply ──────────────────────────────────────────────────
   async function aplicar() {
-    if (!previewActual || !$('chk-revisado').checked) return
-    if (!window.confirm(`¿Aplicar ${previewActual.porcentaje}% a ${previewActual.totalLis} line items iJServ? Esta acción escribe en HubSpot.`)) return
+    if (!preview || !$('chk-revisado').checked) return
+    if (!window.confirm(`¿Aplicar ${preview.porcentaje}% a ${preview.rows.length} line items iJServ? Esta acción escribe en HubSpot.`)) return
+    const batchId = preview.batchId
     $('btn-apply').disabled = true
-    $('btn-preview').disabled = true
     setAlert('Aplicando ajuste… no cierres la pestaña.', 'alert-warn')
     try {
       const res = await fetch(`${API}/apply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batchId: previewActual.batchId, confirm: true }),
+        body: JSON.stringify({ batchId, confirm: true }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+
+      resultado = { ...json, batchId }
       modo = 'resultado'
+      preview = null
+      seleccion = new Set()
+      $('f-pct').value = ''
 
       setAlert(json.fallidos === 0
         ? `✔ Ajuste aplicado a ${json.aplicados} line items. Se envió el extracto por email.`
         : `Ajuste terminado con fallos: ${json.aplicados} aplicados, ${json.fallidos} fallidos. Se envió el extracto por email.`,
         json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
 
-      $('stats').innerHTML = `<span class="badge">RESULTADO — batch ${previewActual.batchId}</span>` +
-        `<span><strong>${json.aplicados}</strong> aplicados · <strong>${json.fallidos}</strong> fallidos</span>` +
-        `<button class="btn btn-ghost" id="btn-csv-res">⬇ Descargar CSV extracto</button>`
-      $('btn-csv-res').addEventListener('click', () => descargarCsvBatch(previewActual.batchId))
-
-      $('thead').innerHTML = `<tr>
-        <th>Negocio</th><th>Empresa</th><th>Servicio</th>
-        <th class="num">Precio viejo</th><th class="num">Precio nuevo</th><th>Estado</th></tr>`
-      $('tbody').innerHTML = json.items.map(i => `
-        <tr>
-          <td>${esc(i.dealName)}</td>
-          <td>${esc(i.empresa) || '—'}</td>
-          <td>${esc(i.servicio)}<br><span class="li-id">LI ${esc(i.lineItemId)}</span></td>
-          <td class="num">${fmt(i.priceViejo)}</td>
-          <td class="num">${fmt(i.priceNuevo)}</td>
-          <td><span class="badge ${i.estado === 'applied' ? 'b-ok' : 'b-err'}">${esc(i.estado)}</span>${i.error ? `<br><span class="li-id">${esc(i.error)}</span>` : ''}</td>
-        </tr>`).join('')
-
-      $('confirm-wrap').style.display = 'none'
-      $('btn-apply').style.display = 'none'
-      $('btn-cancel-preview').style.display = 'none'
-      $('f-pct').value = ''
-      previewActual = null
+      render()
       cargarBatches()
     } catch (err) {
       setAlert(esc(err.message), 'alert-err')
-      $('btn-apply').disabled = false
-    } finally {
-      $('btn-preview').disabled = false
+      renderBotones()
+    }
+  }
+
+  // ── CSV ────────────────────────────────────────────────────
+  const escCsv = (s) => { s = String(s ?? ''); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+
+  function bajarCsv(nombre, cabecera, filas) {
+    const lineas = [cabecera.join(';'), ...filas.map(f => f.map(escCsv).join(';'))]
+    const blob = new Blob(['﻿' + lineas.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = nombre
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  /** CSV de lo que estás viendo: respeta el buscador y el modo. */
+  function descargarCsvVista() {
+    const filas = filasVisibles()
+    const base = ['entidad_facturadora', 'cliente_factura', 'codigo_empresa', 'numero_contrato',
+      'negocio', 'deal_id', 'line_item_id', 'descripcion_producto', 'area', 'producto', 'rubro', 'moneda']
+    const comunes = (f) => [f.entidadFacturadora, f.clienteFactura, f.codigoEmpresa, f.numeroContrato,
+      f.dealName, f.dealId, f.lineItemId, f.descripcion || f.servicio, f.area, f.producto, f.rubro, f.moneda]
+
+    if (modo === 'lista') {
+      bajarCsv('parametrica_ijserv_seleccion.csv',
+        [...base, 'importe_sin_iva', 'fecha_ultimo_ajuste', 'porcentaje_ultimo_ajuste', 'marcado'],
+        filas.map(f => [...comunes(f), f.price, f.fechaUltimoAjuste, f.porcentajeUltimoAjuste,
+          seleccion.has(f.lineItemId) ? 'sí' : 'no']))
+    } else if (modo === 'preview') {
+      bajarCsv(`parametrica_ijserv_previsualizacion_${preview.batchId}.csv`,
+        [...base, 'importe_viejo', 'importe_nuevo', 'porcentaje', 'fecha_ultimo_ajuste', 'marcado'],
+        filas.map(f => [...comunes(f), f.priceViejo, f.priceNuevo, preview.porcentaje,
+          f.fechaUltimoAjuste, seleccion.has(f.lineItemId) ? 'sí' : 'no']))
+    } else {
+      bajarCsv(`parametrica_ijserv_resultado_${resultado.batchId}.csv`,
+        [...base, 'importe_viejo', 'importe_nuevo', 'estado', 'error'],
+        filas.map(f => [...comunes(f), f.priceViejo, f.priceNuevo, f.estado, f.error]))
+    }
+  }
+
+  /** CSV de un lote del historial (ya aplicado o revertido). */
+  window.descargarCsvBatch = async function (batchId) {
+    try {
+      const res = await fetch(`${API}/batches/${batchId}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      bajarCsv(`parametrica_ijserv_lote_${batchId}.csv`,
+        ['entidad_facturadora', 'cliente_factura', 'codigo_empresa', 'numero_contrato',
+          'negocio', 'deal_id', 'line_item_id', 'descripcion_producto', 'area', 'producto', 'rubro',
+          'moneda', 'importe_viejo', 'importe_nuevo', 'porcentaje', 'usuario', 'fecha', 'estado', 'error'],
+        json.items.map(i => [i.entidad_facturadora, i.cliente_factura, i.codigo_empresa, i.numero_contrato,
+          i.deal_name, i.deal_id, i.line_item_id, i.descripcion || i.servicio, i.area, i.producto, i.rubro,
+          i.moneda, i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.usuario,
+          json.batch.applied_at || json.batch.created_at, i.estado, i.error]))
+    } catch (err) {
+      setAlert(esc(err.message), 'alert-err')
     }
   }
 
   // ── Historial / reversa ────────────────────────────────────
   const ESTADOS_BATCH = {
     preview: 'b-warn', applying: 'b-warn', applied: 'b-ok', partial: 'b-warn',
-    failed: 'b-err', reverted: 'b-err', reverted_partial: 'b-warn',
+    failed: 'b-err', reverted: 'b-err', reverted_partial: 'b-warn', cancelled: '',
   }
 
   async function cargarBatches() {
@@ -445,18 +719,19 @@
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
       const puedeRevertirItem = ['applied', 'partial', 'reverted_partial'].includes(json.batch.estado)
       $('batch-detalle').innerHTML = `
-        <h2 style="margin:16px 0 8px">Detalle batch ${batchId} — ${esc(json.batch.porcentaje)}% (${esc(json.batch.estado)})</h2>
+        <h2 style="margin:16px 0 8px">Detalle lote ${batchId} — ${esc(json.batch.porcentaje)}% (${esc(json.batch.estado)})</h2>
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Negocio</th><th>Empresa</th><th>Servicio</th>
-              <th class="num">Precio viejo</th><th class="num">Precio nuevo</th><th>Estado</th><th></th>
+              <th>Cliente factura</th><th>N° contrato</th><th>Negocio</th><th>Descripción del producto</th>
+              <th class="num">Importe viejo</th><th class="num">Importe nuevo</th><th>Estado</th><th></th>
             </tr></thead>
             <tbody>${json.items.map(i => `
               <tr>
-                <td>${esc(i.deal_name)}<span class="li-id"> ${esc(i.deal_id ?? '')}</span></td>
-                <td>${esc(i.empresa) || '—'}</td>
-                <td>${esc(i.servicio)}<br><span class="li-id">LI ${esc(i.line_item_id)}</span></td>
+                <td>${txt(i.cliente_factura || i.empresa)}${i.codigo_empresa ? `<br><span class="li-id">${esc(i.codigo_empresa)}</span>` : ''}</td>
+                <td>${txt(i.numero_contrato)}</td>
+                <td>${txt(i.deal_name)}<span class="li-id"> ${esc(i.deal_id ?? '')}</span></td>
+                <td>${txt(i.descripcion || i.servicio)}<br><span class="li-id">LI ${esc(i.line_item_id)}</span></td>
                 <td class="num">${fmt(i.price_viejo)}</td>
                 <td class="num">${fmt(i.price_nuevo)}</td>
                 <td><span class="badge ${i.estado === 'applied' ? 'b-ok' : i.estado === 'reverted' ? 'b-err' : i.estado.includes('failed') ? 'b-err' : ''}">${esc(i.estado)}</span>${i.error ? `<br><span class="li-id">${esc(i.error)}</span>` : ''}</td>
@@ -483,7 +758,7 @@
         json.fallidos === 0 ? 'alert-ok' : 'alert-warn')
       cargarBatches()
       if (body.batchId) window.verDetalle(body.batchId)
-      if (modo === 'lista') cargarLista()
+      if (modo === 'lista') cargarLista({ conservarSeleccion: true })
     } catch (err) {
       setAlert(esc(err.message), 'alert-err')
     }
@@ -494,37 +769,22 @@
   window.revertirItem = (batchId, lineItemId) =>
     ejecutarReversa({ batchId, lineItemId }, `¿Revertir el line item ${lineItemId} a su precio anterior?`)
 
-  window.descargarCsvBatch = async function (batchId) {
-    try {
-      const res = await fetch(`${API}/batches/${batchId}`)
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      const escCsv = (s) => { s = String(s ?? ''); return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-      const lineas = [
-        'empresa;negocio;deal_id;line_item_id;servicio;moneda;precio_viejo;precio_nuevo;porcentaje;usuario;fecha;estado;error',
-        ...json.items.map(i => [
-          i.empresa, i.deal_name, i.deal_id, i.line_item_id, i.servicio, i.moneda,
-          i.price_viejo, i.price_nuevo, json.batch.porcentaje, json.batch.usuario,
-          json.batch.applied_at || json.batch.created_at, i.estado, i.error,
-        ].map(escCsv).join(';')),
-      ]
-      const blob = new Blob(['﻿' + lineas.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `parametrica_ijserv_batch_${batchId}.csv`
-      a.click()
-      URL.revokeObjectURL(a.href)
-    } catch (err) {
-      setAlert(esc(err.message), 'alert-err')
-    }
-  }
-
   // ── Wiring ─────────────────────────────────────────────────
   $('btn-preview').addEventListener('click', previsualizar)
+  $('btn-actualizar').addEventListener('click', actualizarPreview)
+  $('btn-volver-seleccion').addEventListener('click', volverASeleccion)
   $('btn-apply').addEventListener('click', aplicar)
-  $('btn-cancel-preview').addEventListener('click', salirPreview)
-  $('chk-revisado').addEventListener('change', () => { $('btn-apply').disabled = !$('chk-revisado').checked })
-  $('f-pct').addEventListener('keydown', (e) => { if (e.key === 'Enter') previsualizar() })
+  $('btn-cancel-preview').addEventListener('click', descartarPreview)
+  $('chk-revisado').addEventListener('change', renderBotones)
+  $('f-pct').addEventListener('keydown', (e) => { if (e.key === 'Enter' && modo === 'lista' && !preview) previsualizar() })
+
+  for (const id of ['f-codigo', 'f-empresa', 'f-contrato']) {
+    $(id).addEventListener('input', render)
+  }
+  $('btn-limpiar').addEventListener('click', () => {
+    for (const id of ['f-codigo', 'f-empresa', 'f-contrato']) $(id).value = ''
+    render()
+  })
 
   cargarLista()
   cargarBatches()

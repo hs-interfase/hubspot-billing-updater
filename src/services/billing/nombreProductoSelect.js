@@ -59,6 +59,55 @@ export const ID_TO_NOMBRE_PRODUCTO = Object.fromEntries(
   Object.entries(NOMBRE_PRODUCTO_TO_ID).map(([nombre, id]) => [id, nombre])
 );
 
+// ── Traducción al select del TICKET (`of_producto`) ──────────────────────────
+// Los DOS selects tienen los mismos productos pero con CASING DISTINTO:
+//   line_item.nombre_producto → 'ISCert' · 'ISCert ISA' · 'IJServ'   (I mayúscula)
+//   ticket.of_producto        → 'iSCert' · 'iJServ'                  (casing biblioteca)
+// Verificado por API el 2-ago contra el portal. Escribir el valor del otro select da
+// 400, así que la traducción es OBLIGATORIA — no alcanza con copiar el string.
+//
+// 🔴 HUECO CONOCIDO: `of_producto` NO tiene opción «iSCert ISA» (el ticket sólo conoce
+// «iSCert»). Hasta que se agregue la opción en el portal, el split del 13-jul no se
+// puede representar en el ticket y las dos ramas caen en 'iSCert'.
+export const NOMBRE_PRODUCTO_TO_OF_PRODUCTO = {
+  'ISCert': 'iSCert',
+  'ISCert ISA': 'iSCert', // ⚠️ ver hueco de arriba
+  'IJServ': 'iJServ',
+  'i2': 'i2',
+  'MiFactura': 'MiFactura',
+  'MiRecibo': 'MiRecibo',
+  'Flota': 'Flota',
+  'Proyectos': 'Proyectos',
+  'iGDoc': 'iGDoc',
+  'Liferay': 'Liferay',
+  'NNDD Ops': 'NNDD Ops',
+  'Portal': 'Portal',
+  'PayRoll': 'PayRoll',
+};
+
+/**
+ * Producto del TICKET a partir del LINE ITEM (definición usuaria 2-ago-2026):
+ * «`of_producto` es el nombre del PRODUCTO asociado al line item».
+ *
+ * Antes salía de `deal.producto`, que es la UNIÓN de los productos del negocio → con
+ * varios line items todos los tickets recibían el mismo producto (medido: 4 de 5
+ * tickets con el producto equivocado). Acá se resuelve por línea.
+ *
+ * Prioriza el select ya resuelto y cae al `hs_product_id` si el select todavía no se
+ * rellenó (el orden de Phase 1 no garantiza que ya haya corrido el id→select).
+ *
+ * @param {object} lineItemProps - properties del line item
+ * @returns {string} valor del select `of_producto`, o '' si no se puede resolver
+ */
+export function ofProductoDesdeLineItem(lineItemProps = {}) {
+  const porSelect = String(lineItemProps[LI_NOMBRE_PRODUCTO_PROP] || '').trim();
+  if (porSelect && NOMBRE_PRODUCTO_TO_OF_PRODUCTO[porSelect]) {
+    return NOMBRE_PRODUCTO_TO_OF_PRODUCTO[porSelect];
+  }
+  const porId = ID_TO_NOMBRE_PRODUCTO[String(lineItemProps.hs_product_id || '').trim()];
+  return porId ? (NOMBRE_PRODUCTO_TO_OF_PRODUCTO[porId] || '') : '';
+}
+
 /** Resuelve el product ID (prod) desde el valor del select. null si la opción no está mapeada. */
 export function resolveProductIdFromNombre(nombreProducto) {
   const v = String(nombreProducto ?? '').trim();

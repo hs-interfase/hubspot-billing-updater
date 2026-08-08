@@ -13,7 +13,11 @@ import { auditOrphanTickets } from '../services/orphanAuditService.js';
 import pool, { initCronStateTable, getCronState, setCronState, initCronFailuresTable, insertCronFailure } from "../db.js";
 import {
   FORECAST_MANUAL_STAGES,
+  FORECAST_MANUAL_STAGES_UP_TO_75,
+  BILLING_ACTIVE_DEAL_STAGES,
+  PROXIMOS_A_FACTURAR_STAGE,
 } from '../config/constants.js';
+import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
 import { acquireCronLock, releaseCronLock } from "../utils/cronLock.js";
 import { getAllAssociatedIds, readTicketsInChunks } from "../utils/hubspotAssociations.js";
 
@@ -148,11 +152,15 @@ async function searchDeals({ after, limit, filters, properties, sorts }) {
   );
 }
 
-async function searchOverdueForecasts({ after, limit }) {
+// Bajo ETAPA_UNICA_ENABLED, el escaneo por ETAPA forecast sólo llega hasta el
+// 75% (85%/95% manual quedan retirados de uso: ver searchGanadoDealsWithProximosTickets
+// para el criterio que los reemplaza). Flag apagada: comportamiento idéntico al de hoy.
+// client/withRetryFn inyectables sólo para tests (defaults = producción).
+export async function searchOverdueForecasts({ after, limit }, { client = hubspotClient, withRetryFn = withRetry } = {}) {
   const todayMs = String(Date.now());
-  const stages = [...FORECAST_MANUAL_STAGES];
-  return await withRetry(() =>
-    hubspotClient.crm.tickets.searchApi.doSearch({
+  const stages = [...(etapaUnicaEnabled() ? FORECAST_MANUAL_STAGES_UP_TO_75 : FORECAST_MANUAL_STAGES)];
+  return await withRetryFn(() =>
+    client.crm.tickets.searchApi.doSearch({
       filterGroups: stages.map(stageId => ({
         filters: [
           { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stageId },
@@ -165,6 +173,91 @@ async function searchOverdueForecasts({ after, limit }) {
       after: after || undefined,
     })
   );
+}
+
+// Paginado completo: junta los of_deal_id de los tickets en `stageId` cuyo
+// of_deal_id esté en `dealIds` (chunks de <=100, límite del operador IN).
+// client/withRetryFn inyectables sólo para tests (defaults = producción).
+export async function findDealIdsWithTicketInStage(dealIds, stageId, { client = hubspotClient, withRetryFn = withRetry } = {}) {
+  const found = new Set();
+  if (!dealIds.length || !stageId) return found;
+
+  for (let i = 0; i < dealIds.length; i += 100) {
+    const chunk = dealIds.slice(i, i + 100);
+    let after;
+    for (;;) {
+      const resp = await withRetryFn(() =>
+        client.crm.tickets.searchApi.doSearch({
+          filterGroups: [{
+            filters: [
+              { propertyName: 'hs_pipeline_stage', operator: 'EQ', value: stageId },
+              { propertyName: 'of_deal_id', operator: 'IN', values: chunk },
+            ],
+          }],
+          properties: ['of_deal_id'],
+          limit: 100,
+          after: after || undefined,
+        })
+      );
+      for (const t of resp?.results || []) {
+        const id = String(t?.properties?.of_deal_id || '').trim();
+        if (id) found.add(id);
+      }
+      after = resp?.paging?.next?.after;
+      if (!after) break;
+    }
+  }
+  return found;
+}
+
+// Sólo bajo ETAPA_UNICA_ENABLED. Reemplaza, para el 85%/95%, la búsqueda por
+// ETAPA de ticket vencida: en su lugar busca NEGOCIOS en esas etapas de deal
+// (85/95/100 — BILLING_ACTIVE_DEAL_STAGES) y verifica que tengan algún ticket
+// en «Próximos a facturar».
+//
+// ⚠️ ACÁ VA SIN FILTRO DE FECHA, a propósito (decisión usuaria 30-jul): el del
+// fin de semana es el barrido COMPLETO de consistencia, la señal es "negocio
+// ganado con cronograma vivo en la etapa única", no "vencido". El que sí acota
+// a lo vencido es el cron DIARIO (cronDealsBatch, `soloVencidos: true`).
+// Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2 / TANDA A punto 1.
+// client/withRetryFn/findDealIdsWithTicketInStageFn inyectables sólo para tests.
+export async function searchGanadoDealsWithProximosTickets({ after, limit }, {
+  client = hubspotClient,
+  withRetryFn = withRetry,
+  findDealIdsWithTicketInStageFn = findDealIdsWithTicketInStage,
+} = {}) {
+  const dealStages = [...BILLING_ACTIVE_DEAL_STAGES].filter(Boolean);
+  if (!dealStages.length || !PROXIMOS_A_FACTURAR_STAGE) {
+    return { results: [], paging: {} };
+  }
+
+  const dealsResp = await withRetryFn(() =>
+    client.crm.deals.searchApi.doSearch({
+      filterGroups: [{
+        filters: [{ propertyName: 'dealstage', operator: 'IN', values: dealStages }],
+      }],
+      properties: ['hs_object_id'],
+      sorts: [{ propertyName: 'hs_object_id', direction: 'ASCENDING' }],
+      limit,
+      after: after || undefined,
+    })
+  );
+
+  const dealIds = (dealsResp?.results || [])
+    .map(d => String(d.id || d.properties?.hs_object_id || '').trim())
+    .filter(Boolean);
+
+  if (!dealIds.length) {
+    return { results: [], paging: dealsResp?.paging || {} };
+  }
+
+  const dealIdsConProximos = await findDealIdsWithTicketInStageFn(dealIds, PROXIMOS_A_FACTURAR_STAGE, { client, withRetryFn });
+
+  const results = dealIds
+    .filter(id => dealIdsConProximos.has(id))
+    .map(id => ({ properties: { of_deal_id: id } }));
+
+  return { results, paging: dealsResp?.paging || {} };
 }
 
 function baseFiltersCancelled() {
@@ -314,6 +407,7 @@ let processed = 0, ok = 0, failed = 0, skippedMirror = 0, skippedNoLI = 0, skipp
     if (prevScanDate && prevScanDate !== today) {
       await setCronState('weekend_last_id_full', null);
       await setCronState('weekend_after_s4', null);
+      await setCronState('weekend_after_s5', null);
       await setCronState('weekend_full_scan_done_date', null);
       logger.info({ prevScanDate, today }, '[cronWeekend] Cursores reseteados (nuevo día)');
     }
@@ -398,6 +492,7 @@ lastCtx = { ...lastCtx, where: "onlyDealId.runPhasesForDeal", dealId };
       return { mode, processed: 0, ok: 0, failed: 0, skippedMirror: 0, skippedNoLI: 0 };
     }
     let afterS4    = await getCronState('weekend_after_s4');
+    let afterS5    = await getCronState('weekend_after_s5');
 
 
     async function* candidateDealsGenerator() {
@@ -471,6 +566,38 @@ while (Date.now() < deadline) {
             where: 'candidateDealsGenerator.s4_overdue_forecasts',
             msg: e4?.message || String(e4),
             status: e4?.code || e4?.statusCode || e4?.response?.status || null,
+          });
+          break;
+        }
+      }
+
+      // S5: bajo ETAPA_UNICA_ENABLED, negocios ganados (85/95/100) con algún
+      // ticket en «Próximos a facturar» — reemplaza el rol de S4 para esas dos
+      // etapas (ver searchGanadoDealsWithProximosTickets). Flag apagada: no corre.
+      while (etapaUnicaEnabled() && Date.now() < deadline) {
+        try {
+          const r5 = await searchGanadoDealsWithProximosTickets({ after: afterS5, limit: PAGE_LIMIT });
+          for (const t of r5?.results || []) {
+            const dealId = String(t?.properties?.of_deal_id || '').trim();
+            if (!dealId || seen.has(dealId)) continue;
+            seen.add(dealId);
+            yield { id: dealId, summary: null };
+          }
+          afterS5 = r5?.paging?.next?.after || null;
+          await setCronState('weekend_after_s5', afterS5);
+
+          if (!afterS5 || (r5?.results || []).length === 0) {
+            afterS5 = null;
+            await setCronState('weekend_after_s5', null);
+            break;
+          }
+        } catch (e5) {
+          appendAudit({
+            at: new Date().toISOString(),
+            type: 'error',
+            where: 'candidateDealsGenerator.s5_ganado_proximos',
+            msg: e5?.message || String(e5),
+            status: e5?.code || e5?.statusCode || e5?.response?.status || null,
           });
           break;
         }

@@ -164,3 +164,40 @@ test('associationType en minúsculas se normaliza', () => {
   const r = rutearAssociationChangeDealCompany(assocEvent({ associationType: 'deal_to_company' }));
   assert.equal(r.aplica, true);
 });
+
+// ─── TANDA B punto 6: el listener sigue la frontera ──────────────────────────
+// ETAPA_UNICA_ENABLED prendida: valor_recalc alcanza TODO el pipeline manual
+// (lo no notificado — que ahora incluye «Próximos» y los viejos 85/95 — y lo ya
+// notificado, que hoy también pasa). El guard anti-tormenta deja de hacer falta
+// porque bajo la misma flag Phase P ya no re-snapshotea los manuales no
+// notificados. Ver PLAN §2.3.
+
+test('flag ON: el ticket forecast manual pasa a disparar valor_recalc', () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+  for (const stage of [STAGE_FORECAST, STAGE_FORECAST_50, STAGE_FORECAST_75, STAGE_FORECAST_85, STAGE_FORECAST_95]) {
+    assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage }), true, `stage ${stage}`);
+  }
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('flag ON: «Próximos» y «Listo» siguen disparando (no se pierde nada de lo de hoy)', () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage: STAGE_PROXIMOS }), true);
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage: STAGE_LISTO }), true);
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('flag ON: el pipeline AUTOMÁTICO sigue sin disparar, y null/undefined tampoco', () => {
+  process.env.ETAPA_UNICA_ENABLED = 'true';
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_AUTO, stage: STAGE_PROXIMOS }), false);
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage: null }), false);
+  assert.equal(esTicketEditableParaValor({ pipeline: null, stage: STAGE_PROXIMOS }), false);
+  assert.equal(esTicketEditableParaValor(), false);
+  delete process.env.ETAPA_UNICA_ENABLED;
+});
+
+test('flag OFF (default): el forecast manual NO dispara — guard anti-tormenta intacto', () => {
+  delete process.env.ETAPA_UNICA_ENABLED;
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage: STAGE_FORECAST_85 }), false);
+  assert.equal(esTicketEditableParaValor({ pipeline: PIPELINE_MANUAL, stage: STAGE_PROXIMOS }), true);
+});

@@ -600,6 +600,28 @@ await processLineItemsForPhase1(mirrorResult.targetDealId, mirrorLineItems, toda
       } catch (err) {
         logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error updateDealCupo en espejo UY');
       }
+      // 🔴 2-ago-2026: el ESPEJO deriva su área y su emisora POR SU CUENTA, desde SU
+      // producto — no las copia del original (criterio de la usuaria). Antes estas dos
+      // no se corrían para el espejo (vivían más abajo, sólo para el deal original),
+      // así que el line item espejo quedaba con `area` y `empresa_que_factura` VACÍAS
+      // aunque el producto sí se hubiera copiado. Medido en sandbox: las dos vacías.
+      //
+      // Van ANTES de syncDealCatalogTags, igual que en el original, para que los tags
+      // del negocio espejo tomen el área nueva.
+      //
+      // 📌 `syncLineItemAreaByCountry` es no-op acá (el espejo es Uruguay y la regla
+      // sólo fuerza Paraguay), pero se llama igual para no cablear la excepción: si
+      // mañana la regla cubre otro país, el espejo la hereda sin tocar esto.
+      try {
+        await syncLineItemAreaByCountry(mirrorDeal, mirrorLineItems);
+      } catch (err) {
+        logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error en syncLineItemAreaByCountry (espejo UY)');
+      }
+      try {
+        await syncLineItemEntidadFacturadora(mirrorDeal, mirrorLineItems);
+      } catch (err) {
+        logger.error({ module: 'phase1', fn: 'runPhase1', mirrorDealId: mirrorResult.targetDealId, err }, '[phase1] Error en syncLineItemEntidadFacturadora (espejo UY)');
+      }
       try {
         await syncDealCatalogTags(mirrorDeal, mirrorLineItems);
       } catch (err) {

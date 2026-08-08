@@ -11,19 +11,20 @@ import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { recalcFromTickets } from '../services/lineItems/recalcFromTickets.js';
 import { withRetry } from '../utils/withRetry.js';
-import { 
-  DEAL_STAGE_EN_EJECUCION, 
-  MANUAL_TICKET_LOOKAHEAD_DAYS, 
-  TICKET_STAGES, 
-  BILLING_TICKET_FORECAST, 
-  BILLING_TICKET_FORECAST_50, 
-  BILLING_TICKET_FORECAST_75,   
+import {
+  DEAL_STAGE_EN_EJECUCION,
+  MANUAL_TICKET_LOOKAHEAD_DAYS,
+  TICKET_STAGES,
+  BILLING_TICKET_FORECAST,
+  BILLING_TICKET_FORECAST_50,
+  BILLING_TICKET_FORECAST_75,
   BILLING_TICKET_FORECAST_85,
-  BILLING_TICKET_FORECAST_95,  
+  BILLING_TICKET_FORECAST_95,
   FORECAST_MANUAL_STAGES,
   DEAL_STAGE_FINALIZADO,
-  PROXIMOS_A_FACTURAR_STAGE
+  PROXIMOS_A_FACTURAR_STAGE,
 } from '../config/constants.js';
+import { etapaUnicaEnabled } from '../config/etapaUnicaFlags.js';
 
 /**
  * PHASE 2 (MANUAL):
@@ -100,13 +101,42 @@ async function moveTicketToStage(ticketId, stageId) {
  * la ventana editable por admin. NO es "Listo para Facturar" (TICKET_STAGES.READY):
  * la emisión sigue requiriendo confirmación del admin.
  */
-async function promoteManualForecastTicketToProximos({
+export async function promoteManualForecastTicketToProximos({
   dealId,
   dealStage,
   lineItemKey,
   nextBillingDate,
   lineItemId,
 }) {
+  // ETAPA ÚNICA (flag ON): LA VENTANA DE 30 DÍAS DEJA DE SER UN CAMBIO DE ETAPA.
+  //
+  // Ya no hay a dónde promover: del cierre ganado en adelante la etapa es una
+  // sola y el ticket NACE en «Próximos a facturar» (resolveForecastStage en
+  // phasep.js).
+  //
+  // Los 30 días sobreviven sólo como disparador del AVISO individual al
+  // responsable, y ese aviso NO LO HACE EL MOTOR: lo manda un workflow de
+  // HubSpot (decisión de la usuaria, 31-jul — mismo criterio que el resumen al
+  // cierre ganado, que salió del motor el 30-jul). El código que lo hacía acá
+  // se borró en esa fecha, junto con la prop `of_aviso_1mes_enviado`: si el
+  // motor también lo mandara, llegarían DOS avisos por ticket.
+  //
+  // Efecto lateral asumido: un negocio que TODAVÍA no está ganado (buckets
+  // 25/50/75) deja de tener su ticket movido a «Próximos» por cercanía de
+  // fecha. Es coherente con lo que ya avisa el motor en ese caso ("no se
+  // facturará hasta ganar el negocio", warnFacturacionDealNoGanado) y evita el
+  // ping-pong con Phase P, que bajo la flag maneja «Próximos» y lo devolvería a
+  // su etapa forecast en la misma corrida.
+  //
+  // Ver PLAN_proximos_cambios_tickets_2026-07-29.md §2.2 y §2.6.
+  if (etapaUnicaEnabled()) {
+    logger.debug(
+      { module: 'phase2', fn: 'promoteManualForecastTicketToProximos', dealId, lineItemId, nextBillingDate },
+      'Etapa única: sin promoción de etapa (la ventana de 30 días es sólo aviso)'
+    );
+    return { moved: false, reason: 'etapa_unica_sin_promocion' };
+  }
+
   if (!lineItemKey) return { moved: false, reason: 'missing_line_item_key' };
 
   const ticketKeyNew = buildTicketKeyFromLineItemKey(dealId, lineItemKey, nextBillingDate);
@@ -280,7 +310,14 @@ export async function runPhase2({ deal, lineItems }) {
       // antes de que Phase 2 corra en el mismo cron run.
       const mirrorLineItemKey = lp.line_item_key ? String(lp.line_item_key).trim() : '';
       if (mirrorLineItemKey) {
-        const forecastStageIds = [...FORECAST_MANUAL_STAGES];
+        // Bajo ETAPA_UNICA_ENABLED el ticket manual del espejo vive en «Próximos
+        // a facturar» (nace ahí, o lo promovió mirrorUtils a propósito): si el
+        // scan siguiera mirando sólo las etapas forecast, este line item se
+        // quedaría sin el aviso individual de 1 mes. La promoción de etapa ya no
+        // ocurre bajo la flag — acá sólo se amplía a qué tickets se les avisa.
+        const forecastStageIds = etapaUnicaEnabled() && PROXIMOS_A_FACTURAR_STAGE
+          ? [...FORECAST_MANUAL_STAGES, PROXIMOS_A_FACTURAR_STAGE]
+          : [...FORECAST_MANUAL_STAGES];
         let searchResp;
         try {
           searchResp = await withRetry(

@@ -51,6 +51,25 @@ actualizar, ajuste_factura_aparte, area, billing_anchor_date, description, disco
 ajuste_factura_aparte, area, cancelar_ticket, cantidad_real, cliente_partner, comentarios_pm, content, descuento_en_porcentaje, descuento_por_unidad_real, dolar, empresa_id, empresa_que_factura, entidad_facturadora, exonera_irae, facturacion_automatica, facturar_ahora, fecha_inicio_de_facturacion, fecha_real_de_facturacion, fecha_resolucion_esperada, fin_del_contrato, hay_ajuste, hs_resolution, inicio_del_contrato, momento_de_facturacion, monto_unitario_real, motivo_cancelacion_del_ticket, motivo_del_ajuste, nc, negocio_compartido, nombre_empresa, nota, observaciones, observaciones_ventas, of_aplica_para_cupo, of_cantidad_de_pagos, of_costo_usd, of_frecuencia_de_facturacion, of_line_item_ids, of_moneda, of_monto_total, of_motivo_pausa, of_pais_operativo, of_producto, of_producto_nombres, of_propietario_secundario, of_rubro, of_subrubro, opera_trading, producto_id, renovacion_automatica, repetitivo, reventa, revisado_por, servicio, source_type, subject, tipo_de_parametrica, unidad_de_negocio
 
 ## deal / "Negocio" — 17 (`deal.propertyChange`)
+
+> 🆕 **Ruteo `deal_prop_sync` (TANDA E, 1-ago):** `hubspot_owner_id` y `deal_currency_code`
+> ya estaban suscritas pero **el router las ignoraba** — caían en "Property not supported".
+> Ahora rutean a `deal_prop_sync` (**RUTA 0b** de `api/escuchar-cambios.js` →
+> `syncDealPropToTickets`), que baja al ticket las dos props de transferencia cuyo origen
+> es el NEGOCIO y no el line item: **vendedor** (`→ of_propietario_secundario`) y **moneda**
+> (`→ of_moneda`). Alcance: tickets del pipeline **manual** en etapa **no notificada**; los
+> que cruzaron la frontera están congelados. Detrás de `DEAL_PROP_SYNC_ENABLED` (default OFF
+> ⇒ vuelven a caer en el fallback, sin cambio de comportamiento).
+>
+> ⚠️ El job resuelve **las dos** props desde el estado actual del negocio, no sólo la que
+> disparó: `deal_prop_sync` está clasificado como derivado del estado, así que la cola le
+> colapsa los pending por `deal_id` + `action_type` (`src/utils/webhookQueueRules.js`) y un
+> job por prop haría desaparecer el otro cambio en silencio.
+>
+> 🔁 **NO suscribir** props que escribe el motor en el ticket (`of_propietario_secundario`,
+> `of_moneda` ya están suscritas del lado TICKET, pero el motor no rutea nada desde ahí —
+> no hay bucle).
+
 amount, cliente_beneficiario, cupo_activo, cupo_total, cupo_total_monto, cupo_umbral, deal_currency_code, dealname, dealstage, description, exonera_irae, facturacion_automatica, facturacion_activa, hs_exchange_rate, hubspot_owner_id, pais_operativo, tipo_de_cupo
 
 ## product / "Producto" — 3 (`product.propertyChange`)

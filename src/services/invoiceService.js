@@ -6,6 +6,7 @@ import { getTodayYMD, toYMDInBillingTZ, toHubSpotDateOnly } from '../utils/dateU
 import { isDryRun, DEFAULT_CURRENCY } from '../config/constants.js';
 import { associateV4 } from '../associations.js';
 import { consumeCupoAfterInvoice } from './cupo/consumeCupo.js';
+import { cupoAsientoEnEmisionEnabled } from '../config/cancelRevertFlags.js';
 import { recalcDerivedFacturas } from './billing/recalcDerivedFacturas.js';
 import { syncBillingState } from './billing/syncBillingState.js';
 import { isAutoRenew } from './billing/mode.js';
@@ -588,12 +589,23 @@ export async function createInvoiceFromTicket(ticket, modoGeneracion = 'AUTO_LIN
     }
 
     // 11) Consumo de cupo (idempotente, no rompe facturación)
+    //
+    // §1 del plan (D2) — con CUPO_ASIENTO_EN_EMISION_ENABLED prendida esto NO
+    // corre: la factura nace en «Pendiente» y sin `id_factura_nodum`, o sea que
+    // acá el cupo se comprometería contra una factura que todavía no existe
+    // para Nodum. El asiento pasa a hacerse cuando la factura llega a «Emitida»
+    // o posterior, en propagateInvoiceStateToTicket (paso 5a-bis).
     try {
       const cupoLineItemId = rawLineItemIds?.includes(',')
         ? rawLineItemIds.split(',')[0].trim()
         : rawLineItemIds?.trim();
 
-      if (!dealId) {
+      if (cupoAsientoEnEmisionEnabled()) {
+        logger.info(
+          { module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId, invoiceId },
+          '[invoice] Asiento de cupo diferido a la emisión (CUPO_ASIENTO_EN_EMISION_ENABLED)'
+        );
+      } else if (!dealId) {
         logger.debug({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId }, '[invoice] ⊘ No se consume cupo: falta of_deal_id');
       } else if (!invoiceId) {
         logger.warn({ module: 'invoiceService', fn: 'createInvoiceFromTicket', ticketId }, '[invoice] ⚠️ No se consume cupo: invoiceId undefined');

@@ -2,16 +2,26 @@
 
 import { hubspotClient } from '../../hubspotClient.js';
 import { FORECAST_TICKET_STAGES } from '../../config/constants.js'; // Set combinado manual+auto
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
+import { isTicketEngineManaged } from '../../utils/ticketFrontera.js';
 import logger from '../../../lib/logger.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 
 /**
- * Deriva billing_next_date del ticket forecast más próximo del line item.
+ * Deriva billing_next_date del ticket NO NOTIFICADO más próximo del line item.
+ *
+ * TANDA C — es la fecha PRÓXIMA del plan (§2.5). Lo que cambia con
+ * ETAPA_UNICA_ENABLED es la PARTICIÓN: de «etapa forecast» a «todavía no
+ * notificado», que bajo la llave incluye «Próximos a facturar». Sin eso, con
+ * todo el cronograma en la etapa única no queda ningún candidato y la fecha se
+ * CONGELA (la salva el guard de abajo, que evita vaciarla, pero deja de avanzar).
  *
  * Reglas:
- *   - Solo tickets en stages FORECAST_* (manual o automático)
+ *   - Solo tickets que el motor todavía maneja (flag OFF: stages FORECAST_*
+ *     manual o automático — idéntico a hoy)
  *   - fecha_resolucion_esperada > todayYmd
- *   - fecha_resolucion_esperada > lastTicketedYmd (si existe)
+ *   - fecha_resolucion_esperada > lastTicketedYmd (si existe; con la llave
+ *     prendida el que llega acá es el piso NOTIFICADO)
  *   - Toma el mínimo (más cercano al futuro)
  *   - Si no hay ninguno → billing_next_date = ''
  *   - Solo escribe si el valor cambió (diff antes del PATCH)
@@ -34,10 +44,13 @@ export async function syncBillingNextDateFromTickets({
 }) {
   const log = logger.child({ module: 'syncBillingNextDateFromTickets', lineItemId });
 
-  // 1. Filtrar: solo forecast, solo futuro, solo mayor a last_ticketed_date
+  // 1. Filtrar: solo NO notificado, solo futuro, solo mayor al piso
+  const esCandidatoPorEtapa = etapaUnicaEnabled()
+    ? (t) => isTicketEngineManaged(t)
+    : (t) => FORECAST_TICKET_STAGES.has(String(t?.properties?.hs_pipeline_stage || ''));
+
   const candidates = (allTickets || []).filter((t) => {
-    const stage = String(t?.properties?.hs_pipeline_stage || '');
-    if (!FORECAST_TICKET_STAGES.has(stage)) return false;
+    if (!esCandidatoPorEtapa(t)) return false;
 
     const fecha = String(t?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
     if (!fecha) return false;

@@ -22,12 +22,17 @@
 import { hubspotClient } from '../../hubspotClient.js';
 import { extractLineItemSnapshots } from '../snapshotService.js';
 import { updateTicket } from '../tickets/ticketService.js';
-import { PROXIMOS_A_FACTURAR_STAGE, TICKET_PIPELINE } from '../../config/constants.js';
+import { PROXIMOS_A_FACTURAR_STAGE, TICKET_PIPELINE, isEngineManagedStage } from '../../config/constants.js';
+import { etapaUnicaEnabled } from '../../config/etapaUnicaFlags.js';
 import { reportIfActionable } from '../../utils/errorReporting.js';
 import { reportHubSpotError } from '../../utils/hubspotErrorCollector.js';
 import { findMirrorLineItem } from '../mirrorUtils.js';
 import { avisarResponsableTicketPorSyncLI } from '../notifications/liSyncTicketAlert.js';
 import { emailAvisoMirror } from '../notifications/mirrorAlert.js';
+import { mirrorPuntualEnabled } from '../../config/mirrorPuntualFlags.js';
+import { propagarCambioLiAlEspejo } from '../mirror/mirrorLiPuntualSync.js';
+import { esPropSensible } from '../mirror/mirrorLiPropMap.js';
+import { parseTicketKeyFromLineItemKey } from '../../utils/ticketKey.js';
 import logger from '../../../lib/logger.js';
 
 const MODULE = 'syncLineItemPropToTicket';
@@ -79,6 +84,12 @@ export const LI_PROP_TO_TICKET_KEYS = {
   opera_trading: ['opera_trading'],
   nc: ['nc'],
   facturacion_automatica: ['facturacion_automatica'],
+  // 🔴 8-ago: PLURAL. La propiedad real en los dos portales es `condiciones_de_pago`;
+  // el singular no existe en ningún objeto y la escritura se caía en silencio.
+  condiciones_de_pago: ['condiciones_de_pago'],
+  // Tipo de venta: se movió del negocio al line item el 7-ago; desde el 8-ago
+  // viaja al ticket como el resto.
+  tipo_de_venta: ['tipo_de_venta'],
   // Fechas
   hs_recurring_billing_start_date: ['fecha_inicio_de_facturacion'],
   fecha_inicio_de_facturacion: ['fecha_inicio_de_facturacion'],
@@ -95,6 +106,7 @@ const LI_PROPS_TO_FETCH = [
   'name', 'description', 'servicio', 'subrubro', 'area', 'of_codigo_rubro',
   'momento_de_facturacion', 'nota', 'pais_operativo',
   'parte_del_cupo', 'reventa', 'opera_trading', 'nc', 'empresa_que_factura',
+  'condiciones_de_pago', 'tipo_de_venta',
   'hs_recurring_billing_start_date', 'fecha_inicio_de_facturacion', 'facturacion_automatica',
   'hs_recurring_billing_number_of_payments',
 ];
@@ -102,6 +114,18 @@ const LI_PROPS_TO_FETCH = [
 const DEAL_PROPS_TO_FETCH = [
   'deal_currency_code', 'dolar', 'pais_operativo', 'es_mirror_de_py', 'tipo_de_cupo',
 ];
+
+/**
+ * Período (YYYY-MM-DD) del ticket: la fecha esperada y, si falta, la que trae su
+ * clave. Es lo que enlaza el ticket del ORIGINAL con el ticket del ESPEJO del
+ * mismo período (TANDA D, §3.2 caso 8). (pura, testeable)
+ */
+export function ymdDelTicket(ticket) {
+  const directa = String(ticket?.properties?.fecha_resolucion_esperada || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(directa)) return directa;
+  const parsed = parseTicketKeyFromLineItemKey(ticket?.properties?.of_ticket_key);
+  return parsed?.ok ? parsed.ymd : '';
+}
 
 /** ¿La prop del LI se transfiere al ticket? (pura, testeable) */
 export function isTransferableLiProp(propertyName) {
@@ -158,8 +182,9 @@ export async function syncLineItemPropToTickets({
   reportErrorFn = reportHubSpotError,
   notifyOwnerFn = avisarResponsableTicketPorSyncLI,
   emailMirrorFn = emailAvisoMirror,
+  propagarEspejoFn = propagarCambioLiAlEspejo,
 }) {
-  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false, ownersNotified: 0 };
+  const stats = { applies: false, ticketsScanned: 0, ticketsUpdated: 0, skipped: 0, keys: [], errors: 0, mirrorNotified: false, ownersNotified: 0, mirrorLiCopiado: false, mirrorAvisos: 0 };
 
   if (!isTransferableLiProp(propertyName)) {
     return { ...stats, reason: TRANSFER_EXCLUDED_LI_PROPS.has(propertyName) ? 'excluded' : 'not_mapped' };
@@ -191,7 +216,14 @@ export async function syncLineItemPropToTickets({
   const snapshot = extractFn(lineItem, deal);
   const affected = pickAffectedTicketProps(snapshot, propertyName);
   const affectedKeys = Object.keys(affected);
-  if (!affectedKeys.length) return { ...stats, reason: 'sin_claves_afectadas' };
+  // 🔴 Salir acá cortaba el aviso al espejo. Hay props que NO tienen equivalente
+  // en el ticket pero sí tienen que avisarle a UY — `uy` es el caso: María pidió
+  // saber cuándo un line item entra o sale del espejo (correo del 6-jul), y eso
+  // no se escribe en ningún ticket. Si la prop es sensible para el espejo se
+  // sigue de largo, aunque no haya nada que sincronizar.
+  if (!affectedKeys.length && !esPropSensible(propertyName)) {
+    return { ...stats, reason: 'sin_claves_afectadas' };
+  }
   stats.applies = true;
   stats.keys = affectedKeys;
 
@@ -200,7 +232,7 @@ export async function syncLineItemPropToTickets({
   try {
     const resp = await client.crm.tickets.searchApi.doSearch({
       filterGroups: [{ filters: [{ propertyName: 'of_line_item_key', operator: 'EQ', value: String(lineItemKey) }] }],
-      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'hubspot_owner_id', 'subject', ...affectedKeys],
+      properties: ['hs_pipeline', 'hs_pipeline_stage', 'of_ticket_key', 'fecha_resolucion_esperada', 'hubspot_owner_id', 'subject', ...affectedKeys],
       limit: 100,
     });
     tickets = resp?.results || [];
@@ -217,13 +249,30 @@ export async function syncLineItemPropToTickets({
     const pipeline = String(t?.properties?.hs_pipeline || '');
     // SOLO "Próximos a Facturar" del pipeline MANUAL (definición usuaria 14-jul).
     // Forecast → lo cubre el re-snapshot del cron; automático no se edita; emitido congelado.
-    if (!(pipeline === TICKET_PIPELINE && stage === PROXIMOS_A_FACTURAR_STAGE)) { stats.skipped++; continue; }
+    //
+    // ETAPA ÚNICA (flag ON): alcanza TODO lo no notificado del pipeline manual
+    // — «Próximos a facturar» y los forecast, incluidos los viejos 85/95. Bajo
+    // la misma flag el re-snapshot del cron ya NO reescribe esos tickets
+    // (phasep.js §2.2), así que este sync pasa a ser el único camino por el que
+    // el contenido del line item llega al ticket: si se dejara sólo en
+    // «Próximos», el tramo forecast se quedaría con datos viejos.
+    const alcanzaAlTicket = etapaUnicaEnabled()
+      ? (pipeline === TICKET_PIPELINE && isEngineManagedStage(stage))
+      : (pipeline === TICKET_PIPELINE && stage === PROXIMOS_A_FACTURAR_STAGE);
+    if (!alcanzaAlTicket) { stats.skipped++; continue; }
 
     // Patch mínimo: solo las claves cuyo valor difiere.
+    // `antes` guarda lo que el ticket TENÍA: es el único lugar del motor donde
+    // existe el valor anterior, y es lo que el aviso al espejo necesita para
+    // decir "pasó de X a Y" (TANDA D).
     const patch = {};
+    const antes = {};
     for (const k of affectedKeys) {
       const nv = affected[k];
-      if (String(nv ?? '') !== String(t?.properties?.[k] ?? '')) patch[k] = nv;
+      if (String(nv ?? '') !== String(t?.properties?.[k] ?? '')) {
+        patch[k] = nv;
+        antes[k] = t?.properties?.[k];
+      }
     }
     if (!Object.keys(patch).length) continue;
 
@@ -235,6 +284,8 @@ export async function syncLineItemPropToTickets({
         ownerId: t?.properties?.hubspot_owner_id || null,
         subject: t?.properties?.subject || null,
         patch,
+        antes,
+        ymd: ymdDelTicket(t),
       });
       logger.info(
         { module: MODULE, lineItemId, ticketId: t.id, propertyName, patchKeys: Object.keys(patch) },
@@ -247,10 +298,51 @@ export async function syncLineItemPropToTickets({
     }
   }
 
+  // ── TANDA D — EL ESPEJO (flag MIRROR_PUNTUAL_ENABLED, default OFF) ─────────
+  // Con la llave prendida, el espejo deja de enterarse sólo por el deal: se
+  // COPIA la prop al line item espejo (puntual, con traducción costo→precio) y
+  // se AVISA al ticket del espejo del MISMO período, con el antes y el después.
+  //
+  // Este es el único punto del motor donde el valor ANTERIOR existe: `t.properties[k]`
+  // es lo que el ticket tenía y `patch[k]` lo que se le acaba de escribir. Por eso
+  // el antes/después se arma acá y se le pasa hecho al orquestador del espejo.
+  //
+  // Corre aunque no se haya actualizado ningún ticket del original (la copia al
+  // espejo no depende de eso); si no hay períodos, el aviso cae al deal espejo,
+  // que es el comportamiento de hoy.
+  if (mirrorPuntualEnabled()) {
+    try {
+      const cambiosPorPeriodo = [];
+      for (const ut of updatedTickets) {
+        const ymd = ut.ymd || '';
+        if (!ymd) continue;
+        cambiosPorPeriodo.push({ ymd, antes: ut.antes || {}, despues: ut.patch || {} });
+      }
+      const r = await propagarEspejoFn(
+        {
+          lineItemId,
+          propertyName,
+          cambiosPorPeriodo,
+          valorNuevo: lp[propertyName],
+          sourceCurrency: deal?.properties?.deal_currency_code || 'USD',
+        },
+        {}
+      );
+      stats.mirrorLiCopiado = !!r?.copiado;
+      stats.mirrorAvisos = r?.avisos || 0;
+      if (r?.avisos) stats.mirrorNotified = true;
+    } catch (err) {
+      logger.warn({ module: MODULE, lineItemId, err: err?.message }, 'Propagación al espejo falló (no bloquea el sync)');
+    }
+  }
+
   // Aviso puntual al mirror: si cambió algún ticket del ORIGINAL y ese LI tiene mirror (UY),
   // avisar en el deal UY qué prop cambió. findMirrorLineItem trae anti-loop (si el LI ya es de
   // un deal mirror, devuelve null → no avisa). Fire-and-forget: nunca frena el sync.
-  if (stats.ticketsUpdated > 0) {
+  //
+  // Con MIRROR_PUNTUAL_ENABLED el aviso ya salió arriba, al TICKET del espejo (que es
+  // lo que pedía §3.2 caso 2): repetirlo en el deal sería el mismo aviso dos veces.
+  if (stats.ticketsUpdated > 0 && !mirrorPuntualEnabled()) {
     try {
       const mirror = await findMirrorFn(lineItemId);
       if (mirror?.mirrorDealId) {

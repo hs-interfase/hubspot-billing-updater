@@ -64,6 +64,10 @@ const LI_PROPS = [
   // Correcciones del 4-ago: área y el RUBRO, que en el line item vive en `servicio`
   // (of_rubro/rubro no existen acá — por eso el rubro nunca salía en este mensaje).
   'area', 'servicio',
+  // Lista del 5-ago: condición de pago (#20), la descripción del ticket (#9, que
+  // ahora sale siempre) y el monto con impuestos (#17, nativa de HubSpot).
+  // 🔴 PLURAL (corregido 8-ago): la propiedad del line item es `condiciones_de_pago`.
+  'condiciones_de_pago', 'content', 'hs_post_tax_amount',
   'mansoft_pendiente', 'facturacion_automatica',
   // Nuevas props para el sistema alta/edición
     'fecha_de_baja', 'motivo_de_pausa', 'es_definitivo', 'pausa',

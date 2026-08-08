@@ -2,6 +2,7 @@
 
 import { parseNumber, safeString, parseBool } from '../utils/parsers.js';
 import { toHubSpotDateOnly } from '../utils/dateUtils.js';
+import { ofProductoDesdeLineItem } from './billing/nombreProductoSelect.js';
 import logger from '../../lib/logger.js';
 import { reportIfActionable } from '../utils/errorReporting.js';
 import { reportHubSpotError } from '../utils/hubspotErrorCollector.js';
@@ -313,6 +314,18 @@ const repetitivo = !!rawFreq && ![
     exonera_irae: iraeValue === 'true' ? 'false' : iraeValue === 'false' ? 'true' : '',
     reventa: parseBool(lp.reventa),
     opera_trading: parseBool(lp.opera_trading),
+    // Condición de pago: select del line item → select homónimo del ticket
+    // (mismas opciones). Pedido del 5-ago: va en los DOS mensajes.
+    // 🔴 8-ago: el nombre real de la propiedad en los dos portales es
+    // `condiciones_de_pago`, en PLURAL. El código usaba el singular, que no existe
+    // en ningún objeto: safeUpdateTicket la borraba del payload y reintentaba, así
+    // que la escritura "funcionaba" pero el valor nunca llegaba y la fila
+    // «Condición de Pago» de los dos mensajes salía siempre vacía.
+    condiciones_de_pago: safeString(lp.condiciones_de_pago),
+    // Tipo de venta: select del line item → select homónimo del ticket (8-ago).
+    // Se movió del NEGOCIO al LINE ITEM el 7-ago; faltaba el último tramo, que es
+    // que viaje al ticket como el resto de las props del line item.
+    tipo_de_venta: safeString(lp.tipo_de_venta),
     of_frecuencia_de_facturacion: frecuencia, // ✅ Irregular / Único / Frecuente
     nc: parseBool(lp.nc), // NC: se setea a mano en el LI y se propaga al ticket (solo registro)
     repetitivo,
@@ -322,6 +335,13 @@ const repetitivo = !!rawFreq && ![
     fecha_inicio_de_facturacion: toHubSpotDateOnly(lp.hs_recurring_billing_start_date || lp.fecha_inicio_de_facturacion),
     // Facturación automática: espejo del checkbox del line item (enum booleancheckbox: "true"/"false")
     facturacion_automatica: parseBool(lp.facturacion_automatica) ? 'true' : 'false',
+    // Cómo factura el ORIGEN, para los tickets de un line item espejo (7-ago). El
+    // espejo se fuerza a manual, así que `facturacion_automatica` de arriba siempre
+    // dice "false" y no distingue el espejo de un automático del de un manual.
+    // Esta marca viaja LI PY → LI espejo (dealMirroring) → ticket, y es la que lee
+    // associateOnClosedWon para decidir si asocia todo el cronograma o sólo el
+    // próximo a facturar. En un line item que no es espejo queda vacía.
+    of_origen_facturacion_automatica: safeString(lp.of_origen_facturacion_automatica),
     // Intercompany (regla informes 2026-07-07): el deal UY espejo factura al grupo (su monto
     // = costo del PY), así que su facturación NO cuenta para informes (FACT 0 vía calc prop
     // of_facturacion_usd); su MARGEN sí (monto UY − costo real UY). Fuente: es_mirror_de_py.
@@ -440,8 +460,17 @@ export function createTicketSnapshots(deal, lineItem, expectedDate, orderedDate 
   const lp = lineItem?.properties || {};
   const dp = deal?.properties || {};
 
-  // Producto del ticket (select of_producto, mismo catálogo que deal.producto)
-  const ofProducto = deriveProductoTicket(dp.producto, lp.name);
+  // Producto del ticket (select of_producto).
+  //
+  // 🔴 CAMBIO 2-ago-2026 (definición usuaria): sale del PRODUCTO ASOCIADO AL LINE ITEM,
+  // no de `deal.producto`. `deal.producto` es la UNIÓN de los productos del negocio
+  // (la sube syncDealCatalogTags), así que con varios line items TODOS los tickets
+  // recibían el mismo producto — medido en sandbox: 4 de 5 tickets con el producto
+  // equivocado, y los 5 con el mismo valor.
+  //
+  // Se conserva `deriveProductoTicket` como FALLBACK para las líneas sin producto
+  // asociado (migrados viejos, LIs cargados a mano): ahí el comportamiento no cambia.
+  const ofProducto = ofProductoDesdeLineItem(lp) || deriveProductoTicket(dp.producto, lp.name);
 
   // Motivo cancelación: primero motivo_de_pausa del line item, luego closed_lost_reason del deal.
   // (24-jul: decía `motivo_pausa`, prop que NO existe en el portal → la rama del LI estaba

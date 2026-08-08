@@ -5,7 +5,10 @@ import { enqueue } from '../src/webhookQueue.js';
 import { parseBool } from '../src/utils/parsers.js';
 import { isDealCancelledStage } from '../src/config/constants.js';
 import { LI_NOMBRE_PRODUCTO_PROP } from '../src/services/billing/nombreProductoSelect.js';
-import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js';
+import { isTransferableLiProp } from '../src/services/lineItems/syncLineItemPropToTicket.js'
+import { esPropSensible } from '../src/services/mirror/mirrorLiPropMap.js';
+import { isTransferableDealProp } from '../src/services/deal/syncDealPropToTicket.js';
+import { dealPropSyncEnabled } from '../src/config/transferPropsFlags.js';
 import {
   esEventoTicketValor,
   esTicketEditableParaValor,
@@ -146,6 +149,33 @@ export default async function handler(req, res) {
       return res.status(200).json({ queued: true, queueId, objectId, objectType, action: 'deal_cancel' });
     }
 
+    // ====== RUTA 0b: SYNC QUIRÚRGICO NEGOCIO→TICKET (vendedor / moneda) ======
+    // TANDA E (§5.bis): las dos props del ticket que NO salen del line item sino del
+    // NEGOCIO — `of_propietario_secundario` (vendedor = owner del negocio) y `of_moneda`
+    // (moneda del negocio). El ticket nace bien; lo que faltaba es que SIGA al negocio
+    // cuando lo reasignan o le cambian la moneda. Las dos suscripciones ya existen en
+    // PROD (doc de webhooks, 14-jul); hasta ahora caían en "Property not supported".
+    // Detrás de flag; con DEAL_PROP_SYNC_ENABLED apagada vuelven a caer ahí (neutral).
+    if (
+      objectType === 'deal' &&
+      dealPropSyncEnabled() &&
+      isTransferableDealProp(propertyName)
+    ) {
+      const queueId = await enqueue({
+        source: 'escuchar-cambios',
+        objectType: 'deal',
+        objectId,
+        propertyName,
+        propertyValue,
+        dealId: String(objectId),
+        actionType: 'deal_prop_sync',
+        priority: 0,
+        eventId,
+        rawPayload: payload,
+      });
+      return res.status(200).json({ queued: true, queueId, objectId, objectType, propertyName, action: 'deal_prop_sync' });
+    }
+
     // ====== RUTA 1: FACTURACIÓN URGENTE ======
     if (propertyName === 'facturar_ahora') {
       if (!parseBool(propertyValue)) {
@@ -247,10 +277,14 @@ export default async function handler(req, res) {
     // ticket entero → no pisa lo que editó el responsable). Detrás de flag; con flag OFF
     // estas props caen al "skipped" de abajo (comportamiento actual). Excluye Frecuencia /
     // Término / Nº Pagos / Momento (isTransferableLiProp) y las props ya ruteadas arriba.
+    // `esPropSensible` suma las props que NO se transfieren al ticket pero sí
+    // tienen que avisarle al espejo — `uy` (entra/sale del mirror), que María
+    // pidió por escrito el 6-jul. Sin esto el evento no se encola y el aviso
+    // nunca sale.
     if (
       objectType === 'line_item' &&
       parseBool(process.env.LI_PROP_SYNC_ENABLED) &&
-      isTransferableLiProp(propertyName)
+      (isTransferableLiProp(propertyName) || esPropSensible(propertyName))
     ) {
       const dealId = await getDealIdForLineItem(objectId);
       const queueId = await enqueue({
